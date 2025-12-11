@@ -1,6 +1,8 @@
 package main
 
 import (
+	lineidx "Magma/src/line_idx"
+	"Magma/src/parser"
 	"Magma/src/tokenizer"
 	"Magma/src/types"
 	"fmt"
@@ -11,38 +13,35 @@ func wrappedMain() error {
 	args := os.Args[1:]
 
 	if len(args) > 1 {
-		return fmt.Errorf("Too many arguments")
+		return fmt.Errorf("too many arguments")
 	} else if len(args) == 0 {
-		return fmt.Errorf("Not enough arguments")
+		return fmt.Errorf("not enough arguments")
 	}
 
 	filePathArg := args[0]
 
 	fileBytes, err := os.ReadFile(filePathArg)
 	if err != nil {
-		return fmt.Errorf("Failed to open file")
+		return fmt.Errorf("failed to open file")
 	}
 
 	fCtx := &types.FileCtx{
 		FilePath: filePathArg,
-		Content: fileBytes,
-		LineIdx: make([]int, 0, 8),
+		Content:  fileBytes,
+		LineIdx:  lineidx.GetLineIdx(fileBytes),
 	}
-	fCtx.LineIdx = append(fCtx.LineIdx, -1)
 
-	for i, b := range fileBytes {
-		if b == '\n' {
-			fCtx.LineIdx = append(fCtx.LineIdx, i)
-		}
-	}
-	fCtx.LineIdx = append(fCtx.LineIdx, len(fileBytes))
-
-	tokens, err := tokenizer.Tokenize(fCtx, fileBytes)
+	fCtx.Tokens, err = tokenizer.Tokenize(fCtx, fileBytes)
 
 	if err != nil {
 		return err
 	}
-	tokenizer.PrintTokens(tokens)
+	tokenizer.PrintTokens(fCtx.Tokens)
+
+	fCtx.GlNode, err = parser.Parse(fCtx)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

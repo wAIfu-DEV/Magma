@@ -1,6 +1,6 @@
 mod main
 use io
 
-pub main () !void:,
+pub main () !void:
     ret
 ..

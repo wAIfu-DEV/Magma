@@ -2,7 +2,7 @@ package tokenizer
 
 import (
 	"Magma/src/comp_err"
-	"Magma/src/types"
+	t "Magma/src/types"
 	"fmt"
 	"strings"
 	"unicode"
@@ -18,19 +18,19 @@ const (
 )
 
 type TkCtx struct {
-	fCtx *types.FileCtx
+	fCtx *t.FileCtx
 
 	Content []byte
 
-	CurrTok types.Token
+	CurrTok     t.Token
 	TokReprBuff []rune
 
-	Tokens []types.Token
+	Tokens []t.Token
 
-	Pos types.FilePos
+	Pos t.FilePos
 
-	Idx int
-	Mode tkMode
+	Idx       int
+	Mode      tkMode
 	IsEscaped bool
 }
 
@@ -77,7 +77,7 @@ func peekMany(ctx *TkCtx, n int) ([]rune, error) {
 	runes := make([]rune, n)
 	offset := 0
 	for i := range n {
-		r, size, err := decodeFrom(ctx, ctx.Idx + offset)
+		r, size, err := decodeFrom(ctx, ctx.Idx+offset)
 		if err != nil {
 			return nil, err
 		}
@@ -93,7 +93,7 @@ func consumeSize(ctx *TkCtx, size int) {
 
 func consume(ctx *TkCtx) (rune, error) {
 	r, size, err := decodeFirst(ctx)
-    consumeSize(ctx, size)
+	consumeSize(ctx, size)
 	return r, err
 }
 
@@ -105,21 +105,21 @@ func toggleMode(ctx *TkCtx, mode tkMode) {
 	}
 }
 
-func pushToken(ctx *TkCtx, tk types.Token) {
+func pushToken(ctx *TkCtx, tk t.Token) {
 	ctx.Tokens = append(ctx.Tokens, tk)
 }
 
 func clearTokenBuff(ctx *TkCtx) {
-	ctx.CurrTok = types.Token{
-		Type: types.TokName,
-		Pos: ctx.Pos,
+	ctx.CurrTok = t.Token{
+		Type: t.TokName,
+		Pos:  ctx.Pos,
 	}
 	ctx.CurrTok.Pos.Col++
 
 	ctx.TokReprBuff = make([]rune, 0, 16)
 }
 
-func pushTokenAndClearBuff(ctx *TkCtx, tk types.Token) {
+func pushTokenAndClearBuff(ctx *TkCtx, tk t.Token) {
 	ctx.Tokens = append(ctx.Tokens, tk)
 	clearTokenBuff(ctx)
 }
@@ -131,9 +131,9 @@ func pushTokenBuff(ctx *TkCtx) {
 
 	ctx.CurrTok.Repr = string(ctx.TokReprBuff)
 
-	kwType, ok := types.KwReprToType[ctx.CurrTok.Repr]
+	kwType, ok := t.KwReprToType[ctx.CurrTok.Repr]
 	if ok {
-		ctx.CurrTok.Type = types.TokKeyword
+		ctx.CurrTok.Type = t.TokKeyword
 		ctx.CurrTok.KeywType = kwType
 	}
 
@@ -141,13 +141,15 @@ func pushTokenBuff(ctx *TkCtx) {
 	clearTokenBuff(ctx)
 }
 
-func handleNonAlphaKeyword(ctx *TkCtx, first rune) (types.Token, int, error) {
+func handleNonAlphaKeyword(ctx *TkCtx, first rune) (t.Token, int, error) {
 	bestMatch := ""
 	bestSize := 0
-	var bestKwType types.KwType = types.KwNone
+	var bestKwType t.KwType = t.KwNone
 
-	for i, kw := range types.KwTypeToRepr {
-		if i == 0 { continue }
+	for i, kw := range t.KwTypeToRepr {
+		if i == 0 {
+			continue
+		}
 
 		kwLen := len(kw)
 		kwRuneCnt := utf8.RuneCountInString(kw)
@@ -161,50 +163,50 @@ func handleNonAlphaKeyword(ctx *TkCtx, first rune) (types.Token, int, error) {
 		if strings.HasPrefix(peekedStr, kw) && kwLen > bestSize {
 			bestMatch = kw
 			bestSize = kwLen
-			bestKwType = types.KwType(i)
+			bestKwType = t.KwType(i)
 		}
 	}
 
 	if bestMatch == "" {
-		return types.Token{}, 0,
-		comp_err.CompilationErrorToken(
-			ctx.fCtx,
-			&ctx.CurrTok,
-			fmt.Sprintf("'%c' is not a valid keyword", first),
-			fmt.Sprintf("non alphanumeric character '%c' was not recognized as a valid keyword", first),
-		)
+		return t.Token{}, 0,
+			comp_err.CompilationErrorToken(
+				ctx.fCtx,
+				&ctx.CurrTok,
+				fmt.Sprintf("'%c' is not a valid keyword", first),
+				fmt.Sprintf("non alphanumeric character '%c' was not recognized as a valid keyword", first),
+			)
 	}
 
-	return types.Token{
-		Repr: bestMatch,
-		Pos: ctx.Pos,
-		Type: types.TokKeyword,
+	return t.Token{
+		Repr:     bestMatch,
+		Pos:      ctx.Pos,
+		Type:     t.TokKeyword,
 		KeywType: bestKwType,
 	}, bestSize, nil
 }
 
-func Tokenize(fCtx *types.FileCtx, bytes []byte) ([]types.Token, error) {
+func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 	ctx := &TkCtx{
-		fCtx: fCtx,
+		fCtx:    fCtx,
 		Content: bytes,
 
-		CurrTok: types.Token{
-			Type: types.TokName,
-			Pos: types.FilePos{
-			 	Line: 1,
-				Col: 0,
-		 	},
+		CurrTok: t.Token{
+			Type: t.TokName,
+			Pos: t.FilePos{
+				Line: 1,
+				Col:  0,
+			},
 		},
 		TokReprBuff: make([]rune, 0, 16),
-		Tokens: make([]types.Token, 0, 256),
+		Tokens:      make([]t.Token, 0, 256),
 
-		Pos: types.FilePos{
+		Pos: t.FilePos{
 			Line: 1,
-			Col: 0,
+			Col:  0,
 		},
 
-		Idx: 0,
-		Mode: tkModeNormal,
+		Idx:       0,
+		Mode:      tkModeNormal,
 		IsEscaped: false,
 	}
 
@@ -246,7 +248,7 @@ func Tokenize(fCtx *types.FileCtx, bytes []byte) ([]types.Token, error) {
 			toggleMode(ctx, tkModeString)
 
 			if ctx.Mode == tkModeString {
-				ctx.CurrTok.Type = types.TokLitStr
+				ctx.CurrTok.Type = t.TokLitStr
 			}
 			consume(ctx)
 			continue
@@ -264,11 +266,11 @@ func Tokenize(fCtx *types.FileCtx, bytes []byte) ([]types.Token, error) {
 			pushTokenBuff(ctx)
 
 			if r == '\n' {
-				pushToken(ctx, types.Token{
-					Repr: "\n",
-					Pos: ctx.Pos,
-					Type: types.TokKeyword,
-					KeywType: types.KwNewline,
+				pushToken(ctx, t.Token{
+					Repr:     "\n",
+					Pos:      ctx.Pos,
+					Type:     t.TokKeyword,
+					KeywType: t.KwNewline,
 				})
 
 				ctx.Pos.Line++
@@ -292,17 +294,17 @@ func Tokenize(fCtx *types.FileCtx, bytes []byte) ([]types.Token, error) {
 		}
 
 		if unicode.IsDigit(r) && len(ctx.TokReprBuff) == 0 {
-			ctx.CurrTok.Type = types.TokLitNum
+			ctx.CurrTok.Type = t.TokLitNum
 		}
 
-		if ctx.CurrTok.Type == types.TokLitNum {
+		if ctx.CurrTok.Type == t.TokLitNum {
 			if unicode.IsDigit(r) || r == '.' {
 				consume(ctx)
 				continue
 			}
 			return nil, comp_err.CompilationErrorToken(
 				ctx.fCtx,
-				 &ctx.CurrTok,
+				&ctx.CurrTok,
 				fmt.Sprintf("invalid character '%c' in number literal", r),
 				"valid characters in number literal are: [0-9.]",
 			)
@@ -323,18 +325,18 @@ func Tokenize(fCtx *types.FileCtx, bytes []byte) ([]types.Token, error) {
 	return ctx.Tokens, nil
 }
 
-func PrintTokens(toks []types.Token) {
+func PrintTokens(toks []t.Token) {
 	fmt.Printf("Tokens:\n")
-	for _, t := range toks {
-		if t.KeywType == types.KwNewline {
+	for _, tk := range toks {
+		if tk.KeywType == t.KwNewline {
 			fmt.Printf("Newline,\n")
 			continue
 		}
 		fmt.Printf("%s<%s>(l%d,c%d), ",
-		 types.TokTypeToRepr[t.Type],
-			t.Repr,
-			t.Pos.Line,
-			t.Pos.Col,
+			t.TokTypeToRepr[tk.Type],
+			tk.Repr,
+			tk.Pos.Line,
+			tk.Pos.Col,
 		)
 	}
 }
