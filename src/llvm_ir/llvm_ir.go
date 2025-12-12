@@ -13,7 +13,7 @@ type IrCtx struct {
 	builder strings.Builder
 }
 
-func irWrite(ctx *IrCtx, format string, a ...any) {
+func irWritef(ctx *IrCtx, format string, a ...any) {
 	ctx.builder.WriteString(fmt.Sprintf(format, a...))
 }
 
@@ -229,18 +229,21 @@ func IrWrite(fCtx *t.FileCtx, glNode *t.NodeGlobal) (string, error) {
 		fCtx:    fCtx,
 		builder: strings.Builder{},
 	}
-	ctx.builder.Grow(256)
+	ctx.builder.Grow(128)
 
-	irWrite(ctx, "; File=\"%s\"\n", ctx.fCtx.FilePath)
-	irWrite(ctx, "; Module=\"%s\"\n", ctx.fCtx.PackageName)
+	irWritef(ctx, "; File=\"%s\"\n", ctx.fCtx.FilePath)
+	irWritef(ctx, "; Module=\"%s\"\n\n", ctx.fCtx.PackageName)
 
+	ctx.builder.WriteString("; Basic Types\n")
 	magmatypes.WriteIrBasicTypes(&ctx.builder)
 
+	ctx.builder.WriteString("\n; Defined Types\n")
 	e := irGlobalStructDefs(ctx, glNode)
 	if e != nil {
 		return "", e
 	}
 
+	ctx.builder.WriteString("\n; Code\n")
 	e = irGlobal(ctx, glNode)
 	if e != nil {
 		return "", e
