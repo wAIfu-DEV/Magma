@@ -42,6 +42,8 @@ func wrappedMain() error {
 	if err != nil {
 		return err
 	}
+
+	fCtx.GlNode.Print(0)
 	return nil
 }
 

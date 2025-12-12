@@ -82,7 +82,7 @@ func parseModuleDecl(ctx *ParseCtx, tk t.Token) error {
 	}
 
 	name, e := peekNth(ctx, 1)
-	if e != nil {
+	if e != nil || name.Type != t.TokName {
 		return comp_err.CompilationErrorToken(
 			ctx.Fctx,
 			&tk,
@@ -92,7 +92,7 @@ func parseModuleDecl(ctx *ParseCtx, tk t.Token) error {
 	}
 
 	newln, e := peekNth(ctx, 2)
-	if e != nil && !errors.Is(e, errOutOfBounds) {
+	if (e != nil && !errors.Is(e, errOutOfBounds)) || newln.KeywType != t.KwNewline {
 		return comp_err.CompilationErrorToken(
 			ctx.Fctx,
 			&tk,
@@ -160,11 +160,10 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token) error {
 }
 
 func parseName(ctx *ParseCtx, tk t.Token) (t.NodeName, error) {
-	i := 0
 	parts := []string{}
 
 	for {
-		namePart, e := peekNth(ctx, i)
+		namePart, e := peek(ctx)
 		if e != nil {
 			return nil, e
 		}
@@ -181,14 +180,15 @@ func parseName(ctx *ParseCtx, tk t.Token) (t.NodeName, error) {
 		parts = append(parts, namePart.Repr)
 		consume(ctx)
 
-		maybeDot, e := peekNth(ctx, i+1)
-		if errors.Is(e, errOutOfBounds) {
-			break
-		} else if e != nil {
+		maybeDot, e := peek(ctx)
+		if e != nil {
+			if errors.Is(e, errOutOfBounds) {
+				break
+			}
 			return nil, e
 		}
 
-		if maybeDot.Type != t.TokKeyword || maybeDot.KeywType != t.KwDot {
+		if maybeDot.KeywType != t.KwDot {
 			break
 		}
 		consume(ctx)
@@ -223,7 +223,7 @@ func parseArgsList(ctx *ParseCtx) (t.NodeArgList, error) {
 		return t.NodeArgList{}, comp_err.CompilationErrorToken(
 			ctx.Fctx,
 			&openPar,
-			"syntax error: expected '(' but got '%s'",
+			fmt.Sprintf("syntax error: expected '(' but got '%s'", openPar.Repr),
 			"",
 		)
 	}
@@ -237,7 +237,7 @@ func parseArgsList(ctx *ParseCtx) (t.NodeArgList, error) {
 		return t.NodeArgList{}, comp_err.CompilationErrorToken(
 			ctx.Fctx,
 			&closePar,
-			"syntax error: expected ')' but got '%s'",
+			fmt.Sprintf("syntax error: expected ')' but got '%s'", closePar.Repr),
 			"",
 		)
 	}
@@ -260,6 +260,164 @@ func parseGenericClass(ctx *ParseCtx, nameNode t.NodeName) (t.NodeGenericClass, 
 	return n, nil
 }
 
+func parseType(ctx *ParseCtx, tk t.Token) (t.NodeType, error) {
+	isThrowing := false
+	if tk.KeywType == t.KwExclam {
+		isThrowing = true
+		consume(ctx)
+	}
+
+	tk, e := peek(ctx)
+	if e != nil {
+		return t.NodeType{}, e
+	}
+
+	if tk.Type == t.TokName {
+		n, e := parseName(ctx, tk)
+		if e != nil {
+			return t.NodeType{}, e
+		}
+
+		return t.NodeType{
+			Throws: isThrowing,
+			KindNode: &t.NodeTypeNamed{
+				NameNode: n,
+			},
+		}, nil
+	}
+
+	// TODO: implement complex types
+	return t.NodeType{}, comp_err.CompilationErrorToken(
+		ctx.Fctx,
+		&tk,
+		fmt.Sprintf("syntax error: unexpected '%s' when expected name of type", tk.Repr),
+		"",
+	)
+}
+
+func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
+	// TODO: expand
+
+	if tk.KeywType == t.KwReturn {
+		// TODO: parse following expr
+		consume(ctx)
+		return &t.NodeStmtRet{Expression: &t.NodeExprVoid{}}, nil
+	}
+
+	return nil, comp_err.CompilationErrorToken(
+		ctx.Fctx,
+		&tk,
+		fmt.Sprintf("syntax error: '%s' is not a valid start of statement", tk.Repr),
+		"valid statements include: `name: type = expr`, `name()`, `ret expr`, etc.",
+	)
+}
+
+func parseBody(ctx *ParseCtx, tk t.Token) (t.NodeBody, error) {
+	n := t.NodeBody{}
+
+	if tk.KeywType != t.KwColon {
+		return t.NodeBody{}, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&tk,
+			fmt.Sprintf("syntax error: expected body opening ':' but got '%s' instead", tk.Repr),
+			"bodies/scopes are opened with ':' and ended with '..'",
+		)
+	}
+	consume(ctx)
+
+	for {
+		tk, e := peek(ctx)
+		if e != nil {
+			return n, nil
+		}
+
+		if tk.KeywType == t.KwNewline {
+			consume(ctx)
+			continue
+		}
+
+		if tk.KeywType == t.KwDots {
+			consume(ctx)
+			return n, nil
+		}
+
+		stmtNode, e := parseStatement(ctx, tk)
+		if e != nil {
+			return t.NodeBody{}, e
+		}
+		n.Statements = append(n.Statements, stmtNode)
+	}
+}
+
+func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
+	n, e := parseName(ctx, tk)
+	if e != nil {
+		return nil, e
+	}
+
+	next, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	if next.Type != t.TokKeyword {
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&tk,
+			fmt.Sprintf("syntax error: unexpected '%s' after name in global declaration", next.Repr),
+			"expected in global scope: `<name> :`, `<name> (",
+		)
+	}
+
+	switch next.KeywType {
+	case t.KwParenOp:
+		gncls, e := parseGenericClass(ctx, n)
+		if e != nil {
+			return nil, e
+		}
+
+		after, e := peek(ctx)
+		if e != nil && !errors.Is(e, errOutOfBounds) {
+			return nil, e
+		}
+
+		if errors.Is(e, errOutOfBounds) || after.KeywType == t.KwNewline {
+			return &t.NodeStructDef{
+				Class: gncls,
+			}, nil
+		}
+
+		typeNode, e := parseType(ctx, after)
+		if e != nil {
+			return nil, e
+		}
+
+		bodyStart, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+
+		bodyNode, e := parseBody(ctx, bodyStart)
+		if e != nil {
+			return nil, e
+		}
+
+		fnDef := &t.NodeFuncDef{
+			Class:      gncls,
+			ReturnType: typeNode,
+			Body:       bodyNode,
+		}
+		return fnDef, nil
+	default:
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&tk,
+			fmt.Sprintf("syntax error: unexpected '%s' after name in global declaration", next.Repr),
+			"expected in global scope: `<name> :`, `<name> (",
+		)
+	}
+}
+
 func parseGlobalDecl(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
 	var n t.NodeGlobalDecl = nil
 	var e error = nil
@@ -267,48 +425,11 @@ func parseGlobalDecl(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
 outer:
 	switch tk.Type {
 	case t.TokName:
-		n, e := parseName(ctx, tk)
+		n, e := parseGlobalDeclFromName(ctx, tk)
 		if e != nil {
 			return nil, e
 		}
-
-		next, e := peek(ctx)
-		if e != nil {
-			return nil, e
-		}
-
-		if next.Type != t.TokKeyword {
-			return nil, comp_err.CompilationErrorToken(
-				ctx.Fctx,
-				&tk,
-				fmt.Sprintf("syntax error: unexpected '%s' after name in global declaration", next.Repr),
-				"expected in global scope: `<name> :`, `<name> (",
-			)
-		}
-
-		switch next.KeywType {
-		case t.KwParenOp:
-			gncls, e := parseGenericClass(ctx, n)
-			if e != nil {
-				return nil, e
-			}
-			fnDef := &t.NodeFuncDef{
-				Class: gncls,
-				ReturnType: t.NodeType{
-					Throws:   true,
-					KindNode: &t.NodeTypeNamed{NameNode: &t.NodeNameSingle{Name: "void"}},
-				},
-				Body: t.NodeBody{Statements: []t.NodeStatement{}},
-			}
-			return fnDef, nil
-		default:
-			return nil, comp_err.CompilationErrorToken(
-				ctx.Fctx,
-				&tk,
-				fmt.Sprintf("syntax error: unexpected '%s' after name in global declaration", next.Repr),
-				"expected in global scope: `<name> :`, `<name> (",
-			)
-		}
+		return n, nil
 
 	case t.TokKeyword:
 		switch tk.KeywType {
@@ -347,7 +468,15 @@ func parseGlobal(ctx *ParseCtx) (t.NodeGlobal, error) {
 	for {
 		tk, e := peek(ctx)
 		if e != nil {
-			return n, nil
+			if errors.Is(e, errOutOfBounds) {
+				return n, nil
+			}
+			return t.NodeGlobal{}, e
+		}
+
+		if tk.KeywType == t.KwNewline {
+			consume(ctx)
+			continue
 		}
 
 		glDecl, e := parseGlobalDecl(ctx, tk)
@@ -356,6 +485,7 @@ func parseGlobal(ctx *ParseCtx) (t.NodeGlobal, error) {
 		}
 
 		// this is sketch af
+		// we do this since some valid declarations won't return a node
 		if glDecl != nil {
 			n.Declarations = append(n.Declarations, glDecl)
 		}
@@ -363,7 +493,6 @@ func parseGlobal(ctx *ParseCtx) (t.NodeGlobal, error) {
 }
 
 func Parse(fCtx *t.FileCtx) (t.NodeGlobal, error) {
-
 	ctx := &ParseCtx{
 		Fctx: fCtx,
 		Toks: fCtx.Tokens,
@@ -371,6 +500,19 @@ func Parse(fCtx *t.FileCtx) (t.NodeGlobal, error) {
 
 	glNd, e := parseGlobal(ctx)
 	if e != nil {
+		if errors.Is(e, errOutOfBounds) {
+			var last t.Token
+			if len(ctx.Toks) > 0 {
+				last, _ = peekNth(ctx, -1)
+			}
+
+			return glNd, comp_err.CompilationErrorToken(
+				ctx.Fctx, &last,
+				"syntax error: reached end of file prematurely",
+				"",
+			)
+		}
+
 		return glNd, e
 	}
 	return glNd, nil
