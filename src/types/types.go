@@ -295,6 +295,8 @@ func (n *NodeGlobal) Print(indent int) {
 	for _, x := range n.Declarations {
 		x.Print(indent + 1)
 	}
+
+	fmt.Printf("\n")
 }
 
 func (*NodeExprVoid) IsExpr()        {}

@@ -53,6 +53,11 @@ func wrappedMain() error {
 
 	fmt.Println("Llvm IR:")
 	fmt.Println(irStr)
+
+	err = os.WriteFile("out.ll", []byte(irStr), 0666)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

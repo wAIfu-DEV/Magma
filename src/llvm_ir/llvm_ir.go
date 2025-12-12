@@ -17,7 +17,71 @@ func irWritef(ctx *IrCtx, format string, a ...any) {
 	ctx.builder.WriteString(fmt.Sprintf(format, a...))
 }
 
+func irStmtReturn(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
+	// TODO: lower expression
+	ctx.builder.WriteString("  ret\n")
+	return nil
+}
+
+func irStatement(ctx *IrCtx, stmtNode t.NodeStatement) error {
+	switch s := stmtNode.(type) {
+	case *t.NodeStmtRet:
+		e := irStmtReturn(ctx, s)
+		if e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+func irBody(ctx *IrCtx, bodyNode *t.NodeBody) error {
+	ctx.builder.WriteString("{\n")
+
+	for _, stmt := range bodyNode.Statements {
+		e := irStatement(ctx, stmt)
+		if e != nil {
+			return e
+		}
+	}
+	ctx.builder.WriteString("}\n\n")
+	return nil
+}
+
+func irMainWrapper(ctx *IrCtx, mainFnDef *t.NodeFuncDef) error {
+	ctx.builder.WriteString("; Entry point\n")
+	ctx.builder.WriteString("define i32 @main(i32 %argc, ptr %argv) {\n")
+	ctx.builder.WriteString("entry:\n")
+
+	// TODO: create args slice and pass to main
+
+	if mainFnDef.ReturnType.Throws {
+		// TODO: alloca error struct and pass it as first arg
+	} else {
+		ctx.builder.WriteString("  call void main.main()\n")
+	}
+	ctx.builder.WriteString("  ret i32 0\n")
+	ctx.builder.WriteString("}\n\n")
+	return nil
+}
+
 func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
+	isMemberFunc := false
+	singleName := ""
+
+	switch n := fnDefNode.Class.NameNode.(type) {
+	case *t.NodeNameComposite:
+		isMemberFunc = true
+	case *t.NodeNameSingle:
+		singleName = n.Name
+	}
+
+	if ctx.fCtx.PackageName == "main" && singleName == "main" {
+		e := irMainWrapper(ctx, fnDefNode)
+		if e != nil {
+			return e
+		}
+	}
+
 	ctx.builder.WriteString("define ")
 	e := irType(ctx, &fnDefNode.ReturnType)
 	if e != nil {
@@ -30,19 +94,16 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 		return e
 	}
 
-	isMemberFunc := false
-	switch fnDefNode.Class.NameNode.(type) {
-	case *t.NodeNameComposite:
-		isMemberFunc = true
-	}
-
 	e = irArgsList(ctx, &fnDefNode.Class.ArgsNode, isMemberFunc, fnDefNode.ReturnType.Throws)
 	if e != nil {
 		return e
 	}
 
-	ctx.builder.WriteString(" {")
-	ctx.builder.WriteString("}\n")
+	ctx.builder.WriteString(" ")
+	e = irBody(ctx, &fnDefNode.Body)
+	if e != nil {
+		return e
+	}
 	return nil
 }
 

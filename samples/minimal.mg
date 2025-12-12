@@ -3,9 +3,9 @@ use io
 
 myStruct(field u32)
 
-myStruct.member() !void:
+myStruct.member(first u32) !void:
 ..
 
-pub main(arg void, second void) !void:
+pub main() !void:
     ret
 ..
