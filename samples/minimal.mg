@@ -1,8 +1,11 @@
 mod main
 use io
 
-myStruct()
+myStruct(field u32)
 
-pub main(arg void) !void:
+myStruct.member() !void:
+..
+
+pub main(arg void, second void) !void:
     ret
 ..

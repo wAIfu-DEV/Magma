@@ -2,6 +2,7 @@ package main
 
 import (
 	lineidx "Magma/src/line_idx"
+	llvmir "Magma/src/llvm_ir"
 	"Magma/src/parser"
 	"Magma/src/tokenizer"
 	"Magma/src/types"
@@ -44,6 +45,14 @@ func wrappedMain() error {
 	}
 
 	fCtx.GlNode.Print(0)
+
+	irStr, err := llvmir.IrWrite(fCtx, &fCtx.GlNode)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("Llvm IR:")
+	fmt.Println(irStr)
 	return nil
 }
 

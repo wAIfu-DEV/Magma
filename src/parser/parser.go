@@ -32,10 +32,11 @@ func peek(ctx *ParseCtx) (t.Token, error) {
 }
 
 func peekNth(ctx *ParseCtx, n int) (t.Token, error) {
-	if (ctx.TokIdx + n) >= len(ctx.Toks) {
+	nthIdx := ctx.TokIdx + n
+	if nthIdx >= len(ctx.Toks) || nthIdx < 0 {
 		return t.Token{}, errOutOfBounds
 	}
-	return ctx.Toks[ctx.TokIdx+n], nil
+	return ctx.Toks[nthIdx], nil
 }
 
 func consume(ctx *ParseCtx) {
@@ -61,6 +62,8 @@ func ensureNoModifiers(ctx *ParseCtx, tk t.Token) error {
 }
 
 func parseApplyModifier(ctx *ParseCtx, tk t.Token, md ModifierType) error {
+	// TODO: apply modifiers to decl
+
 	if slices.Contains(ctx.NextModifiers, md) {
 		return comp_err.CompilationErrorToken(
 			ctx.Fctx,
@@ -159,7 +162,7 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token) error {
 	return nil
 }
 
-func parseName(ctx *ParseCtx, tk t.Token) (t.NodeName, error) {
+func parseName(ctx *ParseCtx, tk t.Token, allowComposite bool) (t.NodeName, error) {
 	parts := []string{}
 
 	for {
@@ -190,6 +193,15 @@ func parseName(ctx *ParseCtx, tk t.Token) (t.NodeName, error) {
 
 		if maybeDot.KeywType != t.KwDot {
 			break
+		}
+
+		if !allowComposite {
+			return nil, comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&tk,
+				"syntax error: context does not allow for name to be a composite name",
+				"a name chain joined by '.' is a composite name, some contexts do not allow them.",
+			)
 		}
 		consume(ctx)
 	}
@@ -301,6 +313,10 @@ func parseArgsList(ctx *ParseCtx) (t.NodeArgList, error) {
 				"expected args list format: `()`, `(name type)`, `(name type, ...)`",
 			)
 		}
+
+		if tk.KeywType == t.KwComma {
+			consume(ctx)
+		}
 	}
 }
 
@@ -338,7 +354,7 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (t.NodeType, error) {
 	}
 
 	if tk.Type == t.TokName {
-		n, e := parseName(ctx, tk)
+		n, e := parseName(ctx, tk, true)
 		if e != nil {
 			return t.NodeType{}, e
 		}
@@ -415,7 +431,7 @@ func parseBody(ctx *ParseCtx, tk t.Token) (t.NodeBody, error) {
 }
 
 func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
-	n, e := parseName(ctx, tk)
+	n, e := parseName(ctx, tk, true)
 	if e != nil {
 		return nil, e
 	}
