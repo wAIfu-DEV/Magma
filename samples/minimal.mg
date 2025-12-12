@@ -1,6 +1,8 @@
 mod main
 use io
 
-pub main() !void:
+myStruct()
+
+pub main(arg void) !void:
     ret
 ..

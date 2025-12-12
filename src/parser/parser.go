@@ -194,27 +194,63 @@ func parseName(ctx *ParseCtx, tk t.Token) (t.NodeName, error) {
 		consume(ctx)
 	}
 
-	partsLen := len(parts)
-
-	if partsLen == 0 {
+	switch len(parts) {
+	case 0:
 		return nil, comp_err.CompilationErrorToken(
 			ctx.Fctx,
 			&tk,
 			"syntax error: name parsing failure, unexpected state",
 			"",
 		)
-	} else if partsLen == 1 {
+	case 1:
 		return &t.NodeNameSingle{
 			Name: parts[0],
 		}, nil
-	} else {
+	default:
 		return &t.NodeNameComposite{
 			Parts: parts,
 		}, nil
 	}
 }
 
+func parseArgument(ctx *ParseCtx) (t.NodeArg, error) {
+	name, e := peek(ctx)
+	if e != nil {
+		return t.NodeArg{}, e
+	}
+
+	if name.Type != t.TokName {
+		return t.NodeArg{}, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&name,
+			fmt.Sprintf("syntax error: expected argument name but got '%s'", name.Repr),
+			"expected: `(name type, ...)`",
+		)
+	}
+
+	consume(ctx)
+
+	typeTk, e := peek(ctx)
+	if e != nil {
+		return t.NodeArg{}, e
+	}
+
+	ndType, e := parseType(ctx, typeTk, false)
+	if e != nil {
+		return t.NodeArg{}, e
+	}
+
+	return t.NodeArg{
+		Name:     name.Repr,
+		TypeNode: ndType,
+	}, nil
+}
+
 func parseArgsList(ctx *ParseCtx) (t.NodeArgList, error) {
+	n := t.NodeArgList{
+		Args: make([]t.NodeArg, 0),
+	}
+
 	openPar, e := peek(ctx)
 	if e != nil {
 		return t.NodeArgList{}, e
@@ -229,23 +265,43 @@ func parseArgsList(ctx *ParseCtx) (t.NodeArgList, error) {
 	}
 	consume(ctx)
 
-	closePar, e := peek(ctx)
-	if e != nil {
-		return t.NodeArgList{}, e
-	}
-	if closePar.KeywType != t.KwParenCl {
-		return t.NodeArgList{}, comp_err.CompilationErrorToken(
-			ctx.Fctx,
-			&closePar,
-			fmt.Sprintf("syntax error: expected ')' but got '%s'", closePar.Repr),
-			"",
-		)
-	}
-	consume(ctx)
+	for {
+		tk, e := peek(ctx)
+		if e != nil {
+			return t.NodeArgList{}, e
+		}
 
-	return t.NodeArgList{
-		Args: []t.NodeArg{},
-	}, nil
+		// TODO: func drainNewLines()
+		if tk.KeywType == t.KwNewline {
+			consume(ctx)
+			continue
+		}
+
+		if tk.KeywType == t.KwParenCl {
+			consume(ctx)
+			return n, nil
+		}
+
+		argNode, e := parseArgument(ctx)
+		if e != nil {
+			return t.NodeArgList{}, e
+		}
+		n.Args = append(n.Args, argNode)
+
+		tk, e = peek(ctx)
+		if e != nil {
+			return t.NodeArgList{}, e
+		}
+
+		if tk.KeywType != t.KwParenCl && tk.KeywType != t.KwComma {
+			return t.NodeArgList{}, comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&tk,
+				fmt.Sprintf("syntax error: unexpected '%s' when expected ',' or ')'", tk.Repr),
+				"expected args list format: `()`, `(name type)`, `(name type, ...)`",
+			)
+		}
+	}
 }
 
 func parseGenericClass(ctx *ParseCtx, nameNode t.NodeName) (t.NodeGenericClass, error) {
@@ -260,9 +316,18 @@ func parseGenericClass(ctx *ParseCtx, nameNode t.NodeName) (t.NodeGenericClass, 
 	return n, nil
 }
 
-func parseType(ctx *ParseCtx, tk t.Token) (t.NodeType, error) {
+func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (t.NodeType, error) {
 	isThrowing := false
 	if tk.KeywType == t.KwExclam {
+		if !allowThrow {
+			return t.NodeType{}, comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&tk,
+				"syntax error: context does not allow for type to be a throwing type",
+				"a type prefixed by '!' is a throwing type, some contexts do not allow them.",
+			)
+		}
+
 		isThrowing = true
 		consume(ctx)
 	}
@@ -328,7 +393,7 @@ func parseBody(ctx *ParseCtx, tk t.Token) (t.NodeBody, error) {
 	for {
 		tk, e := peek(ctx)
 		if e != nil {
-			return n, nil
+			return t.NodeBody{}, e
 		}
 
 		if tk.KeywType == t.KwNewline {
@@ -387,7 +452,7 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 			}, nil
 		}
 
-		typeNode, e := parseType(ctx, after)
+		typeNode, e := parseType(ctx, after, true)
 		if e != nil {
 			return nil, e
 		}

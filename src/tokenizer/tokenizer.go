@@ -171,7 +171,7 @@ func handleNonAlphaKeyword(ctx *TkCtx, first rune) (t.Token, int, error) {
 		return t.Token{}, 0,
 			comp_err.CompilationErrorToken(
 				ctx.fCtx,
-				&ctx.CurrTok,
+				&t.Token{Repr: string(first), Pos: ctx.Pos},
 				fmt.Sprintf("'%c' is not a valid keyword", first),
 				fmt.Sprintf("non alphanumeric character '%c' was not recognized as a valid keyword", first),
 			)
@@ -298,16 +298,15 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 		}
 
 		if ctx.CurrTok.Type == t.TokLitNum {
-			if unicode.IsDigit(r) || r == '.' {
-				consume(ctx)
-				continue
+			if !(unicode.IsDigit(r) || r == '.') {
+				ctx.TokReprBuff = append(ctx.TokReprBuff, r)
+				return nil, comp_err.CompilationErrorToken(
+					ctx.fCtx,
+					&t.Token{Repr: string(ctx.TokReprBuff), Pos: ctx.CurrTok.Pos},
+					fmt.Sprintf("invalid character '%c' in number literal", r),
+					"valid characters in number literal are: [0-9.]",
+				)
 			}
-			return nil, comp_err.CompilationErrorToken(
-				ctx.fCtx,
-				&ctx.CurrTok,
-				fmt.Sprintf("invalid character '%c' in number literal", r),
-				"valid characters in number literal are: [0-9.]",
-			)
 		}
 
 		if len(ctx.TokReprBuff) == 0 {

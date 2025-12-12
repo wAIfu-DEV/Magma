@@ -40,6 +40,7 @@ const (
 	KwPublic
 	KwReturn
 	KwNewline
+	KwComma
 )
 
 var KwTypeToRepr []string = []string{
@@ -56,6 +57,7 @@ var KwTypeToRepr []string = []string{
 	KwPublic:  "pub",
 	KwReturn:  "ret",
 	KwNewline: "\n",
+	KwComma:   ",",
 }
 
 var KwReprToType map[string]KwType = map[string]KwType{
@@ -72,6 +74,7 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"pub": KwPublic,
 	"ret": KwReturn,
 	"\n":  KwNewline,
+	",":   KwComma,
 }
 
 type Token struct {
@@ -111,8 +114,9 @@ const (
 )
 
 func PrintIndent(n int) {
-	p := make([]byte, n)
-	for i := range n {
+	d := n * 2
+	p := make([]byte, d)
+	for i := range d {
 		p[i] = ' '
 	}
 	s := *(*string)(unsafe.Pointer(&p))
@@ -283,7 +287,7 @@ type NodeGlobal struct {
 }
 
 func (n *NodeGlobal) Print(indent int) {
-	fmt.Printf("Node Tree:\n")
+	fmt.Printf("\nNode Tree:\n")
 
 	PrintIndent(indent)
 	fmt.Printf("Global\n")

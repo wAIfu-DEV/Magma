@@ -27,7 +27,12 @@ func CompilationErrorToken(ctx *types.FileCtx, tk *types.Token, shortDesc string
 		lnStart := ctx.LineIdx[currLine] + 1
 		lnEnd := ctx.LineIdx[currLine+1] - 1
 		line := ctx.Content[lnStart:lnEnd]
-		fmt.Printf("%d| %s\n", pos.Line, line)
+
+		left := line[:pos.Col-1]
+		middle := line[pos.Col-1 : int(pos.Col-1)+len(tk.Repr)]
+		right := line[int(pos.Col-1)+len(tk.Repr):]
+
+		fmt.Printf("%d| %s\x1b[31m\x1b[4:3m%s\x1b[0m%s\n", pos.Line, left, middle, right)
 	}
 
 	// next line
