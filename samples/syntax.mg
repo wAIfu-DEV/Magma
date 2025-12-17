@@ -1,9 +1,8 @@
 mod main
 
-use errors
-use io
-use heap
-use gc
+use "std/errors" errors
+use "std/io"     io
+use "std/heap"   heap
 
 # comment line
 # second comment line
@@ -11,11 +10,11 @@ use gc
 # global var defintion
 my_var u64 = 0
 
-# global const defintion
+# global const/immutable defintion
 MY_CONST u64 : 0
 
 # function defintion
-myFunc (first_arg u64, second_arg f32) !bool:
+myFunc(first_arg u64, second_arg f32) !bool:
 
     if first_arg == 0:
         io.printLn("first branch")
@@ -34,26 +33,32 @@ myFunc (first_arg u64, second_arg f32) !bool:
 ..
 
 # struct definition
-MyStruct (
+MyStruct(
     first_field u64,
     second_field f32,
     third_field str,
 )
 
 # struct member func defintion
-MyStruct.memberFunc () void:
+MyStruct.memberFunc() void:
     this.third_field = "some str value"
     this.first_field = this.third_field.count
 ..
 
-allocs () !void:
-    on_heap *MyStruct = try heap.alloc(sizeof(MyStruct))
-    defer heap.free(on_heap)
+allocs() !void:
+    heap_ptr *MyStruct = try heap.alloc(sizeof(MyStruct))
+    defer heap.free(heap_ptr)
+
+    ref_counted_ptr $MyStruct = rfc MyStruct() # moves a copy of MyStruct to heap
+    # ref counted '$' vars are freed once every references fall out of scope
+
+    rfc2 $MyStruct = ref_counted_ptr # adds another reference, until rfc2 falls out of scope
 ..
 
-pub main (args str[]) !void:
+pub main(args str[]) !void:
 
     # auto-throw on error
+    # only works from within functions with a return type of !T
     ret_val bool = try myFunc(0, 0.0)
 
     # handle error, equivalent to previous
@@ -80,7 +85,7 @@ pub main (args str[]) !void:
 
     my_ptr.memberFunc()
 
-    for i u64 = 0..args.count:
+    for i u64 = 0->args.count:
         io.printLn(args[i])
     ..
     ret

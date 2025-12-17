@@ -4,32 +4,136 @@ import (
 	magmatypes "Magma/src/magma_types"
 	t "Magma/src/types"
 	"fmt"
-	"slices"
+	"maps"
+	"strconv"
 	"strings"
+	"sync"
 )
+
+type SsaName string
 
 type IrCtx struct {
 	fCtx    *t.FileCtx
-	builder strings.Builder
+	builder *strings.Builder
+	nextSsa int
+}
+
+func irSsaName(ctx *IrCtx) SsaName {
+	name := strconv.Itoa(ctx.nextSsa)
+	ctx.nextSsa++
+	return SsaName(name)
 }
 
 func irWritef(ctx *IrCtx, format string, a ...any) {
 	ctx.builder.WriteString(fmt.Sprintf(format, a...))
 }
 
+func irVarDefAssign(ctx *IrCtx, vda *t.NodeExprVarDefAssign) (SsaName, error) {
+	assignSsa, e := irExpression(ctx, vda.AssignExpr)
+	if e != nil {
+		return SsaName(""), e
+	}
+
+	allocSsa := irSsaName(ctx)
+	ctx.builder.WriteString(fmt.Sprintf("  %%%s = alloca ", allocSsa))
+	e = irType(ctx, &vda.VarDef.Type)
+	if e != nil {
+		return SsaName(""), e
+	}
+	ctx.builder.WriteString("\n")
+
+	ctx.builder.WriteString("  store ")
+	e = irType(ctx, &vda.VarDef.Type)
+	if e != nil {
+		return SsaName(""), e
+	}
+	ctx.builder.WriteString(fmt.Sprintf(" %%%s, ", assignSsa))
+	e = irType(ctx, &vda.VarDef.Type)
+	if e != nil {
+		return SsaName(""), e
+	}
+	ctx.builder.WriteString(fmt.Sprintf(" %%%s\n", allocSsa))
+	return allocSsa, nil
+}
+
+func irExprFuncCall(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
+	ssaName := irSsaName(ctx)
+
+	argsSsa := make([]SsaName, len(fnCall.Args))
+	for i, expr := range fnCall.Args {
+		exprSsa, e := irExpression(ctx, expr)
+		if e != nil {
+			return SsaName(""), e
+		}
+		argsSsa[i] = exprSsa
+	}
+
+	ctx.builder.WriteString(fmt.Sprintf("  %%%s = call ", ssaName))
+
+	// TODO: print type
+	ctx.builder.WriteString("<type> ")
+
+	switch expr := fnCall.Callee.(type) {
+	case *t.NodeExprName:
+		e := irName(ctx, expr.Name, true)
+		if e != nil {
+			return SsaName(""), e
+		}
+	default:
+		ctx.builder.WriteString("<name>")
+	}
+
+	ctx.builder.WriteString("(")
+
+	bound := len(argsSsa)
+	for i, ssa := range argsSsa {
+		ctx.builder.WriteString(fmt.Sprintf("%%%s", ssa))
+		if bound < i {
+			ctx.builder.WriteString(", ")
+		}
+	}
+
+	ctx.builder.WriteString(")\n")
+	return ssaName, nil
+}
+
+func irExpression(ctx *IrCtx, expr t.NodeExpr) (SsaName, error) {
+	switch ne := expr.(type) {
+	case *t.NodeExprVarDefAssign:
+		return irVarDefAssign(ctx, ne)
+	case *t.NodeExprCall:
+		return irExprFuncCall(ctx, ne)
+	}
+	return SsaName(""), nil
+}
+
 func irStmtReturn(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
 	// TODO: lower expression
-	ctx.builder.WriteString("  ret\n")
+	switch stmtRet.Expression.(type) {
+	case *t.NodeExprVoid:
+		ctx.builder.WriteString("  ret <type>\n")
+	default:
+		ssa, e := irExpression(ctx, stmtRet.Expression)
+		if e != nil {
+			return e
+		}
+		ctx.builder.WriteString(fmt.Sprintf("  ret <type> %%%s\n", ssa))
+	}
 	return nil
 }
 
 func irStatement(ctx *IrCtx, stmtNode t.NodeStatement) error {
+	var e error
+
 	switch s := stmtNode.(type) {
 	case *t.NodeStmtRet:
-		e := irStmtReturn(ctx, s)
-		if e != nil {
-			return e
-		}
+		e = irStmtReturn(ctx, s)
+	case *t.NodeStmtExpr:
+		_, e = irExpression(ctx, s.Expression)
+	}
+
+	if e != nil {
+		return e
 	}
 	return nil
 }
@@ -175,13 +279,12 @@ func irNameComposite(ctx *IrCtx, nameNode *t.NodeNameComposite, withPackage bool
 	if withPackage {
 		first := nameNode.Parts[0]
 
-		pack := ctx.fCtx.PackageName
-		if slices.Contains(ctx.fCtx.Imports, first) {
-			pack = first
+		// if not imported package, prepend with <thispackage>.
+		_, ok := ctx.fCtx.ImportAlias[first]
+		if !ok {
+			ctx.builder.WriteString(ctx.fCtx.PackageName)
+			ctx.builder.WriteString(".")
 		}
-
-		ctx.builder.WriteString(pack)
-		ctx.builder.WriteString(".")
 	}
 
 	bound := len(nameNode.Parts)
@@ -220,8 +323,8 @@ func irType(ctx *IrCtx, typeNode *t.NodeType) error {
 			_, ok := magmatypes.BasicTypes[n.Name]
 			if ok {
 				ctx.builder.WriteString(magmatypes.BasicTypes[n.Name])
+				return nil
 			}
-			return nil
 		}
 
 		ctx.builder.WriteString("%struct.")
@@ -285,30 +388,87 @@ func irGlobal(ctx *IrCtx, glNode *t.NodeGlobal) error {
 	return nil
 }
 
-func IrWrite(fCtx *t.FileCtx, glNode *t.NodeGlobal) (string, error) {
+func irWriteModule(fCtx *t.FileCtx, builder *strings.Builder) error {
 	ctx := &IrCtx{
 		fCtx:    fCtx,
-		builder: strings.Builder{},
+		builder: builder,
 	}
-	ctx.builder.Grow(128)
+	ctx.builder.Grow(512)
 
 	irWritef(ctx, "; File=\"%s\"\n", ctx.fCtx.FilePath)
 	irWritef(ctx, "; Module=\"%s\"\n\n", ctx.fCtx.PackageName)
 
-	ctx.builder.WriteString("; Basic Types\n")
-	magmatypes.WriteIrBasicTypes(&ctx.builder)
-
-	ctx.builder.WriteString("\n; Defined Types\n")
-	e := irGlobalStructDefs(ctx, glNode)
+	ctx.builder.WriteString("; Defined Types\n")
+	e := irGlobalStructDefs(ctx, &fCtx.GlNode)
 	if e != nil {
-		return "", e
+		return e
 	}
 
 	ctx.builder.WriteString("\n; Code\n")
-	e = irGlobal(ctx, glNode)
+	e = irGlobal(ctx, &fCtx.GlNode)
 	if e != nil {
-		return "", e
+		return e
+	}
+	return nil
+}
+
+func IrWrite(shared *t.SharedState) (string, error) {
+	// creates a shallow copy of shared.Files, will prevent any race condition
+	// if it were ever to be modified, which it shouldn't.
+	shared.FilesM.Lock()
+	filesMap := maps.Clone(shared.Files)
+	shared.FilesM.Unlock()
+
+	// write header
+	headBld := &strings.Builder{}
+	headBld.WriteString("; Magma\n\n")
+	headBld.WriteString("; Basic Types\n")
+	magmatypes.WriteIrBasicTypes(headBld)
+	header := headBld.String()
+
+	// result receiver
+	type resStr struct {
+		S string
+		E error
+	}
+	results := make([]resStr, len(filesMap)+1)
+	results[0] = resStr{S: header}
+
+	// multithreaded writing per-module
+
+	wg := sync.WaitGroup{}
+	wg.Add(len(filesMap))
+
+	i := 1
+	for _, v := range filesMap {
+
+		localI := i
+		go func(idx int) {
+			defer wg.Done()
+
+			// module local builder
+			moduleBld := &strings.Builder{}
+			e := irWriteModule(v, moduleBld)
+			if e != nil {
+				results[idx] = resStr{E: e}
+				return
+			}
+			results[idx] = resStr{S: moduleBld.String()}
+		}(localI)
+
+		i++
 	}
 
-	return ctx.builder.String(), nil
+	// join threads
+	wg.Wait()
+
+	// process results
+	irStrings := []string{}
+	for _, r := range results {
+		if r.E != nil {
+			return "", r.E
+		}
+		irStrings = append(irStrings, r.S)
+	}
+	return strings.Join(irStrings, "\n"), nil
 }

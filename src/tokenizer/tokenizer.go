@@ -233,7 +233,7 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 			continue
 		}
 
-		if r == '#' && ctx.Mode == tkModeNormal {
+		if ctx.Mode == tkModeNormal && r == '#' {
 			if ctx.Mode == tkModeNormal {
 				pushTokenBuff(ctx)
 			}
@@ -256,13 +256,13 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 
 		ctx.IsEscaped = false
 
-		if r == '\\' && ctx.Mode == tkModeString {
+		if ctx.Mode == tkModeString && r == '\\' {
 			ctx.IsEscaped = true
 			consume(ctx)
 			continue
 		}
 
-		if unicode.IsSpace(r) {
+		if ctx.Mode == tkModeNormal && unicode.IsSpace(r) {
 			pushTokenBuff(ctx)
 
 			if r == '\n' {
@@ -281,7 +281,7 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 			continue
 		}
 
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+		if ctx.Mode == tkModeNormal && !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
 			pushTokenBuff(ctx)
 
 			tk, size, err := handleNonAlphaKeyword(ctx, r)
@@ -293,11 +293,11 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 			continue
 		}
 
-		if unicode.IsDigit(r) && len(ctx.TokReprBuff) == 0 {
+		if ctx.Mode == tkModeNormal && unicode.IsDigit(r) && len(ctx.TokReprBuff) == 0 {
 			ctx.CurrTok.Type = t.TokLitNum
 		}
 
-		if ctx.CurrTok.Type == t.TokLitNum {
+		if ctx.Mode == tkModeNormal && ctx.CurrTok.Type == t.TokLitNum {
 			if !(unicode.IsDigit(r) || r == '.') {
 				ctx.TokReprBuff = append(ctx.TokReprBuff, r)
 				return nil, comp_err.CompilationErrorToken(

@@ -1,13 +1,13 @@
 package main
 
 import (
-	lineidx "Magma/src/line_idx"
 	llvmir "Magma/src/llvm_ir"
-	"Magma/src/parser"
-	"Magma/src/tokenizer"
+	"Magma/src/makeabs"
+	"Magma/src/pipeline"
 	"Magma/src/types"
 	"fmt"
 	"os"
+	"sync"
 )
 
 func wrappedMain() error {
@@ -18,45 +18,51 @@ func wrappedMain() error {
 	} else if len(args) == 0 {
 		return fmt.Errorf("not enough arguments")
 	}
-
 	filePathArg := args[0]
-
-	fileBytes, err := os.ReadFile(filePathArg)
-	if err != nil {
-		return fmt.Errorf("failed to open file")
+	absPath, e := makeabs.MakeAbs(filePathArg, os.Args[0])
+	if e != nil {
+		return e
 	}
 
-	fCtx := &types.FileCtx{
-		FilePath: filePathArg,
-		Content:  fileBytes,
-		LineIdx:  lineidx.GetLineIdx(fileBytes),
+	shared := &types.SharedState{
+		ImportM:       sync.Mutex{},
+		ImportedFiles: map[string]<-chan error{},
+
+		Files:  map[string]*types.FileCtx{},
+		FilesM: sync.Mutex{},
+
+		PipeChans:  []<-chan error{},
+		PipeChansM: sync.Mutex{},
+
+		PipelineFunc: pipeline.PipelineAsync,
+		WaitGroup:    sync.WaitGroup{},
 	}
 
-	fCtx.Tokens, err = tokenizer.Tokenize(fCtx, fileBytes)
-
-	if err != nil {
-		return err
-	}
-	tokenizer.PrintTokens(fCtx.Tokens)
-
-	fCtx.GlNode, err = parser.Parse(fCtx)
-	if err != nil {
-		return err
+	e = pipeline.Pipeline(shared, absPath, "", absPath)
+	if e != nil {
+		return e
 	}
 
-	fCtx.GlNode.Print(0)
+	shared.WaitGroup.Wait() // wait for other compilation units
 
-	irStr, err := llvmir.IrWrite(fCtx, &fCtx.GlNode)
-	if err != nil {
-		return err
+	for k, v := range shared.ImportedFiles {
+		err := <-v
+		if err != nil {
+			fmt.Printf("%s: %s\n", k, err.Error())
+		}
+	}
+
+	irStr, e := llvmir.IrWrite(shared)
+	if e != nil {
+		return e
 	}
 
 	fmt.Println("Llvm IR:")
 	fmt.Println(irStr)
 
-	err = os.WriteFile("out.ll", []byte(irStr), 0666)
-	if err != nil {
-		return err
+	e = os.WriteFile("out.ll", []byte(irStr), 0666)
+	if e != nil {
+		return e
 	}
 	return nil
 }

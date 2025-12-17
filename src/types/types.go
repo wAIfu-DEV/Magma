@@ -3,6 +3,7 @@ package types
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"unsafe"
 )
 
@@ -41,23 +42,33 @@ const (
 	KwReturn
 	KwNewline
 	KwComma
+	KwMinus
+	KwPlus
+	KwDollar
+	KwAsterisk
+	KwAmpersand
 )
 
 var KwTypeToRepr []string = []string{
-	KwNone:    "",
-	KwEqual:   "=",
-	KwParenOp: "(",
-	KwParenCl: ")",
-	KwColon:   ":",
-	KwDot:     ".",
-	KwDots:    "..",
-	KwExclam:  "!",
-	KwModule:  "mod",
-	KwUse:     "use",
-	KwPublic:  "pub",
-	KwReturn:  "ret",
-	KwNewline: "\n",
-	KwComma:   ",",
+	KwNone:      "",
+	KwEqual:     "=",
+	KwParenOp:   "(",
+	KwParenCl:   ")",
+	KwColon:     ":",
+	KwDot:       ".",
+	KwDots:      "..",
+	KwExclam:    "!",
+	KwModule:    "mod",
+	KwUse:       "use",
+	KwPublic:    "pub",
+	KwReturn:    "ret",
+	KwNewline:   "\n",
+	KwComma:     ",",
+	KwMinus:     "-",
+	KwPlus:      "+",
+	KwDollar:    "$",
+	KwAsterisk:  "*",
+	KwAmpersand: "&",
 }
 
 var KwReprToType map[string]KwType = map[string]KwType{
@@ -75,6 +86,11 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"ret": KwReturn,
 	"\n":  KwNewline,
 	",":   KwComma,
+	"-":   KwMinus,
+	"+":   KwPlus,
+	"$":   KwDollar,
+	"*":   KwAsterisk,
+	"&":   KwAmpersand,
 }
 
 type Token struct {
@@ -93,6 +109,7 @@ type FileCtx struct {
 	FilePath    string
 	PackageName string
 	Imports     []string
+	ImportAlias map[string]string
 	Content     []byte
 	LineIdx     []int
 	Tokens      []Token
@@ -158,7 +175,7 @@ type NodeNameSingle struct {
 
 func (n *NodeNameSingle) Print(indent int) {
 	PrintIndent(indent)
-	fmt.Printf("NameSingle(%s)\n", n.Name)
+	fmt.Printf("NameSingle(name=%s)\n", n.Name)
 }
 
 type NodeNameComposite struct {
@@ -167,7 +184,7 @@ type NodeNameComposite struct {
 
 func (n *NodeNameComposite) Print(indent int) {
 	PrintIndent(indent)
-	fmt.Printf("NameComposite(%s)\n", strings.Join(n.Parts, "."))
+	fmt.Printf("NameComposite(name=%s)\n", strings.Join(n.Parts, "."))
 }
 
 type NodeType struct {
@@ -191,6 +208,26 @@ func (n *NodeTypeNamed) Print(indent int) {
 	n.NameNode.Print(indent + 1)
 }
 
+type NodeTypePointer struct {
+	Kind NodeTypeKind
+}
+
+func (n *NodeTypePointer) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("TypePointer\n")
+	n.Kind.Print(indent + 1)
+}
+
+type NodeTypeRfc struct {
+	Kind NodeTypeKind
+}
+
+func (n *NodeTypeRfc) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("TypeRfc\n")
+	n.Kind.Print(indent + 1)
+}
+
 type NodeExprVoid struct {
 }
 
@@ -199,14 +236,120 @@ func (n *NodeExprVoid) Print(indent int) {
 	fmt.Printf("ExprVoid\n")
 }
 
+type NodeExprUnary struct {
+	Operator KwType
+	Operand  NodeExpr
+}
+
+func (n *NodeExprUnary) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprUnary(op=%s)\n", KwTypeToRepr[n.Operator])
+	n.Operand.Print(indent + 1)
+}
+
+type NodeExprLit struct {
+	Value   string
+	LitType TokType
+}
+
+func (n *NodeExprLit) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprLit(type=%s, '%s')\n", TokTypeToRepr[n.LitType], n.Value)
+}
+
+type NodeExprName struct {
+	Name NodeName
+}
+
+func (n *NodeExprName) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprName\n")
+	n.Name.Print(indent + 1)
+}
+
+type NodeExprCall struct {
+	Callee NodeExpr
+	Args   []NodeExpr
+}
+
+func (n *NodeExprCall) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprCall\n")
+
+	PrintIndent(indent + 1)
+	fmt.Printf("Callee\n")
+	n.Callee.Print(indent + 2)
+
+	PrintIndent(indent + 1)
+	fmt.Printf("ArgExprs\n")
+	for _, expr := range n.Args {
+		expr.Print(indent + 2)
+	}
+}
+
+type NodeExprBinary struct {
+	Operator KwType
+	Left     NodeExpr
+	Right    NodeExpr
+}
+
+func (n *NodeExprBinary) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprBinary(op=%s)\n", KwTypeToRepr[n.Operator])
+
+	PrintIndent(indent + 1)
+	fmt.Printf("Left\n")
+	n.Left.Print(indent + 2)
+
+	PrintIndent(indent + 1)
+	fmt.Printf("Right\n")
+	n.Right.Print(indent + 2)
+}
+
 type NodeStmtRet struct {
 	Expression NodeExpr
 }
 
 func (n *NodeStmtRet) Print(indent int) {
 	PrintIndent(indent)
-	fmt.Printf("Return\n")
+	fmt.Printf("StmtRet\n")
 	n.Expression.Print(indent + 1)
+}
+
+type NodeStmtExpr struct {
+	Expression NodeExpr
+}
+
+func (n *NodeStmtExpr) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("StmtExpr\n")
+	n.Expression.Print(indent + 1)
+}
+
+type NodeExprVarDef struct {
+	Name NodeName
+	Type NodeType
+}
+
+func (n *NodeExprVarDef) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("NodeExprVarDef\n")
+	n.Name.Print(indent + 1)
+	n.Type.Print(indent + 1)
+}
+
+type NodeExprVarDefAssign struct {
+	VarDef     NodeExprVarDef
+	AssignExpr NodeExpr
+}
+
+func (n *NodeExprVarDefAssign) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprVarDefAssign\n")
+	n.VarDef.Print(indent + 1)
+	PrintIndent(indent + 1)
+	fmt.Printf("AssignExpr\n")
+	n.AssignExpr.Print(indent + 2)
 }
 
 type NodeArg struct {
@@ -216,7 +359,7 @@ type NodeArg struct {
 
 func (n *NodeArg) Print(indent int) {
 	PrintIndent(indent)
-	fmt.Printf("Arg(%s)\n", n.Name)
+	fmt.Printf("Arg(name=%s)\n", n.Name)
 	n.TypeNode.Print(indent + 1)
 }
 
@@ -299,10 +442,33 @@ func (n *NodeGlobal) Print(indent int) {
 	fmt.Printf("\n")
 }
 
-func (*NodeExprVoid) IsExpr()        {}
-func (*NodeTypeNamed) IsType()       {}
-func (*NodeNameSingle) IsName()      {}
-func (*NodeNameComposite) IsName()   {}
-func (*NodeStmtRet) IsStatement()    {}
-func (*NodeFuncDef) IsGlobalDecl()   {}
-func (*NodeStructDef) IsGlobalDecl() {}
+func (*NodeExprVoid) IsExpr()         {}
+func (*NodeExprUnary) IsExpr()        {}
+func (*NodeExprLit) IsExpr()          {}
+func (*NodeExprName) IsExpr()         {}
+func (*NodeExprCall) IsExpr()         {}
+func (*NodeExprBinary) IsExpr()       {}
+func (*NodeExprVarDef) IsExpr()       {}
+func (*NodeExprVarDefAssign) IsExpr() {}
+func (*NodeTypeNamed) IsType()        {}
+func (*NodeNameSingle) IsName()       {}
+func (*NodeNameComposite) IsName()    {}
+func (*NodeStmtRet) IsStatement()     {}
+func (*NodeStmtExpr) IsStatement()    {}
+func (*NodeFuncDef) IsGlobalDecl()    {}
+func (*NodeStructDef) IsGlobalDecl()  {}
+
+type SharedState struct {
+	ImportedFiles map[string]<-chan error
+	ImportM       sync.Mutex
+
+	Files  map[string]*FileCtx
+	FilesM sync.Mutex
+
+	PipeChans  []<-chan error
+	PipeChansM sync.Mutex
+
+	PipelineFunc func(shared *SharedState, filePath string, alias string, fromAbs string) <-chan error
+
+	WaitGroup sync.WaitGroup
+}

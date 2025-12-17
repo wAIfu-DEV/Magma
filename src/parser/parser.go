@@ -2,6 +2,7 @@ package parser
 
 import (
 	"Magma/src/comp_err"
+	"Magma/src/makeabs"
 	t "Magma/src/types"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ const (
 )
 
 type ParseCtx struct {
+	Shared        *t.SharedState
 	Fctx          *t.FileCtx
 	Toks          []t.Token
 	TokIdx        int
@@ -78,45 +80,52 @@ func parseApplyModifier(ctx *ParseCtx, tk t.Token, md ModifierType) error {
 	return nil
 }
 
-func parseModuleDecl(ctx *ParseCtx, tk t.Token) error {
-	e := ensureNoModifiers(ctx, tk)
-	if e != nil {
-		return e
-	}
+func parseModuleDecl(ctx *ParseCtx, _ t.Token) error {
+	// WARNING: Now handled in pipeline
+	consume(ctx) // mod
+	consume(ctx) // name
+	consume(ctx) // newln
 
-	name, e := peekNth(ctx, 1)
-	if e != nil || name.Type != t.TokName {
-		return comp_err.CompilationErrorToken(
-			ctx.Fctx,
-			&tk,
-			"syntax error: expected module name after 'mod'",
-			"expected: `mod <name>`",
-		)
-	}
+	/*
+		e := ensureNoModifiers(ctx, tk)
+		if e != nil {
+			return e
+		}
 
-	newln, e := peekNth(ctx, 2)
-	if (e != nil && !errors.Is(e, errOutOfBounds)) || newln.KeywType != t.KwNewline {
-		return comp_err.CompilationErrorToken(
-			ctx.Fctx,
-			&tk,
-			fmt.Sprintf("syntax error: expected end of line after module name but got '%s'", newln.Repr),
-			"expected: `mod <name>(\\n)`",
-		)
-	}
+		name, e := peekNth(ctx, 1)
+		if e != nil || name.Type != t.TokName {
+			return comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&tk,
+				"syntax error: expected module name after 'mod'",
+				"expected: `mod <name>`",
+			)
+		}
 
-	if ctx.Fctx.PackageName != "" {
-		return comp_err.CompilationErrorToken(
-			ctx.Fctx,
-			&tk,
-			fmt.Sprintf("syntax error: previously declared module as '%s'", ctx.Fctx.PackageName),
-			"only a single 'mod' declaration is allowed within the same file",
-		)
-	}
+		newln, e := peekNth(ctx, 2)
+		if (e != nil && !errors.Is(e, errOutOfBounds)) || newln.KeywType != t.KwNewline {
+			return comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&tk,
+				fmt.Sprintf("syntax error: expected end of line after module name but got '%s'", newln.Repr),
+				"expected: `mod <name>(\\n)`",
+			)
+		}
 
-	ctx.Fctx.PackageName = name.Repr
-	consume(ctx)
-	consume(ctx)
-	consume(ctx)
+		if ctx.Fctx.PackageName != "" {
+			return comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&tk,
+				fmt.Sprintf("syntax error: previously declared module as '%s'", ctx.Fctx.PackageName),
+				"only a single 'mod' declaration is allowed within the same file",
+			)
+		}
+
+		ctx.Fctx.PackageName = name.Repr
+		consume(ctx)
+		consume(ctx)
+		consume(ctx)
+	*/
 	return nil
 }
 
@@ -126,40 +135,352 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token) error {
 		return e
 	}
 
-	name, e := peekNth(ctx, 1)
-	if e != nil {
+	path, e := peekNth(ctx, 1)
+	if e != nil || path.Type != t.TokLitStr {
 		return comp_err.CompilationErrorToken(
 			ctx.Fctx,
 			&tk,
-			"syntax error: expected module name after 'use'",
-			"expected: `use <name>`",
+			"syntax error: expected file path after 'use'",
+			"expected: `use \"<filepath>\" <alias>`",
 		)
 	}
 
-	newln, e := peekNth(ctx, 2)
+	alias, e := peekNth(ctx, 2)
+	if e != nil || alias.Type != t.TokName {
+		return comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&tk,
+			"syntax error: expected alias after file path in 'use' statement",
+			"expected: `use \"<filepath>\" <alias>`",
+		)
+	}
+
+	newln, e := peekNth(ctx, 3)
 	if e != nil && !errors.Is(e, errOutOfBounds) {
 		return comp_err.CompilationErrorToken(
 			ctx.Fctx,
 			&tk,
-			fmt.Sprintf("syntax error: expected end of line after module name but got '%s'", newln.Repr),
-			"expected: `use <name>(\\n)`",
+			fmt.Sprintf("syntax error: expected end of line after file path but got '%s'", newln.Repr),
+			"expected: `use \"<filepath>\" <alias>(\\n)`",
 		)
 	}
 
-	if slices.Contains(ctx.Fctx.Imports, name.Repr) {
+	_, ok := ctx.Fctx.ImportAlias[alias.Repr]
+	if ok {
 		return comp_err.CompilationErrorToken(
 			ctx.Fctx,
-			&tk,
-			fmt.Sprintf("syntax error: already using module '%s'", name.Repr),
-			"only a single 'use' declaration is allowed per module within the same file",
+			&alias,
+			fmt.Sprintf("syntax error: already using a module with alias of '%s'", alias.Repr),
+			"cannot reuse module aliases within the same file",
 		)
 	}
 
-	ctx.Fctx.Imports = append(ctx.Fctx.Imports, name.Repr)
-	consume(ctx)
-	consume(ctx)
-	consume(ctx)
+	absPath, err := makeabs.MakeAbs(path.Repr, ctx.Fctx.FilePath)
+	if err != nil {
+		return comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&path,
+			fmt.Sprintf("syntax error: failed to get full path from '%s' (%s)", path.Repr, err.Error()),
+			"",
+		)
+	}
+
+	if slices.Contains(ctx.Fctx.Imports, absPath) {
+		return comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&path,
+			"syntax error: already using module from another 'use' declaration within this file",
+			"cannot use the same module multiple times within the same file",
+		)
+	}
+
+	consume(ctx) // use
+	consume(ctx) // path
+	consume(ctx) // alias
+	consume(ctx) // newln
+
+	ctx.Fctx.Imports = append(ctx.Fctx.Imports, absPath)
+	ctx.Fctx.ImportAlias[alias.Repr] = absPath
+
+	// start pipeline for imported file
+	fmt.Printf("running compilation pipeline for file: %s\n", absPath)
+	c := ctx.Shared.PipelineFunc(ctx.Shared, absPath, alias.Repr, ctx.Fctx.FilePath)
+
+	ctx.Shared.PipeChansM.Lock()
+	ctx.Shared.PipeChans = append(ctx.Shared.PipeChans, c)
+	ctx.Shared.PipeChansM.Unlock()
 	return nil
+}
+
+func parseSimplePrimaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
+	if tk.KeywType == t.KwParenOp {
+		next, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+
+		if next.KeywType == t.KwParenCl {
+			consume(ctx)
+			return &t.NodeExprVoid{}, nil
+		}
+
+		n, e := parseExpression(ctx, next, 0)
+		if e != nil {
+			return nil, e
+		}
+
+		maybeClose, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+
+		if maybeClose.KeywType != t.KwParenCl {
+			return nil, comp_err.CompilationErrorToken(
+				ctx.Fctx, &maybeClose,
+				"syntax error: missing closing ')' in grouped expression",
+				"",
+			)
+		}
+
+		consume(ctx)
+		return n, nil
+	}
+
+	if tk.Type == t.TokLitNum || tk.Type == t.TokLitStr {
+		consume(ctx)
+		return &t.NodeExprLit{Value: tk.Repr, LitType: tk.Type}, nil
+	}
+
+	if tk.Type == t.TokName {
+		n, e := parseName(ctx, tk, true)
+		if e != nil {
+			return nil, e
+		}
+		return &t.NodeExprName{Name: n}, nil
+	}
+
+	return nil, comp_err.CompilationErrorToken(
+		ctx.Fctx, &tk,
+		fmt.Sprintf("syntax error: unexpected '%s' in expression", tk.Repr),
+		"",
+	)
+}
+
+func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExpr, error) {
+	expr := baseExpr
+
+	for {
+		next, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+
+		if next.KeywType == t.KwNewline {
+			break
+		}
+
+		if next.KeywType == t.KwParenOp {
+			consume(ctx)
+			argExprs := []t.NodeExpr{}
+
+			maybeCl, e := peek(ctx)
+			if e != nil {
+				return nil, e
+			}
+
+			if maybeCl.KeywType == t.KwParenCl {
+				consume(ctx)
+			} else {
+				for {
+					nextExpr, e := peek(ctx)
+					if e != nil {
+						return nil, e
+					}
+					parsedExpr, e := parseExpression(ctx, nextExpr, 0)
+					if e != nil {
+						return nil, e
+					}
+					argExprs = append(argExprs, parsedExpr)
+
+					afterExpr, e := peek(ctx)
+					if e != nil {
+						return nil, e
+					}
+					if afterExpr.KeywType == t.KwComma {
+						consume(ctx)
+						afterComma, e := peek(ctx)
+						if e != nil {
+							return nil, e
+						}
+						if afterComma.KeywType == t.KwParenCl {
+							consume(ctx)
+							break
+						}
+						continue
+					}
+					if afterExpr.KeywType == t.KwParenCl {
+						consume(ctx)
+						break
+					}
+
+					return nil, comp_err.CompilationErrorToken(
+						ctx.Fctx, &tk,
+						fmt.Sprintf("syntax error: unexpected '%s' in call argument expression list", tk.Repr),
+						"",
+					)
+				}
+			}
+
+			expr = &t.NodeExprCall{
+				Callee: expr,
+				Args:   argExprs,
+			}
+			continue
+		}
+
+		if expr == baseExpr {
+			switch n := baseExpr.(type) {
+			case *t.NodeExprName:
+				typeNd, e := parseType(ctx, next, false)
+				if e != nil {
+					return nil, e
+				}
+				return &t.NodeExprVarDef{
+					Name: n.Name,
+					Type: typeNd,
+				}, nil
+			}
+		}
+		break
+	}
+
+	return expr, nil
+}
+
+func parsePrimaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
+	n, e := parseSimplePrimaryExpr(ctx, tk)
+	if e != nil {
+		return nil, e
+	}
+	return parsePostfixExpr(ctx, tk, n)
+}
+
+func parseUnaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
+	if tk.Type != t.TokKeyword {
+		switch tk.KeywType {
+		case t.KwExclam, t.KwMinus, t.KwAsterisk, t.KwAmpersand:
+			consume(ctx)
+			next, e := peek(ctx)
+			if e != nil {
+				return nil, e
+			}
+			exp, e := parseUnaryExpr(ctx, next)
+			if e != nil {
+				return nil, e
+			}
+
+			n := &t.NodeExprUnary{
+				Operator: tk.KeywType,
+				Operand:  exp,
+			}
+			return n, nil
+		}
+	}
+
+	return parsePrimaryExpr(ctx, tk)
+}
+
+func tokenEndsExpr(tk t.Token) bool {
+	if tk.KeywType == t.KwNewline {
+		return true
+	}
+
+	switch tk.KeywType {
+	// TODO: add BrackCl
+	case t.KwComma, t.KwParenCl, t.KwColon, t.KwDots:
+		return true
+	default:
+		return false
+	}
+}
+
+func getBinaryPrecedence(tk t.Token) int {
+	if tk.Type != t.TokKeyword {
+		return 0
+	}
+
+	switch tk.KeywType {
+	case t.KwAsterisk:
+		// TODO: implement
+		//case KW_TYPE_SLASH:
+		//case KW_TYPE_PERCENT:
+		return 50
+	case t.KwPlus, t.KwMinus:
+		return 40
+
+	// TODO: implement
+	//case KW_TYPE_CMPEQUAL:
+	//case KW_TYPE_CMPNEQUAL:
+	//	return 35
+
+	case t.KwEqual:
+		return 20
+	default:
+		return 0
+	}
+}
+
+func parseExpression(ctx *ParseCtx, tk t.Token, minPrecedence int) (t.NodeExpr, error) {
+	left, e := parseUnaryExpr(ctx, tk)
+	if e != nil {
+		return nil, e
+	}
+
+	for {
+		opTk, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+
+		if tokenEndsExpr(opTk) {
+			break
+		}
+
+		precedence := getBinaryPrecedence(opTk)
+		if precedence == 0 || precedence < minPrecedence {
+			break
+		}
+
+		consume(ctx)
+
+		rTk, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+		right, e := parseExpression(ctx, rTk, precedence+1)
+		if e != nil {
+			return nil, e
+		}
+
+		switch vd := left.(type) {
+		case *t.NodeExprVarDef:
+			varDefAssign := &t.NodeExprVarDefAssign{
+				VarDef:     *vd,
+				AssignExpr: right,
+			}
+			left = varDefAssign
+			continue
+		}
+
+		binaryNd := &t.NodeExprBinary{
+			Operator: opTk.KeywType,
+			Left:     left,
+			Right:    right,
+		}
+		left = binaryNd
+	}
+
+	return left, nil
 }
 
 func parseName(ctx *ParseCtx, tk t.Token, allowComposite bool) (t.NodeName, error) {
@@ -353,6 +674,10 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (t.NodeType, error) {
 		return t.NodeType{}, e
 	}
 
+	if tk.KeywType == t.KwAsterisk || tk.KeywType == t.KwDollar {
+
+	}
+
 	if tk.Type == t.TokName {
 		n, e := parseName(ctx, tk, true)
 		if e != nil {
@@ -376,21 +701,44 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (t.NodeType, error) {
 	)
 }
 
+func parseStmtReturn(ctx *ParseCtx) (t.NodeStatement, error) {
+	consume(ctx) // consume ret kw
+
+	next, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	if next.KeywType == t.KwNewline {
+		return &t.NodeStmtRet{Expression: &t.NodeExprVoid{}}, nil
+	}
+
+	expr, e := parseExpression(ctx, next, 0)
+	if e != nil {
+		return nil, e
+	}
+
+	return &t.NodeStmtRet{Expression: expr}, nil
+}
+
 func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
 	// TODO: expand
 
 	if tk.KeywType == t.KwReturn {
-		// TODO: parse following expr
-		consume(ctx)
-		return &t.NodeStmtRet{Expression: &t.NodeExprVoid{}}, nil
+		return parseStmtReturn(ctx)
 	}
 
-	return nil, comp_err.CompilationErrorToken(
-		ctx.Fctx,
-		&tk,
-		fmt.Sprintf("syntax error: '%s' is not a valid start of statement", tk.Repr),
-		"valid statements include: `name: type = expr`, `name()`, `ret expr`, etc.",
-	)
+	expr, e := parseExpression(ctx, tk, 0)
+	if e != nil {
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&tk,
+			fmt.Sprintf("syntax error: '%s' is not a valid start of statement", tk.Repr),
+			"valid statements include: `name: type = expr`, `name()`, `ret expr`, etc.",
+		)
+	}
+
+	return &t.NodeStmtExpr{Expression: expr}, nil
 }
 
 func parseBody(ctx *ParseCtx, tk t.Token) (t.NodeBody, error) {
@@ -444,7 +792,7 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 	if next.Type != t.TokKeyword {
 		return nil, comp_err.CompilationErrorToken(
 			ctx.Fctx,
-			&tk,
+			&next,
 			fmt.Sprintf("syntax error: unexpected '%s' after name in global declaration", next.Repr),
 			"expected in global scope: `<name> :`, `<name> (",
 		)
@@ -452,6 +800,9 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 
 	switch next.KeywType {
 	case t.KwParenOp:
+		// TODO: apply modifiers
+		ctx.NextModifiers = []ModifierType{}
+
 		gncls, e := parseGenericClass(ctx, n)
 		if e != nil {
 			return nil, e
@@ -492,7 +843,7 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 	default:
 		return nil, comp_err.CompilationErrorToken(
 			ctx.Fctx,
-			&tk,
+			&next,
 			fmt.Sprintf("syntax error: unexpected '%s' after name in global declaration", next.Repr),
 			"expected in global scope: `<name> :`, `<name> (",
 		)
@@ -573,10 +924,11 @@ func parseGlobal(ctx *ParseCtx) (t.NodeGlobal, error) {
 	}
 }
 
-func Parse(fCtx *t.FileCtx) (t.NodeGlobal, error) {
+func Parse(shared *t.SharedState, fCtx *t.FileCtx) (t.NodeGlobal, error) {
 	ctx := &ParseCtx{
-		Fctx: fCtx,
-		Toks: fCtx.Tokens,
+		Shared: shared,
+		Fctx:   fCtx,
+		Toks:   fCtx.Tokens,
 	}
 
 	glNd, e := parseGlobal(ctx)
@@ -593,7 +945,6 @@ func Parse(fCtx *t.FileCtx) (t.NodeGlobal, error) {
 				"",
 			)
 		}
-
 		return glNd, e
 	}
 	return glNd, nil
