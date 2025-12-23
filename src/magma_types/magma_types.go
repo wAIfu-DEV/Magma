@@ -28,7 +28,7 @@ var BasicTypes = map[string]string{
 }
 
 func WriteIrBasicTypes(b *strings.Builder) {
-	b.WriteString("%type.error = type { i64 }\n")
+	b.WriteString("%type.error = type { i32 }\n")
 	b.WriteString("%type.str = type { i64, ptr }\n")
 	b.WriteString("%type.slice = type { i64, ptr }\n")
 }

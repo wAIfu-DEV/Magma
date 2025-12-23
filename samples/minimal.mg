@@ -20,6 +20,10 @@ func1() i32:
     ret 0
 ..
 
+func3() str:
+    ret "lol"
+..
+
 pub main() !void:
     myStr str = "test"
 
