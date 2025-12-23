@@ -13,9 +13,11 @@ import (
 type SsaName string
 
 type IrCtx struct {
-	fCtx    *t.FileCtx
-	builder *strings.Builder
-	nextSsa int
+	fCtx         *t.FileCtx
+	glBuilder    *strings.Builder
+	builder      *strings.Builder
+	scopeHeadBld *strings.Builder
+	nextSsa      int
 }
 
 func irSsaName(ctx *IrCtx) SsaName {
@@ -24,8 +26,45 @@ func irSsaName(ctx *IrCtx) SsaName {
 	return SsaName(name)
 }
 
+func irWrite(ctx *IrCtx, text string) {
+	ctx.builder.WriteString(text)
+}
+
 func irWritef(ctx *IrCtx, format string, a ...any) {
-	ctx.builder.WriteString(fmt.Sprintf(format, a...))
+	fmt.Fprintf(ctx.builder, format, a...)
+}
+
+func irWriteHd(ctx *IrCtx, text string) {
+	ctx.scopeHeadBld.WriteString(text)
+}
+
+func irWriteHdf(ctx *IrCtx, format string, a ...any) {
+	fmt.Fprintf(ctx.scopeHeadBld, format, a...)
+}
+
+func irWriteGl(ctx *IrCtx, text string) {
+	ctx.glBuilder.WriteString(text)
+}
+
+func irWriteGlf(ctx *IrCtx, format string, a ...any) {
+	fmt.Fprintf(ctx.glBuilder, format, a...)
+}
+
+func irVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) (SsaName, error) {
+	allocSsa := irSsaName(ctx)
+
+	irWriteHdf(ctx, "  %%%s = alloca ", allocSsa)
+
+	cpy := *ctx
+	cpy.builder = ctx.scopeHeadBld
+
+	e := irType(&cpy, vd.Type)
+	if e != nil {
+		return SsaName(""), e
+	}
+	irWriteHd(ctx, "\n")
+
+	return allocSsa, nil
 }
 
 func irVarDefAssign(ctx *IrCtx, vda *t.NodeExprVarDefAssign) (SsaName, error) {
@@ -34,25 +73,17 @@ func irVarDefAssign(ctx *IrCtx, vda *t.NodeExprVarDefAssign) (SsaName, error) {
 		return SsaName(""), e
 	}
 
-	allocSsa := irSsaName(ctx)
-	ctx.builder.WriteString(fmt.Sprintf("  %%%s = alloca ", allocSsa))
-	e = irType(ctx, &vda.VarDef.Type)
+	allocSsa, e := irVarDef(ctx, &vda.VarDef)
 	if e != nil {
 		return SsaName(""), e
 	}
-	ctx.builder.WriteString("\n")
 
-	ctx.builder.WriteString("  store ")
-	e = irType(ctx, &vda.VarDef.Type)
+	irWrite(ctx, "  store ")
+	e = irType(ctx, vda.VarDef.Type)
 	if e != nil {
 		return SsaName(""), e
 	}
-	ctx.builder.WriteString(fmt.Sprintf(" %%%s, ", assignSsa))
-	e = irType(ctx, &vda.VarDef.Type)
-	if e != nil {
-		return SsaName(""), e
-	}
-	ctx.builder.WriteString(fmt.Sprintf(" %%%s\n", allocSsa))
+	irWritef(ctx, " %%%s, ptr %%%s\n", assignSsa, allocSsa)
 	return allocSsa, nil
 }
 
@@ -68,10 +99,14 @@ func irExprFuncCall(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 		argsSsa[i] = exprSsa
 	}
 
-	ctx.builder.WriteString(fmt.Sprintf("  %%%s = call ", ssaName))
+	irWritef(ctx, "  %%%s = call ", ssaName)
 
-	// TODO: print type
-	ctx.builder.WriteString("<type> ")
+	e := irType(ctx, fnCall.InfType)
+	if e != nil {
+		return SsaName(""), e
+	}
+
+	irWrite(ctx, " @")
 
 	switch expr := fnCall.Callee.(type) {
 	case *t.NodeExprName:
@@ -80,29 +115,66 @@ func irExprFuncCall(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 			return SsaName(""), e
 		}
 	default:
-		ctx.builder.WriteString("<name>")
+		irWrite(ctx, "<name>")
 	}
 
-	ctx.builder.WriteString("(")
+	irWrite(ctx, "(")
 
 	bound := len(argsSsa)
 	for i, ssa := range argsSsa {
-		ctx.builder.WriteString(fmt.Sprintf("%%%s", ssa))
-		if bound < i {
-			ctx.builder.WriteString(", ")
+		e = irType(ctx, fnCall.Args[i].GetInferredType())
+		if e != nil {
+			return SsaName(""), e
+		}
+		irWritef(ctx, " %%%s", ssa)
+		if i < bound-1 {
+			irWrite(ctx, ", ")
 		}
 	}
 
-	ctx.builder.WriteString(")\n")
+	irWrite(ctx, ")\n")
 	return ssaName, nil
+}
+
+func irExprLitStr(ctx *IrCtx, litStr *t.NodeExprLit) (SsaName, error) {
+	constSsa := irSsaName(ctx)
+
+	sizeFieldSsa := irSsaName(ctx)
+	strFieldSsa := irSsaName(ctx)
+
+	constLen := len(litStr.Value) + 1
+
+	irWriteGlf(ctx, "@.%s = private constant [%d x i8] c\"%s\\0\"\n", constSsa, constLen, litStr.Value)
+
+	irWritef(ctx, "  %%%s = insertvalue %%type.str undef, i64 %d, 0\n", sizeFieldSsa, constLen-1)
+	irWritef(ctx, "  %%%s = insertvalue %%type.str %%%s, ptr @.%s, 1\n", strFieldSsa, sizeFieldSsa, constSsa)
+
+	return strFieldSsa, nil
+}
+
+func irExprLitNum(ctx *IrCtx, litNum *t.NodeExprLit) (SsaName, error) {
+	return SsaName(litNum.Value), nil
+}
+
+func irExprLit(ctx *IrCtx, lit *t.NodeExprLit) (SsaName, error) {
+	switch lit.LitType {
+	case t.TokLitStr:
+		return irExprLitStr(ctx, lit)
+	}
+
+	return SsaName(""), nil
 }
 
 func irExpression(ctx *IrCtx, expr t.NodeExpr) (SsaName, error) {
 	switch ne := expr.(type) {
 	case *t.NodeExprVarDefAssign:
 		return irVarDefAssign(ctx, ne)
+	case *t.NodeExprVarDef:
+		return irVarDef(ctx, ne)
 	case *t.NodeExprCall:
 		return irExprFuncCall(ctx, ne)
+	case *t.NodeExprLit:
+		return irExprLit(ctx, ne)
 	}
 	return SsaName(""), nil
 }
@@ -111,13 +183,20 @@ func irStmtReturn(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
 	// TODO: lower expression
 	switch stmtRet.Expression.(type) {
 	case *t.NodeExprVoid:
-		ctx.builder.WriteString("  ret <type>\n")
+		irWrite(ctx, "  ret void\n")
 	default:
 		ssa, e := irExpression(ctx, stmtRet.Expression)
 		if e != nil {
 			return e
 		}
-		ctx.builder.WriteString(fmt.Sprintf("  ret <type> %%%s\n", ssa))
+		irWritef(ctx, "  ret ")
+
+		e = irType(ctx, stmtRet.OwnerFuncType)
+		if e != nil {
+			return e
+		}
+
+		irWritef(ctx, " %%%s\n", ssa)
 	}
 	return nil
 }
@@ -138,33 +217,47 @@ func irStatement(ctx *IrCtx, stmtNode t.NodeStatement) error {
 	return nil
 }
 
-func irBody(ctx *IrCtx, bodyNode *t.NodeBody) error {
-	ctx.builder.WriteString("{\n")
+func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody) error {
+	irWrite(ctx, "{\n")
+
+	bdyHeadBld := &strings.Builder{}
+	bdyBld := &strings.Builder{}
+
+	// making du ctx to redirect writes
+	cpy := *ctx
+	cpy.scopeHeadBld = bdyHeadBld
+	cpy.builder = bdyBld
 
 	for _, stmt := range bodyNode.Statements {
-		e := irStatement(ctx, stmt)
+		e := irStatement(&cpy, stmt)
 		if e != nil {
 			return e
 		}
 	}
-	ctx.builder.WriteString("}\n\n")
+
+	irWrite(ctx, bdyHeadBld.String())
+	irWrite(ctx, "\n")
+	irWrite(ctx, bdyBld.String())
+	irWrite(ctx, "}\n\n")
 	return nil
 }
 
 func irMainWrapper(ctx *IrCtx, mainFnDef *t.NodeFuncDef) error {
-	ctx.builder.WriteString("; Entry point\n")
-	ctx.builder.WriteString("define i32 @main(i32 %argc, ptr %argv) {\n")
-	ctx.builder.WriteString("entry:\n")
+	irWrite(ctx, "; Entry point\n")
+	irWrite(ctx, "define i32 @main(i32 %argc, ptr %argv) {\n")
+	irWrite(ctx, "entry:\n")
 
 	// TODO: create args slice and pass to main
 
 	if mainFnDef.ReturnType.Throws {
+		irWrite(ctx, "  %uncaught = alloca %type.error\n")
+		irWrite(ctx, "  call void main.main(%uncaught)\n")
 		// TODO: alloca error struct and pass it as first arg
 	} else {
-		ctx.builder.WriteString("  call void main.main()\n")
+		irWrite(ctx, "  call void main.main()\n")
 	}
-	ctx.builder.WriteString("  ret i32 0\n")
-	ctx.builder.WriteString("}\n\n")
+	irWrite(ctx, "  ret i32 0\n")
+	irWrite(ctx, "}\n\n")
 	return nil
 }
 
@@ -186,13 +279,13 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 		}
 	}
 
-	ctx.builder.WriteString("define ")
-	e := irType(ctx, &fnDefNode.ReturnType)
+	irWrite(ctx, "define ")
+	e := irType(ctx, fnDefNode.ReturnType)
 	if e != nil {
 		return e
 	}
 
-	ctx.builder.WriteString(" @")
+	irWrite(ctx, " @")
 	e = irName(ctx, fnDefNode.Class.NameNode, true)
 	if e != nil {
 		return e
@@ -203,8 +296,8 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 		return e
 	}
 
-	ctx.builder.WriteString(" ")
-	e = irBody(ctx, &fnDefNode.Body)
+	irWrite(ctx, " ")
+	e = irFuncBody(ctx, &fnDefNode.Body)
 	if e != nil {
 		return e
 	}
@@ -212,31 +305,31 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 }
 
 func irArg(ctx *IrCtx, argNode *t.NodeArg) error {
-	e := irType(ctx, &argNode.TypeNode)
+	e := irType(ctx, argNode.TypeNode)
 	if e != nil {
 		return e
 	}
 
-	ctx.builder.WriteString(" %")
-	ctx.builder.WriteString(argNode.Name)
+	irWrite(ctx, " %")
+	irWrite(ctx, argNode.Name)
 	return nil
 }
 
 func irArgsList(ctx *IrCtx, argListNode *t.NodeArgList, thisArg bool, throwArg bool) error {
-	ctx.builder.WriteString("(")
+	irWrite(ctx, "(")
 	bound := len(argListNode.Args)
 
 	if thisArg {
-		ctx.builder.WriteString("ptr %this")
+		irWrite(ctx, "ptr %this")
 		if bound > 0 || throwArg {
-			ctx.builder.WriteString(", ")
+			irWrite(ctx, ", ")
 		}
 	}
 
 	if throwArg {
-		ctx.builder.WriteString("ptr %throw")
+		irWrite(ctx, "ptr %throw")
 		if bound > 0 {
-			ctx.builder.WriteString(", ")
+			irWrite(ctx, ", ")
 		}
 	}
 
@@ -247,11 +340,11 @@ func irArgsList(ctx *IrCtx, argListNode *t.NodeArgList, thisArg bool, throwArg b
 		}
 
 		if i < bound-1 {
-			ctx.builder.WriteString(", ")
+			irWrite(ctx, ", ")
 		}
 	}
 
-	ctx.builder.WriteString(")")
+	irWrite(ctx, ")")
 	return nil
 }
 
@@ -268,10 +361,10 @@ func irGlobalDecl(ctx *IrCtx, glDeclNode t.NodeGlobalDecl) error {
 
 func irNameSingle(ctx *IrCtx, nameNode *t.NodeNameSingle, withPackage bool) error {
 	if withPackage {
-		ctx.builder.WriteString(ctx.fCtx.PackageName)
-		ctx.builder.WriteString(".")
+		irWrite(ctx, ctx.fCtx.PackageName)
+		irWrite(ctx, ".")
 	}
-	ctx.builder.WriteString(nameNode.Name)
+	irWrite(ctx, nameNode.Name)
 	return nil
 }
 
@@ -282,16 +375,16 @@ func irNameComposite(ctx *IrCtx, nameNode *t.NodeNameComposite, withPackage bool
 		// if not imported package, prepend with <thispackage>.
 		_, ok := ctx.fCtx.ImportAlias[first]
 		if !ok {
-			ctx.builder.WriteString(ctx.fCtx.PackageName)
-			ctx.builder.WriteString(".")
+			irWrite(ctx, ctx.fCtx.PackageName)
+			irWrite(ctx, ".")
 		}
 	}
 
 	bound := len(nameNode.Parts)
 	for i, n := range nameNode.Parts {
-		ctx.builder.WriteString(n)
+		irWrite(ctx, n)
 		if i < bound-1 {
-			ctx.builder.WriteString(".")
+			irWrite(ctx, ".")
 		}
 	}
 
@@ -315,6 +408,11 @@ func irName(ctx *IrCtx, nameNode t.NodeName, withPackage bool) error {
 }
 
 func irType(ctx *IrCtx, typeNode *t.NodeType) error {
+	if typeNode == nil {
+		irWrite(ctx, "<null type node>")
+		return nil
+	}
+
 	switch tn := typeNode.KindNode.(type) {
 	case *t.NodeTypeNamed:
 		switch n := tn.NameNode.(type) {
@@ -322,44 +420,48 @@ func irType(ctx *IrCtx, typeNode *t.NodeType) error {
 			// TODO: check if intrinsic type
 			_, ok := magmatypes.BasicTypes[n.Name]
 			if ok {
-				ctx.builder.WriteString(magmatypes.BasicTypes[n.Name])
+				irWrite(ctx, magmatypes.BasicTypes[n.Name])
 				return nil
 			}
 		}
 
-		ctx.builder.WriteString("%struct.")
+		irWrite(ctx, "%struct.")
 		e := irName(ctx, tn.NameNode, true)
 		if e != nil {
 			return e
 		}
 		return nil
 	}
-	ctx.builder.WriteString("<invalid type>")
+	irWrite(ctx, "<invalid type>")
 	return nil
 }
 
 func irDefineStruct(ctx *IrCtx, structNode *t.NodeStructDef) error {
-	ctx.builder.WriteString("%struct.")
+	irWriteGl(ctx, "%struct.")
 
-	e := irName(ctx, structNode.Class.NameNode, true)
+	// making dud ctx to redirect name IR to global writer
+	cpy := *ctx
+	cpy.builder = cpy.glBuilder
+
+	e := irName(&cpy, structNode.Class.NameNode, true)
 	if e != nil {
 		return e
 	}
-	ctx.builder.WriteString(" = type { ")
+	irWriteGl(ctx, " = type { ")
 
 	bound := len(structNode.Class.ArgsNode.Args)
 	for i, field := range structNode.Class.ArgsNode.Args {
-		e = irType(ctx, &field.TypeNode)
+		e = irType(&cpy, field.TypeNode)
 		if e != nil {
 			return e
 		}
 
 		if i < bound-1 {
-			ctx.builder.WriteString(", ")
+			irWriteGl(ctx, ", ")
 		}
 	}
 
-	ctx.builder.WriteString(" }\n")
+	irWriteGl(ctx, " }\n")
 	return nil
 }
 
@@ -388,24 +490,27 @@ func irGlobal(ctx *IrCtx, glNode *t.NodeGlobal) error {
 	return nil
 }
 
-func irWriteModule(fCtx *t.FileCtx, builder *strings.Builder) error {
+func irWriteModule(fCtx *t.FileCtx, builder *strings.Builder, glBld *strings.Builder) error {
 	ctx := &IrCtx{
-		fCtx:    fCtx,
-		builder: builder,
+		fCtx:      fCtx,
+		builder:   builder,
+		glBuilder: glBld,
 	}
 	ctx.builder.Grow(512)
 
-	irWritef(ctx, "; File=\"%s\"\n", ctx.fCtx.FilePath)
-	irWritef(ctx, "; Module=\"%s\"\n\n", ctx.fCtx.PackageName)
+	irWriteGlf(ctx, "; File=\"%s\"\n", ctx.fCtx.FilePath)
+	irWriteGlf(ctx, "; Module=\"%s\"\n\n", ctx.fCtx.PackageName)
 
-	ctx.builder.WriteString("; Defined Types\n")
-	e := irGlobalStructDefs(ctx, &fCtx.GlNode)
+	irWriteGl(ctx, "; Defined Types\n")
+	e := irGlobalStructDefs(ctx, fCtx.GlNode)
 	if e != nil {
 		return e
 	}
 
-	ctx.builder.WriteString("\n; Code\n")
-	e = irGlobal(ctx, &fCtx.GlNode)
+	irWriteGl(ctx, "\n; Global Defs\n")
+
+	irWrite(ctx, "\n; Code\n")
+	e = irGlobal(ctx, fCtx.GlNode)
 	if e != nil {
 		return e
 	}
@@ -448,12 +553,13 @@ func IrWrite(shared *t.SharedState) (string, error) {
 
 			// module local builder
 			moduleBld := &strings.Builder{}
-			e := irWriteModule(v, moduleBld)
+			glBld := &strings.Builder{}
+			e := irWriteModule(v, moduleBld, glBld)
 			if e != nil {
 				results[idx] = resStr{E: e}
 				return
 			}
-			results[idx] = resStr{S: moduleBld.String()}
+			results[idx] = resStr{S: glBld.String() + moduleBld.String()}
 		}(localI)
 
 		i++

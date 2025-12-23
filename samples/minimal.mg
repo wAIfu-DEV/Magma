@@ -21,6 +21,8 @@ func1() i32:
 ..
 
 pub main() !void:
+    myStr str = "test"
+
     val i32 = func2(func1())
-    ret val
+    ret
 ..

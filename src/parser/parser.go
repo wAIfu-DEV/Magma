@@ -20,6 +20,7 @@ const (
 
 type ParseCtx struct {
 	Shared        *t.SharedState
+	GlobalNode    *t.NodeGlobal
 	Fctx          *t.FileCtx
 	Toks          []t.Token
 	TokIdx        int
@@ -204,7 +205,7 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token) error {
 
 	// start pipeline for imported file
 	fmt.Printf("running compilation pipeline for file: %s\n", absPath)
-	c := ctx.Shared.PipelineFunc(ctx.Shared, absPath, alias.Repr, ctx.Fctx.FilePath)
+	c := ctx.Shared.PipelineFunc(ctx.Shared, absPath, alias.Repr, ctx.Fctx.FilePath, ctx.GlobalNode)
 
 	ctx.Shared.PipeChansM.Lock()
 	ctx.Shared.PipeChans = append(ctx.Shared.PipeChans, c)
@@ -653,11 +654,11 @@ func parseGenericClass(ctx *ParseCtx, nameNode t.NodeName) (t.NodeGenericClass, 
 	return n, nil
 }
 
-func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (t.NodeType, error) {
+func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (*t.NodeType, error) {
 	isThrowing := false
 	if tk.KeywType == t.KwExclam {
 		if !allowThrow {
-			return t.NodeType{}, comp_err.CompilationErrorToken(
+			return nil, comp_err.CompilationErrorToken(
 				ctx.Fctx,
 				&tk,
 				"syntax error: context does not allow for type to be a throwing type",
@@ -671,7 +672,7 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (t.NodeType, error) {
 
 	tk, e := peek(ctx)
 	if e != nil {
-		return t.NodeType{}, e
+		return nil, e
 	}
 
 	if tk.KeywType == t.KwAsterisk || tk.KeywType == t.KwDollar {
@@ -681,10 +682,10 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (t.NodeType, error) {
 	if tk.Type == t.TokName {
 		n, e := parseName(ctx, tk, true)
 		if e != nil {
-			return t.NodeType{}, e
+			return nil, e
 		}
 
-		return t.NodeType{
+		return &t.NodeType{
 			Throws: isThrowing,
 			KindNode: &t.NodeTypeNamed{
 				NameNode: n,
@@ -693,7 +694,7 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (t.NodeType, error) {
 	}
 
 	// TODO: implement complex types
-	return t.NodeType{}, comp_err.CompilationErrorToken(
+	return nil, comp_err.CompilationErrorToken(
 		ctx.Fctx,
 		&tk,
 		fmt.Sprintf("syntax error: unexpected '%s' when expected name of type", tk.Repr),
@@ -778,6 +779,116 @@ func parseBody(ctx *ParseCtx, tk t.Token) (t.NodeBody, error) {
 	}
 }
 
+func ensureSimpleName(ctx *ParseCtx, tk t.Token, name t.NodeName) error {
+	switch n := name.(type) {
+	case *t.NodeNameComposite:
+		// TODO: associate nodes with tokens for better error reporting
+		return comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&tk,
+			fmt.Sprintf("syntax error: complex name: '%s' not allowed in this context, expected simple name", strings.Join(n.Parts, ".")),
+			"cannot define a struct with a name containing a '.'",
+		)
+	}
+	return nil
+}
+
+func parseStructDef(ctx *ParseCtx, tk t.Token, gncls t.NodeGenericClass) (*t.NodeStructDef, error) {
+
+	// check if struct name is valid (complex name not allowed)
+	e := ensureSimpleName(ctx, tk, gncls.NameNode)
+	if e != nil {
+		return nil, e
+	}
+
+	simpleName := gncls.NameNode.(*t.NodeNameSingle)
+
+	// create struct def in global node for easir type checking later
+	structMap := t.StructDef{
+		Name:   simpleName.Name,
+		Fields: map[string]*t.NodeType{},
+		Funcs:  map[string]*t.NodeFuncDef{},
+	}
+
+	for _, arg := range gncls.ArgsNode.Args {
+		structMap.Fields[arg.Name] = arg.TypeNode
+	}
+
+	ctx.GlobalNode.StructDefs[simpleName.Name] = structMap
+
+	return &t.NodeStructDef{
+		Class: gncls,
+	}, nil
+}
+
+func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGenericClass) (*t.NodeFuncDef, error) {
+	isMemberFunc := false
+	fnNameSimple := ""
+
+	switch n := gncls.NameNode.(type) {
+	case *t.NodeNameComposite:
+		isMemberFunc = true
+	case *t.NodeNameSingle:
+		fnNameSimple = n.Name
+	}
+
+	typeNode, e := parseType(ctx, after, true)
+	if e != nil {
+		return nil, e
+	}
+
+	bodyStart, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	bodyNode, e := parseBody(ctx, bodyStart)
+	if e != nil {
+		return nil, e
+	}
+
+	fnDef := &t.NodeFuncDef{
+		Class:      gncls,
+		ReturnType: typeNode,
+		Body:       bodyNode,
+	}
+
+	if isMemberFunc {
+		complexName := gncls.NameNode.(*t.NodeNameComposite)
+		if len(complexName.Parts) > 2 {
+			return nil, comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&nameTk,
+				fmt.Sprintf("syntax error: too many parts in complex name: '%s' a function definition should have 1 or 2 parts, no more", strings.Join(complexName.Parts, ".")),
+				"expected: `<name> (<args>) <type>:` or `<structname>.<name> (<args>) <type>:` ",
+			)
+		}
+
+		ownerName := complexName.Parts[0]
+		memberName := complexName.Parts[1]
+
+		// check if type exists in file (at least before member func)
+		// if not, this is sign of garbage code, so I don't feel bad about
+		// making this a compiler error
+		_, ok := ctx.GlobalNode.StructDefs[ownerName]
+		if !ok {
+			return nil, comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&nameTk,
+				fmt.Sprintf("syntax error: defined member function for '%s', but the struct was not defined in this file", ownerName),
+				"member functions need to be defined after the owner struct",
+			)
+		}
+
+		ctx.GlobalNode.StructDefs[ownerName].Funcs[memberName] = fnDef
+	}
+
+	if fnNameSimple != "" {
+		ctx.GlobalNode.FuncDefs[fnNameSimple] = fnDef
+	}
+	return fnDef, nil
+}
+
 func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
 	n, e := parseName(ctx, tk, true)
 	if e != nil {
@@ -814,32 +925,10 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 		}
 
 		if errors.Is(e, errOutOfBounds) || after.KeywType == t.KwNewline {
-			return &t.NodeStructDef{
-				Class: gncls,
-			}, nil
+			return parseStructDef(ctx, tk, gncls)
 		}
 
-		typeNode, e := parseType(ctx, after, true)
-		if e != nil {
-			return nil, e
-		}
-
-		bodyStart, e := peek(ctx)
-		if e != nil {
-			return nil, e
-		}
-
-		bodyNode, e := parseBody(ctx, bodyStart)
-		if e != nil {
-			return nil, e
-		}
-
-		fnDef := &t.NodeFuncDef{
-			Class:      gncls,
-			ReturnType: typeNode,
-			Body:       bodyNode,
-		}
-		return fnDef, nil
+		return parseFuncDef(ctx, tk, after, gncls)
 	default:
 		return nil, comp_err.CompilationErrorToken(
 			ctx.Fctx,
@@ -894,8 +983,15 @@ outer:
 	)
 }
 
-func parseGlobal(ctx *ParseCtx) (t.NodeGlobal, error) {
-	n := t.NodeGlobal{}
+func parseGlobal(ctx *ParseCtx) (*t.NodeGlobal, error) {
+	n := &t.NodeGlobal{
+		StructDefs: map[string]t.StructDef{},
+		FuncDefs:   map[string]*t.NodeFuncDef{},
+
+		Declarations: []t.NodeGlobalDecl{},
+		ImportAlias:  map[string]string{},
+	}
+	ctx.GlobalNode = n
 
 	for {
 		tk, e := peek(ctx)
@@ -903,7 +999,7 @@ func parseGlobal(ctx *ParseCtx) (t.NodeGlobal, error) {
 			if errors.Is(e, errOutOfBounds) {
 				return n, nil
 			}
-			return t.NodeGlobal{}, e
+			return nil, e
 		}
 
 		if tk.KeywType == t.KwNewline {
@@ -913,7 +1009,7 @@ func parseGlobal(ctx *ParseCtx) (t.NodeGlobal, error) {
 
 		glDecl, e := parseGlobalDecl(ctx, tk)
 		if e != nil {
-			return t.NodeGlobal{}, e
+			return nil, e
 		}
 
 		// this is sketch af
@@ -924,7 +1020,7 @@ func parseGlobal(ctx *ParseCtx) (t.NodeGlobal, error) {
 	}
 }
 
-func Parse(shared *t.SharedState, fCtx *t.FileCtx) (t.NodeGlobal, error) {
+func Parse(shared *t.SharedState, fCtx *t.FileCtx) (*t.NodeGlobal, error) {
 	ctx := &ParseCtx{
 		Shared: shared,
 		Fctx:   fCtx,

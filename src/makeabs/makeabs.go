@@ -11,15 +11,8 @@ func MakeAbs(relative string, importedFromAbs string) (string, error) {
 		return relative, nil
 	}
 
-	fmt.Printf("imported from: %s\n", importedFromAbs)
-
 	fromDir := filepath.Dir(importedFromAbs)
-
-	fmt.Printf("from dir: %s\n", fromDir)
-
 	joined := filepath.Join(fromDir, relative)
-
-	fmt.Printf("joined: %s\n", joined)
 
 	_, err := os.Stat(joined)
 	if err != nil && !os.IsNotExist(err) {

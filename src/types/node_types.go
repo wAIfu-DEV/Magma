@@ -1,0 +1,415 @@
+package types
+
+import (
+	"fmt"
+	"strings"
+	"unsafe"
+)
+
+type NodeT uint8
+
+const (
+	NdNone NodeT = iota
+	NdType
+	NdTypeNamed
+	NdGlobal
+	NdGlobalDecl
+	NdFuncDef
+	NdBody
+	NdStatement
+	NdStmtRet
+)
+
+func PrintIndent(n int) {
+	d := n * 2
+	p := make([]byte, d)
+	for i := range d {
+		p[i] = ' '
+	}
+	s := *(*string)(unsafe.Pointer(&p))
+	fmt.Print(s)
+}
+
+type Node interface {
+	Print(int)
+}
+
+type NodeTypeKind interface {
+	IsType()
+	Print(int)
+}
+
+type NodeExpr interface {
+	IsExpr()
+	GetInferredType() *NodeType
+	Print(int)
+}
+
+type NodeStatement interface {
+	IsStatement()
+	Print(int)
+}
+
+type NodeGlobalDecl interface {
+	IsGlobalDecl()
+	Print(int)
+}
+
+type NodeName interface {
+	IsName()
+	Print(int)
+}
+
+type NodeNameSingle struct {
+	Name string
+}
+
+func (n *NodeNameSingle) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("NameSingle(name=%s)\n", n.Name)
+}
+
+type NodeNameComposite struct {
+	Parts []string
+}
+
+func (n *NodeNameComposite) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("NameComposite(name=%s)\n", strings.Join(n.Parts, "."))
+}
+
+type NodeType struct {
+	Throws   bool
+	KindNode NodeTypeKind
+}
+
+func (n *NodeType) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("Type(throw=%t)\n", n.Throws)
+	n.KindNode.Print(indent + 1)
+}
+
+type NodeTypeNamed struct {
+	NameNode NodeName
+}
+
+func (n *NodeTypeNamed) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("TypeNamed\n")
+	n.NameNode.Print(indent + 1)
+}
+
+type NodeTypePointer struct {
+	Kind NodeTypeKind
+}
+
+func (n *NodeTypePointer) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("TypePointer\n")
+	n.Kind.Print(indent + 1)
+}
+
+type NodeTypeRfc struct {
+	Kind NodeTypeKind
+}
+
+func (n *NodeTypeRfc) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("TypeRfc\n")
+	n.Kind.Print(indent + 1)
+}
+
+type NodeExprVoid struct {
+	VoidType *NodeType
+}
+
+func (n *NodeExprVoid) GetInferredType() *NodeType {
+	fmt.Println("ExprVoid")
+	return n.VoidType
+}
+
+func (n *NodeExprVoid) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprVoid\n")
+}
+
+type NodeExprUnary struct {
+	Operator KwType
+	Operand  NodeExpr
+
+	InfType *NodeType
+}
+
+func (n *NodeExprUnary) GetInferredType() *NodeType {
+	fmt.Println("ExprUnary")
+	return n.InfType
+}
+
+func (n *NodeExprUnary) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprUnary(op=%s)\n", KwTypeToRepr[n.Operator])
+	n.Operand.Print(indent + 1)
+}
+
+type NodeExprLit struct {
+	Value   string
+	LitType TokType
+
+	InfType *NodeType
+}
+
+func (n *NodeExprLit) GetInferredType() *NodeType {
+	fmt.Println("ExprLit")
+	return n.InfType
+}
+
+func (n *NodeExprLit) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprLit(type=%s, '%s')\n", TokTypeToRepr[n.LitType], n.Value)
+}
+
+type NodeExprName struct {
+	Name NodeName
+
+	InfType *NodeType
+}
+
+func (n *NodeExprName) GetInferredType() *NodeType {
+	fmt.Println("ExprName")
+	return n.InfType
+}
+
+func (n *NodeExprName) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprName\n")
+	n.Name.Print(indent + 1)
+}
+
+type NodeExprCall struct {
+	Callee NodeExpr
+	Args   []NodeExpr
+
+	AssociatedFnDef *NodeFuncDef
+	InfType         *NodeType
+}
+
+func (n *NodeExprCall) GetInferredType() *NodeType {
+	fmt.Println("ExprCall")
+	return n.InfType
+}
+
+func (n *NodeExprCall) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprCall\n")
+
+	PrintIndent(indent + 1)
+	fmt.Printf("Callee\n")
+	n.Callee.Print(indent + 2)
+
+	PrintIndent(indent + 1)
+	fmt.Printf("ArgExprs\n")
+	for _, expr := range n.Args {
+		expr.Print(indent + 2)
+	}
+}
+
+type NodeExprBinary struct {
+	Operator KwType
+	Left     NodeExpr
+	Right    NodeExpr
+
+	InfType *NodeType
+}
+
+func (n *NodeExprBinary) GetInferredType() *NodeType {
+	fmt.Println("ExprBinary")
+	return n.InfType
+}
+
+func (n *NodeExprBinary) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprBinary(op=%s)\n", KwTypeToRepr[n.Operator])
+
+	PrintIndent(indent + 1)
+	fmt.Printf("Left\n")
+	n.Left.Print(indent + 2)
+
+	PrintIndent(indent + 1)
+	fmt.Printf("Right\n")
+	n.Right.Print(indent + 2)
+}
+
+type NodeExprVarDef struct {
+	Name NodeName
+	Type *NodeType
+}
+
+func (n *NodeExprVarDef) GetInferredType() *NodeType {
+	fmt.Println("ExprVarDef")
+	return n.Type
+}
+
+func (n *NodeExprVarDef) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprVarDef\n")
+	n.Name.Print(indent + 1)
+	n.Type.Print(indent + 1)
+}
+
+type NodeExprVarDefAssign struct {
+	VarDef     NodeExprVarDef
+	AssignExpr NodeExpr
+}
+
+func (n *NodeExprVarDefAssign) GetInferredType() *NodeType {
+	fmt.Println("ExprVarDefAssign")
+	return n.VarDef.Type
+}
+
+func (n *NodeExprVarDefAssign) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprVarDefAssign\n")
+	n.VarDef.Print(indent + 1)
+	PrintIndent(indent + 1)
+	fmt.Printf("AssignExpr\n")
+	n.AssignExpr.Print(indent + 2)
+}
+
+type NodeStmtRet struct {
+	Expression NodeExpr
+
+	OwnerFuncType *NodeType
+}
+
+func (n *NodeStmtRet) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("StmtRet\n")
+	n.Expression.Print(indent + 1)
+}
+
+type NodeStmtExpr struct {
+	Expression NodeExpr
+}
+
+func (n *NodeStmtExpr) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("StmtExpr\n")
+	n.Expression.Print(indent + 1)
+}
+
+type NodeArg struct {
+	Name     string
+	TypeNode *NodeType
+}
+
+func (n *NodeArg) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("Arg(name=%s)\n", n.Name)
+	n.TypeNode.Print(indent + 1)
+}
+
+type NodeArgList struct {
+	Args []NodeArg
+}
+
+func (n *NodeArgList) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ArgList\n")
+
+	for _, x := range n.Args {
+		x.Print(indent + 1)
+	}
+}
+
+type NodeBody struct {
+	Statements []NodeStatement
+}
+
+func (n *NodeBody) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("Body\n")
+
+	for _, x := range n.Statements {
+		x.Print(indent + 1)
+	}
+}
+
+type NodeGenericClass struct {
+	NameNode NodeName
+	ArgsNode NodeArgList
+}
+
+func (n *NodeGenericClass) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("GenericClass\n")
+	n.NameNode.Print(indent + 1)
+	n.ArgsNode.Print(indent + 1)
+}
+
+type NodeFuncDef struct {
+	Class      NodeGenericClass
+	ReturnType *NodeType
+	Body       NodeBody
+}
+
+func (n *NodeFuncDef) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("FuncDef\n")
+	n.Class.Print(indent + 1)
+	n.ReturnType.Print(indent + 1)
+	n.Body.Print(indent + 1)
+}
+
+type NodeStructDef struct {
+	Class NodeGenericClass
+}
+
+func (n *NodeStructDef) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("StructDef\n")
+	n.Class.Print(indent + 1)
+}
+
+type NodeGlobal struct {
+	Declarations []NodeGlobalDecl
+
+	ImportAlias map[string]string
+
+	StructDefs map[string]StructDef
+	FuncDefs   map[string]*NodeFuncDef
+}
+
+func (n *NodeGlobal) Print(indent int) {
+	fmt.Printf("\nNode Tree:\n")
+
+	PrintIndent(indent)
+	fmt.Printf("Global\n")
+
+	for _, x := range n.Declarations {
+		x.Print(indent + 1)
+	}
+
+	fmt.Printf("\n")
+}
+
+type ModuleBundle struct {
+	Main    *NodeGlobal
+	Modules map[string]*NodeGlobal
+}
+
+func (*NodeExprVoid) IsExpr()         {}
+func (*NodeExprUnary) IsExpr()        {}
+func (*NodeExprLit) IsExpr()          {}
+func (*NodeExprName) IsExpr()         {}
+func (*NodeExprCall) IsExpr()         {}
+func (*NodeExprBinary) IsExpr()       {}
+func (*NodeExprVarDef) IsExpr()       {}
+func (*NodeExprVarDefAssign) IsExpr() {}
+func (*NodeTypeNamed) IsType()        {}
+func (*NodeTypePointer) IsType()      {}
+func (*NodeNameSingle) IsName()       {}
+func (*NodeNameComposite) IsName()    {}
+func (*NodeStmtRet) IsStatement()     {}
+func (*NodeStmtExpr) IsStatement()    {}
+func (*NodeFuncDef) IsGlobalDecl()    {}
+func (*NodeStructDef) IsGlobalDecl()  {}

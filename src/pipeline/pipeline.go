@@ -66,19 +66,23 @@ func extractModuleName(fCtx *types.FileCtx, firstLine string) (string, error) {
 	return moduleName, nil
 }
 
-func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath string, alias string, fromAbs string) (*types.FileCtx, error) {
+func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath string, alias string, fromAbs string, fromGl *types.NodeGlobal) (*types.FileCtx, error) {
+
+	fmt.Printf("sync pipeline prelude for: %s\n", filePath)
 
 	absPath, err := makeabs.MakeAbs(filePath, fromAbs)
 	if err != nil {
-		shared.ImportM.Lock()
+		shared.ImportedFilesM.Lock()
 		shared.ImportedFiles[filePath] = c
-		shared.ImportM.Unlock()
+		shared.ImportedFilesM.Unlock()
 		return nil, err
 	}
 
-	shared.ImportM.Lock()
+	fmt.Printf("resolved to abs path: %s\n", absPath)
+
+	shared.ImportedFilesM.Lock()
 	shared.ImportedFiles[absPath] = c
-	shared.ImportM.Unlock()
+	shared.ImportedFilesM.Unlock()
 
 	fileBytes, err := os.ReadFile(absPath)
 	if err != nil {
@@ -97,32 +101,37 @@ func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath strin
 	shared.Files[absPath] = fCtx
 	shared.FilesM.Unlock()
 
-	fmt.Printf("read first line\n")
 	scanner := bufio.NewScanner(bytes.NewReader(fileBytes))
-
 	if !scanner.Scan() {
 		return nil, fmt.Errorf("failed to read any data from file")
 	}
 
 	firstLine := scanner.Text()
-
-	fmt.Printf("extract module name\n")
 	moduleName, err := extractModuleName(fCtx, firstLine)
 	if err != nil {
 		return nil, err
 	}
 
 	fCtx.PackageName = moduleName
+
+	if fromGl != nil {
+		fromGl.ImportAlias[alias] = moduleName
+	}
 	return fCtx, nil
 }
 
-func Pipeline(shared *types.SharedState, filePath string, alias string, fromAbs string) error {
+func Do(shared *types.SharedState, filePath string, alias string, fromAbs string, fromGl *types.NodeGlobal) error {
+	fmt.Printf("running pipeline for: %s with alias: %s from file: %s\n", filePath, alias, fromAbs)
+
 	c := make(chan error, 1)
 
 	shared.WaitGroup.Add(1)
 
-	fCtx, err := pipelineSyncPrelude(shared, c, filePath, alias, fromAbs)
+	fCtx, err := pipelineSyncPrelude(shared, c, filePath, alias, fromAbs, fromGl)
 	if err != nil {
+		c <- err
+		close(c)
+		shared.WaitGroup.Done()
 		return err
 	}
 
@@ -131,12 +140,14 @@ func Pipeline(shared *types.SharedState, filePath string, alias string, fromAbs 
 	return <-c
 }
 
-func PipelineAsync(shared *types.SharedState, filePath string, alias string, fromAbs string) <-chan error {
+func DoAsync(shared *types.SharedState, filePath string, alias string, fromAbs string, fromGl *types.NodeGlobal) <-chan error {
+	fmt.Printf("running pipelineasync for: %s with alias: %s from file: %s\n", filePath, alias, fromAbs)
+
 	c := make(chan error, 1)
 
 	shared.WaitGroup.Add(1)
 
-	fCtx, err := pipelineSyncPrelude(shared, c, filePath, alias, fromAbs)
+	fCtx, err := pipelineSyncPrelude(shared, c, filePath, alias, fromAbs, fromGl)
 	if err != nil {
 		c <- err
 		close(c)
