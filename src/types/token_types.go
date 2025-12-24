@@ -40,6 +40,7 @@ const (
 	KwDollar
 	KwAsterisk
 	KwAmpersand
+	KwThrow
 )
 
 var KwTypeToRepr []string = []string{
@@ -62,28 +63,30 @@ var KwTypeToRepr []string = []string{
 	KwDollar:    "$",
 	KwAsterisk:  "*",
 	KwAmpersand: "&",
+	KwThrow:     "throw",
 }
 
 var KwReprToType map[string]KwType = map[string]KwType{
-	"":    KwNone,
-	"=":   KwEqual,
-	"(":   KwParenOp,
-	")":   KwParenCl,
-	":":   KwColon,
-	".":   KwDot,
-	"..":  KwDots,
-	"!":   KwExclam,
-	"mod": KwModule,
-	"use": KwUse,
-	"pub": KwPublic,
-	"ret": KwReturn,
-	"\n":  KwNewline,
-	",":   KwComma,
-	"-":   KwMinus,
-	"+":   KwPlus,
-	"$":   KwDollar,
-	"*":   KwAsterisk,
-	"&":   KwAmpersand,
+	"":      KwNone,
+	"=":     KwEqual,
+	"(":     KwParenOp,
+	")":     KwParenCl,
+	":":     KwColon,
+	".":     KwDot,
+	"..":    KwDots,
+	"!":     KwExclam,
+	"mod":   KwModule,
+	"use":   KwUse,
+	"pub":   KwPublic,
+	"ret":   KwReturn,
+	"\n":    KwNewline,
+	",":     KwComma,
+	"-":     KwMinus,
+	"+":     KwPlus,
+	"$":     KwDollar,
+	"*":     KwAsterisk,
+	"&":     KwAmpersand,
+	"throw": KwThrow,
 }
 
 type Token struct {

@@ -26,7 +26,7 @@ myFunc(first_arg u64, second_arg f32) !bool:
         io.printLn("third branch")
     ..
 
-    for i u64 = 0..first_arg:
+    for i u64 = 0->first_arg:
         io.printUint(i)
     ..
     ret true
@@ -49,10 +49,10 @@ allocs() !void:
     heap_ptr *MyStruct = try heap.alloc(sizeof(MyStruct))
     defer heap.free(heap_ptr)
 
-    ref_counted_ptr $MyStruct = rfc MyStruct() # moves a copy of MyStruct to heap
+    rfcnt_ptr $MyStruct = rfc MyStruct() # moves a copy of MyStruct to heap
     # ref counted '$' vars are freed once every references fall out of scope
 
-    rfc2 $MyStruct = ref_counted_ptr # adds another reference, until rfc2 falls out of scope
+    rfcnt_ptr2 $MyStruct = rfcnt_ptr # adds another reference, until rfcnt_ptr2 falls out of scope
 ..
 
 pub main(args str[]) !void:
@@ -62,7 +62,7 @@ pub main(args str[]) !void:
     ret_val bool = try myFunc(0, 0.0)
 
     # handle error, equivalent to previous
-    ret_val2 bool, e err = myFunc(0, 0.0)
+    ret_val2 bool, e error = myFunc(0, 0.0)
     if e.code != errors.ok().code:
         throw e
     ..

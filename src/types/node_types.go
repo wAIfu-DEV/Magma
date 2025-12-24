@@ -172,6 +172,9 @@ type NodeExprName struct {
 	Name NodeName
 
 	InfType *NodeType
+
+	AssociatedNode Node
+	IsSsa          bool
 }
 
 func (n *NodeExprName) GetInferredType() *NodeType {
@@ -242,6 +245,8 @@ func (n *NodeExprBinary) Print(indent int) {
 type NodeExprVarDef struct {
 	Name NodeName
 	Type *NodeType
+
+	IsSsa bool
 }
 
 func (n *NodeExprVarDef) GetInferredType() *NodeType {
@@ -294,6 +299,16 @@ type NodeStmtExpr struct {
 func (n *NodeStmtExpr) Print(indent int) {
 	PrintIndent(indent)
 	fmt.Printf("StmtExpr\n")
+	n.Expression.Print(indent + 1)
+}
+
+type NodeStmtThrow struct {
+	Expression NodeExpr
+}
+
+func (n *NodeStmtThrow) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("StmtThrow\n")
 	n.Expression.Print(indent + 1)
 }
 
@@ -375,7 +390,7 @@ type NodeGlobal struct {
 
 	ImportAlias map[string]string
 
-	StructDefs map[string]StructDef
+	StructDefs map[string]*StructDef
 	FuncDefs   map[string]*NodeFuncDef
 }
 
@@ -411,5 +426,6 @@ func (*NodeNameSingle) IsName()       {}
 func (*NodeNameComposite) IsName()    {}
 func (*NodeStmtRet) IsStatement()     {}
 func (*NodeStmtExpr) IsStatement()    {}
+func (*NodeStmtThrow) IsStatement()   {}
 func (*NodeFuncDef) IsGlobalDecl()    {}
 func (*NodeStructDef) IsGlobalDecl()  {}

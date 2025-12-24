@@ -26,6 +26,9 @@ func3() str:
 
 pub main() !void:
     myStr str = "test"
+    myErr error
+
+    throw myErr
 
     val i32 = func2(func1())
     ret

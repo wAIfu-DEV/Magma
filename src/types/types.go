@@ -10,6 +10,10 @@ type StructDef struct {
 	Funcs  map[string]*NodeFuncDef
 }
 
+func (*StructDef) Print(int) {
+	// This is a filthy hack
+}
+
 type FileCtx struct {
 	FilePath    string
 	PackageName string

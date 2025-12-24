@@ -722,11 +722,31 @@ func parseStmtReturn(ctx *ParseCtx) (t.NodeStatement, error) {
 	return &t.NodeStmtRet{Expression: expr}, nil
 }
 
+func parseStmtThrow(ctx *ParseCtx) (t.NodeStatement, error) {
+	consume(ctx) // consume ret kw
+
+	next, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	expr, e := parseExpression(ctx, next, 0)
+	if e != nil {
+		return nil, e
+	}
+
+	return &t.NodeStmtThrow{Expression: expr}, nil
+}
+
 func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
 	// TODO: expand
 
 	if tk.KeywType == t.KwReturn {
 		return parseStmtReturn(ctx)
+	}
+
+	if tk.KeywType == t.KwThrow {
+		return parseStmtThrow(ctx)
 	}
 
 	expr, e := parseExpression(ctx, tk, 0)
@@ -804,7 +824,7 @@ func parseStructDef(ctx *ParseCtx, tk t.Token, gncls t.NodeGenericClass) (*t.Nod
 	simpleName := gncls.NameNode.(*t.NodeNameSingle)
 
 	// create struct def in global node for easir type checking later
-	structMap := t.StructDef{
+	structMap := &t.StructDef{
 		Name:   simpleName.Name,
 		Fields: map[string]*t.NodeType{},
 		Funcs:  map[string]*t.NodeFuncDef{},
@@ -985,7 +1005,7 @@ outer:
 
 func parseGlobal(ctx *ParseCtx) (*t.NodeGlobal, error) {
 	n := &t.NodeGlobal{
-		StructDefs: map[string]t.StructDef{},
+		StructDefs: map[string]*t.StructDef{},
 		FuncDefs:   map[string]*t.NodeFuncDef{},
 
 		Declarations: []t.NodeGlobalDecl{},

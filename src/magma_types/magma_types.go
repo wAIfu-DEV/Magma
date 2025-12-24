@@ -23,6 +23,7 @@ var BasicTypes = map[string]string{
 	"f64":  "double",
 	"f128": "fp128",
 
+	"error": "%type.error",
 	"str":   "%type.str",
 	"slice": "%type.slice",
 }

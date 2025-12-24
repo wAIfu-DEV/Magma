@@ -119,6 +119,8 @@ func bldFuncDef(ctx *lcx, fnDef *t.NodeFuncDef) error {
 		declVarInStack(ctx, &t.NodeExprVarDef{
 			Name: &t.NodeNameSingle{Name: arg.Name},
 			Type: arg.TypeNode,
+
+			IsSsa: true,
 		})
 	}
 

@@ -42,6 +42,20 @@ func leaveScope(c *ctx) {
 	}
 }
 
+func flattenName(name t.NodeName) string {
+	s := ""
+
+	parsed := parseName(name)
+
+	s += parsed.First
+	if parsed.HasParts {
+		for _, x := range parsed.Parts {
+			s += "." + x
+		}
+	}
+	return s
+}
+
 func parseName(name t.NodeName) parsedName {
 	switch n := name.(type) {
 	case *t.NodeNameSingle:
@@ -59,10 +73,10 @@ func parseName(name t.NodeName) parsedName {
 	return parsedName{}
 }
 
-func clGetStructDefFromModule(c *ctx, name parsedName) (t.StructDef, error) {
+func clGetStructDefFromModule(c *ctx, name parsedName) (*t.StructDef, error) {
 	if !name.HasParts {
 		// TODO: compiler error
-		return t.StructDef{}, fmt.Errorf("cannot get struct def from module with simply named struct")
+		return nil, fmt.Errorf("cannot get struct def from module with simply named struct")
 	}
 
 	moduleAlias := name.First
@@ -73,7 +87,7 @@ func clGetStructDefFromModule(c *ctx, name parsedName) (t.StructDef, error) {
 
 	if !ok {
 		// TODO: compilation error
-		return t.StructDef{}, fmt.Errorf("module alias does not exist in file")
+		return nil, fmt.Errorf("module alias does not exist in file")
 	}
 
 	moduleGlNode := c.ModuleBundle.Modules[moduleName]
@@ -81,44 +95,44 @@ func clGetStructDefFromModule(c *ctx, name parsedName) (t.StructDef, error) {
 
 	if !ok {
 		// TODO: compilation error
-		return t.StructDef{}, fmt.Errorf("struct name not defined in file")
+		return nil, fmt.Errorf("struct name not defined in file")
 	}
 
 	return structDef, nil
 }
 
-func clGetStructDefFromThisModule(c *ctx, structName parsedName) (t.StructDef, error) {
+func clGetStructDefFromThisModule(c *ctx, structName parsedName) (*t.StructDef, error) {
 	if structName.HasParts {
 		// TODO: compiler error
-		return t.StructDef{}, fmt.Errorf("cannot get struct def from this module with complex named struct")
+		return nil, fmt.Errorf("cannot get struct def from this module with complex named struct")
 	}
 
 	structDef, ok := c.GlobalNode.StructDefs[structName.First]
 
 	if !ok {
 		// TODO: compilation error
-		return t.StructDef{}, fmt.Errorf("struct name not defined in file")
+		return nil, fmt.Errorf("struct name not defined in file")
 	}
 
 	return structDef, nil
 }
 
-func clGetStructDefFromName(c *ctx, nameNode t.NodeName) (t.StructDef, error) {
+func clGetStructDefFromName(c *ctx, nameNode t.NodeName) (*t.StructDef, error) {
 	switch nameNode.(type) {
 	case *t.NodeNameComposite:
 		return clGetStructDefFromModule(c, parseName(nameNode))
 	case *t.NodeNameSingle:
 		return clGetStructDefFromThisModule(c, parseName(nameNode))
 	}
-	return t.StructDef{}, fmt.Errorf("failed to get struct def from name")
+	return nil, fmt.Errorf("failed to get struct def from name")
 }
 
-func clGetStructDefFromType(c *ctx, typeNode *t.NodeType) (t.StructDef, error) {
+func clGetStructDefFromType(c *ctx, typeNode *t.NodeType) (*t.StructDef, error) {
 	switch n := typeNode.KindNode.(type) {
 	case *t.NodeTypeNamed:
 		return clGetStructDefFromName(c, n.NameNode)
 	}
-	return t.StructDef{}, fmt.Errorf("failed to get struct def from type")
+	return nil, fmt.Errorf("failed to get struct def from type")
 }
 
 func clGetFuncDefFromModule(c *ctx, name parsedName) (*t.NodeFuncDef, error) {
@@ -214,7 +228,7 @@ func clVarNameChainValid(c *ctx, scope *t.Scope, name *parsedName, varName strin
 	return foundMemberFunc, nil
 }
 
-func clExistsInScope(c *ctx, scope *t.Scope, name t.NodeName, ent entryType) (bool, error) {
+func clExistsInScope(c *ctx, scope *t.Scope, name t.NodeName, ent entryType) (bool, t.Node, bool, error) {
 	parsed := parseName(name)
 
 	switch ent {
@@ -224,7 +238,7 @@ func clExistsInScope(c *ctx, scope *t.Scope, name t.NodeName, ent entryType) (bo
 		for _, v := range scope.DeclVars {
 			vName := parseName(v.Name)
 			if (!parsed.HasParts && !vName.HasParts) && parsed.First == vName.First {
-				return true, nil
+				return true, v, v.IsSsa, nil
 			}
 
 			if parsed.First != vName.First {
@@ -235,37 +249,37 @@ func clExistsInScope(c *ctx, scope *t.Scope, name t.NodeName, ent entryType) (bo
 			_, e := clVarNameChainValid(c, scope, &parsed, vName.First, v.Type)
 
 			if e != nil {
-				return false, e
+				return false, nil, false, e
 			}
-			return true, nil
+			return true, v, v.IsSsa, nil
 		}
 
 		if ent != enumEntAll {
-			return false, nil
+			return false, nil, false, nil
 		}
 		fallthrough
 	case enumEntFunc:
 		for _, f := range scope.DeclFuncs {
 			fName := parseName(f.Func.Class.NameNode)
 			if (!parsed.HasParts && !fName.HasParts) && parsed.First == fName.First {
-				return true, nil
+				return true, f.Func, false, nil
 			}
 
 			_, e := clGetFuncDefFromName(c, f.Func.Class.NameNode)
 			if e != nil {
-				return false, e
+				return false, nil, false, e
 			}
-			return true, nil
+			return true, f.Func, false, nil
 		}
 
 		if ent != enumEntAll {
-			return false, nil
+			return false, nil, false, nil
 		}
 		fallthrough
 	case enumEntStruct:
-		_, e := clGetStructDefFromName(c, name)
+		s, e := clGetStructDefFromName(c, name)
 		if e == nil {
-			return true, nil
+			return true, s, false, nil
 		}
 
 		if ent != enumEntAll {
@@ -273,28 +287,45 @@ func clExistsInScope(c *ctx, scope *t.Scope, name t.NodeName, ent entryType) (bo
 		}
 	}
 
-	return false, nil
+	return false, nil, false, nil
 }
 
-func clExistsInScopeTree(c *ctx, name t.NodeName, ent entryType) (bool, error) {
+func clExistsInScopeTree(c *ctx, name t.NodeName, ent entryType) (found bool, expr t.Node, isSsa bool, err error) {
 	currScope := c.CurrScope
 
 	for {
 		if currScope == nil {
-			return false, nil
+			return false, nil, false, nil
 		}
 
-		found, e := clExistsInScope(c, currScope, name, ent)
+		found, expr, isSsa, e := clExistsInScope(c, currScope, name, ent)
 		if e != nil {
-			return false, e
+			return false, nil, false, e
 		}
 
 		if found {
-			return true, nil
+			return true, expr, isSsa, nil
 		}
 
 		currScope = currScope.Parent
 	}
+}
+
+func clName(c *ctx, name *t.NodeExprName) error {
+	// TODO: get associated node for easier type checking later
+	found, expr, isSsa, err := clExistsInScopeTree(c, name.Name, enumEntVar)
+
+	if err != nil {
+		return err
+	}
+
+	if !found {
+		return fmt.Errorf("name expression: %s does not refer to any defined vars", flattenName(name.Name))
+	}
+
+	name.IsSsa = isSsa
+	name.AssociatedNode = expr
+	return nil
 }
 
 func clExprCall(c *ctx, call *t.NodeExprCall) error {
@@ -339,12 +370,25 @@ func clExpr(c *ctx, expr t.NodeExpr) error {
 		if e != nil {
 			return e
 		}
+	case *t.NodeExprName:
+		e := clName(c, n)
+		if e != nil {
+			return e
+		}
 	}
 	return nil
 }
 
 func clReturn(c *ctx, ret *t.NodeStmtRet) error {
 	e := clExpr(c, ret.Expression)
+	if e != nil {
+		return e
+	}
+	return nil
+}
+
+func clThrow(c *ctx, throw *t.NodeStmtThrow) error {
+	e := clExpr(c, throw.Expression)
 	if e != nil {
 		return e
 	}
@@ -361,6 +405,11 @@ func clBody(c *ctx, bdy *t.NodeBody) error {
 			}
 		case *t.NodeStmtExpr:
 			e := clExpr(c, n.Expression)
+			if e != nil {
+				return e
+			}
+		case *t.NodeStmtThrow:
+			e := clThrow(c, n)
 			if e != nil {
 				return e
 			}
@@ -389,6 +438,17 @@ func clType(c *ctx, typeNd *t.NodeType) error {
 }
 
 func clFuncDef(c *ctx, fnDef *t.NodeFuncDef) error {
+	var scope *t.Scope = nil
+
+	for _, f := range c.CurrScope.DeclFuncs {
+		if f.Func == fnDef {
+			scope = f.Scope
+		}
+	}
+
+	enterScope(c, scope)
+	defer leaveScope(c)
+
 	for _, arg := range fnDef.Class.ArgsNode.Args {
 		e := clType(c, arg.TypeNode)
 		if e != nil {

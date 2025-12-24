@@ -66,7 +66,7 @@ func irWriteGlf(ctx *IrCtx, format string, a ...any) {
 }
 
 func irVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) (SsaName, error) {
-	allocSsa := irSsaName(ctx)
+	allocSsa := irNameSsa(ctx, vd.Name, false)
 
 	irWriteHdf(ctx, "  %%%s = alloca ", allocSsa)
 
@@ -180,6 +180,36 @@ func irExprLit(ctx *IrCtx, lit *t.NodeExprLit) (SsaName, error) {
 	return SsaName(""), nil
 }
 
+func irExprName(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
+	if nameExpr.IsSsa {
+		return irNameSsa(ctx, nameExpr.Name, false), nil
+	}
+
+	ptrSsa := irNameSsa(ctx, nameExpr.Name, false)
+	ssa := irSsaName(ctx)
+
+	var typeNd *t.NodeType = nil
+
+	switch n := nameExpr.AssociatedNode.(type) {
+	case *t.NodeExprVarDef:
+		typeNd = n.Type
+	case *t.NodeExprVarDefAssign:
+		typeNd = n.VarDef.Type
+	}
+
+	fmt.Printf("type: %T\n", nameExpr.AssociatedNode)
+
+	irWritef(ctx, "  %%%s = load ", ssa)
+
+	e := irType(ctx, typeNd)
+	if e != nil {
+		return SsaName(""), e
+	}
+
+	irWritef(ctx, ", ptr %%%s\n", ptrSsa)
+	return SsaName(ssa), nil
+}
+
 func irExpression(ctx *IrCtx, expr t.NodeExpr) (SsaName, error) {
 	switch ne := expr.(type) {
 	case *t.NodeExprVarDefAssign:
@@ -191,7 +221,7 @@ func irExpression(ctx *IrCtx, expr t.NodeExpr) (SsaName, error) {
 	case *t.NodeExprLit:
 		return irExprLit(ctx, ne)
 	case *t.NodeExprName:
-		return irNameSsa(ctx, ne.Name, false), nil
+		return irExprName(ctx, ne)
 	}
 	return SsaName(""), nil
 }
@@ -231,7 +261,49 @@ func irStmtReturn(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
 	return nil
 }
 
-func irStatement(ctx *IrCtx, stmtNode t.NodeStatement) error {
+func irStmtThrow(ctx *IrCtx, stmtThrow *t.NodeStmtThrow, fnDef *t.NodeFuncDef) error {
+	// TODO: implement throw lowering
+	exprSsa, e := irExpression(ctx, stmtThrow.Expression)
+	if e != nil {
+		return e
+	}
+
+	fieldSsa := irSsaName(ctx)
+	compSsa := irSsaName(ctx)
+
+	eqLabel := irSsaName(ctx)
+	neqLabel := irSsaName(ctx)
+
+	// get error code field
+	irWritef(ctx, "  %%%s = extractvalue %%type.error %%%s, 0\n", fieldSsa, exprSsa)
+
+	// if errcode != 0
+	irWritef(ctx, "  %%%s = icmp ne i32 %%%s, 0\n", compSsa, fieldSsa)
+	irWritef(ctx, "  br i1 %%%s, label %%%s, label %%%s\n", compSsa, neqLabel, eqLabel)
+
+	// throw = err; return 0
+	irWritef(ctx, "%s:\n", neqLabel)
+	irWritef(ctx, "  store %%type.error %%%s, ptr %%throw\n", exprSsa)
+	irWrite(ctx, "  ret ")
+
+	e = irType(ctx, fnDef.ReturnType)
+	if e != nil {
+		return e
+	}
+
+	if !isVoidType(fnDef.ReturnType) {
+		irWritef(ctx, " zeroinitializer\n")
+	} else {
+		irWrite(ctx, "\n")
+	}
+
+	// else nothing
+	irWritef(ctx, "%s:\n", eqLabel)
+
+	return nil
+}
+
+func irStatement(ctx *IrCtx, stmtNode t.NodeStatement, fnDef *t.NodeFuncDef) error {
 	var e error
 
 	switch s := stmtNode.(type) {
@@ -239,12 +311,10 @@ func irStatement(ctx *IrCtx, stmtNode t.NodeStatement) error {
 		e = irStmtReturn(ctx, s)
 	case *t.NodeStmtExpr:
 		_, e = irExpression(ctx, s.Expression)
+	case *t.NodeStmtThrow:
+		e = irStmtThrow(ctx, s, fnDef)
 	}
-
-	if e != nil {
-		return e
-	}
-	return nil
+	return e
 }
 
 func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
@@ -258,8 +328,15 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 	cpy.scopeHeadBld = bdyHeadBld
 	cpy.builder = bdyBld
 
+	foundRet := false
+
 	for _, stmt := range bodyNode.Statements {
-		e := irStatement(&cpy, stmt)
+		switch stmt.(type) {
+		case *t.NodeStmtRet:
+			foundRet = true
+		}
+
+		e := irStatement(&cpy, stmt, fnDef)
 		if e != nil {
 			return e
 		}
@@ -268,17 +345,20 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 	irWrite(ctx, bdyHeadBld.String())
 	irWrite(ctx, "\n")
 	irWrite(ctx, bdyBld.String())
-	irWrite(ctx, "  ret ")
 
-	if !isVoidType(fnDef.ReturnType) {
-		e := irType(ctx, fnDef.ReturnType)
-		if e != nil {
-			return e
+	if !foundRet {
+		irWrite(ctx, "  ret ")
+
+		if !isVoidType(fnDef.ReturnType) {
+			e := irType(ctx, fnDef.ReturnType)
+			if e != nil {
+				return e
+			}
+
+			irWrite(ctx, " zeroinitializer\n")
+		} else {
+			irWrite(ctx, "void\n")
 		}
-
-		irWrite(ctx, " zeroinitializer\n")
-	} else {
-		irWrite(ctx, "void\n")
 	}
 
 	irWrite(ctx, "}\n\n")
