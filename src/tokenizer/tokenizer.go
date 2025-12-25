@@ -125,16 +125,18 @@ func pushTokenAndClearBuff(ctx *TkCtx, tk t.Token) {
 }
 
 func pushTokenBuff(ctx *TkCtx) {
-	if len(ctx.TokReprBuff) == 0 {
+	if len(ctx.TokReprBuff) == 0 && ctx.CurrTok.Type != t.TokLitStr {
 		return
 	}
 
 	ctx.CurrTok.Repr = string(ctx.TokReprBuff)
 
-	kwType, ok := t.KwReprToType[ctx.CurrTok.Repr]
-	if ok {
-		ctx.CurrTok.Type = t.TokKeyword
-		ctx.CurrTok.KeywType = kwType
+	if ctx.CurrTok.Type == t.TokNone || ctx.CurrTok.Type == t.TokName {
+		kwType, ok := t.KwReprToType[ctx.CurrTok.Repr]
+		if ok {
+			ctx.CurrTok.Type = t.TokKeyword
+			ctx.CurrTok.KeywType = kwType
+		}
 	}
 
 	pushToken(ctx, ctx.CurrTok)
@@ -254,13 +256,38 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 			continue
 		}
 
-		ctx.IsEscaped = false
+		if ctx.Mode == tkModeString && ctx.IsEscaped {
+			switch r {
+			case 'a':
+				r = '\a'
+			case 'b':
+				r = '\b'
+			case 'f':
+				r = '\f'
+			case 'n':
+				r = '\n'
+			case 'r':
+				r = '\r'
+			case 't':
+				r = '\t'
+			case 'v':
+				r = '\v'
+			case '\\':
+				r = '\\'
+			case '\'':
+				r = '\''
+			case '"':
+				r = '"'
+			}
+		}
 
-		if ctx.Mode == tkModeString && r == '\\' {
+		if ctx.Mode == tkModeString && r == '\\' && !ctx.IsEscaped {
 			ctx.IsEscaped = true
 			consume(ctx)
 			continue
 		}
+
+		ctx.IsEscaped = false
 
 		if ctx.Mode == tkModeNormal && unicode.IsSpace(r) {
 			pushTokenBuff(ctx)
@@ -281,6 +308,23 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 			continue
 		}
 
+		if ctx.Mode == tkModeNormal && (unicode.IsDigit(r) || r == '-') && len(ctx.TokReprBuff) == 0 {
+			prev := ctx.CurrTok.Type
+			ctx.CurrTok.Type = t.TokLitNum
+
+			if r == '-' {
+				r2, err := peekMany(ctx, 2)
+				if err != nil {
+					return nil, err
+				}
+				if !unicode.IsDigit(r2[1]) {
+					ctx.CurrTok.Type = prev
+				} else {
+					goto write_num
+				}
+			}
+		}
+
 		if ctx.Mode == tkModeNormal && !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
 			pushTokenBuff(ctx)
 
@@ -293,12 +337,9 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 			continue
 		}
 
-		if ctx.Mode == tkModeNormal && unicode.IsDigit(r) && len(ctx.TokReprBuff) == 0 {
-			ctx.CurrTok.Type = t.TokLitNum
-		}
-
+	write_num:
 		if ctx.Mode == tkModeNormal && ctx.CurrTok.Type == t.TokLitNum {
-			if !(unicode.IsDigit(r) || r == '.') {
+			if !(unicode.IsDigit(r) || r == '.' || r == '-') {
 				ctx.TokReprBuff = append(ctx.TokReprBuff, r)
 				return nil, comp_err.CompilationErrorToken(
 					ctx.fCtx,

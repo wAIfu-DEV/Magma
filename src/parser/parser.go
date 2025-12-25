@@ -739,14 +739,13 @@ func parseStmtThrow(ctx *ParseCtx) (t.NodeStatement, error) {
 }
 
 func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
-	// TODO: expand
-
-	if tk.KeywType == t.KwReturn {
+	switch tk.KeywType {
+	case t.KwReturn:
 		return parseStmtReturn(ctx)
-	}
-
-	if tk.KeywType == t.KwThrow {
+	case t.KwThrow:
 		return parseStmtThrow(ctx)
+	case t.KwLlvm:
+		return parseLlvm(ctx, tk)
 	}
 
 	expr, e := parseExpression(ctx, tk, 0)
@@ -959,6 +958,27 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 	}
 }
 
+func parseLlvm(ctx *ParseCtx, tk t.Token) (*t.NodeLlvm, error) {
+	consume(ctx) // consume llvm kw
+
+	next, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	if next.Type == t.TokLitStr {
+		consume(ctx)
+		return &t.NodeLlvm{Text: next.Repr}, nil
+	}
+
+	return nil, comp_err.CompilationErrorToken(
+		ctx.Fctx,
+		&next,
+		fmt.Sprintf("syntax error: unexpected '%s' after 'llvm' keyword", next.Repr),
+		"expected: `llvm \"<llvm text>\"`",
+	)
+}
+
 func parseGlobalDecl(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
 	var n t.NodeGlobalDecl = nil
 	var e error = nil
@@ -983,6 +1003,9 @@ outer:
 			e = parseModuleDecl(ctx, tk)
 		case t.KwUse:
 			e = parseUseDecl(ctx, tk)
+		case t.KwLlvm:
+			return parseLlvm(ctx, tk)
+
 		default:
 			break outer
 		}

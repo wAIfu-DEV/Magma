@@ -41,6 +41,7 @@ const (
 	KwAsterisk
 	KwAmpersand
 	KwThrow
+	KwLlvm
 )
 
 var KwTypeToRepr []string = []string{
@@ -64,6 +65,7 @@ var KwTypeToRepr []string = []string{
 	KwAsterisk:  "*",
 	KwAmpersand: "&",
 	KwThrow:     "throw",
+	KwLlvm:      "llvm",
 }
 
 var KwReprToType map[string]KwType = map[string]KwType{
@@ -87,6 +89,7 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"*":     KwAsterisk,
 	"&":     KwAmpersand,
 	"throw": KwThrow,
+	"llvm":  KwLlvm,
 }
 
 type Token struct {

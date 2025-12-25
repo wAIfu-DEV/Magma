@@ -14,12 +14,8 @@ func MakeAbs(relative string, importedFromAbs string) (string, error) {
 	fromDir := filepath.Dir(importedFromAbs)
 	joined := filepath.Join(fromDir, relative)
 
-	_, err := os.Stat(joined)
-	if err != nil && !os.IsNotExist(err) {
-		return "", err
-	}
-
-	if !os.IsNotExist(err) {
+	s, err := os.Stat(joined)
+	if err == nil && !s.IsDir() {
 		return joined, nil
 	}
 
@@ -28,12 +24,8 @@ func MakeAbs(relative string, importedFromAbs string) (string, error) {
 		return "", err
 	}
 
-	_, err = os.Stat(absPath)
-	if err != nil && !os.IsNotExist(err) {
-		return "", err
-	}
-
-	if os.IsExist(err) {
+	s, err = os.Stat(absPath)
+	if err == nil && !s.IsDir() {
 		return absPath, nil
 	}
 

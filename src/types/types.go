@@ -15,19 +15,21 @@ func (*StructDef) Print(int) {
 }
 
 type FileCtx struct {
-	FilePath    string
-	PackageName string
-	Imports     []string
-	ImportAlias map[string]string
-	Content     []byte
-	LineIdx     []int
-	Tokens      []Token
-	GlNode      *NodeGlobal
-	ScopeTree   Scope
+	FilePath     string
+	PackageName  string
+	MainPckgName string
+	Imports      []string
+	ImportAlias  map[string]string
+	Content      []byte
+	LineIdx      []int
+	Tokens       []Token
+	GlNode       *NodeGlobal
+	ScopeTree    Scope
 }
 
 type SharedState struct {
-	Cwd string
+	Cwd          string
+	MainPckgName string
 
 	ImportedFiles  map[string]<-chan error
 	ImportedFilesM sync.Mutex

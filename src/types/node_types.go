@@ -165,7 +165,16 @@ func (n *NodeExprLit) GetInferredType() *NodeType {
 
 func (n *NodeExprLit) Print(indent int) {
 	PrintIndent(indent)
-	fmt.Printf("ExprLit(type=%s, '%s')\n", TokTypeToRepr[n.LitType], n.Value)
+	fmt.Printf("ExprLit(type=%s, '%s')\n", TokTypeToRepr[n.LitType], strings.ReplaceAll(n.Value, "\n", "\\n"))
+}
+
+type NodeLlvm struct {
+	Text string
+}
+
+func (n *NodeLlvm) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("Llvm('%s')\n", strings.ReplaceAll(n.Text, "\n", "\\n"))
 }
 
 type NodeExprName struct {
@@ -427,5 +436,7 @@ func (*NodeNameComposite) IsName()    {}
 func (*NodeStmtRet) IsStatement()     {}
 func (*NodeStmtExpr) IsStatement()    {}
 func (*NodeStmtThrow) IsStatement()   {}
+func (*NodeLlvm) IsStatement()        {}
 func (*NodeFuncDef) IsGlobalDecl()    {}
 func (*NodeStructDef) IsGlobalDecl()  {}
+func (*NodeLlvm) IsGlobalDecl()       {}

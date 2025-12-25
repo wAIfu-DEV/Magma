@@ -5,6 +5,7 @@ import (
 	lineidx "Magma/src/line_idx"
 	"Magma/src/makeabs"
 	pipelineasync "Magma/src/pipeline_async"
+	randid "Magma/src/rand_id"
 	"Magma/src/types"
 	"bufio"
 	"bytes"
@@ -112,12 +113,23 @@ func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath strin
 		return nil, err
 	}
 
-	fCtx.PackageName = moduleName
+	moduleId := randid.RandId(5)
+	moduleNameId := moduleName + "_" + moduleId
+
+	fCtx.PackageName = moduleNameId
 
 	if fromGl != nil {
-		fromGl.ImportAlias[alias] = moduleName
+		fromGl.ImportAlias[alias] = moduleNameId
+	} else {
+		shared.MainPckgName = moduleNameId
 	}
+
+	fCtx.MainPckgName = shared.MainPckgName
 	return fCtx, nil
+}
+
+func DoMain(shared *types.SharedState, filePath string) error {
+	return Do(shared, filePath, "", filePath, nil)
 }
 
 func Do(shared *types.SharedState, filePath string, alias string, fromAbs string, fromGl *types.NodeGlobal) error {

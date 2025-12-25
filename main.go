@@ -6,10 +6,9 @@ import (
 	"Magma/src/makeabs"
 	"Magma/src/pipeline"
 	"Magma/src/program"
-	"Magma/src/types"
+	"Magma/src/shared"
 	"fmt"
 	"os"
-	"sync"
 )
 
 func wrappedMain() error {
@@ -36,40 +35,33 @@ func wrappedMain() error {
 		return e
 	}
 
-	shared := &types.SharedState{
-		Cwd:            cwd,
-		ImportedFiles:  map[string]<-chan error{},
-		ImportedFilesM: sync.Mutex{},
-		Files:          map[string]*types.FileCtx{},
-		FilesM:         sync.Mutex{},
-		PipeChans:      []<-chan error{},
-		PipeChansM:     sync.Mutex{},
+	s := shared.MakeShared(cwd)
 
-		// needed because Go sucks and can't figure out cyclical imports
-		PipelineFunc: pipeline.DoAsync,
-		WaitGroup:    sync.WaitGroup{},
-	}
-
-	// actual meat of the program
-	if e = pipeline.Do(shared, absPath, "", absPath, nil); e != nil {
+	// actual meat of the program, multithreaded per file
+	// 1. lexing/tokenization
+	// 2. parsing to AST
+	// 3. scope info gathering
+	if e = pipeline.DoMain(s, absPath); e != nil {
 		fmt.Printf("fatal error in file '%s': %s\n", absPath, e.Error())
 	}
 
 	// wait for other compilation unit goroutines
-	if e = program.JoinCompilationUnits(shared, e); e != nil {
+	if e = program.JoinCompilationUnits(s, e); e != nil {
 		os.Exit(1)
 	}
 
-	if e = checker.CheckLinks(shared); e != nil {
+	// check/resolve name->node
+	if e = checker.CheckLinks(s); e != nil {
 		return e
 	}
 
-	if e = checker.TypeChecker(shared); e != nil {
+	// check/resolve types
+	if e = checker.TypeChecker(s); e != nil {
 		return e
 	}
 
 	// write LLVM intermediate repr
-	irStr, e := llvmir.IrWrite(shared)
+	irStr, e := llvmir.IrWrite(s)
 	if e != nil {
 		return e
 	}

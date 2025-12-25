@@ -28,7 +28,20 @@ pub main() !void:
     myStr str = "test"
     myErr error
 
+    io.printLn("Running program...")
+
+    io.print("Hello, ")
+    io.print("World!\n")
+
+    io.printInt(-45)
+    io.printLn("")
+
+    io.printUint(45)
+    io.printLn("")
+
     throw myErr
+
+    io.printLn("Did not throw.")
 
     val i32 = func2(func1())
     ret

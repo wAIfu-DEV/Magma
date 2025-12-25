@@ -10,7 +10,14 @@ import (
 	"sync"
 )
 
-type SsaName string
+type SsaName struct {
+	Repr      string
+	IsLiteral bool
+}
+
+func ssaName(name string) SsaName {
+	return SsaName{Repr: name}
+}
 
 type IrCtx struct {
 	fCtx         *t.FileCtx
@@ -38,7 +45,7 @@ func isVoidType(node *t.NodeType) bool {
 func irSsaName(ctx *IrCtx) SsaName {
 	name := strconv.Itoa(*ctx.nextSsa)
 	(*ctx.nextSsa)++
-	return SsaName("." + name)
+	return ssaName("." + name)
 }
 
 func irWrite(ctx *IrCtx, text string) {
@@ -68,57 +75,84 @@ func irWriteGlf(ctx *IrCtx, format string, a ...any) {
 func irVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) (SsaName, error) {
 	allocSsa := irNameSsa(ctx, vd.Name, false)
 
-	irWriteHdf(ctx, "  %%%s = alloca ", allocSsa)
+	irWriteHdf(ctx, "  %%%s = alloca ", allocSsa.Repr)
 
 	cpy := *ctx
 	cpy.builder = ctx.scopeHeadBld
 
 	e := irType(&cpy, vd.Type)
 	if e != nil {
-		return SsaName(""), e
+		return ssaName(""), e
 	}
 	irWriteHd(ctx, "\n")
 
+	irWrite(ctx, "  store ")
+	e = irType(ctx, vd.Type)
+	if e != nil {
+		return ssaName(""), e
+	}
+
+	irWritef(ctx, " zeroinitializer, ptr %%%s\n", allocSsa.Repr)
 	return allocSsa, nil
+}
+
+func irPossibleLitSsa(ctx *IrCtx, ssa SsaName) {
+	if ssa.IsLiteral {
+		irWrite(ctx, ssa.Repr)
+	} else {
+		irWritef(ctx, "%%%s", ssa.Repr)
+	}
 }
 
 func irVarDefAssign(ctx *IrCtx, vda *t.NodeExprVarDefAssign) (SsaName, error) {
 	assignSsa, e := irExpression(ctx, vda.AssignExpr)
 	if e != nil {
-		return SsaName(""), e
+		return ssaName(""), e
 	}
 
 	allocSsa, e := irVarDef(ctx, &vda.VarDef)
 	if e != nil {
-		return SsaName(""), e
+		return ssaName(""), e
 	}
 
 	irWrite(ctx, "  store ")
 	e = irType(ctx, vda.VarDef.Type)
 	if e != nil {
-		return SsaName(""), e
+		return ssaName(""), e
 	}
-	irWritef(ctx, " %%%s, ptr %%%s\n", assignSsa, allocSsa)
+
+	irWrite(ctx, " ")
+	irPossibleLitSsa(ctx, assignSsa)
+
+	irWritef(ctx, ", ptr %%%s\n", allocSsa.Repr)
 	return allocSsa, nil
 }
 
 func irExprFuncCall(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
-	ssaName := irSsaName(ctx)
+	ssa := irSsaName(ctx)
 
 	argsSsa := make([]SsaName, len(fnCall.Args))
 	for i, expr := range fnCall.Args {
 		exprSsa, e := irExpression(ctx, expr)
 		if e != nil {
-			return SsaName(""), e
+			return ssaName(""), e
 		}
 		argsSsa[i] = exprSsa
 	}
 
-	irWritef(ctx, "  %%%s = call ", ssaName)
+	isVoidRet := isVoidType(fnCall.InfType)
+
+	if !isVoidRet {
+		irWritef(ctx, "  %%%s = ", ssa.Repr)
+	} else {
+		irWrite(ctx, "  ")
+	}
+
+	irWritef(ctx, "call ")
 
 	e := irType(ctx, fnCall.InfType)
 	if e != nil {
-		return SsaName(""), e
+		return ssaName(""), e
 	}
 
 	irWrite(ctx, " @")
@@ -127,7 +161,7 @@ func irExprFuncCall(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 	case *t.NodeExprName:
 		e := irName(ctx, expr.Name, true)
 		if e != nil {
-			return SsaName(""), e
+			return ssaName(""), e
 		}
 	default:
 		irWrite(ctx, "<name>")
@@ -139,16 +173,24 @@ func irExprFuncCall(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 	for i, ssa := range argsSsa {
 		e = irType(ctx, fnCall.Args[i].GetInferredType())
 		if e != nil {
-			return SsaName(""), e
+			return ssaName(""), e
 		}
-		irWritef(ctx, " %%%s", ssa)
+		irWrite(ctx, " ")
+		irPossibleLitSsa(ctx, ssa)
+
 		if i < bound-1 {
 			irWrite(ctx, ", ")
 		}
 	}
 
 	irWrite(ctx, ")\n")
-	return ssaName, nil
+
+	if isVoidRet {
+		// TODO: Check and inforce that void ret calls HAVE to be statements
+		// and cannot be in expressions
+		return ssaName(""), nil
+	}
+	return ssa, nil
 }
 
 func irExprLitStr(ctx *IrCtx, litStr *t.NodeExprLit) (SsaName, error) {
@@ -159,25 +201,30 @@ func irExprLitStr(ctx *IrCtx, litStr *t.NodeExprLit) (SsaName, error) {
 
 	constLen := len(litStr.Value) + 1
 
-	irWriteGlf(ctx, "@%s = private constant [%d x i8] c\"%s\\00\"\n", constSsa, constLen, litStr.Value)
+	cleanStr := strings.ReplaceAll(litStr.Value, "\n", "\\0A")
 
-	irWritef(ctx, "  %%%s = insertvalue %%type.str undef, i64 %d, 0\n", sizeFieldSsa, constLen-1)
-	irWritef(ctx, "  %%%s = insertvalue %%type.str %%%s, ptr @%s, 1\n", strFieldSsa, sizeFieldSsa, constSsa)
+	irWriteGlf(ctx, "@%s = private constant [%d x i8] c\"%s\\00\"\n", constSsa.Repr, constLen, cleanStr)
+
+	irWritef(ctx, "  %%%s = insertvalue %%type.str undef, i64 %d, 0\n", sizeFieldSsa.Repr, constLen-1)
+	irWritef(ctx, "  %%%s = insertvalue %%type.str %%%s, ptr @%s, 1\n", strFieldSsa.Repr, sizeFieldSsa.Repr, constSsa.Repr)
 
 	return strFieldSsa, nil
 }
 
 func irExprLitNum(ctx *IrCtx, litNum *t.NodeExprLit) (SsaName, error) {
-	return SsaName(litNum.Value), nil
+	ssa := ssaName(litNum.Value)
+	ssa.IsLiteral = true
+	return ssa, nil
 }
 
 func irExprLit(ctx *IrCtx, lit *t.NodeExprLit) (SsaName, error) {
 	switch lit.LitType {
 	case t.TokLitStr:
 		return irExprLitStr(ctx, lit)
+	case t.TokLitNum:
+		return irExprLitNum(ctx, lit)
 	}
-
-	return SsaName(""), nil
+	return ssaName(""), nil
 }
 
 func irExprName(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
@@ -197,17 +244,15 @@ func irExprName(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 		typeNd = n.VarDef.Type
 	}
 
-	fmt.Printf("type: %T\n", nameExpr.AssociatedNode)
-
-	irWritef(ctx, "  %%%s = load ", ssa)
+	irWritef(ctx, "  %%%s = load ", ssa.Repr)
 
 	e := irType(ctx, typeNd)
 	if e != nil {
-		return SsaName(""), e
+		return ssaName(""), e
 	}
 
-	irWritef(ctx, ", ptr %%%s\n", ptrSsa)
-	return SsaName(ssa), nil
+	irWritef(ctx, ", ptr %%%s\n", ptrSsa.Repr)
+	return ssa, nil
 }
 
 func irExpression(ctx *IrCtx, expr t.NodeExpr) (SsaName, error) {
@@ -223,27 +268,15 @@ func irExpression(ctx *IrCtx, expr t.NodeExpr) (SsaName, error) {
 	case *t.NodeExprName:
 		return irExprName(ctx, ne)
 	}
-	return SsaName(""), nil
+	return ssaName(""), nil
 }
 
 func irStmtReturn(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
 	// TODO: lower expression
-	switch n := stmtRet.Expression.(type) {
+	switch stmtRet.Expression.(type) {
 	case *t.NodeExprVoid:
 		irWrite(ctx, "  ret void\n")
 		return nil
-	case *t.NodeExprLit:
-		if n.LitType == t.TokLitNum {
-			irWrite(ctx, "  ret ")
-
-			e := irType(ctx, stmtRet.OwnerFuncType)
-			if e != nil {
-				return e
-			}
-
-			irWritef(ctx, " %s\n", n.Value)
-			return nil
-		}
 	}
 
 	ssa, e := irExpression(ctx, stmtRet.Expression)
@@ -257,7 +290,10 @@ func irStmtReturn(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
 		return e
 	}
 
-	irWritef(ctx, " %%%s\n", ssa)
+	irWrite(ctx, " ")
+	irPossibleLitSsa(ctx, ssa)
+
+	irWrite(ctx, "\n")
 	return nil
 }
 
@@ -275,15 +311,15 @@ func irStmtThrow(ctx *IrCtx, stmtThrow *t.NodeStmtThrow, fnDef *t.NodeFuncDef) e
 	neqLabel := irSsaName(ctx)
 
 	// get error code field
-	irWritef(ctx, "  %%%s = extractvalue %%type.error %%%s, 0\n", fieldSsa, exprSsa)
+	irWritef(ctx, "  %%%s = extractvalue %%type.error %%%s, 0\n", fieldSsa.Repr, exprSsa.Repr)
 
 	// if errcode != 0
-	irWritef(ctx, "  %%%s = icmp ne i32 %%%s, 0\n", compSsa, fieldSsa)
-	irWritef(ctx, "  br i1 %%%s, label %%%s, label %%%s\n", compSsa, neqLabel, eqLabel)
+	irWritef(ctx, "  %%%s = icmp ne i32 %%%s, 0\n", compSsa.Repr, fieldSsa.Repr)
+	irWritef(ctx, "  br i1 %%%s, label %%%s, label %%%s\n", compSsa.Repr, neqLabel.Repr, eqLabel.Repr)
 
 	// throw = err; return 0
-	irWritef(ctx, "%s:\n", neqLabel)
-	irWritef(ctx, "  store %%type.error %%%s, ptr %%throw\n", exprSsa)
+	irWritef(ctx, "%s:\n", neqLabel.Repr)
+	irWritef(ctx, "  store %%type.error %%%s, ptr %%throw\n", exprSsa.Repr)
 	irWrite(ctx, "  ret ")
 
 	e = irType(ctx, fnDef.ReturnType)
@@ -298,7 +334,7 @@ func irStmtThrow(ctx *IrCtx, stmtThrow *t.NodeStmtThrow, fnDef *t.NodeFuncDef) e
 	}
 
 	// else nothing
-	irWritef(ctx, "%s:\n", eqLabel)
+	irWritef(ctx, "%s:\n", eqLabel.Repr)
 
 	return nil
 }
@@ -313,6 +349,9 @@ func irStatement(ctx *IrCtx, stmtNode t.NodeStatement, fnDef *t.NodeFuncDef) err
 		_, e = irExpression(ctx, s.Expression)
 	case *t.NodeStmtThrow:
 		e = irStmtThrow(ctx, s, fnDef)
+	case *t.NodeLlvm:
+		irLlvm(ctx, s)
+		return nil
 	}
 	return e
 }
@@ -374,7 +413,8 @@ func irMainWrapper(ctx *IrCtx, mainFnDef *t.NodeFuncDef) error {
 
 	if mainFnDef.ReturnType.Throws {
 		irWrite(ctx, "  %e = alloca %type.error\n")
-		irWrite(ctx, "  call void @main.main(ptr %e)\n")
+		irWrite(ctx, "  store %type.error zeroinitializer, ptr %e\n")
+		irWritef(ctx, "  call void @%s.main(ptr %%e)\n", ctx.fCtx.MainPckgName)
 		irWrite(ctx, "  %efld1 = getelementptr %type.error, ptr %e, i32 0, i32 0\n")
 		irWrite(ctx, "  %ecd = load i32, ptr %efld1\n")
 		irWrite(ctx, "  %isnz = icmp ne i32 %ecd, 0\n")
@@ -401,7 +441,7 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 		singleName = n.Name
 	}
 
-	if ctx.fCtx.PackageName == "main" && singleName == "main" {
+	if ctx.fCtx.PackageName == ctx.fCtx.MainPckgName && singleName == "main" {
 		e := irMainWrapper(ctx, fnDefNode)
 		if e != nil {
 			return e
@@ -484,6 +524,9 @@ func irGlobalDecl(ctx *IrCtx, glDeclNode t.NodeGlobalDecl) error {
 		if e != nil {
 			return e
 		}
+	case *t.NodeLlvm:
+		irLlvm(ctx, g)
+		return nil
 	}
 	return nil
 }
@@ -504,24 +547,31 @@ func irNameSingleSsa(ctx *IrCtx, nameNode *t.NodeNameSingle, withPackage bool) S
 		ssa += ctx.fCtx.PackageName + "."
 	}
 	ssa += nameNode.Name
-	return SsaName(ssa)
+	return ssaName(ssa)
 }
 
 func irNameComposite(ctx *IrCtx, nameNode *t.NodeNameComposite, withPackage bool) error {
-	if withPackage {
-		first := nameNode.Parts[0]
-
-		// if not imported package, prepend with <thispackage>.
-		_, ok := ctx.fCtx.ImportAlias[first]
-		if !ok {
-			irWrite(ctx, ctx.fCtx.PackageName)
-			irWrite(ctx, ".")
-		}
-	}
-
 	bound := len(nameNode.Parts)
 	for i, n := range nameNode.Parts {
-		irWrite(ctx, n)
+
+		if i == 0 {
+			if withPackage {
+				first := nameNode.Parts[0]
+
+				// if not imported package, prepend with <thispackage>.
+				alias, ok := ctx.fCtx.GlNode.ImportAlias[first]
+				if !ok {
+					irWrite(ctx, ctx.fCtx.PackageName)
+				} else {
+					irWrite(ctx, alias)
+				}
+			} else {
+				irWrite(ctx, n)
+			}
+		} else {
+			irWrite(ctx, n)
+		}
+
 		if i < bound-1 {
 			irWrite(ctx, ".")
 		}
@@ -551,7 +601,7 @@ func irNameCompositeSsa(ctx *IrCtx, nameNode *t.NodeNameComposite, withPackage b
 		}
 	}
 
-	return SsaName(ssa)
+	return ssaName(ssa)
 }
 
 func irName(ctx *IrCtx, nameNode t.NodeName, withPackage bool) error {
@@ -577,7 +627,7 @@ func irNameSsa(ctx *IrCtx, nameNode t.NodeName, withPackage bool) SsaName {
 	case *t.NodeNameSingle:
 		return irNameSingleSsa(ctx, n, withPackage)
 	}
-	return SsaName("")
+	return ssaName("")
 }
 
 func irType(ctx *IrCtx, typeNode *t.NodeType) error {
@@ -661,6 +711,10 @@ func irGlobal(ctx *IrCtx, glNode *t.NodeGlobal) error {
 		}
 	}
 	return nil
+}
+
+func irLlvm(ctx *IrCtx, llvmNode *t.NodeLlvm) {
+	irWrite(ctx, llvmNode.Text)
 }
 
 func irWriteModule(fCtx *t.FileCtx, builder *strings.Builder, glBld *strings.Builder) error {
