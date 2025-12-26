@@ -3,6 +3,7 @@ package checker
 import (
 	t "Magma/src/types"
 	"fmt"
+	"strings"
 )
 
 func makeNamedType(name string) *t.NodeType {
@@ -47,6 +48,59 @@ func isVoidType(node *t.NodeType) bool {
 	return false
 }
 
+func isErrType(node *t.NodeType) bool {
+	if node == nil {
+		return false
+	}
+
+	switch n := node.KindNode.(type) {
+	case *t.NodeTypeNamed:
+		switch nn := n.NameNode.(type) {
+		case *t.NodeNameSingle:
+			return nn.Name == "error"
+		}
+	}
+	return false
+}
+
+func isBoolType(node *t.NodeType) bool {
+	if node == nil {
+		return false
+	}
+
+	switch n := node.KindNode.(type) {
+	case *t.NodeTypeNamed:
+		switch nn := n.NameNode.(type) {
+		case *t.NodeNameSingle:
+			return nn.Name == "bool"
+		}
+	}
+	return false
+}
+
+func flattenTypeKind(nodeKind t.NodeTypeKind) string {
+	switch n := nodeKind.(type) {
+	case *t.NodeTypeNamed:
+		switch nn := n.NameNode.(type) {
+		case *t.NodeNameSingle:
+			return nn.Name
+		case *t.NodeNameComposite:
+			return strings.Join(nn.Parts, ".")
+		}
+	case *t.NodeTypePointer:
+		return "ptr<" + flattenTypeKind(n.Kind) + ">"
+	}
+	return "undef"
+}
+
+func flattenType(node *t.NodeType) string {
+	if node == nil {
+		return "nil"
+	}
+
+	return flattenTypeKind(node.KindNode)
+}
+
 func ctExpr(c *ctx, expr t.NodeExpr) error {
 	switch n := expr.(type) {
 	case *t.NodeExprVoid:
@@ -74,9 +128,27 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		case t.TokLitStr:
 			n.InfType = makeNamedType("str")
 			return nil
+		case t.TokLitBool:
+			n.InfType = makeNamedType("bool")
+			return nil
 		}
 	case *t.NodeExprName:
-		// TODO: resolve type of named variable
+		if n.AssociatedNode == nil {
+			fmt.Printf("name: %s\n", flattenName(n.Name))
+			return fmt.Errorf("name node pointing to no valid node")
+		}
+
+		switch n2 := n.AssociatedNode.(type) {
+		case *t.NodeExprVarDef:
+			n.InfType = n2.GetInferredType()
+		case *t.NodeExprVarDefAssign:
+			n.InfType = n2.GetInferredType()
+		case *t.NodeFuncDef:
+			// TODO: build function type
+			n.InfType = n2.ReturnType
+		default:
+			return fmt.Errorf("name node pointing to invalid node type, failed to infer type")
+		}
 		return nil
 	case *t.NodeExprBinary:
 		e := ctExpr(c, n.Left)
@@ -115,6 +187,57 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 	return fmt.Errorf("unexpected expression type")
 }
 
+func ctIfStmt(c *ctx, ifStmt *t.NodeStmtIf) error {
+	e := ctExpr(c, ifStmt.CondExpr)
+	if e != nil {
+		return e
+	}
+
+	infType := ifStmt.CondExpr.GetInferredType()
+	isBool := isBoolType(infType)
+
+	if !isBool {
+		fmt.Printf("inferred type: %s\n", flattenType(infType))
+		return fmt.Errorf("type of expression in if statement must be of type 'bool'")
+	}
+
+	e = ctBody(c, &ifStmt.Body)
+	if e != nil {
+		return e
+	}
+
+	if ifStmt.NextCondStmt != nil {
+		switch n := ifStmt.NextCondStmt.(type) {
+		case *t.NodeStmtIf:
+			e = ctIfStmt(c, n)
+		case *t.NodeStmtElse:
+			e = ctBody(c, &n.Body)
+		}
+		if e != nil {
+			return e
+		}
+	}
+
+	return nil
+}
+
+func ctThrow(c *ctx, throw *t.NodeStmtThrow) error {
+	e := ctExpr(c, throw.Expression)
+	if e != nil {
+		return e
+	}
+
+	infType := throw.Expression.GetInferredType()
+	isErr := isErrType(infType)
+
+	if !isErr {
+		fmt.Printf("inferred type: %s\n", flattenType(infType))
+		return fmt.Errorf("type of expression in throw statement must be of type 'error'")
+	}
+
+	return nil
+}
+
 func ctReturn(c *ctx, ret *t.NodeStmtRet) error {
 	if c.LastFuncDef == nil {
 		// TODO: compiler error
@@ -149,17 +272,19 @@ func ctReturn(c *ctx, ret *t.NodeStmtRet) error {
 
 func ctBody(c *ctx, bdy *t.NodeBody) error {
 	for _, stmt := range bdy.Statements {
+		var e error
 		switch n := stmt.(type) {
 		case *t.NodeStmtRet:
-			e := ctReturn(c, n)
-			if e != nil {
-				return e
-			}
+			e = ctReturn(c, n)
 		case *t.NodeStmtExpr:
-			e := ctExpr(c, n.Expression)
-			if e != nil {
-				return e
-			}
+			e = ctExpr(c, n.Expression)
+		case *t.NodeStmtThrow:
+			e = ctThrow(c, n)
+		case *t.NodeStmtIf:
+			e = ctIfStmt(c, n)
+		}
+		if e != nil {
+			return e
 		}
 	}
 	return nil

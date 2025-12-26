@@ -247,6 +247,15 @@ func parseSimplePrimaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
 		return n, nil
 	}
 
+	if tk.KeywType == t.KwTrue || tk.KeywType == t.KwFalse {
+		consume(ctx)
+		boolVal := "0"
+		if tk.KeywType == t.KwTrue {
+			boolVal = "1"
+		}
+		return &t.NodeExprLit{Value: boolVal, LitType: t.TokLitBool}, nil
+	}
+
 	if tk.Type == t.TokLitNum || tk.Type == t.TokLitStr {
 		consume(ctx)
 		return &t.NodeExprLit{Value: tk.Repr, LitType: tk.Type}, nil
@@ -277,6 +286,14 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 		}
 
 		if next.KeywType == t.KwNewline {
+			break
+		}
+
+		if next.KeywType == t.KwColon {
+			break
+		}
+
+		if next.KeywType == t.KwParenCl {
 			break
 		}
 
@@ -746,6 +763,8 @@ func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
 		return parseStmtThrow(ctx)
 	case t.KwLlvm:
 		return parseLlvm(ctx, tk)
+	case t.KwIf:
+		return parseStmtIf(ctx, tk)
 	}
 
 	expr, e := parseExpression(ctx, tk, 0)
@@ -787,6 +806,61 @@ func parseBody(ctx *ParseCtx, tk t.Token) (t.NodeBody, error) {
 
 		if tk.KeywType == t.KwDots {
 			consume(ctx)
+			return n, nil
+		}
+
+		stmtNode, e := parseStatement(ctx, tk)
+		if e != nil {
+			return t.NodeBody{}, e
+		}
+		n.Statements = append(n.Statements, stmtNode)
+	}
+}
+
+func parseIfBody(ctx *ParseCtx, tk t.Token, ifStmt *t.NodeStmtIf) (t.NodeBody, error) {
+	n := t.NodeBody{}
+
+	if tk.KeywType != t.KwColon {
+		return t.NodeBody{}, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&tk,
+			fmt.Sprintf("syntax error: expected body opening ':' but got '%s' instead", tk.Repr),
+			"bodies/scopes are opened with ':' and ended with '..'",
+		)
+	}
+	consume(ctx)
+
+	for {
+		tk, e := peek(ctx)
+		if e != nil {
+			return t.NodeBody{}, e
+		}
+
+		if tk.KeywType == t.KwNewline {
+			consume(ctx)
+			continue
+		}
+
+		if tk.KeywType == t.KwDots {
+			consume(ctx)
+			return n, nil
+		}
+
+		if tk.KeywType == t.KwElif {
+			elifStmt, e := parseStmtIf(ctx, tk)
+			if e != nil {
+				return t.NodeBody{}, e
+			}
+			ifStmt.NextCondStmt = elifStmt
+			return n, nil
+		}
+
+		if tk.KeywType == t.KwElse {
+			elseStmt, e := parseStmtElse(ctx, tk)
+			if e != nil {
+				return t.NodeBody{}, e
+			}
+			ifStmt.NextCondStmt = elseStmt
 			return n, nil
 		}
 
@@ -847,6 +921,7 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 	switch n := gncls.NameNode.(type) {
 	case *t.NodeNameComposite:
 		isMemberFunc = true
+		fnNameSimple = strings.Join(n.Parts, ".")
 	case *t.NodeNameSingle:
 		fnNameSimple = n.Name
 	}
@@ -902,9 +977,7 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 		ctx.GlobalNode.StructDefs[ownerName].Funcs[memberName] = fnDef
 	}
 
-	if fnNameSimple != "" {
-		ctx.GlobalNode.FuncDefs[fnNameSimple] = fnDef
-	}
+	ctx.GlobalNode.FuncDefs[fnNameSimple] = fnDef
 	return fnDef, nil
 }
 
@@ -956,6 +1029,55 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 			"expected in global scope: `<name> :`, `<name> (",
 		)
 	}
+}
+
+func parseStmtElse(ctx *ParseCtx, tk t.Token) (*t.NodeStmtElse, error) {
+	consume(ctx)
+
+	next, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	body, e := parseBody(ctx, next)
+	if e != nil {
+		return nil, e
+	}
+
+	return &t.NodeStmtElse{
+		Body: body,
+	}, nil
+}
+
+func parseStmtIf(ctx *ParseCtx, tk t.Token) (*t.NodeStmtIf, error) {
+	consume(ctx)
+
+	next, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	condExpr, e := parseExpression(ctx, next, 0)
+	if e != nil {
+		return nil, e
+	}
+
+	next2, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	ifStmt := &t.NodeStmtIf{
+		CondExpr: condExpr,
+	}
+
+	body, e := parseIfBody(ctx, next2, ifStmt)
+	if e != nil {
+		return nil, e
+	}
+
+	ifStmt.Body = body
+	return ifStmt, nil
 }
 
 func parseLlvm(ctx *ParseCtx, tk t.Token) (*t.NodeLlvm, error) {

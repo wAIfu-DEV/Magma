@@ -7,6 +7,7 @@ const (
 	TokName
 	TokLitStr
 	TokLitNum
+	TokLitBool
 	TokKeyword
 )
 
@@ -15,6 +16,7 @@ var TokTypeToRepr []string = []string{
 	TokName:    "Name",
 	TokLitStr:  "LitStr",
 	TokLitNum:  "LitNum",
+	TokLitBool: "LitBool",
 	TokKeyword: "Keyword",
 }
 
@@ -42,6 +44,11 @@ const (
 	KwAmpersand
 	KwThrow
 	KwLlvm
+	KwIf
+	KwElif
+	KwElse
+	KwTrue
+	KwFalse
 )
 
 var KwTypeToRepr []string = []string{
@@ -66,6 +73,11 @@ var KwTypeToRepr []string = []string{
 	KwAmpersand: "&",
 	KwThrow:     "throw",
 	KwLlvm:      "llvm",
+	KwIf:        "if",
+	KwElif:      "elif",
+	KwElse:      "else",
+	KwTrue:      "true",
+	KwFalse:     "false",
 }
 
 var KwReprToType map[string]KwType = map[string]KwType{
@@ -90,6 +102,11 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"&":     KwAmpersand,
 	"throw": KwThrow,
 	"llvm":  KwLlvm,
+	"if":    KwIf,
+	"elif":  KwElif,
+	"else":  KwElse,
+	"true":  KwTrue,
+	"false": KwFalse,
 }
 
 type Token struct {

@@ -4,6 +4,7 @@ import (
 	magmatypes "Magma/src/magma_types"
 	t "Magma/src/types"
 	"fmt"
+	"strings"
 )
 
 type sh *t.SharedState
@@ -138,7 +139,7 @@ func clGetStructDefFromType(c *ctx, typeNode *t.NodeType) (*t.StructDef, error) 
 func clGetFuncDefFromModule(c *ctx, name parsedName) (*t.NodeFuncDef, error) {
 	if !name.HasParts {
 		// TODO: compiler error
-		return nil, fmt.Errorf("cannot get function def from module with simply named struct")
+		return nil, fmt.Errorf("cannot get function def from module with simply named function")
 	}
 
 	moduleAlias := name.First
@@ -148,7 +149,16 @@ func clGetFuncDefFromModule(c *ctx, name parsedName) (*t.NodeFuncDef, error) {
 	moduleName, ok := c.GlobalNode.ImportAlias[moduleAlias]
 
 	if !ok {
+		// Might be member func
+		fullName := name.First + "." + strings.Join(name.Parts, ".")
+		memberFunc, ok := c.GlobalNode.FuncDefs[fullName]
+		if ok {
+			return memberFunc, nil
+		}
+
 		// TODO: compilation error
+		fmt.Printf("alias: %s\n", moduleAlias)
+		fmt.Printf("full name: %s\n", name.First+"."+strings.Join(name.Parts, "."))
 		return nil, fmt.Errorf("module alias does not exist in file")
 	}
 
@@ -309,11 +319,13 @@ func clExistsInScopeTree(c *ctx, name t.NodeName, ent entryType) (found bool, ex
 
 		currScope = currScope.Parent
 	}
+
+	//return false, nil, false, fmt.Errorf("not found")
 }
 
-func clName(c *ctx, name *t.NodeExprName) error {
+func clName(c *ctx, name *t.NodeExprName, expected entryType) error {
 	// TODO: get associated node for easier type checking later
-	found, expr, isSsa, err := clExistsInScopeTree(c, name.Name, enumEntVar)
+	found, expr, isSsa, err := clExistsInScopeTree(c, name.Name, expected)
 
 	if err != nil {
 		return err
@@ -325,14 +337,22 @@ func clName(c *ctx, name *t.NodeExprName) error {
 
 	name.IsSsa = isSsa
 	name.AssociatedNode = expr
+
+	if name.AssociatedNode == nil {
+		return fmt.Errorf("name expression: %s does not point to any existing vars, even though there was no errors?", flattenName(name.Name))
+	}
 	return nil
 }
 
 func clExprCall(c *ctx, call *t.NodeExprCall) error {
 	fmt.Printf("check expr call\n")
 
-	switch call.Callee.(type) {
+	switch n := call.Callee.(type) {
 	case *t.NodeExprName:
+		e := clName(c, n, enumEntFunc)
+		if e != nil {
+			return e
+		}
 		break
 	default:
 		return fmt.Errorf("cannot call expression that is not a name")
@@ -371,7 +391,7 @@ func clExpr(c *ctx, expr t.NodeExpr) error {
 			return e
 		}
 	case *t.NodeExprName:
-		e := clName(c, n)
+		e := clName(c, n, enumEntVar)
 		if e != nil {
 			return e
 		}
@@ -395,6 +415,32 @@ func clThrow(c *ctx, throw *t.NodeStmtThrow) error {
 	return nil
 }
 
+func clIf(c *ctx, ifStmt *t.NodeStmtIf) error {
+	e := clExpr(c, ifStmt.CondExpr)
+	if e != nil {
+		return e
+	}
+
+	e = clBody(c, &ifStmt.Body)
+	if e != nil {
+		return e
+	}
+
+	if ifStmt.NextCondStmt != nil {
+		switch n := ifStmt.NextCondStmt.(type) {
+		case *t.NodeStmtIf:
+			e = clIf(c, n)
+		case *t.NodeStmtElse:
+			e = clBody(c, &n.Body)
+		}
+		if e != nil {
+			return e
+		}
+	}
+
+	return nil
+}
+
 func clBody(c *ctx, bdy *t.NodeBody) error {
 	for _, stmt := range bdy.Statements {
 		switch n := stmt.(type) {
@@ -410,6 +456,11 @@ func clBody(c *ctx, bdy *t.NodeBody) error {
 			}
 		case *t.NodeStmtThrow:
 			e := clThrow(c, n)
+			if e != nil {
+				return e
+			}
+		case *t.NodeStmtIf:
+			e := clIf(c, n)
 			if e != nil {
 				return e
 			}

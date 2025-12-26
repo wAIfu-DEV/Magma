@@ -301,6 +301,45 @@ func (n *NodeStmtRet) Print(indent int) {
 	n.Expression.Print(indent + 1)
 }
 
+type NodeStmtIf struct {
+	CondExpr NodeExpr
+	Body     NodeBody
+
+	NextCondStmt NodeStatement
+}
+
+func (n *NodeStmtIf) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("StmtIf\n")
+
+	PrintIndent(indent + 1)
+	fmt.Printf("CondExpr\n")
+	n.CondExpr.Print(indent + 2)
+
+	n.Body.Print(indent + 1)
+
+	PrintIndent(indent + 1)
+	fmt.Printf("Next\n")
+
+	if n.NextCondStmt == nil {
+		PrintIndent(indent + 2)
+		fmt.Println("<null>")
+	} else {
+		n.NextCondStmt.Print(indent + 2)
+	}
+}
+
+type NodeStmtElse struct {
+	Body NodeBody
+}
+
+func (n *NodeStmtElse) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("StmtElse\n")
+
+	n.Body.Print(indent + 1)
+}
+
 type NodeStmtExpr struct {
 	Expression NodeExpr
 }
@@ -436,6 +475,8 @@ func (*NodeNameComposite) IsName()    {}
 func (*NodeStmtRet) IsStatement()     {}
 func (*NodeStmtExpr) IsStatement()    {}
 func (*NodeStmtThrow) IsStatement()   {}
+func (*NodeStmtIf) IsStatement()      {}
+func (*NodeStmtElse) IsStatement()    {}
 func (*NodeLlvm) IsStatement()        {}
 func (*NodeFuncDef) IsGlobalDecl()    {}
 func (*NodeStructDef) IsGlobalDecl()  {}
