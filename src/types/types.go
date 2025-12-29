@@ -5,13 +5,20 @@ import (
 )
 
 type StructDef struct {
-	Name   string
-	Fields map[string]*NodeType
-	Funcs  map[string]*NodeFuncDef
+	Module  string
+	Name    string
+	FieldNb map[string]int
+	Fields  map[string]*NodeType
+	Funcs   map[string]*NodeFuncDef
 }
 
 func (*StructDef) Print(int) {
 	// This is a filthy hack
+}
+
+type MemberAccess struct {
+	Type    *NodeType
+	FieldNb int
 }
 
 type FileCtx struct {
@@ -29,6 +36,7 @@ type FileCtx struct {
 
 type SharedState struct {
 	Cwd          string
+	ExecPath     string
 	MainPckgName string
 
 	ImportedFiles  map[string]<-chan error
@@ -39,6 +47,9 @@ type SharedState struct {
 
 	PipeChans  []<-chan error
 	PipeChansM sync.Mutex
+
+	LlvmDecl  map[string]bool
+	LlvmDeclM sync.Mutex
 
 	PipelineFunc func(shared *SharedState, filePath string, alias string, fromAbs string, fromGl *NodeGlobal) <-chan error
 	WaitGroup    sync.WaitGroup

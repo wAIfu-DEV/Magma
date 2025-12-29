@@ -119,6 +119,16 @@ func (n *NodeTypeRfc) Print(indent int) {
 	n.Kind.Print(indent + 1)
 }
 
+type NodeTypeSlice struct {
+	ElemKind NodeTypeKind
+}
+
+func (n *NodeTypeSlice) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("TypeSlice\n")
+	n.ElemKind.Print(indent + 1)
+}
+
 type NodeExprVoid struct {
 	VoidType *NodeType
 }
@@ -180,7 +190,8 @@ func (n *NodeLlvm) Print(indent int) {
 type NodeExprName struct {
 	Name NodeName
 
-	InfType *NodeType
+	InfType        *NodeType
+	MemberAccesses []*MemberAccess
 
 	AssociatedNode Node
 	IsSsa          bool
@@ -223,6 +234,35 @@ func (n *NodeExprCall) Print(indent int) {
 	for _, expr := range n.Args {
 		expr.Print(indent + 2)
 	}
+}
+
+type NodeExprSubscript struct {
+	Target NodeExpr
+	Expr   NodeExpr
+
+	AssociatedNode Node
+	IsTargetSsa    bool
+
+	BoxType  *NodeType
+	ElemType *NodeType
+}
+
+func (n *NodeExprSubscript) GetInferredType() *NodeType {
+	fmt.Println("ExprSubscript")
+	return n.ElemType
+}
+
+func (n *NodeExprSubscript) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprSubscript\n")
+
+	PrintIndent(indent + 1)
+	fmt.Printf("Target\n")
+	n.Target.Print(indent + 2)
+
+	PrintIndent(indent + 1)
+	fmt.Printf("Expr\n")
+	n.Expr.Print(indent + 2)
 }
 
 type NodeExprBinary struct {
@@ -287,6 +327,29 @@ func (n *NodeExprVarDefAssign) Print(indent int) {
 	PrintIndent(indent + 1)
 	fmt.Printf("AssignExpr\n")
 	n.AssignExpr.Print(indent + 2)
+}
+
+type NodeExprAssign struct {
+	Left  NodeExpr
+	Right NodeExpr
+
+	InfType *NodeType
+}
+
+func (n *NodeExprAssign) GetInferredType() *NodeType {
+	fmt.Println("ExprAssign")
+	return n.InfType
+}
+
+func (n *NodeExprAssign) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprAssign\n")
+	PrintIndent(indent + 1)
+	fmt.Printf("Left\n")
+	n.Left.Print(indent + 2)
+	PrintIndent(indent + 1)
+	fmt.Printf("Right\n")
+	n.Right.Print(indent + 2)
 }
 
 type NodeStmtRet struct {
@@ -465,11 +528,15 @@ func (*NodeExprUnary) IsExpr()        {}
 func (*NodeExprLit) IsExpr()          {}
 func (*NodeExprName) IsExpr()         {}
 func (*NodeExprCall) IsExpr()         {}
+func (*NodeExprSubscript) IsExpr()    {}
 func (*NodeExprBinary) IsExpr()       {}
 func (*NodeExprVarDef) IsExpr()       {}
 func (*NodeExprVarDefAssign) IsExpr() {}
+func (*NodeExprAssign) IsExpr()       {}
 func (*NodeTypeNamed) IsType()        {}
 func (*NodeTypePointer) IsType()      {}
+func (*NodeTypeRfc) IsType()          {}
+func (*NodeTypeSlice) IsType()        {}
 func (*NodeNameSingle) IsName()       {}
 func (*NodeNameComposite) IsName()    {}
 func (*NodeStmtRet) IsStatement()     {}

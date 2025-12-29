@@ -1,15 +1,21 @@
 mod main
-use "io.mg" io
+use "io.mg"     io
+use "errors.mg" errors
 
-myStruct(
-    field u32,
-    other f32,
+MyNestedStruct(
+    field u32
 )
 
-myStruct.member(first u32) !void:
+MyStruct(
+    field u32,
+    other f32,
+    nested MyNestedStruct,
+)
+
+MyStruct.member(first u32) !void:
 ..
 
-myStruct.destructor() void:
+MyStruct.destructor() void:
 ..
 
 func2(arg i32) i32:
@@ -24,9 +30,22 @@ func3() str:
     ret "lol"
 ..
 
-pub main() !void:
+pub main(args str[]) !void:
     myStr str = "test"
     myErr error
+    myStrt MyStruct
+
+    firstArg str = args[0]
+    io.printLn(firstArg)
+
+    myInt u32 = myStrt.nested.field
+    io.printUint(myInt)
+    io.printLn("")
+
+    myInt = 0
+    myStrt.nested.field = 542
+    io.printUint(myStrt.nested.field)
+    io.printLn("")
 
     myBoolTrue bool = true
     myBoolFalse bool = false
@@ -97,5 +116,9 @@ pub main() !void:
     io.printLn("Did not throw.")
 
     val i32 = func2(func1())
+
+    throw errors.invalidArgument("hi from the main function")
+
+    io.printLn("Did not throw.")
     ret
 ..

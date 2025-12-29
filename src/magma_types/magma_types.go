@@ -1,6 +1,8 @@
 package magmatypes
 
-import "strings"
+import (
+	"io"
+)
 
 var BasicTypes = map[string]string{
 	"void": "void",
@@ -28,8 +30,8 @@ var BasicTypes = map[string]string{
 	"slice": "%type.slice",
 }
 
-func WriteIrBasicTypes(b *strings.Builder) {
-	b.WriteString("%type.error = type { i32 }\n")
+func WriteIrBasicTypes(b io.StringWriter) {
+	b.WriteString("%type.error = type { i32, %type.str }\n")
 	b.WriteString("%type.str = type { ptr, i64 }\n")
 	b.WriteString("%type.slice = type { ptr, i64 }\n")
 }

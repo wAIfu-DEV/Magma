@@ -78,6 +78,51 @@ func isBoolType(node *t.NodeType) bool {
 	return false
 }
 
+func isArrayType(node *t.NodeType) bool {
+	if node == nil {
+		return false
+	}
+
+	switch node.KindNode.(type) {
+	case *t.NodeTypeNamed:
+		return false
+	case *t.NodeTypeRfc:
+		return false
+	case *t.NodeTypePointer:
+		return true
+	case *t.NodeTypeSlice:
+		return true
+	}
+	return false
+}
+
+func getBoxedType(node *t.NodeType) *t.NodeType {
+	if node == nil {
+		return nil
+	}
+
+	switch n := node.KindNode.(type) {
+	case *t.NodeTypeNamed:
+		return nil
+	case *t.NodeTypeRfc:
+		return &t.NodeType{
+			Throws:   node.Throws,
+			KindNode: n.Kind,
+		}
+	case *t.NodeTypePointer:
+		return &t.NodeType{
+			Throws:   node.Throws,
+			KindNode: n.Kind,
+		}
+	case *t.NodeTypeSlice:
+		return &t.NodeType{
+			Throws:   node.Throws,
+			KindNode: n.ElemKind,
+		}
+	}
+	return nil
+}
+
 func flattenTypeKind(nodeKind t.NodeTypeKind) string {
 	switch n := nodeKind.(type) {
 	case *t.NodeTypeNamed:
@@ -120,6 +165,31 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		}
 		n.InfType = n.AssociatedFnDef.ReturnType
 		return nil
+	case *t.NodeExprSubscript:
+		e := ctExpr(c, n.Expr)
+		if e != nil {
+			return e
+		}
+		e = ctExpr(c, n.Target)
+		if e != nil {
+			return e
+		}
+
+		switch n2 := n.AssociatedNode.(type) {
+		case *t.NodeExprVarDef:
+			n.BoxType = n2.GetInferredType()
+		case *t.NodeExprVarDefAssign:
+			n.BoxType = n2.GetInferredType()
+		default:
+			return fmt.Errorf("cannot subscript on type other than pointer or slice")
+		}
+
+		var elemType *t.NodeType = getBoxedType(n.BoxType)
+		if elemType == nil {
+			return fmt.Errorf("failed to infer array element type")
+		}
+		n.ElemType = elemType
+		return nil
 	case *t.NodeExprLit:
 		switch n.LitType {
 		case t.TokLitNum:
@@ -136,6 +206,13 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		if n.AssociatedNode == nil {
 			fmt.Printf("name: %s\n", flattenName(n.Name))
 			return fmt.Errorf("name node pointing to no valid node")
+		}
+
+		// TODO: following is not correct for member accesses
+		if len(n.MemberAccesses) > 0 {
+			last := n.MemberAccesses[len(n.MemberAccesses)-1]
+			n.InfType = last.Type
+			return nil
 		}
 
 		switch n2 := n.AssociatedNode.(type) {
@@ -181,7 +258,17 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		if e != nil {
 			return e
 		}
-		n.GetInferredType()
+		return nil
+	case *t.NodeExprAssign:
+		e := ctExpr(c, n.Left)
+		if e != nil {
+			return e
+		}
+		e = ctExpr(c, n.Right)
+		if e != nil {
+			return e
+		}
+		n.InfType = n.Left.GetInferredType()
 		return nil
 	}
 	return fmt.Errorf("unexpected expression type")

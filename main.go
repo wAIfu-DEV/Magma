@@ -2,6 +2,7 @@ package main
 
 import (
 	"Magma/src/checker"
+	ircleaner "Magma/src/ir_cleaner"
 	llvmir "Magma/src/llvm_ir"
 	"Magma/src/makeabs"
 	"Magma/src/pipeline"
@@ -35,7 +36,10 @@ func wrappedMain() error {
 		return e
 	}
 
-	s := shared.MakeShared(cwd)
+	s, e := shared.MakeShared(cwd)
+	if e != nil {
+		return e
+	}
 
 	// actual meat of the program, multithreaded per file
 	// 1. lexing/tokenization
@@ -66,8 +70,13 @@ func wrappedMain() error {
 		return e
 	}
 
+	irStr, e = ircleaner.CleanIr(irStr)
+	if e != nil {
+		return e
+	}
+
 	fmt.Println("Llvm IR:")
-	fmt.Println(irStr)
+	fmt.Printf("%s\n", irStr)
 
 	return os.WriteFile("out.ll", []byte(irStr), 0666)
 }

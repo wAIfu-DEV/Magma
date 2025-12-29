@@ -276,6 +276,97 @@ func parseSimplePrimaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
 	)
 }
 
+func parsePostfixCallExpr(ctx *ParseCtx, tk t.Token, calleeExpr t.NodeExpr) (*t.NodeExprCall, error) {
+	consume(ctx)
+	argExprs := []t.NodeExpr{}
+
+	maybeCl, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	if maybeCl.KeywType == t.KwParenCl {
+		consume(ctx)
+	} else {
+		for {
+			nextExpr, e := peek(ctx)
+			if e != nil {
+				return nil, e
+			}
+			parsedExpr, e := parseExpression(ctx, nextExpr, 0)
+			if e != nil {
+				return nil, e
+			}
+			argExprs = append(argExprs, parsedExpr)
+
+			afterExpr, e := peek(ctx)
+			if e != nil {
+				return nil, e
+			}
+			if afterExpr.KeywType == t.KwComma {
+				consume(ctx)
+				afterComma, e := peek(ctx)
+				if e != nil {
+					return nil, e
+				}
+				if afterComma.KeywType == t.KwParenCl {
+					consume(ctx)
+					break
+				}
+				continue
+			}
+			if afterExpr.KeywType == t.KwParenCl {
+				consume(ctx)
+				break
+			}
+
+			return nil, comp_err.CompilationErrorToken(
+				ctx.Fctx, &tk,
+				fmt.Sprintf("syntax error: unexpected '%s' in call argument expression list", tk.Repr),
+				"",
+			)
+		}
+	}
+
+	return &t.NodeExprCall{
+		Callee: calleeExpr,
+		Args:   argExprs,
+	}, nil
+}
+
+func parsePostfixSubscriptExpr(ctx *ParseCtx, tk t.Token, targetExpr t.NodeExpr) (*t.NodeExprSubscript, error) {
+	consume(ctx)
+
+	nextExpr, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+	parsedExpr, e := parseExpression(ctx, nextExpr, 0)
+	if e != nil {
+		return nil, e
+	}
+
+	afterExpr, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	if afterExpr.KeywType != t.KwBrackCl {
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx, &tk,
+			fmt.Sprintf("syntax error: unexpected '%s' in array indexing expression, expected closing ']'", tk.Repr),
+			"expected: `<arrayname>[<expr>]`, `my_array[0]`",
+		)
+	}
+
+	consume(ctx)
+
+	return &t.NodeExprSubscript{
+		Target: targetExpr,
+		Expr:   parsedExpr,
+	}, nil
+}
+
 func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExpr, error) {
 	expr := baseExpr
 
@@ -298,60 +389,17 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 		}
 
 		if next.KeywType == t.KwParenOp {
-			consume(ctx)
-			argExprs := []t.NodeExpr{}
-
-			maybeCl, e := peek(ctx)
+			expr, e = parsePostfixCallExpr(ctx, tk, expr)
 			if e != nil {
 				return nil, e
 			}
+			continue
+		}
 
-			if maybeCl.KeywType == t.KwParenCl {
-				consume(ctx)
-			} else {
-				for {
-					nextExpr, e := peek(ctx)
-					if e != nil {
-						return nil, e
-					}
-					parsedExpr, e := parseExpression(ctx, nextExpr, 0)
-					if e != nil {
-						return nil, e
-					}
-					argExprs = append(argExprs, parsedExpr)
-
-					afterExpr, e := peek(ctx)
-					if e != nil {
-						return nil, e
-					}
-					if afterExpr.KeywType == t.KwComma {
-						consume(ctx)
-						afterComma, e := peek(ctx)
-						if e != nil {
-							return nil, e
-						}
-						if afterComma.KeywType == t.KwParenCl {
-							consume(ctx)
-							break
-						}
-						continue
-					}
-					if afterExpr.KeywType == t.KwParenCl {
-						consume(ctx)
-						break
-					}
-
-					return nil, comp_err.CompilationErrorToken(
-						ctx.Fctx, &tk,
-						fmt.Sprintf("syntax error: unexpected '%s' in call argument expression list", tk.Repr),
-						"",
-					)
-				}
-			}
-
-			expr = &t.NodeExprCall{
-				Callee: expr,
-				Args:   argExprs,
+		if next.KeywType == t.KwBrackOp {
+			expr, e = parsePostfixSubscriptExpr(ctx, tk, expr)
+			if e != nil {
+				return nil, e
 			}
 			continue
 		}
@@ -359,6 +407,12 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 		if expr == baseExpr {
 			switch n := baseExpr.(type) {
 			case *t.NodeExprName:
+				// Only treat `name <type>` as a variable definition when the next token
+				// can actually start a type. Otherwise this would incorrectly swallow
+				// valid expressions like `x = y` by trying to parse `=` as a type.
+				if next.Type != t.TokName {
+					break
+				}
 				typeNd, e := parseType(ctx, next, false)
 				if e != nil {
 					return nil, e
@@ -475,19 +529,39 @@ func parseExpression(ctx *ParseCtx, tk t.Token, minPrecedence int) (t.NodeExpr, 
 		if e != nil {
 			return nil, e
 		}
-		right, e := parseExpression(ctx, rTk, precedence+1)
+		// `=` should be right-associative (e.g. `x = y = z` -> `x = (y = z)`).
+		nextMinPrecedence := precedence + 1
+		if opTk.KeywType == t.KwEqual {
+			nextMinPrecedence = precedence
+		}
+		right, e := parseExpression(ctx, rTk, nextMinPrecedence)
 		if e != nil {
 			return nil, e
 		}
 
-		switch vd := left.(type) {
-		case *t.NodeExprVarDef:
-			varDefAssign := &t.NodeExprVarDefAssign{
-				VarDef:     *vd,
-				AssignExpr: right,
+		if opTk.KeywType == t.KwEqual {
+			switch vd := left.(type) {
+			case *t.NodeExprVarDef:
+				varDefAssign := &t.NodeExprVarDefAssign{
+					VarDef:     *vd,
+					AssignExpr: right,
+				}
+				left = varDefAssign
+				continue
+			case *t.NodeExprName:
+				left = &t.NodeExprAssign{
+					Left:  left,
+					Right: right,
+				}
+				continue
+			default:
+				return nil, comp_err.CompilationErrorToken(
+					ctx.Fctx,
+					&opTk,
+					"syntax error: invalid assignment target",
+					"left side of '=' must be an assignable expression (e.g. a name)",
+				)
 			}
-			left = varDefAssign
-			continue
 		}
 
 		binaryNd := &t.NodeExprBinary{
@@ -644,7 +718,7 @@ func parseArgsList(ctx *ParseCtx) (t.NodeArgList, error) {
 			return t.NodeArgList{}, e
 		}
 
-		if tk.KeywType != t.KwParenCl && tk.KeywType != t.KwComma {
+		if tk.KeywType != t.KwParenCl && tk.KeywType != t.KwComma && tk.KeywType != t.KwNewline {
 			return t.NodeArgList{}, comp_err.CompilationErrorToken(
 				ctx.Fctx,
 				&tk,
@@ -693,19 +767,50 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (*t.NodeType, error) 
 	}
 
 	if tk.KeywType == t.KwAsterisk || tk.KeywType == t.KwDollar {
-
+		// TODO: parse pointer types
 	}
 
+	var named t.NodeName = nil
 	if tk.Type == t.TokName {
-		n, e := parseName(ctx, tk, true)
+		named, e = parseName(ctx, tk, true)
+		if e != nil {
+			return nil, e
+		}
+	}
+
+	after, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	// parse array types / (future) templated types
+	if after.KeywType == t.KwBrackOp {
+		consume(ctx)
+
+		maybeCl, e := peek(ctx)
 		if e != nil {
 			return nil, e
 		}
 
+		if maybeCl.KeywType == t.KwBrackCl {
+			consume(ctx)
+
+			return &t.NodeType{
+				Throws: isThrowing,
+				KindNode: &t.NodeTypeSlice{
+					ElemKind: &t.NodeTypeNamed{
+						NameNode: named,
+					},
+				},
+			}, nil
+		}
+	}
+
+	if named != nil {
 		return &t.NodeType{
 			Throws: isThrowing,
 			KindNode: &t.NodeTypeNamed{
-				NameNode: n,
+				NameNode: named,
 			},
 		}, nil
 	}
@@ -762,7 +867,9 @@ func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
 	case t.KwThrow:
 		return parseStmtThrow(ctx)
 	case t.KwLlvm:
-		return parseLlvm(ctx, tk)
+		return parseLlvm(ctx, tk, false)
+	case t.KwLlvmDecl:
+		return parseLlvm(ctx, tk, true)
 	case t.KwIf:
 		return parseStmtIf(ctx, tk)
 	}
@@ -898,13 +1005,16 @@ func parseStructDef(ctx *ParseCtx, tk t.Token, gncls t.NodeGenericClass) (*t.Nod
 
 	// create struct def in global node for easir type checking later
 	structMap := &t.StructDef{
-		Name:   simpleName.Name,
-		Fields: map[string]*t.NodeType{},
-		Funcs:  map[string]*t.NodeFuncDef{},
+		Module:  ctx.Fctx.PackageName,
+		Name:    simpleName.Name,
+		Fields:  map[string]*t.NodeType{},
+		Funcs:   map[string]*t.NodeFuncDef{},
+		FieldNb: map[string]int{},
 	}
 
-	for _, arg := range gncls.ArgsNode.Args {
+	for i, arg := range gncls.ArgsNode.Args {
 		structMap.Fields[arg.Name] = arg.TypeNode
+		structMap.FieldNb[arg.Name] = i
 	}
 
 	ctx.GlobalNode.StructDefs[simpleName.Name] = structMap
@@ -1080,7 +1190,7 @@ func parseStmtIf(ctx *ParseCtx, tk t.Token) (*t.NodeStmtIf, error) {
 	return ifStmt, nil
 }
 
-func parseLlvm(ctx *ParseCtx, tk t.Token) (*t.NodeLlvm, error) {
+func parseLlvm(ctx *ParseCtx, tk t.Token, decl bool) (*t.NodeLlvm, error) {
 	consume(ctx) // consume llvm kw
 
 	next, e := peek(ctx)
@@ -1090,6 +1200,14 @@ func parseLlvm(ctx *ParseCtx, tk t.Token) (*t.NodeLlvm, error) {
 
 	if next.Type == t.TokLitStr {
 		consume(ctx)
+
+		if decl {
+			ctx.Shared.LlvmDeclM.Lock()
+			ctx.Shared.LlvmDecl[next.Repr] = true
+			ctx.Shared.LlvmDeclM.Unlock()
+
+			return &t.NodeLlvm{Text: "\n"}, nil // llvm once are going to be outputed at top of module
+		}
 		return &t.NodeLlvm{Text: next.Repr}, nil
 	}
 
@@ -1126,7 +1244,9 @@ outer:
 		case t.KwUse:
 			e = parseUseDecl(ctx, tk)
 		case t.KwLlvm:
-			return parseLlvm(ctx, tk)
+			return parseLlvm(ctx, tk, false)
+		case t.KwLlvmDecl:
+			return parseLlvm(ctx, tk, true)
 
 		default:
 			break outer
