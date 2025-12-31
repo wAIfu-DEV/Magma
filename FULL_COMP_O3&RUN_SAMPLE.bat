@@ -16,12 +16,13 @@ if %ERRORLEVEL% GEQ 1 GOTO :End
 ECHO.
 ECHO Running Compiler Backend ...
 CALL clang.exe -O3 out.ll -o out.exe
+CALL clang.exe -O3 out.ll -S -emit-llvm -o out_o3.ll
 
 if %ERRORLEVEL% GEQ 1 GOTO :End
 
 ECHO.
 ECHO Running out.exe
-CALL out.exe
+CALL out.exe "this is second arg" 10051
 
 PAUSE
 EXIT

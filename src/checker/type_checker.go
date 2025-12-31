@@ -238,7 +238,13 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 			return e
 		}
 
-		n.InfType = n.Left.GetInferredType()
+		switch n.Operator {
+		case t.KwCmpEq, t.KwCmpNeq:
+			n.InfType = makeNamedType("bool")
+		default:
+			// TODO: implicit casting rules
+			n.InfType = n.Left.GetInferredType()
+		}
 		return nil
 	case *t.NodeExprUnary:
 		switch n.Operator {
@@ -269,6 +275,12 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 			return e
 		}
 		n.InfType = n.Left.GetInferredType()
+		return nil
+	case *t.NodeExprTry:
+		e := ctExpr(c, n.Call)
+		if e != nil {
+			return e
+		}
 		return nil
 	}
 	return fmt.Errorf("unexpected expression type")
@@ -308,6 +320,26 @@ func ctIfStmt(c *ctx, ifStmt *t.NodeStmtIf) error {
 	return nil
 }
 
+func ctWhileStmt(c *ctx, whileStmt *t.NodeStmtWhile) error {
+	e := ctExpr(c, whileStmt.CondExpr)
+	if e != nil {
+		return e
+	}
+
+	infType := whileStmt.CondExpr.GetInferredType()
+	isBool := isBoolType(infType)
+
+	if !isBool {
+		fmt.Printf("inferred type: %s\n", flattenType(infType))
+		return fmt.Errorf("type of expression in if statement must be of type 'bool'")
+	}
+
+	e = ctBody(c, &whileStmt.Body)
+	if e != nil {
+		return e
+	}
+	return nil
+}
 func ctThrow(c *ctx, throw *t.NodeStmtThrow) error {
 	e := ctExpr(c, throw.Expression)
 	if e != nil {
@@ -369,6 +401,8 @@ func ctBody(c *ctx, bdy *t.NodeBody) error {
 			e = ctThrow(c, n)
 		case *t.NodeStmtIf:
 			e = ctIfStmt(c, n)
+		case *t.NodeStmtWhile:
+			e = ctWhileStmt(c, n)
 		}
 		if e != nil {
 			return e

@@ -46,12 +46,15 @@ const (
 	KwAmpersand
 	KwThrow
 	KwLlvm
-	KwLlvmDecl
 	KwIf
 	KwElif
 	KwElse
 	KwTrue
 	KwFalse
+	KwWhile
+	KwCmpEq
+	KwCmpNeq
+	KwTry
 )
 
 var KwTypeToRepr []string = []string{
@@ -78,44 +81,50 @@ var KwTypeToRepr []string = []string{
 	KwAmpersand: "&",
 	KwThrow:     "throw",
 	KwLlvm:      "llvm",
-	KwLlvmDecl:  "llvm_decl",
 	KwIf:        "if",
 	KwElif:      "elif",
 	KwElse:      "else",
 	KwTrue:      "true",
 	KwFalse:     "false",
+	KwWhile:     "while",
+	KwCmpEq:     "==",
+	KwCmpNeq:    "!=",
+	KwTry:       "try",
 }
 
 var KwReprToType map[string]KwType = map[string]KwType{
-	"":          KwNone,
-	"=":         KwEqual,
-	"(":         KwParenOp,
-	")":         KwParenCl,
-	"[":         KwBrackOp,
-	"]":         KwBrackCl,
-	":":         KwColon,
-	".":         KwDot,
-	"..":        KwDots,
-	"!":         KwExclam,
-	"mod":       KwModule,
-	"use":       KwUse,
-	"pub":       KwPublic,
-	"ret":       KwReturn,
-	"\n":        KwNewline,
-	",":         KwComma,
-	"-":         KwMinus,
-	"+":         KwPlus,
-	"$":         KwDollar,
-	"*":         KwAsterisk,
-	"&":         KwAmpersand,
-	"throw":     KwThrow,
-	"llvm":      KwLlvm,
-	"llvm_decl": KwLlvmDecl,
-	"if":        KwIf,
-	"elif":      KwElif,
-	"else":      KwElse,
-	"true":      KwTrue,
-	"false":     KwFalse,
+	"":      KwNone,
+	"=":     KwEqual,
+	"(":     KwParenOp,
+	")":     KwParenCl,
+	"[":     KwBrackOp,
+	"]":     KwBrackCl,
+	":":     KwColon,
+	".":     KwDot,
+	"..":    KwDots,
+	"!":     KwExclam,
+	"mod":   KwModule,
+	"use":   KwUse,
+	"pub":   KwPublic,
+	"ret":   KwReturn,
+	"\n":    KwNewline,
+	",":     KwComma,
+	"-":     KwMinus,
+	"+":     KwPlus,
+	"$":     KwDollar,
+	"*":     KwAsterisk,
+	"&":     KwAmpersand,
+	"throw": KwThrow,
+	"llvm":  KwLlvm,
+	"if":    KwIf,
+	"elif":  KwElif,
+	"else":  KwElse,
+	"true":  KwTrue,
+	"false": KwFalse,
+	"while": KwWhile,
+	"==":    KwCmpEq,
+	"!=":    KwCmpNeq,
+	"try":   KwTry,
 }
 
 type Token struct {

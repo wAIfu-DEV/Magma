@@ -1,8 +1,9 @@
 mod main
 
-use "std/errors" errors
-use "std/io"     io
-use "std/heap"   heap
+use "../std/errors.mg" errors
+use "../std/io.mg"     io
+use "../std/heap.mg"   heap
+use "../std/slices"    slices
 
 # comment line
 # second comment line
@@ -26,13 +27,14 @@ myFunc(first_arg u64, second_arg f32) !bool:
         io.printLn("third branch")
     ..
 
-    for i u64 = 0->first_arg:
+    for i u64 = 0 -> first_arg:
         io.printUint(i)
     ..
     ret true
 ..
 
 # struct definition
+# implicit definition of constructor function of the same name
 MyStruct(
     first_field u64,
     second_field f32,
@@ -46,13 +48,13 @@ MyStruct.memberFunc() void:
 ..
 
 allocs() !void:
-    heap_ptr *MyStruct = try heap.alloc(sizeof(MyStruct))
+    heap_ptr MyStruct* = try heap.alloc(sizeof(MyStruct))
     defer heap.free(heap_ptr)
 
-    rfcnt_ptr $MyStruct = rfc MyStruct() # moves a copy of MyStruct to heap
+    rfcnt_ptr MyStruct$ = rfc MyStruct() # moves a copy of MyStruct to heap
     # ref counted '$' vars are freed once every references fall out of scope
 
-    rfcnt_ptr2 $MyStruct = rfcnt_ptr # adds another reference, until rfcnt_ptr2 falls out of scope
+    rfcnt_ptr2 MyStruct$ = rfcnt_ptr # adds another reference, until rfcnt_ptr2 falls out of scope
 ..
 
 pub main(args str[]) !void:
@@ -64,8 +66,10 @@ pub main(args str[]) !void:
     # handle error, equivalent to previous
     ret_val2 bool, e error = myFunc(0, 0.0)
     if e.code != errors.ok().code:
-        throw e
+        throw e # throw itself is conditional, if err == ok then control flow is resumed
     ..
+
+    throw errors.ok() # is a no-op
 
     my_struct MyStruct = MyStruct(first_field=0, second_field=5.0) # rest is 0-init
 
@@ -78,14 +82,14 @@ pub main(args str[]) !void:
         io.printLn("end of main")
     ..
 
-    my_ptr *MyStruct = &my_struct
+    my_ptr MyStruct* = &my_struct
     my_ptr.second_field = 50.0
 
     # at this point my_struct.first_field == 50
 
     my_ptr.memberFunc()
 
-    for i u64 = 0->args.count:
+    for i u64 = 0 -> slices.count(args):
         io.printLn(args[i])
     ..
     ret

@@ -211,6 +211,7 @@ func clGetFuncDefFromModule(c *ctx, name parsedName) (*t.NodeFuncDef, error) {
 
 	if !ok {
 		// TODO: compilation error
+		fmt.Printf("name: %s\n", fnName)
 		return nil, fmt.Errorf("function name not defined in file")
 	}
 
@@ -227,6 +228,7 @@ func clGetFuncDefFromThisModule(c *ctx, fnName parsedName) (*t.NodeFuncDef, erro
 
 	if !ok {
 		// TODO: compilation error
+		fmt.Printf("name: %s\n", fnName.First)
 		return nil, fmt.Errorf("function name not defined in file")
 	}
 
@@ -472,6 +474,8 @@ func clExpr(c *ctx, expr t.NodeExpr) error {
 		return nil
 	case *t.NodeExprCall:
 		return clExprCall(c, n)
+	case *t.NodeExprTry:
+		return clExprCall(c, n.Call.(*t.NodeExprCall))
 	case *t.NodeExprSubscript:
 		return clExprSubscript(c, n)
 	case *t.NodeExprVarDefAssign:
@@ -490,6 +494,15 @@ func clExpr(c *ctx, expr t.NodeExpr) error {
 		}
 	case *t.NodeExprName:
 		e := clName(c, n, enumEntVar)
+		if e != nil {
+			return e
+		}
+	case *t.NodeExprBinary:
+		e := clExpr(c, n.Left)
+		if e != nil {
+			return e
+		}
+		e = clExpr(c, n.Right)
 		if e != nil {
 			return e
 		}
@@ -539,6 +552,19 @@ func clIf(c *ctx, ifStmt *t.NodeStmtIf) error {
 	return nil
 }
 
+func clWhile(c *ctx, whileStmt *t.NodeStmtWhile) error {
+	e := clExpr(c, whileStmt.CondExpr)
+	if e != nil {
+		return e
+	}
+
+	e = clBody(c, &whileStmt.Body)
+	if e != nil {
+		return e
+	}
+	return nil
+}
+
 func clBody(c *ctx, bdy *t.NodeBody) error {
 	for _, stmt := range bdy.Statements {
 		switch n := stmt.(type) {
@@ -559,6 +585,11 @@ func clBody(c *ctx, bdy *t.NodeBody) error {
 			}
 		case *t.NodeStmtIf:
 			e := clIf(c, n)
+			if e != nil {
+				return e
+			}
+		case *t.NodeStmtWhile:
+			e := clWhile(c, n)
 			if e != nil {
 				return e
 			}

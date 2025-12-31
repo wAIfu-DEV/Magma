@@ -1,6 +1,9 @@
 mod main
-use "io.mg"     io
-use "errors.mg" errors
+
+use "../std/cast.mg"   cast
+use "../std/io.mg"     io
+use "../std/errors.mg" errors
+use "../std/slices.mg" slices
 
 MyNestedStruct(
     field u32
@@ -30,13 +33,47 @@ func3() str:
     ret "lol"
 ..
 
+throwing(isThrowing bool) !i32:
+    if isThrowing:
+        throw errors.failure("from throwing func")
+    ..
+    ret 2
+..
+
 pub main(args str[]) !void:
     myStr str = "test"
     myErr error
     myStrt MyStruct
 
-    firstArg str = args[0]
-    io.printLn(firstArg)
+    myArr str[3]
+
+    i i64 = 0
+    while i != slices.count(args):
+        io.print("arg")
+        io.printInt(i)
+        io.print(": ")
+        io.printLn(args[i])
+        i = i+1
+    ..
+
+    test i64 = -1258
+    test2 i32 = cast.i64to32(test)
+
+    io.print("value of (i64)-1258 after cast to i32: ")
+    io.printInt(cast.i32to64(test2))
+    io.printLn("")
+
+    myOperand i32 = try throwing(false)
+
+    io.print("throwing did not throw on first call\n")
+
+    try throwing(true)
+
+    myAdd f64 = cast.itof(0 + myOperand)
+
+    io.print("0 + 2 = ")
+    io.printFloat(myAdd)
+    io.printLn("")
 
     myInt u32 = myStrt.nested.field
     io.printUint(myInt)
@@ -75,7 +112,6 @@ pub main(args str[]) !void:
 
     if true:
         io.printLn("true is true :)")
-
         someVar bool = false
     ..
 

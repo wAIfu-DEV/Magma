@@ -120,6 +120,8 @@ func (n *NodeTypeRfc) Print(indent int) {
 }
 
 type NodeTypeSlice struct {
+	HasSize  bool
+	Size     int
 	ElemKind NodeTypeKind
 }
 
@@ -291,10 +293,14 @@ func (n *NodeExprBinary) Print(indent int) {
 	n.Right.Print(indent + 2)
 }
 
-type NodeExprVarDef struct {
+type NameTypePair struct {
 	Name NodeName
 	Type *NodeType
+}
 
+type NodeExprVarDef struct {
+	Name  NodeName
+	Type  *NodeType
 	IsSsa bool
 }
 
@@ -352,6 +358,21 @@ func (n *NodeExprAssign) Print(indent int) {
 	n.Right.Print(indent + 2)
 }
 
+type NodeExprTry struct {
+	Call NodeExpr
+}
+
+func (n *NodeExprTry) GetInferredType() *NodeType {
+	fmt.Println("ExprTry")
+	return n.Call.GetInferredType()
+}
+
+func (n *NodeExprTry) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprTry\n")
+	n.Call.Print(indent + 1)
+}
+
 type NodeStmtRet struct {
 	Expression NodeExpr
 
@@ -399,6 +420,22 @@ type NodeStmtElse struct {
 func (n *NodeStmtElse) Print(indent int) {
 	PrintIndent(indent)
 	fmt.Printf("StmtElse\n")
+
+	n.Body.Print(indent + 1)
+}
+
+type NodeStmtWhile struct {
+	CondExpr NodeExpr
+	Body     NodeBody
+}
+
+func (n *NodeStmtWhile) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("StmtWhile\n")
+
+	PrintIndent(indent + 1)
+	fmt.Printf("CondExpr\n")
+	n.CondExpr.Print(indent + 2)
 
 	n.Body.Print(indent + 1)
 }
@@ -533,6 +570,7 @@ func (*NodeExprBinary) IsExpr()       {}
 func (*NodeExprVarDef) IsExpr()       {}
 func (*NodeExprVarDefAssign) IsExpr() {}
 func (*NodeExprAssign) IsExpr()       {}
+func (*NodeExprTry) IsExpr()          {}
 func (*NodeTypeNamed) IsType()        {}
 func (*NodeTypePointer) IsType()      {}
 func (*NodeTypeRfc) IsType()          {}
@@ -544,6 +582,7 @@ func (*NodeStmtExpr) IsStatement()    {}
 func (*NodeStmtThrow) IsStatement()   {}
 func (*NodeStmtIf) IsStatement()      {}
 func (*NodeStmtElse) IsStatement()    {}
+func (*NodeStmtWhile) IsStatement()   {}
 func (*NodeLlvm) IsStatement()        {}
 func (*NodeFuncDef) IsGlobalDecl()    {}
 func (*NodeStructDef) IsGlobalDecl()  {}

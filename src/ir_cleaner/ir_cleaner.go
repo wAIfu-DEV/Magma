@@ -34,7 +34,7 @@ func handleDeclare(ctx *ClCtx, line []byte) {
 	}
 	ctx.Decls[string(declName)] = bytes.Clone(line)
 
-	for i := range len(line) - 1 {
+	for i := range lnLen - 1 {
 		line[i] = ' ' // erase line
 	}
 }

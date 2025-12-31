@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -247,6 +248,22 @@ func parseSimplePrimaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
 		return n, nil
 	}
 
+	if tk.KeywType == t.KwTry {
+		consume(ctx)
+		next, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+		expr, e := parseExpression(ctx, next, 0)
+		if e != nil {
+			return nil, e
+		}
+		n := &t.NodeExprTry{
+			Call: expr,
+		}
+		return n, nil
+	}
+
 	if tk.KeywType == t.KwTrue || tk.KeywType == t.KwFalse {
 		consume(ctx)
 		boolVal := "0"
@@ -417,6 +434,28 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 				if e != nil {
 					return nil, e
 				}
+
+				/*
+					maybeComma, e := peek(ctx)
+					if e != nil {
+						return nil, e
+					}
+
+					if maybeComma.KeywType == t.KwComma {
+						expr2, e := parseSimplePrimaryExpr(ctx, tk)
+						if e != nil {
+							return nil, e
+						}
+
+						switch expr2.(type) {
+						case *t.NodeExprName:
+							typeNd2, e := parseType(ctx, next, false)
+							if e != nil {
+								return nil, e
+							}
+						}
+					}*/
+
 				return &t.NodeExprVarDef{
 					Name: n.Name,
 					Type: typeNd,
@@ -468,8 +507,7 @@ func tokenEndsExpr(tk t.Token) bool {
 	}
 
 	switch tk.KeywType {
-	// TODO: add BrackCl
-	case t.KwComma, t.KwParenCl, t.KwColon, t.KwDots:
+	case t.KwComma, t.KwParenCl, t.KwColon, t.KwDots, t.KwBrackCl:
 		return true
 	default:
 		return false
@@ -494,6 +532,8 @@ func getBinaryPrecedence(tk t.Token) int {
 	//case KW_TYPE_CMPEQUAL:
 	//case KW_TYPE_CMPNEQUAL:
 	//	return 35
+	case t.KwCmpEq, t.KwCmpNeq:
+		return 32
 
 	case t.KwEqual:
 		return 20
@@ -792,17 +832,42 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (*t.NodeType, error) 
 			return nil, e
 		}
 
+		size := int64(-1)
+
+		if maybeCl.Type == t.TokLitNum {
+			consume(ctx)
+
+			size, e = strconv.ParseInt(maybeCl.Repr, 10, 64)
+			if e != nil {
+				return nil, e
+			}
+
+			maybeCl, e = peek(ctx)
+			if e != nil {
+				return nil, e
+			}
+		}
+
 		if maybeCl.KeywType == t.KwBrackCl {
 			consume(ctx)
 
-			return &t.NodeType{
-				Throws: isThrowing,
-				KindNode: &t.NodeTypeSlice{
-					ElemKind: &t.NodeTypeNamed{
-						NameNode: named,
-					},
+			sliceKind := &t.NodeTypeSlice{
+				ElemKind: &t.NodeTypeNamed{
+					NameNode: named,
 				},
-			}, nil
+			}
+
+			sliceT := &t.NodeType{
+				Throws:   isThrowing,
+				KindNode: sliceKind,
+			}
+
+			if size > -1 {
+				sliceKind.HasSize = true
+				sliceKind.Size = int(size)
+			}
+
+			return sliceT, nil
 		}
 	}
 
@@ -867,21 +932,22 @@ func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
 	case t.KwThrow:
 		return parseStmtThrow(ctx)
 	case t.KwLlvm:
-		return parseLlvm(ctx, tk, false)
-	case t.KwLlvmDecl:
-		return parseLlvm(ctx, tk, true)
+		return parseLlvm(ctx, tk)
 	case t.KwIf:
 		return parseStmtIf(ctx, tk)
+	case t.KwWhile:
+		return parseStmtWhile(ctx, tk)
 	}
 
 	expr, e := parseExpression(ctx, tk, 0)
 	if e != nil {
-		return nil, comp_err.CompilationErrorToken(
+		comp_err.CompilationErrorToken(
 			ctx.Fctx,
 			&tk,
 			fmt.Sprintf("syntax error: '%s' is not a valid start of statement", tk.Repr),
 			"valid statements include: `name: type = expr`, `name()`, `ret expr`, etc.",
 		)
+		return nil, e
 	}
 
 	return &t.NodeStmtExpr{Expression: expr}, nil
@@ -1190,7 +1256,38 @@ func parseStmtIf(ctx *ParseCtx, tk t.Token) (*t.NodeStmtIf, error) {
 	return ifStmt, nil
 }
 
-func parseLlvm(ctx *ParseCtx, tk t.Token, decl bool) (*t.NodeLlvm, error) {
+func parseStmtWhile(ctx *ParseCtx, tk t.Token) (*t.NodeStmtWhile, error) {
+	consume(ctx)
+
+	next, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	condExpr, e := parseExpression(ctx, next, 0)
+	if e != nil {
+		return nil, e
+	}
+
+	next2, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	whileStmt := &t.NodeStmtWhile{
+		CondExpr: condExpr,
+	}
+
+	body, e := parseBody(ctx, next2)
+	if e != nil {
+		return nil, e
+	}
+
+	whileStmt.Body = body
+	return whileStmt, nil
+}
+
+func parseLlvm(ctx *ParseCtx, tk t.Token) (*t.NodeLlvm, error) {
 	consume(ctx) // consume llvm kw
 
 	next, e := peek(ctx)
@@ -1200,14 +1297,6 @@ func parseLlvm(ctx *ParseCtx, tk t.Token, decl bool) (*t.NodeLlvm, error) {
 
 	if next.Type == t.TokLitStr {
 		consume(ctx)
-
-		if decl {
-			ctx.Shared.LlvmDeclM.Lock()
-			ctx.Shared.LlvmDecl[next.Repr] = true
-			ctx.Shared.LlvmDeclM.Unlock()
-
-			return &t.NodeLlvm{Text: "\n"}, nil // llvm once are going to be outputed at top of module
-		}
 		return &t.NodeLlvm{Text: next.Repr}, nil
 	}
 
@@ -1244,9 +1333,7 @@ outer:
 		case t.KwUse:
 			e = parseUseDecl(ctx, tk)
 		case t.KwLlvm:
-			return parseLlvm(ctx, tk, false)
-		case t.KwLlvmDecl:
-			return parseLlvm(ctx, tk, true)
+			return parseLlvm(ctx, tk)
 
 		default:
 			break outer
