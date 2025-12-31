@@ -2,10 +2,10 @@
 ## Yet another programming language
 
 Magma is a [enter list of all the paradigms that are hip and cool in this day and age] language.
-It appeals to [what makes money currently]
+It appeals to [what jobs makes money currently], especially as a replacement to COBOL.
 
 That's cool and all but it doesn't really give you an idea of what the language is about, does it?
-Here's some snippets so we can start to boil the frog:
+Here's some snippets so we can start boiling the frog:
 
 ### 1. The classic
 

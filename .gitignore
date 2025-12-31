@@ -1,4 +1,4 @@
 Magma.exe
 out.exe
 out/*
-*.ll
+/out*.ll
