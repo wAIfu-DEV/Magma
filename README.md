@@ -11,7 +11,7 @@ Here's some snippets so we can start to boil the frog:
 
 ```
 mod main
-use io
+use "std:io" io
 
 main() void:
     io.printLn("Hello, World!")
@@ -29,6 +29,8 @@ use "std:io" io
 main(args str[]) !void:
     io.printLn("Hello, World!")
 ..
+
+# on the edge of unreasonable
 ```
 
 
