@@ -131,6 +131,28 @@ func (n *NodeTypeSlice) Print(indent int) {
 	n.ElemKind.Print(indent + 1)
 }
 
+type NodeTypeFunc struct {
+	Args    []*NodeType
+	RetType *NodeType
+}
+
+func (n *NodeTypeFunc) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("TypeFunc\n")
+
+	PrintIndent(indent + 1)
+	fmt.Printf("ArgsType\n")
+
+	for _, n2 := range n.Args {
+		n2.Print(indent + 2)
+	}
+
+	PrintIndent(indent + 1)
+	fmt.Printf("RetType\n")
+
+	n.RetType.Print(indent + 2)
+}
+
 type NodeExprVoid struct {
 	VoidType *NodeType
 }
@@ -216,6 +238,10 @@ type NodeExprCall struct {
 
 	AssociatedFnDef *NodeFuncDef
 	InfType         *NodeType
+
+	IsFuncPointer bool
+	FuncPtrType   *NodeType
+	FuncPtrOwner  *NodeExprName
 }
 
 func (n *NodeExprCall) GetInferredType() *NodeType {
@@ -575,6 +601,7 @@ func (*NodeTypeNamed) IsType()        {}
 func (*NodeTypePointer) IsType()      {}
 func (*NodeTypeRfc) IsType()          {}
 func (*NodeTypeSlice) IsType()        {}
+func (*NodeTypeFunc) IsType()         {}
 func (*NodeNameSingle) IsName()       {}
 func (*NodeNameComposite) IsName()    {}
 func (*NodeStmtRet) IsStatement()     {}

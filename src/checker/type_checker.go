@@ -163,7 +163,12 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		if e != nil {
 			return e
 		}
-		n.InfType = n.AssociatedFnDef.ReturnType
+
+		if n.IsFuncPointer {
+			n.InfType = n.FuncPtrType.KindNode.(*t.NodeTypeFunc).RetType
+		} else {
+			n.InfType = n.AssociatedFnDef.ReturnType
+		}
 		return nil
 	case *t.NodeExprSubscript:
 		e := ctExpr(c, n.Expr)

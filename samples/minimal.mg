@@ -1,9 +1,10 @@
 mod main
 
-use "../std/cast.mg"   cast
-use "../std/io.mg"     io
-use "../std/errors.mg" errors
-use "../std/slices.mg" slices
+use "../std/cast.mg"      cast
+use "../std/io.mg"        io
+use "../std/errors.mg"    errors
+use "../std/slices.mg"    slices
+use "../std/allocator.mg" alloc
 
 MyNestedStruct(
     field u32

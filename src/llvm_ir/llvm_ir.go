@@ -288,9 +288,97 @@ func irVarDefAssign(ctx *IrCtx, vda *t.NodeExprVarDefAssign) (SsaName, error) {
 	return allocSsa, nil
 }
 
-func irExprFuncCall(ctx *IrCtx, fnCall *t.NodeExprCall, keepError bool) (SsaName, error) {
+func irFuncPtrType(ctx *IrCtx, fnType *t.NodeTypeFunc) error {
+	e := irThrowingType(ctx, fnType.RetType)
+	if e != nil {
+		return e
+	}
+
+	irWrite(ctx, " (")
+
+	for i, n := range fnType.Args {
+		e := irType(ctx, n)
+		if e != nil {
+			return e
+		}
+
+		if i != len(fnType.Args)-1 {
+			irWrite(ctx, ", ")
+		}
+	}
+
+	irWrite(ctx, ")*")
+	return nil
+}
+
+func irExprCallFuncPtr(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
+	fnType := fnCall.FuncPtrType.KindNode.(*t.NodeTypeFunc)
+
+	argsSsa := make([]SsaName, len(fnCall.Args))
+	for i, expr := range fnCall.Args {
+		exprSsa, e := irExpression(ctx, fnType.Args[i], expr)
+		if e != nil {
+			return ssaName(""), e
+		}
+		argsSsa[i] = exprSsa
+	}
+
+	fnPtrSsa, e := irExprName(ctx, fnCall.Callee.(*t.NodeExprName))
+	bitCastPtr := irSsaName(ctx)
+
+	irWritef(ctx, "  %%%s = bitcast ptr %%%s to ", bitCastPtr.Repr, fnPtrSsa.Repr)
+
+	e = irFuncPtrType(ctx, fnCall.FuncPtrType.KindNode.(*t.NodeTypeFunc))
+	if e != nil {
+		return SsaName{}, e
+	}
+	irWrite(ctx, "\n")
+
 	ssa := irSsaName(ctx)
 
+	isVoidRet := isVoidType(fnCall.InfType)
+
+	if !isVoidRet || fnCall.InfType.Throws {
+		irWritef(ctx, "  %%%s = ", ssa.Repr)
+	} else {
+		irWrite(ctx, "  ")
+	}
+
+	irWritef(ctx, "call ")
+
+	e = irThrowingType(ctx, fnCall.InfType)
+	if e != nil {
+		return ssaName(""), e
+	}
+
+	irWritef(ctx, " %%%s(", bitCastPtr.Repr)
+
+	bound := len(argsSsa)
+	for i, ssa := range argsSsa {
+		e = irType(ctx, fnCall.Args[i].GetInferredType())
+		if e != nil {
+			return ssaName(""), e
+		}
+		irWrite(ctx, " ")
+		irPossibleLitSsa(ctx, ssa)
+
+		if i < bound-1 {
+			irWrite(ctx, ", ")
+		}
+	}
+
+	irWrite(ctx, ")\n")
+
+	if isVoidRet && !fnCall.InfType.Throws {
+		// TODO: Check and inforce that void ret calls HAVE to be statements
+		// and cannot be in expressions
+		return ssaName(""), nil
+	}
+
+	return ssa, nil
+}
+
+func irExprCallFuncNonPtr(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 	argsSsa := make([]SsaName, len(fnCall.Args))
 	for i, expr := range fnCall.Args {
 		exprSsa, e := irExpression(ctx, fnCall.AssociatedFnDef.Class.ArgsNode.Args[i].TypeNode, expr)
@@ -299,6 +387,8 @@ func irExprFuncCall(ctx *IrCtx, fnCall *t.NodeExprCall, keepError bool) (SsaName
 		}
 		argsSsa[i] = exprSsa
 	}
+
+	ssa := irSsaName(ctx)
 
 	isVoidRet := isVoidType(fnCall.InfType)
 
@@ -345,13 +435,34 @@ func irExprFuncCall(ctx *IrCtx, fnCall *t.NodeExprCall, keepError bool) (SsaName
 
 	irWrite(ctx, ")\n")
 
-	if isVoidRet {
+	if isVoidRet && !fnCall.InfType.Throws {
 		// TODO: Check and inforce that void ret calls HAVE to be statements
 		// and cannot be in expressions
 		return ssaName(""), nil
 	}
 
-	if fnCall.InfType.Throws && !keepError {
+	return ssa, nil
+}
+
+func irExprFuncCall(ctx *IrCtx, fnCall *t.NodeExprCall, keepError bool) (SsaName, error) {
+	var ssa = SsaName{}
+	var e error
+
+	if fnCall.IsFuncPointer {
+		ssa, e = irExprCallFuncPtr(ctx, fnCall)
+	} else {
+		ssa, e = irExprCallFuncNonPtr(ctx, fnCall)
+	}
+
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	if ssa.Repr == "" {
+		return SsaName{}, nil
+	}
+
+	if fnCall.InfType.Throws && !keepError && !isVoidType(fnCall.InfType) {
 		extractSsa := irSsaName(ctx)
 		irWritef(ctx, "  %%%s = extractvalue ", extractSsa.Repr)
 
@@ -413,12 +524,30 @@ func irExprLit(ctx *IrCtx, lit *t.NodeExprLit) (SsaName, error) {
 	return ssaName(""), nil
 }
 
-func irMemberAccess(ctx *IrCtx, fromType *t.NodeType, fromSsa SsaName, fieldNb int, fieldType *t.NodeType) (SsaName, error) {
+func irMemberAccess(ctx *IrCtx, fromType *t.NodeType, fromSsa SsaName, fieldNb int, fieldType *t.NodeType, isPtrDeref bool) (SsaName, error) {
 	fieldSsa := irSsaName(ctx)
+
+	if isPtrDeref {
+		loadSsa := irSsaName(ctx)
+
+		switch n := fromType.KindNode.(type) {
+		case *t.NodeTypePointer:
+			fromType = &t.NodeType{
+				KindNode: n.Kind,
+			}
+		}
+
+		irWritef(ctx, "  %%%s = load ", loadSsa.Repr)
+		e := irType(ctx, fromType)
+		if e != nil {
+			return SsaName{}, e
+		}
+		irWritef(ctx, ", ptr %%%s\n", fromSsa.Repr)
+		fromSsa = loadSsa
+	}
 
 	// TODO: Possible lit ssa? maybe not
 	irWritef(ctx, "  %%%s = extractvalue ", fieldSsa.Repr)
-
 	e := irType(ctx, fromType)
 	if e != nil {
 		return SsaName{}, e
@@ -444,10 +573,6 @@ func irMemberAddress(ctx *IrCtx, basePtr SsaName, baseType *t.NodeType, fieldInd
 }
 
 func irExprName(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
-	if nameExpr.IsSsa {
-		return irNameSsa(ctx, nameExpr.Name, false), nil
-	}
-
 	ptrSsa := irNameSsa(ctx, nameExpr.Name, false)
 	ssa := irSsaName(ctx)
 
@@ -471,14 +596,20 @@ func irExprName(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 		isMemberAccess = false
 	}
 
-	irWritef(ctx, "  %%%s = load ", ssa.Repr)
+	if nameExpr.IsSsa && !isMemberAccess {
+		return irNameSsa(ctx, nameExpr.Name, false), nil
+	} else if nameExpr.IsSsa {
+		ssa = ptrSsa
+	} else {
+		irWritef(ctx, "  %%%s = load ", ssa.Repr)
 
-	e := irType(ctx, typeNd)
-	if e != nil {
-		return ssaName(""), e
+		e := irType(ctx, typeNd)
+		if e != nil {
+			return ssaName(""), e
+		}
+
+		irWritef(ctx, ", ptr %%%s\n", ptrSsa.Repr)
 	}
-
-	irWritef(ctx, ", ptr %%%s\n", ptrSsa.Repr)
 
 	if isMemberAccess {
 		lastSsa := ssa
@@ -489,7 +620,7 @@ func irExprName(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 		fromType := typeNd
 
 		for _, m := range nameExpr.MemberAccesses {
-			fieldSsa, e := irMemberAccess(ctx, fromType, lastSsa, m.FieldNb, m.Type)
+			fieldSsa, e := irMemberAccess(ctx, fromType, lastSsa, m.FieldNb, m.Type, m.PtrDeref)
 			if e != nil {
 				return SsaName{}, e
 			}
@@ -1033,17 +1164,21 @@ func irTryCall(ctx *IrCtx, callRetSsa SsaName, fnCall *t.NodeExprCall) (SsaName,
 		return SsaName{}, e
 	}
 
-	valSsa := irSsaName(ctx)
+	if !isVoidType(fnCall.InfType) {
+		valSsa := irSsaName(ctx)
 
-	irWritef(ctx, "  %%%s = extractvalue ", valSsa.Repr)
+		irWritef(ctx, "  %%%s = extractvalue ", valSsa.Repr)
 
-	e = irThrowingType(ctx, fnCall.InfType)
-	if e != nil {
-		return SsaName{}, e
+		e = irThrowingType(ctx, fnCall.InfType)
+		if e != nil {
+			return SsaName{}, e
+		}
+
+		irWritef(ctx, " %%%s, 1\n", callRetSsa.Repr)
+		return valSsa, nil
 	}
 
-	irWritef(ctx, " %%%s, 1\n", callRetSsa.Repr)
-	return valSsa, nil
+	return SsaName{Repr: "<void ret>"}, nil
 }
 
 func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr) (SsaName, error) {
@@ -1533,12 +1668,16 @@ func irArgsList(ctx *IrCtx, argListNode *t.NodeArgList, thisArg bool) error {
 
 	if thisArg {
 		irWrite(ctx, "ptr %this")
-		if bound > 0 {
+		if bound > 1 {
 			irWrite(ctx, ", ")
 		}
 	}
 
 	for i, a := range argListNode.Args {
+		if thisArg && i == 0 {
+			continue
+		}
+
 		e := irArg(ctx, &a)
 		if e != nil {
 			return e
@@ -1672,6 +1811,18 @@ func irTypeKind(ctx *IrCtx, typeKind t.NodeTypeKind) error {
 	switch tn := typeKind.(type) {
 	case *t.NodeTypeSlice:
 		irWrite(ctx, "%type.slice")
+		return nil
+	case *t.NodeTypePointer:
+		irWrite(ctx, "ptr")
+		return nil
+	case *t.NodeTypeRfc:
+		irWrite(ctx, "ptr")
+		return nil
+	case *t.NodeTypeFunc:
+		e := irFuncPtrType(ctx, tn)
+		if e != nil {
+			return e
+		}
 		return nil
 	case *t.NodeTypeNamed:
 		switch n := tn.NameNode.(type) {

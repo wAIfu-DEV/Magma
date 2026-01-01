@@ -31,6 +31,7 @@ const (
 	enumEntVar
 	enumEntFunc
 	enumEntStruct
+	enumEntFuncAndVar
 )
 
 func enterScope(c *ctx, scope *t.Scope) {
@@ -246,9 +247,20 @@ func clGetFuncDefFromName(c *ctx, nameNode t.NodeName) (*t.NodeFuncDef, error) {
 }
 
 func clVarNameChainValid(c *ctx, scope *t.Scope, name *parsedName, varName string, varType *t.NodeType) (lastIsFunc bool, accesses []*t.MemberAccess, e error) {
+	var lastDerefType *t.NodeType = varType
+
+	isFromPtrType := false
+	switch n := varType.KindNode.(type) {
+	case *t.NodeTypePointer:
+		isFromPtrType = true
+		lastDerefType = &t.NodeType{
+			Throws:   varType.Throws,
+			KindNode: n.Kind,
+		}
+	}
 
 	// get struct def for type
-	structDef, e := clGetStructDefFromType(c, varType)
+	structDef, e := clGetStructDefFromType(c, lastDerefType)
 	if e != nil {
 		return false, nil, e
 	}
@@ -271,24 +283,43 @@ func clVarNameChainValid(c *ctx, scope *t.Scope, name *parsedName, varName strin
 		if ok {
 			fieldNb := structDef.FieldNb[part]
 
+			derefFieldType := fieldType
+			switch n := fieldType.KindNode.(type) {
+			case *t.NodeTypePointer:
+				derefFieldType = &t.NodeType{
+					Throws:   fieldType.Throws,
+					KindNode: n.Kind,
+				}
+			}
+
 			if i == last {
 				accesses = append(accesses, &t.MemberAccess{
-					Type:    fieldType,
-					FieldNb: fieldNb,
+					Type:     derefFieldType,
+					FieldNb:  fieldNb,
+					PtrDeref: isFromPtrType,
 				})
-
 				return foundMemberFunc, accesses, nil
 			}
 
-			structDef, e = clGetStructDefFromType(c, fieldType)
+			structDef, e = clGetStructDefFromType(c, derefFieldType)
 			if e != nil {
+				fmt.Printf("from ptr type: %t\n", isFromPtrType)
+				fmt.Printf("problem type: ")
+				fieldType.Print(0)
 				return false, nil, e
 			}
 
 			accesses = append(accesses, &t.MemberAccess{
-				Type:    typeFromStructDef(c, structDef),
-				FieldNb: fieldNb,
+				Type:     typeFromStructDef(c, structDef),
+				FieldNb:  fieldNb,
+				PtrDeref: isFromPtrType,
 			})
+
+			isFromPtrType = false
+			switch fieldType.KindNode.(type) {
+			case *t.NodeTypePointer:
+				isFromPtrType = true
+			}
 			continue
 		}
 
@@ -307,7 +338,7 @@ func clExistsInScope(c *ctx, scope *t.Scope, name *t.NodeExprName, ent entryType
 	parsed := parseName(name.Name)
 
 	switch ent {
-	case enumEntAll:
+	case enumEntAll, enumEntFuncAndVar:
 		fallthrough
 	case enumEntVar:
 		for _, v := range scope.DeclVars {
@@ -317,6 +348,7 @@ func clExistsInScope(c *ctx, scope *t.Scope, name *t.NodeExprName, ent entryType
 			}
 
 			if parsed.First != vName.First {
+				fmt.Printf("first %s != %s\n", parsed.First, vName.First)
 				continue
 			}
 
@@ -331,7 +363,7 @@ func clExistsInScope(c *ctx, scope *t.Scope, name *t.NodeExprName, ent entryType
 			return true, v, v.IsSsa, nil
 		}
 
-		if ent != enumEntAll {
+		if ent != enumEntAll && ent != enumEntFuncAndVar {
 			return false, nil, false, nil
 		}
 		fallthrough
@@ -386,8 +418,6 @@ func clExistsInScopeTree(c *ctx, name *t.NodeExprName, ent entryType) (found boo
 
 		currScope = currScope.Parent
 	}
-
-	//return false, nil, false, fmt.Errorf("not found")
 }
 
 func clName(c *ctx, name *t.NodeExprName, expected entryType) error {
@@ -414,13 +444,30 @@ func clName(c *ctx, name *t.NodeExprName, expected entryType) error {
 func clExprCall(c *ctx, call *t.NodeExprCall) error {
 	fmt.Printf("check expr call\n")
 
+	var ownerExpr t.Node = nil
+	var nameExpr *t.NodeExprName = nil
+
 	switch n := call.Callee.(type) {
 	case *t.NodeExprName:
-		e := clName(c, n, enumEntFunc)
-		if e != nil {
-			return e
+		found, expr, isSsa, err := clExistsInScopeTree(c, n, enumEntFuncAndVar)
+
+		if err != nil {
+			return err
 		}
-		break
+
+		if !found {
+			return fmt.Errorf("name expression: %s does not refer to any defined vars", flattenName(n.Name))
+		}
+
+		n.IsSsa = isSsa
+		n.AssociatedNode = expr
+
+		if n.AssociatedNode == nil {
+			return fmt.Errorf("name expression: %s does not point to any existing vars, even though there was no errors?", flattenName(n.Name))
+		}
+
+		ownerExpr = expr
+		nameExpr = n
 	default:
 		return fmt.Errorf("cannot call expression that is not a name")
 	}
@@ -432,15 +479,29 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 		}
 	}
 
-	fnDef, e := clGetFuncDefFromName(c, call.Callee.(*t.NodeExprName).Name)
-	if e != nil {
-		return e
-	}
+	fmt.Printf("found func name\n")
 
-	call.AssociatedFnDef = fnDef
+	switch n := ownerExpr.(type) {
+	case *t.NodeExprVarDef:
+		// TODO: handle func pointer
+		fnType := n.Type
 
-	if fnDef == nil {
-		return fmt.Errorf("associated function def is null")
+		if len(nameExpr.MemberAccesses) > 0 {
+			fnType = nameExpr.MemberAccesses[len(nameExpr.MemberAccesses)-1].Type
+		}
+
+		call.IsFuncPointer = true
+		call.FuncPtrOwner = nameExpr
+		call.FuncPtrType = fnType
+	case *t.NodeFuncDef:
+		fnDef, e := clGetFuncDefFromName(c, call.Callee.(*t.NodeExprName).Name)
+		if e != nil {
+			return e
+		}
+		if fnDef == nil {
+			return fmt.Errorf("associated function def is null")
+		}
+		call.AssociatedFnDef = fnDef
 	}
 
 	return nil
@@ -614,6 +675,18 @@ func clTypeKind(c *ctx, kind t.NodeTypeKind) error {
 		}
 	case *t.NodeTypeSlice:
 		return clTypeKind(c, n.ElemKind)
+	case *t.NodeTypePointer:
+		return clTypeKind(c, n.Kind)
+	case *t.NodeTypeRfc:
+		return clTypeKind(c, n.Kind)
+	case *t.NodeTypeFunc:
+		for _, n2 := range n.Args {
+			e := clTypeKind(c, n2.KindNode)
+			if e != nil {
+				return e
+			}
+		}
+		return clTypeKind(c, n.RetType.KindNode)
 	}
 	return fmt.Errorf("failed to find definition for type")
 }

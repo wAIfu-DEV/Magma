@@ -19,6 +19,8 @@ func (*StructDef) Print(int) {
 type MemberAccess struct {
 	Type    *NodeType
 	FieldNb int
+
+	PtrDeref bool
 }
 
 type FileCtx struct {

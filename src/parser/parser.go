@@ -785,6 +785,180 @@ func parseGenericClass(ctx *ParseCtx, nameNode t.NodeName) (t.NodeGenericClass, 
 	return n, nil
 }
 
+func parseFuncType(ctx *ParseCtx) (*t.NodeType, error) {
+	outT := &t.NodeType{}
+
+	fnT := &t.NodeTypeFunc{
+		Args: []*t.NodeType{},
+	}
+
+	outT.KindNode = fnT
+
+	tk, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	if tk.KeywType != t.KwParenOp {
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&tk,
+			"expected function type but type does not start with '('",
+			"",
+		)
+	}
+	consume(ctx)
+
+	expectComma := false
+
+	for {
+		tk, e = peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+
+		if tk.KeywType == t.KwParenCl {
+			consume(ctx)
+			break
+		}
+
+		if expectComma && tk.KeywType != t.KwComma {
+			return nil, comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&tk,
+				fmt.Sprintf("expected ',' after argument type in function type definition. instead got '%s'", tk.Repr),
+				"",
+			)
+		}
+
+		if tk.KeywType == t.KwComma {
+			expectComma = false
+			consume(ctx)
+			tk, e = peek(ctx)
+			if e != nil {
+				return nil, e
+			}
+		}
+
+		n, e := parseType(ctx, tk, false)
+		if e != nil {
+			return nil, e
+		}
+
+		fnT.Args = append(fnT.Args, n)
+		expectComma = true
+	}
+
+	tk, e = peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	n, e := parseType(ctx, tk, true)
+	if e != nil {
+		return nil, e
+	}
+
+	fnT.RetType = n
+
+	return outT, nil
+}
+
+func parseTypePostfix(ctx *ParseCtx, inType *t.NodeType) (*t.NodeType, error) {
+
+	outT := inType
+
+	for {
+		after, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+
+		// parse array types / (future) templated types
+		if after.KeywType == t.KwBrackOp {
+			consume(ctx)
+
+			maybeCl, e := peek(ctx)
+			if e != nil {
+				return nil, e
+			}
+
+			size := int64(-1)
+
+			if maybeCl.Type == t.TokLitNum {
+				consume(ctx)
+
+				size, e = strconv.ParseInt(maybeCl.Repr, 10, 64)
+				if e != nil {
+					return nil, e
+				}
+
+				maybeCl, e = peek(ctx)
+				if e != nil {
+					return nil, e
+				}
+			}
+
+			if maybeCl.KeywType == t.KwBrackCl {
+				consume(ctx)
+
+				sliceKind := &t.NodeTypeSlice{
+					ElemKind: outT.KindNode,
+				}
+
+				sliceT := &t.NodeType{
+					Throws:   outT.Throws,
+					KindNode: sliceKind,
+				}
+
+				if size > -1 {
+					sliceKind.HasSize = true
+					sliceKind.Size = int(size)
+				}
+
+				outT = sliceT
+				continue
+			}
+		}
+
+		if after.KeywType == t.KwAsterisk {
+			consume(ctx)
+
+			sliceKind := &t.NodeTypePointer{
+				Kind: outT.KindNode,
+			}
+
+			ptrT := &t.NodeType{
+				Throws:   outT.Throws,
+				KindNode: sliceKind,
+			}
+
+			outT = ptrT
+			continue
+		}
+
+		if after.KeywType == t.KwDollar {
+			consume(ctx)
+
+			sliceKind := &t.NodeTypeRfc{
+				Kind: outT.KindNode,
+			}
+
+			ptrT := &t.NodeType{
+				Throws:   outT.Throws,
+				KindNode: sliceKind,
+			}
+
+			outT = ptrT
+			continue
+		}
+
+		break
+	}
+
+	return outT, nil
+}
+
 func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (*t.NodeType, error) {
 	isThrowing := false
 	if tk.KeywType == t.KwExclam {
@@ -796,7 +970,6 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (*t.NodeType, error) 
 				"a type prefixed by '!' is a throwing type, some contexts do not allow them.",
 			)
 		}
-
 		isThrowing = true
 		consume(ctx)
 	}
@@ -806,87 +979,37 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (*t.NodeType, error) 
 		return nil, e
 	}
 
-	if tk.KeywType == t.KwAsterisk || tk.KeywType == t.KwDollar {
-		// TODO: parse pointer types
-	}
-
-	var named t.NodeName = nil
-	if tk.Type == t.TokName {
-		named, e = parseName(ctx, tk, true)
+	if tk.KeywType == t.KwParenOp {
+		n, e := parseFuncType(ctx)
 		if e != nil {
 			return nil, e
 		}
+		return n, nil
 	}
 
-	after, e := peek(ctx)
+	named, e := parseName(ctx, tk, true)
 	if e != nil {
 		return nil, e
 	}
 
-	// parse array types / (future) templated types
-	if after.KeywType == t.KwBrackOp {
-		consume(ctx)
-
-		maybeCl, e := peek(ctx)
-		if e != nil {
-			return nil, e
-		}
-
-		size := int64(-1)
-
-		if maybeCl.Type == t.TokLitNum {
-			consume(ctx)
-
-			size, e = strconv.ParseInt(maybeCl.Repr, 10, 64)
-			if e != nil {
-				return nil, e
-			}
-
-			maybeCl, e = peek(ctx)
-			if e != nil {
-				return nil, e
-			}
-		}
-
-		if maybeCl.KeywType == t.KwBrackCl {
-			consume(ctx)
-
-			sliceKind := &t.NodeTypeSlice{
-				ElemKind: &t.NodeTypeNamed{
-					NameNode: named,
-				},
-			}
-
-			sliceT := &t.NodeType{
-				Throws:   isThrowing,
-				KindNode: sliceKind,
-			}
-
-			if size > -1 {
-				sliceKind.HasSize = true
-				sliceKind.Size = int(size)
-			}
-
-			return sliceT, nil
-		}
+	outT := &t.NodeType{
+		Throws: isThrowing,
+		KindNode: &t.NodeTypeNamed{
+			NameNode: named,
+		},
 	}
 
-	if named != nil {
-		return &t.NodeType{
-			Throws: isThrowing,
-			KindNode: &t.NodeTypeNamed{
-				NameNode: named,
-			},
-		}, nil
+	tk, e = peek(ctx)
+	if e != nil {
+		return nil, e
 	}
 
-	// TODO: implement complex types
-	return nil, comp_err.CompilationErrorToken(
-		ctx.Fctx,
-		&tk,
-		fmt.Sprintf("syntax error: unexpected '%s' when expected name of type", tk.Repr),
-		"",
-	)
+	outTpost, e := parseTypePostfix(ctx, outT)
+	if e != nil {
+		return nil, e
+	}
+
+	return outTpost, nil
 }
 
 func parseStmtReturn(ctx *ParseCtx) (t.NodeStatement, error) {
@@ -1149,6 +1272,19 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 				"member functions need to be defined after the owner struct",
 			)
 		}
+
+		fmt.Printf("added implicit this to: %s.%s()\n", ownerName, memberName)
+
+		fnDef.Class.ArgsNode.Args = slices.Insert(fnDef.Class.ArgsNode.Args, 0, t.NodeArg{
+			Name: "this",
+			TypeNode: &t.NodeType{
+				KindNode: &t.NodeTypePointer{
+					Kind: &t.NodeTypeNamed{
+						NameNode: &t.NodeNameSingle{Name: ownerName},
+					},
+				},
+			},
+		})
 
 		ctx.GlobalNode.StructDefs[ownerName].Funcs[memberName] = fnDef
 	}

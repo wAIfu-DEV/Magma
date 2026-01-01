@@ -37,6 +37,7 @@ var NumberTypes = map[string]NumberType{
 var BasicTypes = map[string]string{
 	"void": "void",
 	"bool": "i1",
+	"ptr":  "ptr",
 
 	"i8":   "i8",
 	"i16":  "i16",
