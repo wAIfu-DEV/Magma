@@ -5,7 +5,7 @@ Magma is a [enter list of all the paradigms that are hip and cool in this day an
 It appeals to [what jobs makes money currently], especially as a replacement to COBOL.
 
 That's cool and all but it doesn't really give you an idea of what the language is about, does it?
-Here's some snippets so we can start boiling the frog:
+Here's some snippets so we can start boiling the frog (you):
 
 ### 1. The classic
 
@@ -32,19 +32,6 @@ main(args str[]) !void:
 
 # on the edge of unreasonable
 ```
-
-
-## Warning
-
-As you get more into this language, you'll be glad to notice that we do not have
-any of the nicities that makes languages nowadays usable by even the most brain
-dead humonculi.
-
-We are proud of that fact, and we are glad that YOU also agree with us.
-
-And if you do not agree, do not worry, we have plenty of time to make multiple very,
-very bad decisions that will stick with this project for centuries because we WILL
-be too p*ssy to simply do a full rewrite of the entire language.
 
 ## Features
 
@@ -82,6 +69,26 @@ main() void:
     my_array[2] = "skibidi"
 ..
 ```
+
+## Politics
+
+As you get more into this language, you'll be glad to notice that we do not have
+any of the niceties that makes languages nowadays usable even by the most human-adjacent
+homunculi.
+
+Our philosophy is one of exclusivity, gatekeeping, excellence and irreverence.
+We think that in an age of sanitized minds and speech, performative everything,
+the new normal ought to be a little more human and rough.
+We are proud to think that way, and we are glad that YOU also agree with us.
+
+Now you may feel the need to ask why we feel the need to talk about philosophy and
+politics in the README of a damn programming language, and that would be a QUITE
+VALID QUESTION, but apparently every project needs to have politics involved now,
+so take it or leave it, we won't really care that much.
+
+---
+
+## The end.
 
 The unpaid intern ran away. The README will stay like this until we fetch a new one from the nearest orphanage.
 
