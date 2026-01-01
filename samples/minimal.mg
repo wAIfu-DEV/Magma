@@ -5,6 +5,7 @@ use "../std/io.mg"        io
 use "../std/errors.mg"    errors
 use "../std/slices.mg"    slices
 use "../std/allocator.mg" alloc
+use "../std/heap.mg"      heap
 
 MyNestedStruct(
     field u32

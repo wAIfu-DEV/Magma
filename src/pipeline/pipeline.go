@@ -73,6 +73,7 @@ func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath strin
 
 	absPath, err := makeabs.MakeAbs(filePath, fromAbs)
 	if err != nil {
+		// TODO: this might cause issues
 		shared.ImportedFilesM.Lock()
 		shared.ImportedFiles[filePath] = c
 		shared.ImportedFilesM.Unlock()
@@ -80,6 +81,18 @@ func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath strin
 	}
 
 	fmt.Printf("resolved to abs path: %s\n", absPath)
+
+	shared.FilesM.Lock()
+	foundFctx, found := shared.Files[absPath]
+	shared.FilesM.Unlock()
+
+	if found {
+		if fromGl != nil {
+			fromGl.ImportAlias[alias] = foundFctx.PackageName
+		}
+
+		return foundFctx, nil
+	}
 
 	shared.ImportedFilesM.Lock()
 	shared.ImportedFiles[absPath] = c

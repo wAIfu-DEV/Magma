@@ -1,5 +1,10 @@
 mod cast
 
+pub ptou(x ptr) u64:
+    llvm "%x0 = ptrtoint ptr %x to i64"
+    llvm "ret i64 %x0"
+..
+
 pub itou(x i64) u64:
     llvm "ret i64 %x\n"
 ..

@@ -38,6 +38,22 @@ type IrCtx struct {
 	CurrFunc  *t.NodeFuncDef
 }
 
+func makeFuncPtrTypeFromDef(fnDef *t.NodeFuncDef) *t.NodeType {
+	k := &t.NodeTypeFunc{
+		Args:    []*t.NodeType{},
+		RetType: fnDef.ReturnType,
+	}
+
+	for _, v := range fnDef.Class.ArgsNode.Args {
+		k.Args = append(k.Args, v.TypeNode)
+	}
+
+	return &t.NodeType{
+		Throws:   false,
+		KindNode: k,
+	}
+}
+
 func makeNamedType(name string) *t.NodeType {
 	return &t.NodeType{
 		Throws: false,
@@ -579,6 +595,9 @@ func irExprName(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 	var typeNd *t.NodeType = nil
 	isMemberAccess := false
 
+	isFuncName := false
+	var fnDef *t.NodeFuncDef = nil
+
 	switch n := nameExpr.Name.(type) {
 	case *t.NodeNameComposite:
 		isMemberAccess = true
@@ -592,6 +611,10 @@ func irExprName(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 		typeNd = n.Type
 	case *t.NodeExprVarDefAssign:
 		typeNd = n.VarDef.Type
+	case *t.NodeFuncDef:
+		fnDef = n
+		isFuncName = true
+		typeNd = makeFuncPtrTypeFromDef(n)
 	default:
 		isMemberAccess = false
 	}
@@ -600,6 +623,21 @@ func irExprName(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 		return irNameSsa(ctx, nameExpr.Name, false), nil
 	} else if nameExpr.IsSsa {
 		ssa = ptrSsa
+	} else if isFuncName {
+		irWritef(ctx, "  %%%s = bitcast ptr @", ssa.Repr)
+
+		e := irName(ctx, fnDef.Class.NameNode, true)
+		if e != nil {
+			return ssaName(""), e
+		}
+
+		irWrite(ctx, " to ")
+
+		e = irFuncPtrType(ctx, typeNd.KindNode.(*t.NodeTypeFunc))
+		if e != nil {
+			return ssaName(""), e
+		}
+		irWrite(ctx, "\n")
 	} else {
 		irWritef(ctx, "  %%%s = load ", ssa.Repr)
 

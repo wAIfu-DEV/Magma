@@ -1,13 +1,16 @@
 mod heap
 
-use "allocator.mg" allocator
-use "errors.mg"    errors
+use "allocator.mg" a
+use "errors.mg"    e
+use "cast.mg"      cast
 
 llvm "declare ptr @malloc(i64)\n"
 llvm "declare ptr @realloc(ptr, i64)\n"
 llvm "declare void @free(ptr)\n"
 
-HeapAllocator()
+HeapAllocator(
+    _ ptr,
+)
 
 heapAlloc(impl ptr, nBytes u64) !u8*:
     p ptr
@@ -15,63 +18,59 @@ heapAlloc(impl ptr, nBytes u64) !u8*:
     llvm "  %p1 = call ptr @malloc(i64 %nBytes)\n"
     llvm "  store ptr %p1, ptr %p\n"
 
-    if p == 0:
+    if cast.ptou(p) == 0:
         if nBytes == 0:
-            throw errors.invalidArgument("requested size is 0")
+            throw e.invalidArgument("requested size is 0")
         ..
-        throw errors.outOfMemory("")
+        throw e.outOfMemory("OOM")
     ..
     ret p
 ..
 
-heapAlloc(impl ptr, in u8*, nBytes u64) !u8*:
+heapRealloc(impl ptr, in u8*, nBytes u64) !u8*:
     p ptr
 
     llvm "  %p1 = call ptr @realloc(ptr %in, i64 %nBytes)\n"
     llvm "  store ptr %p1, ptr %p\n"
 
-    if p == 0:
-        if in == 0:
-            throw errors.invalidArgument("input pointer is null")
+    if cast.ptou(p) == 0:
+        if cast.ptou(in) == 0:
+            throw e.invalidArgument("input pointer is null")
         ..
         if nBytes == 0:
-            throw errors.invalidArgument("requested size is 0")
+            throw e.invalidArgument("requested size is 0")
         ..
-        throw errors.outOfMemory("")
+        throw e.outOfMemory("OOM")
     ..
     ret p
 ..
 
 heapFree(impl ptr, in u8*) !void:
-    if in == 0:
-        throw errors.invalidArgument("input pointer is null")
+    if cast.ptou(in) == 0:
+        throw e.invalidArgument("input pointer is null")
     ..
-
     llvm "  call void @free(ptr %in)\n"
 ..
 
-HeapAllocator.allocator() allocator.Allocator:
-    a allocator.Allocator
+HeapAllocator.allocator() a.Allocator:
+    alloc a.Allocator
 
-    a.impl = this
-    a.fn_alloc = heapAlloc
-    a.fn_realloc = heapRealloc
-    a.fn_free = heapFree
+    alloc.impl = this
+    alloc.fn_alloc = heapAlloc
+    alloc.fn_realloc = heapRealloc
+    alloc.fn_free = heapFree
 
-    ret a
+    ret alloc
 ..
 
 pub alloc(nBytes u64) !u8*:
-    p ptr
-    ret try heapAlloc(p, nBytes)
+    ret try heapAlloc(0, nBytes)
 ..
 
 pub realloc(in u8*, nBytes u64) !u8*:
-    p ptr
-    ret try heapRealloc(p, in, nBytes)
+    ret try heapRealloc(0, in, nBytes)
 ..
 
 pub free(in u8*) !void:
-    p ptr
-    ret try heapFree(p, in)
+    ret try heapFree(0, in)
 ..

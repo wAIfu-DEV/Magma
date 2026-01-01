@@ -452,6 +452,8 @@ func TypeChecker(s *t.SharedState) error {
 	}
 
 	for _, fCtx := range s.Files {
+		fmt.Printf("check types of: %s\n", fCtx.PackageName)
+
 		n := fCtx.GlNode
 		ctx.GlobalNode = n
 		e := ctGlobal(ctx, n)

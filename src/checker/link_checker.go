@@ -207,7 +207,19 @@ func clGetFuncDefFromModule(c *ctx, name parsedName) (*t.NodeFuncDef, error) {
 		return nil, fmt.Errorf("module alias does not exist in file")
 	}
 
-	moduleGlNode := c.ModuleBundle.Modules[moduleName]
+	moduleGlNode, ok := c.ModuleBundle.Modules[moduleName]
+
+	if !ok {
+		fmt.Printf("module name: %s\n", moduleName)
+		fmt.Print("available modules:\n")
+
+		for k := range c.ModuleBundle.Modules {
+			fmt.Printf("- %s\n", k)
+		}
+
+		return nil, fmt.Errorf("failed to find module in module bundle")
+	}
+
 	fnDef, ok := moduleGlNode.FuncDefs[fnName]
 
 	if !ok {
@@ -348,7 +360,6 @@ func clExistsInScope(c *ctx, scope *t.Scope, name *t.NodeExprName, ent entryType
 			}
 
 			if parsed.First != vName.First {
-				fmt.Printf("first %s != %s\n", parsed.First, vName.First)
 				continue
 			}
 
@@ -442,8 +453,6 @@ func clName(c *ctx, name *t.NodeExprName, expected entryType) error {
 }
 
 func clExprCall(c *ctx, call *t.NodeExprCall) error {
-	fmt.Printf("check expr call\n")
-
 	var ownerExpr t.Node = nil
 	var nameExpr *t.NodeExprName = nil
 
@@ -456,7 +465,7 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 		}
 
 		if !found {
-			return fmt.Errorf("name expression: %s does not refer to any defined vars", flattenName(n.Name))
+			return fmt.Errorf("name expression in call: %s does not refer to any defined vars", flattenName(n.Name))
 		}
 
 		n.IsSsa = isSsa
@@ -478,8 +487,6 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 			return e
 		}
 	}
-
-	fmt.Printf("found func name\n")
 
 	switch n := ownerExpr.(type) {
 	case *t.NodeExprVarDef:
@@ -554,7 +561,7 @@ func clExpr(c *ctx, expr t.NodeExpr) error {
 			return e
 		}
 	case *t.NodeExprName:
-		e := clName(c, n, enumEntVar)
+		e := clName(c, n, enumEntFuncAndVar)
 		if e != nil {
 			return e
 		}
@@ -672,6 +679,9 @@ func clTypeKind(c *ctx, kind t.NodeTypeKind) error {
 
 			_, e := clGetStructDefFromName(c, n.NameNode)
 			return e
+		case *t.NodeNameComposite:
+			_, e := clGetStructDefFromModule(c, parseName(nn))
+			return e
 		}
 	case *t.NodeTypeSlice:
 		return clTypeKind(c, n.ElemKind)
@@ -688,6 +698,9 @@ func clTypeKind(c *ctx, kind t.NodeTypeKind) error {
 		}
 		return clTypeKind(c, n.RetType.KindNode)
 	}
+
+	fmt.Print("problem type: ")
+	kind.Print(0)
 	return fmt.Errorf("failed to find definition for type")
 }
 
@@ -702,6 +715,10 @@ func clFuncDef(c *ctx, fnDef *t.NodeFuncDef) error {
 		if f.Func == fnDef {
 			scope = f.Scope
 		}
+	}
+
+	if scope == nil {
+		return fmt.Errorf("failed to find declaration of function '%s' in scope '%s'", flattenName(fnDef.Class.NameNode), flattenName(c.CurrScope.Name))
 	}
 
 	enterScope(c, scope)
