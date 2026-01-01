@@ -1,5 +1,6 @@
 # TODO
 
+- opaque pointer casting, prevent use of uncasted
 - heap allocator
 - comptime conditional for platform-specific code
 - file impl for windows
