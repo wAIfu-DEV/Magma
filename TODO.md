@@ -1,6 +1,7 @@
 # TODO
 
 - opaque pointer casting, prevent use of uncasted
+- move error context out of return value, only keep errcode or fat pointer
 - heap allocator
 - comptime conditional for platform-specific code
 - file impl for windows

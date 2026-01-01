@@ -61,3 +61,10 @@ pub failure(message str) error:
 pub invalidArgument(message str) error:
     ret makeErr(2, message)
 ..
+
+# Returns an error with code 3 indicating that the system is out of memory.
+# @returns error
+
+pub outOfMemory(message str) error:
+    ret makeErr(3, message)
+..
