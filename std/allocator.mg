@@ -8,14 +8,14 @@ Allocator(
     fn_free    (ptr, u8*) !void,
 )
 
-Allocator.alloc(n u64) !u8*:
-    ret try this.fn_alloc(this.impl, n)
+Allocator.alloc(byteCount u64) !u8*:
+    ret try this.fn_alloc(this.impl, byteCount)
 ..
 
-Allocator.realloc(p u8*, n u64) !u8*:
-    ret try this.fn_realloc(this.impl, p, n)
+Allocator.realloc(block u8*, byteCount u64) !u8*:
+    ret try this.fn_realloc(this.impl, block, byteCount)
 ..
 
-Allocator.free(p u8*) !void:
-    try this.fn_free(this.impl, p)
+Allocator.free(block u8*) !void:
+    try this.fn_free(this.impl, block)
 ..

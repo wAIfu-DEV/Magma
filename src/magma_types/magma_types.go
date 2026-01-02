@@ -5,9 +5,10 @@ import (
 )
 
 type NumberType struct {
-	ByteSize int
-	IsSigned bool
-	IsFloat  bool
+	ByteSize  int
+	IsSigned  bool
+	IsFloat   bool
+	IsPointer bool
 }
 
 var FloatTypes = map[string]NumberType{
@@ -32,6 +33,7 @@ var NumberTypes = map[string]NumberType{
 	"f32":  {ByteSize: 32, IsFloat: true},
 	"f64":  {ByteSize: 64, IsFloat: true},
 	"f128": {ByteSize: 128, IsFloat: true},
+	"ptr":  {ByteSize: 64, IsPointer: true},
 }
 
 var BasicTypes = map[string]string{

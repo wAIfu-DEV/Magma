@@ -5,9 +5,18 @@ mod errors
 # @param e input error
 # @returns error code
 
-pub code(e error) u32:
+pub errCode(e error) u32:
     llvm "  %e0 = extractvalue %type.error %e, 0\n"
     llvm "  ret i32 %e0\n"
+..
+
+# Returns the message from an error.
+# @param e input error
+# @returns error message
+
+pub errMsg(e error) str:
+    llvm "  %e0 = extractvalue %type.error %e, 1\n"
+    llvm "  ret %type.str %e0\n"
 ..
 
 # Returns the error type as a string.

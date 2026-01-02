@@ -542,6 +542,87 @@ func getBinaryPrecedence(tk t.Token) int {
 	}
 }
 
+func parseDestructureAssignAfterComma(ctx *ParseCtx, commaTk t.Token, left t.NodeExpr) (t.NodeExpr, bool, error) {
+	if commaTk.KeywType != t.KwComma {
+		return nil, false, nil
+	}
+
+	// Only valid for `<name> <type>, <name> <type> = <call>`
+	vd, ok := left.(*t.NodeExprVarDef)
+	if !ok {
+		return nil, false, nil
+	}
+
+	consume(ctx) // consume comma
+
+	nameTk2, e := peek(ctx)
+	if e != nil {
+		return nil, true, e
+	}
+	if nameTk2.Type != t.TokName {
+		return nil, true, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&nameTk2,
+			fmt.Sprintf("syntax error: expected name after ',' but got '%s'", nameTk2.Repr),
+			"expected: `value T, err error = call()`",
+		)
+	}
+
+	name2, e := parseName(ctx, nameTk2, false)
+	if e != nil {
+		return nil, true, e
+	}
+
+	typeTk2, e := peek(ctx)
+	if e != nil {
+		return nil, true, e
+	}
+	type2, e := parseType(ctx, typeTk2, false)
+	if e != nil {
+		return nil, true, e
+	}
+
+	eqTk, e := peek(ctx)
+	if e != nil {
+		return nil, true, e
+	}
+	if eqTk.KeywType != t.KwEqual {
+		return nil, true, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&eqTk,
+			fmt.Sprintf("syntax error: expected '=' in destructuring assignment but got '%s'", eqTk.Repr),
+			"expected: `value T, err error = call()`",
+		)
+	}
+	consume(ctx) // '='
+
+	rhsTk, e := peek(ctx)
+	if e != nil {
+		return nil, true, e
+	}
+
+	rhsExpr, e := parseExpression(ctx, rhsTk, 0)
+	if e != nil {
+		return nil, true, e
+	}
+
+	callExpr, ok := rhsExpr.(*t.NodeExprCall)
+	if !ok {
+		return nil, true, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&rhsTk,
+			"syntax error: destructuring assignment only supports function calls on the right-hand side",
+			"expected: `value T, err error = someFunc(...)`",
+		)
+	}
+
+	return &t.NodeExprDestructureAssign{
+		ValueDef: *vd,
+		ErrDef:   t.NodeExprVarDef{Name: name2, Type: type2},
+		Call:     callExpr,
+	}, true, nil
+}
+
 func parseExpression(ctx *ParseCtx, tk t.Token, minPrecedence int) (t.NodeExpr, error) {
 	left, e := parseUnaryExpr(ctx, tk)
 	if e != nil {
@@ -552,6 +633,17 @@ func parseExpression(ctx *ParseCtx, tk t.Token, minPrecedence int) (t.NodeExpr, 
 		opTk, e := peek(ctx)
 		if e != nil {
 			return nil, e
+		}
+
+		if opTk.KeywType == t.KwComma {
+			expr, matched, e := parseDestructureAssignAfterComma(ctx, opTk, left)
+			if e != nil {
+				return nil, e
+			}
+			if matched {
+				left = expr
+				continue
+			}
 		}
 
 		if tokenEndsExpr(opTk) {

@@ -65,7 +65,7 @@ pub main(args str[]) !void:
 
     # handle error, equivalent to previous
     ret_val2 bool, e error = myFunc(0, 0.0)
-    if e.code != errors.ok().code:
+    if errors.errCode(e) != 0:
         throw e # throw itself is conditional, if err == ok then control flow is resumed
     ..
 

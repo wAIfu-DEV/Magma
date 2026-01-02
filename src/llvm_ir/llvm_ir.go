@@ -13,6 +13,9 @@ import (
 )
 
 type ScopeBuilder struct {
+	Struct  *bytes.Buffer
+	StructM *sync.Mutex
+
 	Global *bytes.Buffer
 	Head   *bytes.Buffer
 	Body   *bytes.Buffer
@@ -103,6 +106,18 @@ func isVoidType(node *t.NodeType) bool {
 	return false
 }
 
+func isPointerType(node *t.NodeType) bool {
+	if node == nil {
+		return false
+	}
+
+	switch node.KindNode.(type) {
+	case *t.NodeTypePointer:
+		return true
+	}
+	return false
+}
+
 func isNumberType(node *t.NodeType) bool {
 	if node == nil {
 		return false
@@ -153,6 +168,12 @@ func getNumDesc(node *t.NodeType) magmatypes.NumberType {
 	}
 
 	switch n := node.KindNode.(type) {
+	case *t.NodeTypePointer:
+		numType, ok := magmatypes.NumberTypes["ptr"]
+		if !ok {
+			return magmatypes.NumberType{}
+		}
+		return numType
 	case *t.NodeTypeNamed:
 		switch nn := n.NameNode.(type) {
 		case *t.NodeNameSingle:
@@ -234,31 +255,29 @@ func irVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) (SsaName, error) {
 		sliceT := vd.Type.KindNode.(*t.NodeTypeSlice)
 		elemType := makeTypeFromKind(sliceT.ElemKind)
 
-		if !sliceT.HasSize {
-			return SsaName{}, fmt.Errorf("stack allocated slices must specify the element count between the brackets")
+		if sliceT.HasSize {
+			arrSsa := irSsaName(ctx)
+
+			// making dud ctx to redirect name IR to head
+			cpy := *ctx
+			cpy.bld = ScopeBuilder{
+				Global: ctx.bld.Global,
+				Head:   ctx.bld.Head,
+				Tail:   ctx.bld.Head,
+				Body:   ctx.bld.Head,
+			}
+
+			irWritef(&cpy, "  %%%s = alloca [ %d x ", arrSsa.Repr, sliceT.Size)
+			e = irType(&cpy, elemType)
+			if e != nil {
+				return SsaName{}, e
+			}
+			irWrite(&cpy, " ]\n")
+
+			fldSsa := irSsaName(ctx)
+			irWritef(ctx, "  %%%s = getelementptr %%type.slice, ptr %%%s, i64 0, i32 0\n", fldSsa.Repr, allocSsa.Repr)
+			irWritef(ctx, "  store ptr %%%s, ptr %%%s\n", arrSsa.Repr, fldSsa.Repr)
 		}
-
-		arrSsa := irSsaName(ctx)
-
-		// making dud ctx to redirect name IR to head
-		cpy := *ctx
-		cpy.bld = ScopeBuilder{
-			Global: ctx.bld.Global,
-			Head:   ctx.bld.Head,
-			Tail:   ctx.bld.Head,
-			Body:   ctx.bld.Head,
-		}
-
-		irWritef(&cpy, "  %%%s = alloca [ %d x ", arrSsa.Repr, sliceT.Size)
-		e = irType(&cpy, elemType)
-		if e != nil {
-			return SsaName{}, e
-		}
-		irWrite(&cpy, " ]\n")
-
-		fldSsa := irSsaName(ctx)
-		irWritef(ctx, "  %%%s = getelementptr %%type.slice, ptr %%%s, i64 0, i32 0\n", fldSsa.Repr, allocSsa.Repr)
-		irWritef(ctx, "  store ptr %%%s, ptr %%%s\n", arrSsa.Repr, fldSsa.Repr)
 	}
 
 	return allocSsa, nil
@@ -871,6 +890,18 @@ func irExtendInt(ctx *IrCtx, valSsa SsaName, signed bool, prevType *t.NodeType, 
 	return outSsa, nil
 }
 
+func irPtrToInt(ctx *IrCtx, valSsa SsaName) SsaName {
+	ssa := irSsaName(ctx)
+	irWritef(ctx, "  %%%s = ptrtoint ptr %%%s to i64", ssa.Repr, valSsa.Repr)
+	return ssa
+}
+
+func irIntToPtr(ctx *IrCtx, valSsa SsaName) SsaName {
+	ssa := irSsaName(ctx)
+	irWritef(ctx, "  %%%s = inttoptr i64 %%%s to ptr", ssa.Repr, valSsa.Repr)
+	return ssa
+}
+
 func irIntToFloat(ctx *IrCtx, valSsa SsaName, numType *t.NodeType, toType *t.NodeType) (SsaName, error) {
 	numDesc := getNumDesc(numType)
 
@@ -1031,23 +1062,37 @@ func irImplicitCastNum(ctx *IrCtx, target SsaName, fromType *t.NodeType, toType 
 }*/
 
 func irExprBinAddition(ctx *IrCtx, expectedType *t.NodeType, binaryExpr *t.NodeExprBinary) (SsaName, error) {
-	lhsSsa, e := irExpression(ctx, binaryExpr.Left.GetInferredType(), binaryExpr.Left)
+	leftType := binaryExpr.Left.GetInferredType()
+	rightType := binaryExpr.Right.GetInferredType()
+
+	lhsSsa, e := irExpression(ctx, leftType, binaryExpr.Left)
 	if e != nil {
 		return SsaName{}, e
 	}
 
-	rhsSsa, e := irExpression(ctx, binaryExpr.Right.GetInferredType(), binaryExpr.Right)
+	rhsSsa, e := irExpression(ctx, rightType, binaryExpr.Right)
 	if e != nil {
 		return SsaName{}, e
 	}
+
+	/*
+		if isPointerType(leftType) {
+			lhsSsa = irPtrToInt(ctx, lhsSsa)
+			leftType = makeNamedType("u64")
+		}
+
+		if isPointerType(rightType) {
+			rhsSsa = irPtrToInt(ctx, rhsSsa)
+			rightType = makeNamedType("u64")
+		}*/
 
 	lhs, rhs, newType, e := irPromoteToNum(
 		ctx,
 		expectedType,
 		lhsSsa,
-		binaryExpr.Left.GetInferredType(),
+		leftType,
 		rhsSsa,
-		binaryExpr.Right.GetInferredType(),
+		rightType,
 	)
 
 	if e != nil {
@@ -1073,6 +1118,18 @@ func irExprBinAddition(ctx *IrCtx, expectedType *t.NodeType, binaryExpr *t.NodeE
 	irWrite(ctx, ", ")
 	irPossibleLitSsa(ctx, rhs)
 	irWrite(ctx, "\n")
+
+	/*
+		if isPointerType(expectedType) {
+			tpDesc := getNumDesc(newType)
+			if tpDesc.ByteSize > 64 {
+
+			}
+
+			resSsa = irIntToPtr(ctx, resSsa)
+			rightType = makeNamedType("u64")
+		}*/
+
 	return resSsa, nil
 }
 
@@ -1235,6 +1292,8 @@ func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr) (SsaNam
 			return SsaName{}, e
 		}
 		return irTryCall(ctx, callSsa, ne.Call.(*t.NodeExprCall))
+	case *t.NodeExprDestructureAssign:
+		return irExprDestructureAssign(ctx, ne)
 	case *t.NodeExprSubscript:
 		return irExprSubscript(ctx, ne)
 	case *t.NodeExprLit:
@@ -1388,6 +1447,63 @@ func irStmtThrow(ctx *IrCtx, stmtThrow *t.NodeStmtThrow, fnDef *t.NodeFuncDef) e
 	}
 
 	return irThrowSsa(ctx, exprSsa, fnDef)
+}
+
+func irExprDestructureAssign(ctx *IrCtx, expr *t.NodeExprDestructureAssign) (SsaName, error) {
+	// Allocate both locals first so they exist regardless of call outcome.
+	valPtr, e := irVarDef(ctx, &expr.ValueDef)
+	if e != nil {
+		return SsaName{}, e
+	}
+	errPtr, e := irVarDef(ctx, &expr.ErrDef)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	callSsa, e := irExprFuncCall(ctx, expr.Call, true)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	// Extract error
+	errVal := irSsaName(ctx)
+	irWritef(ctx, "  %%%s = extractvalue ", errVal.Repr)
+	e = irThrowingType(ctx, expr.Call.InfType)
+	if e != nil {
+		return SsaName{}, e
+	}
+	irWritef(ctx, " %%%s, 0\n", callSsa.Repr)
+
+	irWrite(ctx, "  store ")
+	e = irType(ctx, expr.ErrDef.Type)
+	if e != nil {
+		return SsaName{}, e
+	}
+	irWrite(ctx, " ")
+	irPossibleLitSsa(ctx, errVal)
+	irWritef(ctx, ", ptr %%%s\n", errPtr.Repr)
+
+	// Extract value (if any)
+	if !isVoidType(expr.Call.InfType) {
+		valVal := irSsaName(ctx)
+		irWritef(ctx, "  %%%s = extractvalue ", valVal.Repr)
+		e = irThrowingType(ctx, expr.Call.InfType)
+		if e != nil {
+			return SsaName{}, e
+		}
+		irWritef(ctx, " %%%s, 1\n", callSsa.Repr)
+
+		irWrite(ctx, "  store ")
+		e = irType(ctx, expr.ValueDef.Type)
+		if e != nil {
+			return SsaName{}, e
+		}
+		irWrite(ctx, " ")
+		irPossibleLitSsa(ctx, valVal)
+		irWritef(ctx, ", ptr %%%s\n", valPtr.Repr)
+	}
+
+	return valPtr, nil
 }
 
 func irStatement(ctx *IrCtx, stmtNode t.NodeStatement, fnDef *t.NodeFuncDef) error {
@@ -1954,10 +2070,19 @@ func irDefineStruct(ctx *IrCtx, structNode *t.NodeStructDef) error {
 }
 
 func irGlobalStructDefs(ctx *IrCtx, glNode *t.NodeGlobal) error {
+	ctx.bld.StructM.Lock()
+	defer ctx.bld.StructM.Unlock()
+
 	for _, d := range glNode.Declarations {
 		switch s := d.(type) {
 		case *t.NodeStructDef:
-			e := irDefineStruct(ctx, s)
+			cpy := *ctx
+			cpy.bld.Body = ctx.bld.Struct
+			cpy.bld.Head = ctx.bld.Struct
+			cpy.bld.Global = ctx.bld.Struct
+			cpy.bld.Tail = ctx.bld.Struct
+
+			e := irDefineStruct(&cpy, s)
 			if e != nil {
 				return e
 			}
@@ -1982,23 +2107,35 @@ func irLlvm(ctx *IrCtx, llvmNode *t.NodeLlvm) {
 	irWrite(ctx, llvmNode.Text)
 }
 
-func irWriteModule(shared *t.SharedState, fCtx *t.FileCtx, builder *bytes.Buffer, glBld *bytes.Buffer, i int) error {
+func irWriteModule(
+	shared *t.SharedState,
+	fCtx *t.FileCtx,
+	builder *bytes.Buffer,
+	glBld *bytes.Buffer,
+	structBld *bytes.Buffer,
+	strctBldM *sync.Mutex,
+	i int,
+) error {
 	nextSsa := 0
 
 	ctx := &IrCtx{
 		Shared: shared,
 		fCtx:   fCtx,
 		bld: ScopeBuilder{
-			Global: glBld,
-			Head:   &bytes.Buffer{},
-			Tail:   &bytes.Buffer{},
-			Body:   &bytes.Buffer{},
+			Struct:  structBld,
+			StructM: strctBldM,
+			Global:  glBld,
+			Head:    &bytes.Buffer{},
+			Tail:    &bytes.Buffer{},
+			Body:    &bytes.Buffer{},
 		},
 		parentBld: ScopeBuilder{
-			Global: glBld,
-			Head:   &bytes.Buffer{},
-			Tail:   &bytes.Buffer{},
-			Body:   &bytes.Buffer{},
+			Struct:  structBld,
+			StructM: strctBldM,
+			Global:  glBld,
+			Head:    &bytes.Buffer{},
+			Tail:    &bytes.Buffer{},
+			Body:    &bytes.Buffer{},
 		},
 		nextSsa:   &nextSsa,
 		moduleIdx: i,
@@ -2052,6 +2189,7 @@ func IrWrite(shared *t.SharedState) ([]byte, error) {
 
 	llvmFragments := [][]byte{
 		header,
+		{},
 		llvmfragments.Utils,
 	}
 	fragLen := len(llvmFragments)
@@ -2073,6 +2211,9 @@ func IrWrite(shared *t.SharedState) ([]byte, error) {
 	wg := sync.WaitGroup{}
 	wg.Add(len(filesMap))
 
+	structDefBld := &bytes.Buffer{}
+	structDefBldM := sync.Mutex{}
+
 	i := fragLen
 	for _, v := range filesMap {
 
@@ -2083,7 +2224,7 @@ func IrWrite(shared *t.SharedState) ([]byte, error) {
 			// module local builder
 			moduleBld := &bytes.Buffer{}
 			glBld := &bytes.Buffer{}
-			e := irWriteModule(shared, v, moduleBld, glBld, idx)
+			e := irWriteModule(shared, v, moduleBld, glBld, structDefBld, &structDefBldM, idx)
 			if e != nil {
 				results[idx] = resStr{E: e}
 				return
@@ -2098,6 +2239,8 @@ func IrWrite(shared *t.SharedState) ([]byte, error) {
 
 	// join threads
 	wg.Wait()
+
+	results[1].S = structDefBld.Bytes()
 
 	// process results
 	irStrings := [][]byte{}

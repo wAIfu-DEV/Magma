@@ -560,6 +560,8 @@ func clExpr(c *ctx, expr t.NodeExpr) error {
 		if e != nil {
 			return e
 		}
+	case *t.NodeExprDestructureAssign:
+		return clExprCall(c, n.Call)
 	case *t.NodeExprName:
 		e := clName(c, n, enumEntFuncAndVar)
 		if e != nil {

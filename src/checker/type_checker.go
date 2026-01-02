@@ -146,6 +146,64 @@ func flattenType(node *t.NodeType) string {
 	return flattenTypeKind(node.KindNode)
 }
 
+func sameType(a *t.NodeType, b *t.NodeType) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.Throws != b.Throws {
+		return false
+	}
+	return sameTypeKind(a.KindNode, b.KindNode)
+}
+
+func sameTypeKind(a t.NodeTypeKind, b t.NodeTypeKind) bool {
+	switch ta := a.(type) {
+	case *t.NodeTypeNamed:
+		tb, ok := b.(*t.NodeTypeNamed)
+		if !ok {
+			return false
+		}
+		return flattenName(ta.NameNode) == flattenName(tb.NameNode)
+	case *t.NodeTypePointer:
+		tb, ok := b.(*t.NodeTypePointer)
+		if !ok {
+			return false
+		}
+		return sameTypeKind(ta.Kind, tb.Kind)
+	case *t.NodeTypeRfc:
+		tb, ok := b.(*t.NodeTypeRfc)
+		if !ok {
+			return false
+		}
+		return sameTypeKind(ta.Kind, tb.Kind)
+	case *t.NodeTypeSlice:
+		tb, ok := b.(*t.NodeTypeSlice)
+		if !ok {
+			return false
+		}
+		if ta.HasSize != tb.HasSize || ta.Size != tb.Size {
+			return false
+		}
+		return sameTypeKind(ta.ElemKind, tb.ElemKind)
+	case *t.NodeTypeFunc:
+		tb, ok := b.(*t.NodeTypeFunc)
+		if !ok {
+			return false
+		}
+		if len(ta.Args) != len(tb.Args) {
+			return false
+		}
+		for i := range ta.Args {
+			if !sameType(ta.Args[i], tb.Args[i]) {
+				return false
+			}
+		}
+		return sameType(ta.RetType, tb.RetType)
+	default:
+		return false
+	}
+}
+
 func ctExpr(c *ctx, expr t.NodeExpr) error {
 	switch n := expr.(type) {
 	case *t.NodeExprVoid:
@@ -286,6 +344,42 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		if e != nil {
 			return e
 		}
+		return nil
+	case *t.NodeExprDestructureAssign:
+		e := ctExpr(c, n.Call)
+		if e != nil {
+			return e
+		}
+
+		if n.Call.InfType == nil {
+			return fmt.Errorf("destructuring assignment: call has null inferred type")
+		}
+
+		if !n.Call.InfType.Throws {
+			return fmt.Errorf("destructuring assignment requires a throwing call (return type must be !T)")
+		}
+
+		if isVoidType(n.Call.InfType) {
+			return fmt.Errorf("destructuring assignment does not support !void calls (no value to bind)")
+		}
+
+		if n.ErrDef.Type == nil || !isErrType(n.ErrDef.Type) || n.ErrDef.Type.Throws {
+			return fmt.Errorf("destructuring assignment: error binding must be of type 'error'")
+		}
+
+		unwrapped := &t.NodeType{
+			Throws:   false,
+			KindNode: n.Call.InfType.KindNode,
+		}
+
+		if !sameType(unwrapped, n.ValueDef.Type) {
+			return fmt.Errorf(
+				"destructuring assignment: value type mismatch (expected %s but call returns %s)",
+				flattenType(n.ValueDef.Type),
+				flattenType(unwrapped),
+			)
+		}
+
 		return nil
 	}
 	return fmt.Errorf("unexpected expression type")

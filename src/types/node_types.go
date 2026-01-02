@@ -486,6 +486,37 @@ func (n *NodeStmtThrow) Print(indent int) {
 	n.Expression.Print(indent + 1)
 }
 
+// Destructuring assignment for throwing calls:
+//   valueName valueType, errName error = someThrowingCall(...)
+// This allows manual inspection of the error without using `try`.
+type NodeExprDestructureAssign struct {
+	ValueDef NodeExprVarDef
+	ErrDef   NodeExprVarDef
+	Call     *NodeExprCall
+}
+
+func (n *NodeExprDestructureAssign) GetInferredType() *NodeType {
+	fmt.Println("ExprDestructureAssign")
+	return n.ValueDef.Type
+}
+
+func (n *NodeExprDestructureAssign) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprDestructureAssign\n")
+
+	PrintIndent(indent + 1)
+	fmt.Printf("ValueDef\n")
+	n.ValueDef.Print(indent + 2)
+
+	PrintIndent(indent + 1)
+	fmt.Printf("ErrDef\n")
+	n.ErrDef.Print(indent + 2)
+
+	PrintIndent(indent + 1)
+	fmt.Printf("Call\n")
+	n.Call.Print(indent + 2)
+}
+
 type NodeArg struct {
 	Name     string
 	TypeNode *NodeType
@@ -597,6 +628,7 @@ func (*NodeExprVarDef) IsExpr()       {}
 func (*NodeExprVarDefAssign) IsExpr() {}
 func (*NodeExprAssign) IsExpr()       {}
 func (*NodeExprTry) IsExpr()          {}
+func (*NodeExprDestructureAssign) IsExpr() {}
 func (*NodeTypeNamed) IsType()        {}
 func (*NodeTypePointer) IsType()      {}
 func (*NodeTypeRfc) IsType()          {}
