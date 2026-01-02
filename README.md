@@ -89,6 +89,8 @@ main() !void:
     my_reval i32, err error = mightThrow()
     code i32 = errors.code(err)
     
+    # a code of 0 indicates success (errors.ok)
+
     if code == 1: # they really should make enums for error code
         # handle specific error type
     elif code != 0:
