@@ -707,7 +707,7 @@ func parseExpression(ctx *ParseCtx, tk t.Token, minPrecedence int) (t.NodeExpr, 
 			switch vd := left.(type) {
 			case *t.NodeExprVarDef:
 				varDefAssign := &t.NodeExprVarDefAssign{
-					VarDef:     *vd,
+					VarDef:     vd,
 					AssignExpr: right,
 				}
 				left = varDefAssign
@@ -1472,6 +1472,21 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 		})
 
 		ctx.GlobalNode.StructDefs[ownerName].Funcs[memberName] = fnDef
+
+		if memberName == "destructor" {
+
+			if len(fnDef.Class.ArgsNode.Args) > 1 {
+				return nil, comp_err.CompilationErrorToken(
+					ctx.Fctx,
+					&nameTk,
+					fmt.Sprintf("syntax error: destructor function for '%s' cannot have any defined arguments", ownerName),
+					fmt.Sprintf("signature of destructor should be: `%s.destructor() void`", ownerName),
+				)
+			}
+			// TODO: enforce 0 args and non-throwing void type
+			ctx.GlobalNode.StructDefs[ownerName].Destructor = fnDef
+			fmt.Printf("found destructor function for: %s\n", ownerName)
+		}
 	}
 
 	ctx.GlobalNode.FuncDefs[fnNameSimple] = fnDef

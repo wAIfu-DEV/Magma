@@ -45,9 +45,9 @@ heapRealloc(impl ptr, in u8*, nBytes u64) !u8*:
     ret p
 ..
 
-heapFree(impl ptr, in u8*) !void:
+heapFree(impl ptr, in u8*) void:
     if cast.ptou(in) == 0:
-        throw e.invalidArgument("input pointer is null")
+        ret
     ..
     llvm "  call void @free(ptr %in)\n"
 ..
@@ -71,6 +71,6 @@ pub realloc(in u8*, nBytes u64) !u8*:
     ret try heapRealloc(0, in, nBytes)
 ..
 
-pub free(in u8*) !void:
-    ret try heapFree(0, in)
+pub free(in u8*) void:
+    heapFree(0, in)
 ..

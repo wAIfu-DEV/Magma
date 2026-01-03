@@ -234,6 +234,10 @@ func irWriteGlf(ctx *IrCtx, format string, a ...any) {
 func irVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) (SsaName, error) {
 	allocSsa := irNameSsa(ctx, vd.Name, false)
 
+	if vd.Type.Destructor != nil {
+		irWrite(ctx, "  ; has destructor\n")
+	}
+
 	irWriteHdf(ctx, "  %%%s = alloca ", allocSsa.Repr)
 
 	cpy := *ctx
@@ -298,7 +302,7 @@ func irVarDefAssign(ctx *IrCtx, vda *t.NodeExprVarDefAssign) (SsaName, error) {
 		return ssaName(""), e
 	}
 
-	allocSsa, e := irVarDef(ctx, &vda.VarDef)
+	allocSsa, e := irVarDef(ctx, vda.VarDef)
 	if e != nil {
 		return ssaName(""), e
 	}
@@ -478,6 +482,18 @@ func irExprCallFuncNonPtr(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 	}
 
 	return ssa, nil
+}
+
+func irExprDestructor(ctx *IrCtx, destructor *t.NodeExprDestructor) (SsaName, error) {
+	irWrite(ctx, "  call void @")
+
+	e := irName(ctx, destructor.Destructor.Class.NameNode, true)
+	if e != nil {
+		return ssaName(""), e
+	}
+	irWritef(ctx, "(ptr %%%s)\n", destructor.VarDef.Name.(*t.NodeNameSingle).Name)
+
+	return SsaName{}, nil
 }
 
 func irExprFuncCall(ctx *IrCtx, fnCall *t.NodeExprCall, keepError bool) (SsaName, error) {
@@ -1287,6 +1303,8 @@ func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr) (SsaNam
 		return irExprAssign(ctx, ne.Left, ne.Right)
 	case *t.NodeExprCall:
 		return irExprFuncCall(ctx, ne, false)
+	case *t.NodeExprDestructor:
+		return irExprDestructor(ctx, ne)
 	case *t.NodeExprTry:
 		callSsa, e := irExprFuncCall(ctx, ne.Call.(*t.NodeExprCall), true)
 		if e != nil {
@@ -1317,7 +1335,7 @@ func irExpressionLvalue(ctx *IrCtx, expr t.NodeExpr) (SsaName, error) {
 
 func irStmtReturnDeferred(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
 	if isVoidType(ctx.CurrFunc.ReturnType) && !ctx.CurrFunc.ReturnType.Throws {
-		irWritef(ctx, "  br label %%.defer.%d\n", ctx.CurrFunc.DeferCnt-2-ctx.CurrDeferIdx)
+		irWritef(ctx, "  br label %%.defer.%d\n", ctx.CurrDeferIdx-1)
 		return nil
 	}
 
@@ -1326,7 +1344,7 @@ func irStmtReturnDeferred(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
 		if stmtRet.OwnerFuncType.Throws {
 			irWrite(ctx, "  store { %type.error } { %type.error zeroinitializer }, ptr %.defer.rv\n")
 		}
-		irWritef(ctx, "  br label %%.defer.%d\n", ctx.CurrFunc.DeferCnt-2-ctx.CurrDeferIdx)
+		irWritef(ctx, "  br label %%.defer.%d\n", ctx.CurrDeferIdx-1)
 		return nil
 	}
 
@@ -1351,7 +1369,7 @@ func irStmtReturnDeferred(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
 	irPossibleLitSsa(ctx, ssa)
 	irWrite(ctx, ", ptr %.defer.rv\n")
 
-	irWritef(ctx, "  br label %%.defer.%d\n", ctx.CurrFunc.DeferCnt-2-ctx.CurrDeferIdx)
+	irWritef(ctx, "  br label %%.defer.%d\n", ctx.CurrDeferIdx-1)
 	return nil
 }
 
@@ -1482,7 +1500,7 @@ func irThrowSsa(ctx *IrCtx, errSsa SsaName, fnDef *t.NodeFuncDef) error {
 		irWritef(ctx, "%%%s", retValSsa.Repr)
 		irWrite(ctx, ", ptr %.defer.rv\n")
 
-		irWritef(ctx, "  br label %%.defer.%d\n", ctx.CurrFunc.DeferCnt-2-ctx.CurrDeferIdx)
+		irWritef(ctx, "  br label %%.defer.%d\n", ctx.CurrDeferIdx-1)
 	} else {
 		irWrite(ctx, "  ret ")
 		e := irThrowingType(ctx, fnDef.ReturnType)
@@ -1714,15 +1732,42 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 	}
 
 	foundRet := false
-
 	cpy.CurrDeferIdx = 0
 
+	// TODO: fix this, this is a stinking hack
+	// used to insert destructors as deferred statements
+	fnDef.Deferred = nil
+
 	for _, stmt := range bodyNode.Statements {
-		switch stmt.(type) {
+		switch n := stmt.(type) {
 		case *t.NodeStmtRet:
 			foundRet = true
 		case *t.NodeStmtDefer:
 			cpy.CurrDeferIdx++
+			fnDef.Deferred = append(fnDef.Deferred, n)
+		case *t.NodeStmtExpr:
+			switch n2 := n.Expression.(type) {
+			case *t.NodeExprVarDef:
+				if n2.Type.Destructor != nil {
+					cpy.CurrDeferIdx++
+					fnDef.Deferred = append(fnDef.Deferred, &t.NodeStmtDefer{
+						Expression: &t.NodeExprDestructor{
+							VarDef:     n2,
+							Destructor: n2.Type.Destructor,
+						},
+					})
+				}
+			case *t.NodeExprVarDefAssign:
+				if n2.VarDef.Type.Destructor != nil {
+					cpy.CurrDeferIdx++
+					fnDef.Deferred = append(fnDef.Deferred, &t.NodeStmtDefer{
+						Expression: &t.NodeExprDestructor{
+							VarDef:     n2.VarDef,
+							Destructor: n2.VarDef.Type.Destructor,
+						},
+					})
+				}
+			}
 		}
 
 		e := irStatement(&cpy, stmt, fnDef)
@@ -1734,10 +1779,11 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 	defLen := len(fnDef.Deferred)
 
 	for i := range defLen {
-		irWritef(&cpy, "  br label %%.defer.%d\n", i)
-		irWritef(&cpy, ".defer.%d:\n", i)
-
 		revIdx := defLen - 1 - i
+
+		irWritef(&cpy, "  br label %%.defer.%d\n", revIdx)
+		irWritef(&cpy, ".defer.%d:\n", revIdx)
+
 		def := fnDef.Deferred[revIdx]
 		if !def.IsBody {
 			_, e := irExpression(&cpy, nil, def.Expression)

@@ -79,8 +79,9 @@ func (n *NodeNameComposite) Print(indent int) {
 }
 
 type NodeType struct {
-	Throws   bool
-	KindNode NodeTypeKind
+	KindNode   NodeTypeKind
+	Destructor *NodeFuncDef
+	Throws     bool
 }
 
 func (n *NodeType) Print(indent int) {
@@ -343,7 +344,7 @@ func (n *NodeExprVarDef) Print(indent int) {
 }
 
 type NodeExprVarDefAssign struct {
-	VarDef     NodeExprVarDef
+	VarDef     *NodeExprVarDef
 	AssignExpr NodeExpr
 }
 
@@ -398,6 +399,18 @@ func (n *NodeExprTry) Print(indent int) {
 	fmt.Printf("ExprTry\n")
 	n.Call.Print(indent + 1)
 }
+
+type NodeExprDestructor struct {
+	VarDef     *NodeExprVarDef
+	Destructor *NodeFuncDef
+}
+
+func (n *NodeExprDestructor) GetInferredType() *NodeType {
+	fmt.Println("ExprTry")
+	return nil
+}
+
+func (n *NodeExprDestructor) Print(int) {}
 
 type NodeStmtRet struct {
 	Expression NodeExpr
@@ -646,6 +659,7 @@ func (*NodeExprVarDefAssign) IsExpr()      {}
 func (*NodeExprAssign) IsExpr()            {}
 func (*NodeExprTry) IsExpr()               {}
 func (*NodeExprDestructureAssign) IsExpr() {}
+func (*NodeExprDestructor) IsExpr()        {}
 func (*NodeTypeNamed) IsType()             {}
 func (*NodeTypePointer) IsType()           {}
 func (*NodeTypeRfc) IsType()               {}

@@ -21,6 +21,7 @@ MyStruct.member(first u32) !void:
 ..
 
 MyStruct.destructor() void:
+    io.printLn("CALLED DESTRUCTOR")
 ..
 
 func2(arg i32) i32:
@@ -54,7 +55,7 @@ pub main(args str[]) !void:
 
     byteSlice u8[] = slices.fromPtr(allocOnHeap, 8)
 
-    try heap.free(allocOnHeap)
+    defer heap.free(allocOnHeap)
 
     myVal i32, myE error = throwing(true)
     errCode u32 = errors.errCode(myE)
@@ -64,6 +65,7 @@ pub main(args str[]) !void:
         io.print("err code: ")
         io.printInt(errCode)
         io.printLn("")
+
         io.print("err msg: ")
         io.print(errors.errMsg(myE))
         io.printLn("")

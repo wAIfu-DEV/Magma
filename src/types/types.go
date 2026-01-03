@@ -5,11 +5,14 @@ import (
 )
 
 type StructDef struct {
-	Module  string
-	Name    string
+	Module string
+	Name   string
+
 	FieldNb map[string]int
 	Fields  map[string]*NodeType
 	Funcs   map[string]*NodeFuncDef
+
+	Destructor *NodeFuncDef
 }
 
 func (*StructDef) Print(int) {

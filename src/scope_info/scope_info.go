@@ -78,7 +78,7 @@ func bldExpr(ctx *lcx, expr t.NodeExpr) error {
 		if e != nil {
 			return e
 		}
-		declVarInStack(ctx, &n.VarDef)
+		declVarInStack(ctx, n.VarDef)
 	case *t.NodeExprVarDef:
 		declVarInStack(ctx, n)
 	case *t.NodeExprDestructureAssign:

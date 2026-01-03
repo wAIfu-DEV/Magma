@@ -551,6 +551,15 @@ func clExpr(c *ctx, expr t.NodeExpr) error {
 		if e != nil {
 			return e
 		}
+		e = clType(c, n.VarDef.Type)
+		if e != nil {
+			return e
+		}
+	case *t.NodeExprVarDef:
+		e := clType(c, n.Type)
+		if e != nil {
+			return e
+		}
 	case *t.NodeExprAssign:
 		e := clExpr(c, n.Left)
 		if e != nil {
@@ -681,7 +690,7 @@ func clBody(c *ctx, bdy *t.NodeBody) error {
 	return nil
 }
 
-func clTypeKind(c *ctx, kind t.NodeTypeKind) error {
+func clTypeKind(c *ctx, parentType *t.NodeType, kind t.NodeTypeKind, topLevel bool) error {
 	switch n := kind.(type) {
 	case *t.NodeTypeNamed:
 
@@ -692,26 +701,38 @@ func clTypeKind(c *ctx, kind t.NodeTypeKind) error {
 				return nil // is intrinsic type
 			}
 
-			_, e := clGetStructDefFromName(c, n.NameNode)
+			sd, e := clGetStructDefFromName(c, n.NameNode)
+
+			if e == nil && sd.Destructor != nil && topLevel {
+				parentType.Destructor = sd.Destructor
+			}
 			return e
 		case *t.NodeNameComposite:
-			_, e := clGetStructDefFromModule(c, parseName(nn))
+			sd, e := clGetStructDefFromModule(c, parseName(nn))
+
+			if sd.Name == "MyStruct" {
+				fmt.Printf("MyStruct def: %+v\n", *sd)
+			}
+
+			if e == nil && sd.Destructor != nil && topLevel {
+				parentType.Destructor = sd.Destructor
+			}
 			return e
 		}
 	case *t.NodeTypeSlice:
-		return clTypeKind(c, n.ElemKind)
+		return clTypeKind(c, parentType, n.ElemKind, false)
 	case *t.NodeTypePointer:
-		return clTypeKind(c, n.Kind)
+		return clTypeKind(c, parentType, n.Kind, false)
 	case *t.NodeTypeRfc:
-		return clTypeKind(c, n.Kind)
+		return clTypeKind(c, parentType, n.Kind, false)
 	case *t.NodeTypeFunc:
 		for _, n2 := range n.Args {
-			e := clTypeKind(c, n2.KindNode)
+			e := clTypeKind(c, parentType, n2.KindNode, false)
 			if e != nil {
 				return e
 			}
 		}
-		return clTypeKind(c, n.RetType.KindNode)
+		return clTypeKind(c, parentType, n.RetType.KindNode, false)
 	}
 
 	fmt.Print("problem type: ")
@@ -720,7 +741,7 @@ func clTypeKind(c *ctx, kind t.NodeTypeKind) error {
 }
 
 func clType(c *ctx, typeNd *t.NodeType) error {
-	return clTypeKind(c, typeNd.KindNode)
+	return clTypeKind(c, typeNd, typeNd.KindNode, true)
 }
 
 func clFuncDef(c *ctx, fnDef *t.NodeFuncDef) error {
