@@ -20,12 +20,13 @@ const (
 )
 
 type ParseCtx struct {
-	Shared        *t.SharedState
-	GlobalNode    *t.NodeGlobal
-	Fctx          *t.FileCtx
-	Toks          []t.Token
-	TokIdx        int
-	NextModifiers []ModifierType
+	Shared          *t.SharedState
+	GlobalNode      *t.NodeGlobal
+	Fctx            *t.FileCtx
+	Toks            []t.Token
+	TokIdx          int
+	NextModifiers   []ModifierType
+	CurrentFunction *t.NodeFuncDef
 }
 
 func peek(ctx *ParseCtx) (t.Token, error) {
@@ -623,6 +624,37 @@ func parseDestructureAssignAfterComma(ctx *ParseCtx, commaTk t.Token, left t.Nod
 	}, true, nil
 }
 
+func parseDefer(ctx *ParseCtx, tk t.Token) (*t.NodeStmtDefer, error) {
+	consume(ctx) // consume defer
+
+	n := &t.NodeStmtDefer{}
+
+	next, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	if next.KeywType == t.KwColon {
+		n.IsBody = true
+
+		body, e := parseBody(ctx, next)
+		if e != nil {
+			return nil, e
+		}
+
+		n.Body = body
+		return n, nil
+	}
+
+	expr, e := parseExpression(ctx, next, 0)
+	if e != nil {
+		return nil, e
+	}
+
+	n.Expression = expr
+	return n, nil
+}
+
 func parseExpression(ctx *ParseCtx, tk t.Token, minPrecedence int) (t.NodeExpr, error) {
 	left, e := parseUnaryExpr(ctx, tk)
 	if e != nil {
@@ -1152,6 +1184,14 @@ func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
 		return parseStmtIf(ctx, tk)
 	case t.KwWhile:
 		return parseStmtWhile(ctx, tk)
+	case t.KwDefer:
+		n, e := parseDefer(ctx, tk)
+		if e != nil {
+			return nil, e
+		}
+		ctx.CurrentFunction.HasDefer = true
+		ctx.CurrentFunction.Deferred = append(ctx.CurrentFunction.Deferred, n)
+		return n, nil
 	}
 
 	expr, e := parseExpression(ctx, tk, 0)
@@ -1195,6 +1235,52 @@ func parseBody(ctx *ParseCtx, tk t.Token) (t.NodeBody, error) {
 		if tk.KeywType == t.KwDots {
 			consume(ctx)
 			return n, nil
+		}
+
+		stmtNode, e := parseStatement(ctx, tk)
+		if e != nil {
+			return t.NodeBody{}, e
+		}
+		n.Statements = append(n.Statements, stmtNode)
+	}
+}
+
+func parseDeferBody(ctx *ParseCtx, tk t.Token) (t.NodeBody, error) {
+	n := t.NodeBody{}
+
+	if tk.KeywType != t.KwColon {
+		return t.NodeBody{}, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&tk,
+			fmt.Sprintf("syntax error: expected body opening ':' but got '%s' instead", tk.Repr),
+			"bodies/scopes are opened with ':' and ended with '..'",
+		)
+	}
+	consume(ctx)
+
+	for {
+		tk, e := peek(ctx)
+		if e != nil {
+			return t.NodeBody{}, e
+		}
+
+		if tk.KeywType == t.KwNewline {
+			consume(ctx)
+			continue
+		}
+
+		if tk.KeywType == t.KwDots {
+			consume(ctx)
+			return n, nil
+		}
+
+		if tk.KeywType == t.KwDefer {
+			return n, comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&tk,
+				"syntax error: cannot nest defer statements",
+				"",
+			)
 		}
 
 		stmtNode, e := parseStatement(ctx, tk)
@@ -1317,6 +1403,15 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 		fnNameSimple = n.Name
 	}
 
+	fnDef := &t.NodeFuncDef{
+		Class: gncls,
+	}
+
+	ctx.CurrentFunction = fnDef
+	defer func() {
+		ctx.CurrentFunction = nil
+	}()
+
 	typeNode, e := parseType(ctx, after, true)
 	if e != nil {
 		return nil, e
@@ -1332,11 +1427,8 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 		return nil, e
 	}
 
-	fnDef := &t.NodeFuncDef{
-		Class:      gncls,
-		ReturnType: typeNode,
-		Body:       bodyNode,
-	}
+	fnDef.Body = bodyNode
+	fnDef.ReturnType = typeNode
 
 	if isMemberFunc {
 		complexName := gncls.NameNode.(*t.NodeNameComposite)

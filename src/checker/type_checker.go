@@ -456,6 +456,14 @@ func ctThrow(c *ctx, throw *t.NodeStmtThrow) error {
 	return nil
 }
 
+func ctDefer(c *ctx, def *t.NodeStmtDefer) error {
+	if def.IsBody {
+		return ctBody(c, &def.Body)
+	} else {
+		return ctExpr(c, def.Expression)
+	}
+}
+
 func ctReturn(c *ctx, ret *t.NodeStmtRet) error {
 	if c.LastFuncDef == nil {
 		// TODO: compiler error
@@ -502,6 +510,8 @@ func ctBody(c *ctx, bdy *t.NodeBody) error {
 			e = ctIfStmt(c, n)
 		case *t.NodeStmtWhile:
 			e = ctWhileStmt(c, n)
+		case *t.NodeStmtDefer:
+			e = ctDefer(c, n)
 		}
 		if e != nil {
 			return e

@@ -43,6 +43,13 @@ throwing(isThrowing bool) !i32:
 ..
 
 pub main(args str[]) !void:
+    defer io.printLn("DEFERRED!!")
+
+    defer:
+        io.printLn("DEFERRED IN BLOCK!!")
+        io.printLn("YIPPEE!!")
+    ..
+
     allocOnHeap u8* = try heap.alloc(8)
 
     byteSlice u8[] = slices.fromPtr(allocOnHeap, 8)

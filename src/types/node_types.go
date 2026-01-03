@@ -486,9 +486,22 @@ func (n *NodeStmtThrow) Print(indent int) {
 	n.Expression.Print(indent + 1)
 }
 
-// Destructuring assignment for throwing calls:
-//   valueName valueType, errName error = someThrowingCall(...)
-// This allows manual inspection of the error without using `try`.
+type NodeStmtDefer struct {
+	Expression NodeExpr
+	Body       NodeBody
+	IsBody     bool
+}
+
+func (n *NodeStmtDefer) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("StmtDefer\n")
+	if n.IsBody {
+		n.Body.Print(indent + 1)
+	} else {
+		n.Expression.Print(indent + 1)
+	}
+}
+
 type NodeExprDestructureAssign struct {
 	ValueDef NodeExprVarDef
 	ErrDef   NodeExprVarDef
@@ -570,6 +583,9 @@ type NodeFuncDef struct {
 	Class      NodeGenericClass
 	ReturnType *NodeType
 	Body       NodeBody
+
+	Deferred []*NodeStmtDefer
+	HasDefer bool
 }
 
 func (n *NodeFuncDef) Print(indent int) {
@@ -617,32 +633,33 @@ type ModuleBundle struct {
 	Modules map[string]*NodeGlobal
 }
 
-func (*NodeExprVoid) IsExpr()         {}
-func (*NodeExprUnary) IsExpr()        {}
-func (*NodeExprLit) IsExpr()          {}
-func (*NodeExprName) IsExpr()         {}
-func (*NodeExprCall) IsExpr()         {}
-func (*NodeExprSubscript) IsExpr()    {}
-func (*NodeExprBinary) IsExpr()       {}
-func (*NodeExprVarDef) IsExpr()       {}
-func (*NodeExprVarDefAssign) IsExpr() {}
-func (*NodeExprAssign) IsExpr()       {}
-func (*NodeExprTry) IsExpr()          {}
+func (*NodeExprVoid) IsExpr()              {}
+func (*NodeExprUnary) IsExpr()             {}
+func (*NodeExprLit) IsExpr()               {}
+func (*NodeExprName) IsExpr()              {}
+func (*NodeExprCall) IsExpr()              {}
+func (*NodeExprSubscript) IsExpr()         {}
+func (*NodeExprBinary) IsExpr()            {}
+func (*NodeExprVarDef) IsExpr()            {}
+func (*NodeExprVarDefAssign) IsExpr()      {}
+func (*NodeExprAssign) IsExpr()            {}
+func (*NodeExprTry) IsExpr()               {}
 func (*NodeExprDestructureAssign) IsExpr() {}
-func (*NodeTypeNamed) IsType()        {}
-func (*NodeTypePointer) IsType()      {}
-func (*NodeTypeRfc) IsType()          {}
-func (*NodeTypeSlice) IsType()        {}
-func (*NodeTypeFunc) IsType()         {}
-func (*NodeNameSingle) IsName()       {}
-func (*NodeNameComposite) IsName()    {}
-func (*NodeStmtRet) IsStatement()     {}
-func (*NodeStmtExpr) IsStatement()    {}
-func (*NodeStmtThrow) IsStatement()   {}
-func (*NodeStmtIf) IsStatement()      {}
-func (*NodeStmtElse) IsStatement()    {}
-func (*NodeStmtWhile) IsStatement()   {}
-func (*NodeLlvm) IsStatement()        {}
-func (*NodeFuncDef) IsGlobalDecl()    {}
-func (*NodeStructDef) IsGlobalDecl()  {}
-func (*NodeLlvm) IsGlobalDecl()       {}
+func (*NodeTypeNamed) IsType()             {}
+func (*NodeTypePointer) IsType()           {}
+func (*NodeTypeRfc) IsType()               {}
+func (*NodeTypeSlice) IsType()             {}
+func (*NodeTypeFunc) IsType()              {}
+func (*NodeNameSingle) IsName()            {}
+func (*NodeNameComposite) IsName()         {}
+func (*NodeStmtRet) IsStatement()          {}
+func (*NodeStmtExpr) IsStatement()         {}
+func (*NodeStmtThrow) IsStatement()        {}
+func (*NodeStmtIf) IsStatement()           {}
+func (*NodeStmtElse) IsStatement()         {}
+func (*NodeStmtWhile) IsStatement()        {}
+func (*NodeLlvm) IsStatement()             {}
+func (*NodeStmtDefer) IsStatement()        {}
+func (*NodeFuncDef) IsGlobalDecl()         {}
+func (*NodeStructDef) IsGlobalDecl()       {}
+func (*NodeLlvm) IsGlobalDecl()            {}

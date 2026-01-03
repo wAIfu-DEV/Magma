@@ -55,6 +55,7 @@ const (
 	KwCmpEq
 	KwCmpNeq
 	KwTry
+	KwDefer
 )
 
 var KwTypeToRepr []string = []string{
@@ -90,6 +91,7 @@ var KwTypeToRepr []string = []string{
 	KwCmpEq:     "==",
 	KwCmpNeq:    "!=",
 	KwTry:       "try",
+	KwDefer:     "defer",
 }
 
 var KwReprToType map[string]KwType = map[string]KwType{
@@ -125,6 +127,7 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"==":    KwCmpEq,
 	"!=":    KwCmpNeq,
 	"try":   KwTry,
+	"defer": KwDefer,
 }
 
 type Token struct {

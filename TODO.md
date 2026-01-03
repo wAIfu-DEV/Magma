@@ -1,8 +1,7 @@
 # TODO
 
-- opaque pointer casting, prevent use of uncasted
+- add labels in-between deferred statements and jump to the correct ones depending on the return statement
 - move error context out of return value, only keep errcode or fat pointer
-- heap allocator
 - comptime conditional for platform-specific code
 - file impl for windows
 - file impl for unix

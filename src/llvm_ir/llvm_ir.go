@@ -1314,7 +1314,52 @@ func irExpressionLvalue(ctx *IrCtx, expr t.NodeExpr) (SsaName, error) {
 	return ssaName(""), nil
 }
 
+func irStmtReturnDeferred(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
+	if isVoidType(ctx.CurrFunc.ReturnType) && !ctx.CurrFunc.ReturnType.Throws {
+		irWrite(ctx, "  br label %.defer\n")
+		return nil
+	}
+
+	switch stmtRet.Expression.(type) {
+	case *t.NodeExprVoid:
+		if stmtRet.OwnerFuncType.Throws {
+			irWrite(ctx, "  store { %type.error } { %type.error zeroinitializer }, ptr %.defer.rv\n")
+		}
+		irWrite(ctx, "  br label %.defer\n")
+		return nil
+	}
+
+	ssa, e := irExpression(ctx, stmtRet.OwnerFuncType, stmtRet.Expression)
+	if e != nil {
+		return e
+	}
+
+	if stmtRet.OwnerFuncType.Throws {
+		ssa, e = irMakeThrowingRetVal(ctx, stmtRet.OwnerFuncType, SsaName{}, ssa)
+		if e != nil {
+			return e
+		}
+	}
+
+	irWrite(ctx, "  store ")
+	e = irThrowingType(ctx, stmtRet.OwnerFuncType)
+	if e != nil {
+		return e
+	}
+	irWrite(ctx, " ")
+	irPossibleLitSsa(ctx, ssa)
+	irWrite(ctx, ", ptr %.defer.rv\n")
+
+	irWrite(ctx, "  br label %.defer\n")
+	return nil
+}
+
 func irStmtReturn(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
+
+	if ctx.CurrFunc.HasDefer {
+		return irStmtReturnDeferred(ctx, stmtRet)
+	}
+
 	// TODO: lower expression
 	switch stmtRet.Expression.(type) {
 	case *t.NodeExprVoid:
@@ -1426,14 +1471,25 @@ func irThrowSsa(ctx *IrCtx, errSsa SsaName, fnDef *t.NodeFuncDef) error {
 		}
 	}
 
-	irWrite(ctx, "  ret ")
+	if ctx.CurrFunc.HasDefer {
+		irWrite(ctx, "  store ")
+		e := irThrowingType(ctx, fnDef.ReturnType)
+		if e != nil {
+			return e
+		}
+		irWrite(ctx, " ")
+		irWritef(ctx, "%%%s", retValSsa.Repr)
+		irWrite(ctx, ", ptr %.defer.rv\n")
 
-	e := irThrowingType(ctx, fnDef.ReturnType)
-	if e != nil {
-		return e
+		irWrite(ctx, "  br label %.defer\n")
+	} else {
+		irWrite(ctx, "  ret ")
+		e := irThrowingType(ctx, fnDef.ReturnType)
+		if e != nil {
+			return e
+		}
+		irWritef(ctx, " %%%s\n", retValSsa.Repr)
 	}
-
-	irWritef(ctx, " %%%s\n", retValSsa.Repr)
 
 	// else nothing
 	irWritef(ctx, "%s:\n", eqLabel.Repr)
@@ -1645,6 +1701,17 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 	}
 	cpy.parentBld = cpy.bld
 
+	if fnDef.HasDefer {
+		if !(isVoidType(fnDef.ReturnType) && !fnDef.ReturnType.Throws) {
+			irWrite(&cpy, "  %.defer.rv = alloca ")
+			e := irThrowingType(&cpy, fnDef.ReturnType)
+			if e != nil {
+				return e
+			}
+			irWrite(&cpy, "\n")
+		}
+	}
+
 	foundRet := false
 
 	for _, stmt := range bodyNode.Statements {
@@ -1656,6 +1723,57 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 		e := irStatement(&cpy, stmt, fnDef)
 		if e != nil {
 			return e
+		}
+	}
+
+	defLen := len(fnDef.Deferred)
+
+	if defLen > 0 {
+		irWrite(&cpy, ".defer:\n")
+	}
+
+	for i := range defLen {
+		revIdx := defLen - 1 - i
+		def := fnDef.Deferred[revIdx]
+		if !def.IsBody {
+			_, e := irExpression(&cpy, nil, def.Expression)
+			if e != nil {
+				return e
+			}
+		} else {
+			for _, stmt := range bodyNode.Statements {
+				switch stmt.(type) {
+				case *t.NodeStmtRet:
+					foundRet = true
+				}
+
+				e := irStatement(&cpy, stmt, fnDef)
+				if e != nil {
+					return e
+				}
+			}
+		}
+	}
+
+	if defLen > 0 {
+		if !(isVoidType(fnDef.ReturnType) && !fnDef.ReturnType.Throws) {
+			irWrite(&cpy, "  %rv = load ")
+			e := irThrowingType(&cpy, fnDef.ReturnType)
+			if e != nil {
+				return e
+			}
+			irWrite(&cpy, ", ptr %.defer.rv\n")
+		}
+		irWrite(&cpy, "  ret ")
+
+		if isVoidType(fnDef.ReturnType) && !fnDef.ReturnType.Throws {
+			irWrite(&cpy, "void\n")
+		} else {
+			e := irThrowingType(&cpy, fnDef.ReturnType)
+			if e != nil {
+				return e
+			}
+			irWrite(&cpy, " %rv\n")
 		}
 	}
 

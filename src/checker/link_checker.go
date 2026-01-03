@@ -580,6 +580,14 @@ func clExpr(c *ctx, expr t.NodeExpr) error {
 	return nil
 }
 
+func clDefer(c *ctx, def *t.NodeStmtDefer) error {
+	if def.IsBody {
+		return clBody(c, &def.Body)
+	} else {
+		return clExpr(c, def.Expression)
+	}
+}
+
 func clReturn(c *ctx, ret *t.NodeStmtRet) error {
 	e := clExpr(c, ret.Expression)
 	if e != nil {
@@ -660,6 +668,11 @@ func clBody(c *ctx, bdy *t.NodeBody) error {
 			}
 		case *t.NodeStmtWhile:
 			e := clWhile(c, n)
+			if e != nil {
+				return e
+			}
+		case *t.NodeStmtDefer:
+			e := clDefer(c, n)
 			if e != nil {
 				return e
 			}
