@@ -585,6 +585,7 @@ type NodeFuncDef struct {
 	Body       NodeBody
 
 	Deferred []*NodeStmtDefer
+	DeferCnt int
 	HasDefer bool
 }
 

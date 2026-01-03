@@ -1190,6 +1190,7 @@ func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
 			return nil, e
 		}
 		ctx.CurrentFunction.HasDefer = true
+		ctx.CurrentFunction.DeferCnt += 2
 		ctx.CurrentFunction.Deferred = append(ctx.CurrentFunction.Deferred, n)
 		return n, nil
 	}
