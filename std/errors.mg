@@ -42,7 +42,7 @@ pub toStr(e error) str:
 ..
 
 makeErr(code i32, msg str) error:
-    llvm "  %e0 = insertvalue %type.error undef, i32 %code, 0\n"
+    llvm "  %e0 = insertvalue %type.error zeroinitializer, i32 %code, 0\n"
     llvm "  %e1 = insertvalue %type.error %e0, %type.str %msg, 1\n"
     llvm "  ret %type.error %e1\n"
 ..

@@ -10,7 +10,7 @@ pub count(s slice) u64:
 ..
 
 pub fromPtr(p ptr, elemCount u64) slice:
-    llvm "  %s0 = insertvalue %type.slice undef, ptr %p, 0\n"
+    llvm "  %s0 = insertvalue %type.slice zeroinitializer, ptr %p, 0\n"
     llvm "  %s1 = insertvalue %type.slice %s0, i64 %elemCount, 1\n"
     llvm "  ret %type.slice %s1\n"
 ..

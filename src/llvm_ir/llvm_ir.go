@@ -32,14 +32,17 @@ func ssaName(name string) SsaName {
 }
 
 type IrCtx struct {
-	Shared       *t.SharedState
-	fCtx         *t.FileCtx
-	bld          ScopeBuilder
-	parentBld    ScopeBuilder
-	nextSsa      *int
-	moduleIdx    int
-	CurrFunc     *t.NodeFuncDef
-	CurrDeferIdx int
+	Shared    *t.SharedState
+	fCtx      *t.FileCtx
+	bld       ScopeBuilder
+	parentBld ScopeBuilder
+	nextSsa   *int
+	moduleIdx int
+	CurrFunc  *t.NodeFuncDef
+
+	CurrNestedScopeIdx int
+	SeenNestedScopes   int
+	CurrDeferIdx       int
 }
 
 func makeFuncPtrTypeFromDef(fnDef *t.NodeFuncDef) *t.NodeType {
@@ -421,15 +424,27 @@ func irExprCallFuncPtr(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 func irExprCallFuncNonPtr(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 	argsSsa := make([]SsaName, len(fnCall.Args))
 	for i, expr := range fnCall.Args {
-		exprSsa, e := irExpression(ctx, fnCall.AssociatedFnDef.Class.ArgsNode.Args[i].TypeNode, expr)
+		argT := fnCall.AssociatedFnDef.Class.ArgsNode.Args[i].TypeNode
+
+		exprSsa, e := irExpression(ctx, argT, expr)
 		if e != nil {
 			return ssaName(""), e
 		}
+
+		if isNumberType(argT) && !exprSsa.IsLiteral {
+			if !isSameNumType(expr.GetInferredType(), argT) {
+				outSsa, e := irPromoteSingleToNum(ctx, argT, exprSsa, expr.GetInferredType())
+				if e != nil {
+					return SsaName{}, e
+				}
+				exprSsa = outSsa
+			}
+		}
+
 		argsSsa[i] = exprSsa
 	}
 
 	ssa := irSsaName(ctx)
-
 	isVoidRet := isVoidType(fnCall.InfType)
 
 	if !isVoidRet || fnCall.InfType.Throws {
@@ -461,7 +476,7 @@ func irExprCallFuncNonPtr(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 
 	bound := len(argsSsa)
 	for i, ssa := range argsSsa {
-		e = irType(ctx, fnCall.Args[i].GetInferredType())
+		e = irType(ctx, fnCall.AssociatedFnDef.Class.ArgsNode.Args[i].TypeNode)
 		if e != nil {
 			return ssaName(""), e
 		}
@@ -564,7 +579,7 @@ func irExprLitBool(ctx *IrCtx, litBool *t.NodeExprLit) (SsaName, error) {
 	return ssa, nil
 }
 
-func irExprLit(ctx *IrCtx, lit *t.NodeExprLit) (SsaName, error) {
+func irExprLit(ctx *IrCtx, lit *t.NodeExprLit, expectedType *t.NodeType) (SsaName, error) {
 	switch lit.LitType {
 	case t.TokLitStr:
 		return irExprLitStr(ctx, lit)
@@ -907,6 +922,48 @@ func irExtendInt(ctx *IrCtx, valSsa SsaName, signed bool, prevType *t.NodeType, 
 	return outSsa, nil
 }
 
+func irTruncInt(ctx *IrCtx, valSsa SsaName, prevType *t.NodeType, newType *t.NodeType) (SsaName, error) {
+	outSsa := irSsaName(ctx)
+
+	irWritef(ctx, "  %%%s = trunc ", outSsa.Repr)
+
+	e := irType(ctx, prevType)
+	if e != nil {
+		return SsaName{}, e
+	}
+	irWrite(ctx, " ")
+	irPossibleLitSsa(ctx, valSsa)
+	irWrite(ctx, " to ")
+
+	e = irType(ctx, newType)
+	if e != nil {
+		return SsaName{}, e
+	}
+	irWrite(ctx, "\n")
+	return outSsa, nil
+}
+
+func irTruncFlt(ctx *IrCtx, valSsa SsaName, prevType *t.NodeType, newType *t.NodeType) (SsaName, error) {
+	outSsa := irSsaName(ctx)
+
+	irWritef(ctx, "  %%%s = fptrunc ", outSsa.Repr)
+
+	e := irType(ctx, prevType)
+	if e != nil {
+		return SsaName{}, e
+	}
+	irWrite(ctx, " ")
+	irPossibleLitSsa(ctx, valSsa)
+	irWrite(ctx, " to ")
+
+	e = irType(ctx, newType)
+	if e != nil {
+		return SsaName{}, e
+	}
+	irWrite(ctx, "\n")
+	return outSsa, nil
+}
+
 func irPtrToInt(ctx *IrCtx, valSsa SsaName) SsaName {
 	ssa := irSsaName(ctx)
 	irWritef(ctx, "  %%%s = ptrtoint ptr %%%s to i64", ssa.Repr, valSsa.Repr)
@@ -975,6 +1032,47 @@ func irFloatToInt(ctx *IrCtx, valSsa SsaName, numType *t.NodeType, toType *t.Nod
 	}
 	irWrite(ctx, "\n")
 	return outSsa, nil
+}
+
+func irPromoteSingleToNum(ctx *IrCtx, expectedType *t.NodeType, ssa SsaName, fromType *t.NodeType) (SsaName, error) {
+	if ssa.IsLiteral {
+		fromType = expectedType
+	}
+
+	fromNum := getNumDesc(fromType)
+	expectedNum := getNumDesc(expectedType)
+
+	// with floating point ops always return type of largest (byte size) float
+	if fromNum.IsFloat && expectedNum.IsFloat {
+		if fromNum.ByteSize == expectedNum.ByteSize {
+			// no need for promotion
+			return ssa, nil
+		} else if fromNum.ByteSize > expectedNum.ByteSize {
+			return irTruncFlt(ctx, ssa, fromType, expectedType)
+		} else {
+			outSsa, e := irExtendFlt(ctx, ssa, fromType, expectedType)
+			return outSsa, e
+		}
+	}
+
+	if fromNum.IsFloat {
+		return irIntToFloat(
+			ctx, ssa,
+			fromType,
+			expectedType,
+		)
+	}
+
+	// integers
+	if fromNum.ByteSize > expectedNum.ByteSize {
+		return irTruncInt(ctx, ssa, fromType, expectedType)
+	} else if fromNum.ByteSize < expectedNum.ByteSize {
+		return irExtendInt(ctx, ssa, fromNum.IsSigned, fromType, expectedType)
+	} else {
+		return ssa, nil
+	}
+
+	//return SsaName{}, SsaName{}, nil, fmt.Errorf("unhandled type in numerical promotion")
 }
 
 func irPromoteToNum(ctx *IrCtx, expectedType *t.NodeType, leftSsa SsaName, leftType *t.NodeType, rightSsa SsaName, rightType *t.NodeType) (SsaName, SsaName, *t.NodeType, error) {
@@ -1316,7 +1414,7 @@ func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr) (SsaNam
 	case *t.NodeExprSubscript:
 		return irExprSubscript(ctx, ne)
 	case *t.NodeExprLit:
-		return irExprLit(ctx, ne)
+		return irExprLit(ctx, ne, expectedType)
 	case *t.NodeExprName:
 		return irExprName(ctx, ne)
 	case *t.NodeExprBinary:
@@ -1333,9 +1431,35 @@ func irExpressionLvalue(ctx *IrCtx, expr t.NodeExpr) (SsaName, error) {
 	return ssaName(""), nil
 }
 
+func irJmpToDefer(ctx *IrCtx) {
+	if ctx.CurrDeferIdx == 0 {
+		irWritef(ctx, "  br label %%.defer.%d.base\n", ctx.CurrNestedScopeIdx)
+	} else {
+		irWritef(ctx, "  br label %%.defer.%d.%d\n", ctx.CurrNestedScopeIdx, ctx.CurrDeferIdx-1)
+	}
+}
+
+func irJmpToParentDeferOnRet(ctx *IrCtx, parentCtx *IrCtx) {
+	ssa := irSsaName(ctx)
+	after := irSsaName(ctx)
+
+	irWritef(ctx, "  %%%s = load i1, ptr %%.defer.ret\n", ssa.Repr)
+
+	if parentCtx.CurrDeferIdx == 0 {
+		irWritef(ctx, "  br i1 %%%s, label %%.defer.%d.base, label %%%s\n", ssa.Repr, parentCtx.CurrNestedScopeIdx, after.Repr)
+	} else {
+		irWritef(ctx, "  br i1 %%%s, label %%.defer.%d.%d, label %%%s\n", ssa.Repr, parentCtx.CurrNestedScopeIdx, parentCtx.CurrDeferIdx-1, after.Repr)
+	}
+
+	irWritef(ctx, "%s:\n", after.Repr)
+}
+
 func irStmtReturnDeferred(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
+	// set flag for return after deferred statements
+	irWrite(ctx, "  store i1 1, ptr %.defer.ret\n")
+
 	if isVoidType(ctx.CurrFunc.ReturnType) && !ctx.CurrFunc.ReturnType.Throws {
-		irWritef(ctx, "  br label %%.defer.%d\n", ctx.CurrDeferIdx-1)
+		irJmpToDefer(ctx)
 		return nil
 	}
 
@@ -1344,7 +1468,7 @@ func irStmtReturnDeferred(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
 		if stmtRet.OwnerFuncType.Throws {
 			irWrite(ctx, "  store { %type.error } { %type.error zeroinitializer }, ptr %.defer.rv\n")
 		}
-		irWritef(ctx, "  br label %%.defer.%d\n", ctx.CurrDeferIdx-1)
+		irJmpToDefer(ctx)
 		return nil
 	}
 
@@ -1369,51 +1493,50 @@ func irStmtReturnDeferred(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
 	irPossibleLitSsa(ctx, ssa)
 	irWrite(ctx, ", ptr %.defer.rv\n")
 
-	irWritef(ctx, "  br label %%.defer.%d\n", ctx.CurrDeferIdx-1)
+	irJmpToDefer(ctx)
 	return nil
 }
 
 func irStmtReturn(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
+	return irStmtReturnDeferred(ctx, stmtRet)
 
-	if ctx.CurrFunc.HasDefer {
-		return irStmtReturnDeferred(ctx, stmtRet)
-	}
-
-	// TODO: lower expression
-	switch stmtRet.Expression.(type) {
-	case *t.NodeExprVoid:
-		if stmtRet.OwnerFuncType.Throws {
-			irWrite(ctx, "  ret { %type.error } { %type.error zeroinitializer }\n")
-		} else {
-			irWrite(ctx, "  ret void\n")
+	// LEGACY
+	/*
+		// TODO: lower expression
+		switch stmtRet.Expression.(type) {
+		case *t.NodeExprVoid:
+			if stmtRet.OwnerFuncType.Throws {
+				irWrite(ctx, "  ret { %type.error } { %type.error zeroinitializer }\n")
+			} else {
+				irWrite(ctx, "  ret void\n")
+			}
+			return nil
 		}
-		return nil
-	}
 
-	ssa, e := irExpression(ctx, stmtRet.OwnerFuncType, stmtRet.Expression)
-	if e != nil {
-		return e
-	}
-
-	if stmtRet.OwnerFuncType.Throws {
-		ssa, e = irMakeThrowingRetVal(ctx, stmtRet.OwnerFuncType, SsaName{}, ssa)
+		ssa, e := irExpression(ctx, stmtRet.OwnerFuncType, stmtRet.Expression)
 		if e != nil {
 			return e
 		}
-	}
 
-	irWritef(ctx, "  ret ")
+		if stmtRet.OwnerFuncType.Throws {
+			ssa, e = irMakeThrowingRetVal(ctx, stmtRet.OwnerFuncType, SsaName{}, ssa)
+			if e != nil {
+				return e
+			}
+		}
 
-	e = irThrowingType(ctx, stmtRet.OwnerFuncType)
-	if e != nil {
-		return e
-	}
+		irWritef(ctx, "  ret ")
 
-	irWrite(ctx, " ")
-	irPossibleLitSsa(ctx, ssa)
+		e = irThrowingType(ctx, stmtRet.OwnerFuncType)
+		if e != nil {
+			return e
+		}
 
-	irWrite(ctx, "\n")
-	return nil
+		irWrite(ctx, " ")
+		irPossibleLitSsa(ctx, ssa)
+
+		irWrite(ctx, "\n")
+		return nil*/
 }
 
 func irMakeThrowingRetVal(ctx *IrCtx, retType *t.NodeType, errSsa SsaName, valSsa SsaName) (SsaName, error) {
@@ -1490,25 +1613,30 @@ func irThrowSsa(ctx *IrCtx, errSsa SsaName, fnDef *t.NodeFuncDef) error {
 		}
 	}
 
-	if ctx.CurrFunc.HasDefer {
-		irWrite(ctx, "  store ")
-		e := irThrowingType(ctx, fnDef.ReturnType)
-		if e != nil {
-			return e
-		}
-		irWrite(ctx, " ")
-		irWritef(ctx, "%%%s", retValSsa.Repr)
-		irWrite(ctx, ", ptr %.defer.rv\n")
+	//if ctx.CurrFunc.HasDefer {
 
-		irWritef(ctx, "  br label %%.defer.%d\n", ctx.CurrDeferIdx-1)
-	} else {
-		irWrite(ctx, "  ret ")
-		e := irThrowingType(ctx, fnDef.ReturnType)
-		if e != nil {
-			return e
-		}
-		irWritef(ctx, " %%%s\n", retValSsa.Repr)
+	irWrite(ctx, "  store i1 1, ptr %.defer.ret\n")
+
+	irWrite(ctx, "  store ")
+	e := irThrowingType(ctx, fnDef.ReturnType)
+	if e != nil {
+		return e
 	}
+	irWrite(ctx, " ")
+	irWritef(ctx, "%%%s", retValSsa.Repr)
+	irWrite(ctx, ", ptr %.defer.rv\n")
+
+	irJmpToDefer(ctx)
+
+	/*
+		} else {
+			irWrite(ctx, "  ret ")
+			e := irThrowingType(ctx, fnDef.ReturnType)
+			if e != nil {
+				return e
+			}
+			irWritef(ctx, " %%%s\n", retValSsa.Repr)
+		}*/
 
 	// else nothing
 	irWritef(ctx, "%s:\n", eqLabel.Repr)
@@ -1681,6 +1809,8 @@ func irStmtWhile(ctx *IrCtx, ifStmt *t.NodeStmtWhile, fnDef *t.NodeFuncDef) erro
 }
 
 func irBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
+	ctx.SeenNestedScopes++
+
 	cpy := *ctx
 	cpy.bld = ScopeBuilder{
 		Global: ctx.bld.Global,
@@ -1689,17 +1819,85 @@ func irBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 		Body:   &bytes.Buffer{},
 	}
 
+	cpy.CurrNestedScopeIdx = ctx.SeenNestedScopes
+	cpy.CurrDeferIdx = 0
+	var deferred []*t.NodeStmtDefer = nil
+
 	for _, stmt := range bodyNode.Statements {
-		switch stmt.(type) {
-		case *t.NodeStmtRet:
-			return nil
+		switch n := stmt.(type) {
+		case *t.NodeStmtDefer:
+			cpy.CurrDeferIdx++
+			deferred = append(deferred, n)
+		case *t.NodeStmtExpr:
+			switch n2 := n.Expression.(type) {
+			case *t.NodeExprVarDef:
+				if n2.Type.Destructor != nil {
+					cpy.CurrDeferIdx++
+					deferred = append(deferred, &t.NodeStmtDefer{
+						Expression: &t.NodeExprDestructor{
+							VarDef:     n2,
+							Destructor: n2.Type.Destructor,
+						},
+					})
+				}
+			case *t.NodeExprVarDefAssign:
+				if n2.VarDef.Type.Destructor != nil {
+					cpy.CurrDeferIdx++
+					deferred = append(deferred, &t.NodeStmtDefer{
+						Expression: &t.NodeExprDestructor{
+							VarDef:     n2.VarDef,
+							Destructor: n2.VarDef.Type.Destructor,
+						},
+					})
+				}
+			}
 		}
 
-		e := irStatement(ctx, stmt, fnDef)
+		e := irStatement(&cpy, stmt, fnDef)
 		if e != nil {
 			return e
 		}
 	}
+
+	defLen := len(deferred)
+
+	for i := range defLen {
+		revIdx := defLen - 1 - i
+
+		irWritef(&cpy, "  br label %%.defer.%d.%d\n", cpy.CurrNestedScopeIdx, revIdx)
+		irWritef(&cpy, ".defer.%d.%d:\n", cpy.CurrNestedScopeIdx, revIdx)
+
+		def := deferred[revIdx]
+		if !def.IsBody {
+			_, e := irExpression(&cpy, nil, def.Expression)
+			if e != nil {
+				return e
+			}
+			continue
+		} else {
+			for _, stmt := range def.Body.Statements {
+				e := irStatement(&cpy, stmt, fnDef)
+				if e != nil {
+					return e
+				}
+			}
+			continue
+		}
+	}
+
+	if defLen == 0 {
+		irWritef(&cpy, "  br label %%.defer.%d.base\n", cpy.CurrNestedScopeIdx)
+		irWritef(&cpy, ".defer.%d.base:\n", cpy.CurrNestedScopeIdx)
+	}
+
+	/*
+		shouldRetSsa := irSsaName(ctx)
+		afterSsa := irSsaName(ctx)
+		irWritef(&cpy, "  %%%s = load i1, ptr %%.defer.ret\n", shouldRetSsa.Repr)
+		irWritef(&cpy, "  br i1 %%%s, label %%.defer.%d.%d, label %%%s\n", shouldRetSsa.Repr, ctx.CurrNestedScopeIdx, ctx.CurrDeferIdx, afterSsa.Repr)
+		irWritef(&cpy, "%s:\n", afterSsa.Repr)*/
+
+	irJmpToParentDeferOnRet(&cpy, ctx)
 
 	irWrite(ctx, cpy.bld.Head.String())
 	irWrite(ctx, cpy.bld.Body.String())
@@ -1720,15 +1918,25 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 	}
 	cpy.parentBld = cpy.bld
 
-	if fnDef.HasDefer {
-		if !(isVoidType(fnDef.ReturnType) && !fnDef.ReturnType.Throws) {
-			irWrite(&cpy, "  %.defer.rv = alloca ")
-			e := irThrowingType(&cpy, fnDef.ReturnType)
-			if e != nil {
-				return e
-			}
-			irWrite(&cpy, "\n")
+	if !(isVoidType(fnDef.ReturnType) && !fnDef.ReturnType.Throws) {
+		irWrite(&cpy, "  %.defer.rv = alloca ")
+		e := irThrowingType(&cpy, fnDef.ReturnType)
+		if e != nil {
+			return e
 		}
+		irWrite(&cpy, "\n")
+	}
+
+	irWrite(&cpy, "  %.defer.ret = alloca i1\n")
+	irWrite(&cpy, "  store i1 0, ptr %.defer.ret\n")
+
+	if !(isVoidType(fnDef.ReturnType) && !fnDef.ReturnType.Throws) {
+		irWrite(&cpy, "  store ")
+		e := irThrowingType(&cpy, fnDef.ReturnType)
+		if e != nil {
+			return e
+		}
+		irWrite(&cpy, " zeroinitializer, ptr %.defer.rv\n")
 	}
 
 	foundRet := false
@@ -1781,8 +1989,8 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 	for i := range defLen {
 		revIdx := defLen - 1 - i
 
-		irWritef(&cpy, "  br label %%.defer.%d\n", revIdx)
-		irWritef(&cpy, ".defer.%d:\n", revIdx)
+		irWritef(&cpy, "  br label %%.defer.%d.%d\n", ctx.CurrNestedScopeIdx, revIdx)
+		irWritef(&cpy, ".defer.%d.%d:\n", ctx.CurrNestedScopeIdx, revIdx)
 
 		def := fnDef.Deferred[revIdx]
 		if !def.IsBody {
@@ -1807,26 +2015,29 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 		}
 	}
 
-	if defLen > 0 {
-		if !(isVoidType(fnDef.ReturnType) && !fnDef.ReturnType.Throws) {
-			irWrite(&cpy, "  %rv = load ")
-			e := irThrowingType(&cpy, fnDef.ReturnType)
-			if e != nil {
-				return e
-			}
-			irWrite(&cpy, ", ptr %.defer.rv\n")
-		}
-		irWrite(&cpy, "  ret ")
+	if defLen == 0 {
+		irWrite(&cpy, "  br label %.defer.0.base\n")
+		irWrite(&cpy, ".defer.0.base:\n")
+	}
 
-		if isVoidType(fnDef.ReturnType) && !fnDef.ReturnType.Throws {
-			irWrite(&cpy, "void\n")
-		} else {
-			e := irThrowingType(&cpy, fnDef.ReturnType)
-			if e != nil {
-				return e
-			}
-			irWrite(&cpy, " %rv\n")
+	if !(isVoidType(fnDef.ReturnType) && !fnDef.ReturnType.Throws) {
+		irWrite(&cpy, "  %rv = load ")
+		e := irThrowingType(&cpy, fnDef.ReturnType)
+		if e != nil {
+			return e
 		}
+		irWrite(&cpy, ", ptr %.defer.rv\n")
+	}
+	irWrite(&cpy, "  ret ")
+
+	if isVoidType(fnDef.ReturnType) && !fnDef.ReturnType.Throws {
+		irWrite(&cpy, "void\n")
+	} else {
+		e := irThrowingType(&cpy, fnDef.ReturnType)
+		if e != nil {
+			return e
+		}
+		irWrite(&cpy, " %rv\n")
 	}
 
 	irWrite(ctx, cpy.bld.Head.String())
@@ -1884,7 +2095,7 @@ func irMainWrapper(ctx *IrCtx, mainFnDef *t.NodeFuncDef) error {
 	}
 
 	irWrite(ctx, "; Entry point\n")
-	irWrite(ctx, "define i32 @main(i32 %argc, ptr %argv) {\n")
+	irWrite(ctx, "define i32 @main(i32 %argc, ptr %argv) alwaysinline {\n")
 	irWrite(ctx, "entry:\n")
 
 	hasArgs := false
@@ -1964,7 +2175,7 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 		return e
 	}
 
-	irWrite(ctx, " ")
+	irWrite(ctx, " alwaysinline ")
 
 	ctx.CurrFunc = fnDefNode
 	e = irFuncBody(ctx, &fnDefNode.Body, fnDefNode)

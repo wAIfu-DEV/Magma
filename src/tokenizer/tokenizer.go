@@ -221,10 +221,17 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 		ctx.Pos.Col++
 
 		if r == '\n' && ctx.Mode == tkModeComment {
+			ctx.Mode = tkModeNormal
+
+			pushToken(ctx, t.Token{
+				Repr:     "\n",
+				Pos:      ctx.Pos,
+				Type:     t.TokKeyword,
+				KeywType: t.KwNewline,
+			})
+
 			ctx.Pos.Line++
 			ctx.Pos.Col = 0
-
-			ctx.Mode = tkModeNormal
 			consume(ctx)
 			continue
 		}

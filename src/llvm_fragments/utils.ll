@@ -10,7 +10,6 @@ declare i64 @strlen(ptr nocapture readonly) nounwind
 ; - string ops (strlen) implemented
 define %type.slice @magma.argsToSlice(i32 %argc, ptr %argv, ptr %buf) {
 enter:
-    ; buf = malloc(argc * sizeof(str))
     %argc64 = sext i32 %argc to i64
     br label %loop
 
@@ -29,7 +28,7 @@ loop.body:
 
     ; buf[i] = str{ cstr, len }
     %elem = getelementptr %type.str, ptr %buf, i64 %i
-    %f0 = insertvalue %type.str undef, ptr %cstr, 0
+    %f0 = insertvalue %type.str zeroinitializer, ptr %cstr, 0
     %f1 = insertvalue %type.str %f0, i64 %len, 1
     store %type.str %f1, ptr %elem
 
@@ -40,7 +39,7 @@ loop.body:
 
 finish:
     ; return slice{ buf, argc }
-    %slice0 = insertvalue %type.slice undef, ptr %buf, 0
+    %slice0 = insertvalue %type.slice zeroinitializer, ptr %buf, 0
     %slice1 = insertvalue %type.slice %slice0, i64 %argc64, 1
     ret %type.slice %slice1
 }

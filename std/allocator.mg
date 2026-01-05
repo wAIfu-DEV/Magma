@@ -1,11 +1,10 @@
 mod allocator
 
 Allocator(
-    impl ptr # opaque pointer, syntax not fixed yet
+    impl ptr, # opaque pointer, syntax not fixed yet
     
     fn_alloc   (ptr, u64) !u8*,
     fn_realloc (ptr, u8*, u64) !u8*,
-
     fn_free    (ptr, u8*) void,
 )
 

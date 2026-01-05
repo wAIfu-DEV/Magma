@@ -64,13 +64,13 @@ HeapAllocator.allocator() a.Allocator:
 ..
 
 pub alloc(nBytes u64) !u8*:
-    ret try heapAlloc(0, nBytes)
+    ret try heapAlloc(cast.utop(0), nBytes)
 ..
 
 pub realloc(in u8*, nBytes u64) !u8*:
-    ret try heapRealloc(0, in, nBytes)
+    ret try heapRealloc(cast.utop(0), in, nBytes)
 ..
 
 pub free(in u8*) void:
-    heapFree(0, in)
+    heapFree(cast.utop(0), in)
 ..

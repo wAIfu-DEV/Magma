@@ -73,6 +73,16 @@ pub main(args str[]) !void:
         io.print("uninit val: ")
         io.printInt(myVal)
         io.printLn("")
+    else:
+        io.printLn("Something went wrong: throwing(true) returned error OK")
+    ..
+
+    if true:
+        varWithDestructor MyStruct
+        if true:
+            anotherVarWithDestructor MyStruct
+        ..
+        # varWithDestructor destructor called here
     ..
 
     myStr str = "test"
