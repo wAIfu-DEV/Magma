@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -93,6 +94,18 @@ func makePtrType(from *t.NodeType) *t.NodeType {
 		Throws:   cpy.Throws,
 		KindNode: kind,
 	}
+}
+
+func extractBoxedPtrType(from *t.NodeType) *t.NodeType {
+	switch n := from.KindNode.(type) {
+	case *t.NodeTypePointer:
+		return &t.NodeType{
+			KindNode:   n.Kind,
+			Throws:     from.Throws,
+			Destructor: from.Destructor,
+		}
+	}
+	return nil
 }
 
 func isVoidType(node *t.NodeType) bool {
@@ -499,6 +512,85 @@ func irExprCallFuncNonPtr(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 	return ssa, nil
 }
 
+func irExprCallFuncMember(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
+	argsSsa := make([]SsaName, len(fnCall.Args))
+	for i, expr := range fnCall.Args {
+		argT := fnCall.AssociatedFnDef.Class.ArgsNode.Args[i+1].TypeNode
+
+		exprSsa, e := irExpression(ctx, argT, expr)
+		if e != nil {
+			return ssaName(""), e
+		}
+
+		if isNumberType(argT) && !exprSsa.IsLiteral {
+			if !isSameNumType(expr.GetInferredType(), argT) {
+				outSsa, e := irPromoteSingleToNum(ctx, argT, exprSsa, expr.GetInferredType())
+				if e != nil {
+					return SsaName{}, e
+				}
+				exprSsa = outSsa
+			}
+		}
+
+		argsSsa[i] = exprSsa
+	}
+
+	// implicit this
+	ownerSsa, e := irExprNameLvalue(ctx, fnCall.MemberOwnerName)
+	argsSsa = slices.Insert(argsSsa, 0, ownerSsa)
+
+	ssa := irSsaName(ctx)
+	isVoidRet := isVoidType(fnCall.InfType)
+
+	if !isVoidRet || fnCall.InfType.Throws {
+		irWritef(ctx, "  %%%s = ", ssa.Repr)
+	} else {
+		irWrite(ctx, "  ")
+	}
+
+	irWritef(ctx, "call ")
+
+	e = irThrowingType(ctx, fnCall.InfType)
+	if e != nil {
+		return ssaName(""), e
+	}
+
+	irWrite(ctx, " @")
+
+	irWritef(ctx, "%s.", fnCall.MemberOwnerModule)
+
+	e = irName(ctx, fnCall.AssociatedFnDef.Class.NameNode, false)
+	if e != nil {
+		return ssaName(""), e
+	}
+
+	irWrite(ctx, "(")
+
+	bound := len(argsSsa)
+	for i, ssa := range argsSsa {
+		e = irType(ctx, fnCall.AssociatedFnDef.Class.ArgsNode.Args[i].TypeNode)
+		if e != nil {
+			return ssaName(""), e
+		}
+		irWrite(ctx, " ")
+		irPossibleLitSsa(ctx, ssa)
+
+		if i < bound-1 {
+			irWrite(ctx, ", ")
+		}
+	}
+
+	irWrite(ctx, ")\n")
+
+	if isVoidRet && !fnCall.InfType.Throws {
+		// TODO: Check and enforce that void ret calls HAVE to be statements
+		// and cannot be in expressions
+		return ssaName(""), nil
+	}
+
+	return ssa, nil
+}
+
 func irExprDestructor(ctx *IrCtx, destructor *t.NodeExprDestructor) (SsaName, error) {
 	irWrite(ctx, "  call void @")
 
@@ -517,6 +609,8 @@ func irExprFuncCall(ctx *IrCtx, fnCall *t.NodeExprCall, keepError bool) (SsaName
 
 	if fnCall.IsFuncPointer {
 		ssa, e = irExprCallFuncPtr(ctx, fnCall)
+	} else if fnCall.IsMemberFunc {
+		ssa, e = irExprCallFuncMember(ctx, fnCall)
 	} else {
 		ssa, e = irExprCallFuncNonPtr(ctx, fnCall)
 	}
@@ -629,13 +723,19 @@ func irMemberAddress(ctx *IrCtx, basePtr SsaName, baseType *t.NodeType, fieldInd
 
 	irWritef(ctx, "  %%%s = getelementptr ", fieldPtr.Repr)
 
-	e := irType(ctx, baseType)
-	if e != nil {
-		return SsaName{}, e
+	if isPointerType(baseType) {
+		e := irType(ctx, extractBoxedPtrType(baseType))
+		if e != nil {
+			return SsaName{}, e
+		}
+	} else {
+		e := irType(ctx, baseType)
+		if e != nil {
+			return SsaName{}, e
+		}
 	}
 
 	irWritef(ctx, ", ptr %%%s, i32 0, i32 %d\n", basePtr.Repr, fieldIndex)
-
 	return fieldPtr, nil
 }
 
@@ -1322,6 +1422,14 @@ func irExprBinCmp(ctx *IrCtx, binaryExpr *t.NodeExprBinary) (SsaName, error) {
 		}
 	}
 
+	isSigned := false
+	isFloat := false
+	if isNumberType(cmpType) {
+		nd := getNumDesc(cmpType)
+		isSigned = nd.IsSigned
+		isFloat = nd.IsFloat
+	}
+
 	resSsa := irSsaName(ctx)
 	irWritef(ctx, "  %%%s = icmp ", resSsa.Repr)
 
@@ -1330,6 +1438,38 @@ func irExprBinCmp(ctx *IrCtx, binaryExpr *t.NodeExprBinary) (SsaName, error) {
 		irWrite(ctx, "eq ")
 	case t.KwCmpNeq:
 		irWrite(ctx, "ne ")
+	case t.KwCmpGt:
+		if isSigned {
+			irWrite(ctx, "sgt ")
+		} else if isFloat {
+			irWrite(ctx, "ogt ")
+		} else {
+			irWrite(ctx, "ugt ")
+		}
+	case t.KwCmpLt:
+		if isSigned {
+			irWrite(ctx, "slt ")
+		} else if isFloat {
+			irWrite(ctx, "olt ")
+		} else {
+			irWrite(ctx, "ult ")
+		}
+	case t.KwCmpGtEq:
+		if isSigned {
+			irWrite(ctx, "sge ")
+		} else if isFloat {
+			irWrite(ctx, "oge ")
+		} else {
+			irWrite(ctx, "uge ")
+		}
+	case t.KwCmpLtEq:
+		if isSigned {
+			irWrite(ctx, "sle ")
+		} else if isFloat {
+			irWrite(ctx, "ole ")
+		} else {
+			irWrite(ctx, "ule ")
+		}
 	}
 
 	e = irType(ctx, cmpType)
@@ -1351,7 +1491,7 @@ func irExprBinary(ctx *IrCtx, expectedType *t.NodeType, binaryExpr *t.NodeExprBi
 		return irExprBinAddition(ctx, expectedType, binaryExpr)
 	case t.KwMinus:
 		return irExprBinSubstraction(ctx, expectedType, binaryExpr)
-	case t.KwCmpEq, t.KwCmpNeq:
+	case t.KwCmpEq, t.KwCmpNeq, t.KwCmpGt, t.KwCmpLt, t.KwCmpGtEq, t.KwCmpLtEq:
 		return irExprBinCmp(ctx, binaryExpr)
 	}
 	return SsaName{}, fmt.Errorf("unsupported binary expression")
@@ -2370,11 +2510,16 @@ func irTypeKind(ctx *IrCtx, typeKind t.NodeTypeKind) error {
 			}
 		}
 
-		irWrite(ctx, "%struct.")
-		e := irName(ctx, tn.NameNode, true)
-		if e != nil {
-			return e
-		}
+		irWrite(ctx, "<unchecked type>")
+		/*
+			irWrite(ctx, "%struct.")
+			e := irName(ctx, tn.NameNode, true)
+			if e != nil {
+				return e
+			}*/
+		return nil
+	case *t.NodeTypeAbsolute:
+		irWritef(ctx, "%%struct.%s", tn.AbsoluteName)
 		return nil
 	}
 	irWrite(ctx, "<invalid type>")
@@ -2572,6 +2717,7 @@ func IrWrite(shared *t.SharedState) ([]byte, error) {
 		header,
 		{},
 		llvmfragments.Utils,
+		llvmfragments.Utf8,
 	}
 	fragLen := len(llvmFragments)
 

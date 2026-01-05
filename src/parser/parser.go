@@ -173,7 +173,7 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token) error {
 		return comp_err.CompilationErrorToken(
 			ctx.Fctx,
 			&alias,
-			fmt.Sprintf("syntax error: already using a module with alias of '%s'", alias.Repr),
+			fmt.Sprintf("syntax error: already using a module with alias of '%s' in file '%s'", alias.Repr, ctx.Fctx.PackageName),
 			"cannot reuse module aliases within the same file",
 		)
 	}
@@ -529,11 +529,7 @@ func getBinaryPrecedence(tk t.Token) int {
 	case t.KwPlus, t.KwMinus:
 		return 40
 
-	// TODO: implement
-	//case KW_TYPE_CMPEQUAL:
-	//case KW_TYPE_CMPNEQUAL:
-	//	return 35
-	case t.KwCmpEq, t.KwCmpNeq:
+	case t.KwCmpEq, t.KwCmpNeq, t.KwCmpLt, t.KwCmpGt, t.KwCmpLtEq, t.KwCmpGtEq:
 		return 32
 
 	case t.KwEqual:

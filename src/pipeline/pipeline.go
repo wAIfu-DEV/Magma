@@ -91,7 +91,7 @@ func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath strin
 			fromGl.ImportAlias[alias] = foundFctx.PackageName
 		}
 
-		return foundFctx, nil
+		return foundFctx, fmt.Errorf("done")
 	}
 
 	shared.ImportedFilesM.Lock()
@@ -126,7 +126,7 @@ func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath strin
 		return nil, err
 	}
 
-	moduleId := randid.RandId(5)
+	moduleId := randid.RandId(10)
 	moduleNameId := moduleName + "_" + moduleId
 
 	fCtx.PackageName = moduleNameId
@@ -153,6 +153,14 @@ func Do(shared *types.SharedState, filePath string, alias string, fromAbs string
 	shared.WaitGroup.Add(1)
 
 	fCtx, err := pipelineSyncPrelude(shared, c, filePath, alias, fromAbs, fromGl)
+
+	if err != nil && err.Error() == "done" {
+		c <- nil
+		close(c)
+		shared.WaitGroup.Done()
+		return nil
+	}
+
 	if err != nil {
 		c <- err
 		close(c)
@@ -173,6 +181,14 @@ func DoAsync(shared *types.SharedState, filePath string, alias string, fromAbs s
 	shared.WaitGroup.Add(1)
 
 	fCtx, err := pipelineSyncPrelude(shared, c, filePath, alias, fromAbs, fromGl)
+
+	if err != nil && err.Error() == "done" {
+		c <- nil
+		close(c)
+		shared.WaitGroup.Done()
+		return nil
+	}
+
 	if err != nil {
 		c <- err
 		close(c)

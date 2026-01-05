@@ -6,6 +6,7 @@ use "../std/errors.mg"    errors
 use "../std/slices.mg"    slices
 use "../std/allocator.mg" alloc
 use "../std/heap.mg"      heap
+use "../std/utf8.mg"      utf8
 
 MyNestedStruct(
     field u32
@@ -17,7 +18,9 @@ MyStruct(
     nested MyNestedStruct,
 )
 
-MyStruct.member(first u32) !void:
+MyStruct.member() !void:
+    this.field = 45
+    io.printLn("CALLED METHOD")
 ..
 
 MyStruct.destructor() void:
@@ -89,6 +92,13 @@ pub main(args str[]) !void:
     myErr error
     myStrt MyStruct
 
+    myStrt.member()
+
+    if myStrt.field != 45:
+        io.printLn("member function failed to modify state of owner")
+        ret
+    ..
+
     myArr str[3]
 
     i i64 = 0
@@ -109,7 +119,7 @@ pub main(args str[]) !void:
 
     myOperand i32 = try throwing(false)
 
-    io.print("throwing did not throw on first call\n")
+    io.print("throwing did not throw on first call, good\n")
 
     try throwing(true)
 

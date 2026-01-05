@@ -100,6 +100,15 @@ func (n *NodeTypeNamed) Print(indent int) {
 	n.NameNode.Print(indent + 1)
 }
 
+type NodeTypeAbsolute struct {
+	AbsoluteName string
+}
+
+func (n *NodeTypeAbsolute) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("TypeAbsolute(name='%s')\n", n.AbsoluteName)
+}
+
 type NodeTypePointer struct {
 	Kind NodeTypeKind
 }
@@ -239,6 +248,12 @@ type NodeExprCall struct {
 
 	AssociatedFnDef *NodeFuncDef
 	InfType         *NodeType
+
+	IsMemberFunc      bool
+	MemberOwnerType   *NodeType
+	MemberOwnerName   *NodeExprName
+	MemberOwnerIsPtr  bool
+	MemberOwnerModule string
 
 	IsFuncPointer bool
 	FuncPtrType   *NodeType
@@ -665,6 +680,7 @@ func (*NodeTypePointer) IsType()           {}
 func (*NodeTypeRfc) IsType()               {}
 func (*NodeTypeSlice) IsType()             {}
 func (*NodeTypeFunc) IsType()              {}
+func (*NodeTypeAbsolute) IsType()          {}
 func (*NodeNameSingle) IsName()            {}
 func (*NodeNameComposite) IsName()         {}
 func (*NodeStmtRet) IsStatement()          {}
