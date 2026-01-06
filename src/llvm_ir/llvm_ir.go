@@ -3219,7 +3219,6 @@ func IrWrite(shared *t.SharedState) ([]byte, error) {
 		header,
 		{},
 		llvmfragments.Utils,
-		llvmfragments.Utf8,
 	}
 	fragLen := len(llvmFragments)
 

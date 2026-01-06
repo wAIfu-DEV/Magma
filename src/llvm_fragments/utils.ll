@@ -45,3 +45,19 @@ finish:
     ret %type.slice %slice1
 }
 
+
+; returns the updated reference count.
+; used primarily by the rfc ref counting system
+define i32 @magma.atomicIncMonotonic(i32* %ptr) {
+  %old = atomicrmw add i32* %ptr, i32 1 monotonic
+  %new = add i32 %old, 1
+  ret i32 %new
+}
+
+; returns the updated reference count.
+; used primarily by the rfc ref counting system
+define i32 @magma.atomicDecAcqRel(i32* %ptr) {
+  %old = atomicrmw sub i32* %ptr, i32 1 acq_rel
+  %new = add i32 %old, -1
+  ret i32 %new
+}
