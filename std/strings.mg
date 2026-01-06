@@ -29,3 +29,11 @@ pub toPtr(s str) u8*:
     llvm "  %l0 = extractvalue %type.str %s, 0\n"
     llvm "  ret ptr %l0\n"
 ..
+
+
+pub byteAt(s str, idx u64) u8:
+    llvm "  %l0 = extractvalue %type.str %s, 0\n"
+    llvm "  %ptr = getelementptr inbounds i8, ptr %l0, i64 %idx\n"
+    llvm "  %byte = load i8, ptr %ptr\n"
+    llvm "  ret i8 %byte\n"
+..

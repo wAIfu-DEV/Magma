@@ -6,7 +6,7 @@ use "../std/errors.mg"    errors
 use "../std/slices.mg"    slices
 use "../std/allocator.mg" alloc
 use "../std/heap.mg"      heap
-use "../std/utf8.mg"      utf8
+# use "../std/utf8.mg"      utf8
 
 MyNestedStruct(
     field u32
@@ -52,6 +52,10 @@ pub main(args str[]) !void:
     defer:
         io.printLn("DEFERRED IN BLOCK!!")
         io.printLn("YIPPEE!!")
+    ..
+
+    if true || true && false:
+        ret
     ..
 
     allocOnHeap u8* = try heap.alloc(8)

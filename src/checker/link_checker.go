@@ -376,6 +376,11 @@ func clExistsInScope(c *ctx, scope *t.Scope, name *t.NodeExprName, ent entryType
 		for _, v := range scope.DeclVars {
 			vName := parseName(v.Name)
 			if (!parsed.HasParts && !vName.HasParts) && parsed.First == vName.First {
+
+				e := clType(c, v.Type)
+				if e != nil {
+					return false, false, nil, false, e
+				}
 				return true, false, v, v.IsSsa, nil
 			}
 
@@ -402,14 +407,45 @@ func clExistsInScope(c *ctx, scope *t.Scope, name *t.NodeExprName, ent entryType
 		for _, f := range scope.DeclFuncs {
 			fName := parseName(f.Func.Class.NameNode)
 			if (!parsed.HasParts && !fName.HasParts) && parsed.First == fName.First {
+				/*fmt.Printf("from simple name: %s\n", parsed.First)
+				fmt.Printf(" found func:")
+				f.Func.Print(0)*/
 				return true, false, f.Func, false, nil
 			}
 
-			_, e := clGetFuncDefFromName(c, f.Func.Class.NameNode)
-			if e != nil {
-				return false, false, nil, false, e
+			/*
+				_, e := clGetFuncDefFromName(c, f.Func.Class.NameNode)
+				if e != nil {
+					return false, false, nil, false, e
+				}*/
+			/*fmt.Printf("from name: %s\n", parsed.First)
+			fmt.Printf(" found func:")
+			f.Func.Print(0)*/
+
+			lastName := parsed.First
+
+			if parsed.HasParts {
+				lastName = parsed.Parts[len(parsed.Parts)-1]
 			}
+
+			lastFuncName := fName.First
+
+			if fName.HasParts {
+				lastFuncName = fName.Parts[len(fName.Parts)-1]
+			}
+
+			if lastName != lastFuncName {
+				continue
+			}
+
 			return true, false, f.Func, false, nil
+		}
+
+		fnDef, e := clGetFuncDefFromName(c, name.Name)
+		if e != nil {
+			return false, false, nil, false, e
+		} else if fnDef != nil {
+			return true, false, fnDef, false, nil
 		}
 
 		if ent != enumEntAll {
@@ -465,6 +501,10 @@ func clName(c *ctx, name *t.NodeExprName, expected entryType) error {
 
 	name.IsSsa = isSsa
 	name.AssociatedNode = expr
+
+	fmt.Printf("name: %s\n", flattenName(name.Name))
+	fmt.Printf("associated: ")
+	name.AssociatedNode.Print(0)
 
 	if name.AssociatedNode == nil {
 		return fmt.Errorf("name expression: %s does not point to any existing vars, even though there was no errors?", flattenName(name.Name))
@@ -637,6 +677,8 @@ func clExpr(c *ctx, expr t.NodeExpr) error {
 	switch n := expr.(type) {
 	case *t.NodeExprVoid:
 		return nil
+	case *t.NodeExprSizeof:
+		return clType(c, n.Type)
 	case *t.NodeExprCall:
 		return clExprCall(c, n)
 	case *t.NodeExprTry:

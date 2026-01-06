@@ -105,6 +105,8 @@ func bldBody(ctx *lcx, bdy *t.NodeBody, makeScope bool) error {
 	// TODO: for nested scopes, set makeScope to true
 
 	for _, stmt := range bdy.Statements {
+		fmt.Printf("iter bldBody\n")
+
 		switch n := stmt.(type) {
 		case *t.NodeStmtRet:
 			e := bldReturn(ctx, n)
@@ -113,6 +115,46 @@ func bldBody(ctx *lcx, bdy *t.NodeBody, makeScope bool) error {
 			}
 		case *t.NodeStmtExpr:
 			e := bldExpr(ctx, n.Expression)
+			if e != nil {
+				return e
+			}
+		case *t.NodeStmtIf:
+			e := bldBody(ctx, &n.Body, false)
+			if e != nil {
+				return e
+			}
+
+			if n.NextCondStmt != nil {
+				n2 := n.NextCondStmt
+				for n2 != nil {
+					switch n3 := n2.(type) {
+					case *t.NodeStmtIf:
+						fmt.Printf("stmt: if\n")
+						e := bldBody(ctx, &n3.Body, false)
+						if e != nil {
+							return e
+						}
+
+						if n3.NextCondStmt != nil {
+							n2 = n3.NextCondStmt
+							continue
+						}
+						n2 = nil
+					case *t.NodeStmtElse:
+						fmt.Printf("stmt: else\n")
+						e := bldBody(ctx, &n3.Body, false)
+						if e != nil {
+							return e
+						}
+						n2 = nil
+					default:
+						n2 = nil
+					}
+				}
+			}
+
+		case *t.NodeStmtWhile:
+			e := bldBody(ctx, &n.Body, false)
 			if e != nil {
 				return e
 			}

@@ -72,7 +72,7 @@ main() !void:
 
     io.printInt() # this prints 420 to console
 
-    my_array str[3]         # defines a slice pointing to a stack allocated array of size 3 * sizeof(str)
+    my_array str[3]         # defines a slice pointing to a stack allocated array of size 3 * sizeof str
     my_array[0] = "bruh"    # assignment to first index
     my_array[1] = "sigma"
     my_array[2] = "skibidi"

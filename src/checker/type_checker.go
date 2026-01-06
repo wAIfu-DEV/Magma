@@ -1,6 +1,7 @@
 package checker
 
 import (
+	magmatypes "Magma/src/magma_types"
 	t "Magma/src/types"
 	"fmt"
 	"strings"
@@ -78,6 +79,70 @@ func isBoolType(node *t.NodeType) bool {
 	return false
 }
 
+func isPointerType(node *t.NodeType) bool {
+	if node == nil {
+		return false
+	}
+
+	switch n := node.KindNode.(type) {
+	case *t.NodeTypePointer:
+		return true
+	case *t.NodeTypeRfc:
+		return true
+	case *t.NodeTypeNamed:
+		switch nn := n.NameNode.(type) {
+		case *t.NodeNameSingle:
+			return nn.Name == "ptr"
+		}
+	}
+	return false
+}
+
+func isNumberType(node *t.NodeType) bool {
+	if node == nil {
+		return false
+	}
+
+	switch n := node.KindNode.(type) {
+	case *t.NodeTypeNamed:
+		switch nn := n.NameNode.(type) {
+		case *t.NodeNameSingle:
+			_, ok := magmatypes.NumberTypes[nn.Name]
+			return ok
+		}
+	}
+	return false
+}
+
+func isFloatType(node *t.NodeType) bool {
+	if node == nil {
+		return false
+	}
+
+	switch n := node.KindNode.(type) {
+	case *t.NodeTypeNamed:
+		switch nn := n.NameNode.(type) {
+		case *t.NodeNameSingle:
+			desc, ok := magmatypes.NumberTypes[nn.Name]
+			return ok && desc.IsFloat
+		}
+	}
+	return false
+}
+
+func isIntegerType(node *t.NodeType) bool {
+	if node == nil || !isNumberType(node) {
+		return false
+	}
+	if isFloatType(node) {
+		return false
+	}
+	if isPointerType(node) {
+		return false
+	}
+	return true
+}
+
 func isArrayType(node *t.NodeType) bool {
 	if node == nil {
 		return false
@@ -134,6 +199,12 @@ func flattenTypeKind(nodeKind t.NodeTypeKind) string {
 		}
 	case *t.NodeTypePointer:
 		return "ptr<" + flattenTypeKind(n.Kind) + ">"
+	case *t.NodeTypeSlice:
+		return flattenTypeKind(n.ElemKind) + "[]"
+	case *t.NodeTypeFunc:
+		return flattenTypeKind(n.RetType.KindNode) + "()"
+	case *t.NodeTypeAbsolute:
+		return n.AbsoluteName
 	}
 	return "undef"
 }
@@ -209,6 +280,9 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 	case *t.NodeExprVoid:
 		n.VoidType = makeNamedType("void")
 		return nil
+	case *t.NodeExprSizeof:
+		n.InfType = makeNamedType("u64")
+		return nil
 	case *t.NodeExprCall:
 		for _, a := range n.Args {
 			e := ctExpr(c, a)
@@ -251,7 +325,12 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		if elemType == nil {
 			return fmt.Errorf("failed to infer array element type")
 		}
+
 		n.ElemType = elemType
+
+		fmt.Printf("subscript:\n")
+		fmt.Printf(" type: %s\n", flattenType(n.BoxType))
+		fmt.Printf(" elemtype: %s\n", flattenType(n.ElemType))
 		return nil
 	case *t.NodeExprLit:
 		switch n.LitType {
@@ -289,6 +368,9 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		default:
 			return fmt.Errorf("name node pointing to invalid node type, failed to infer type")
 		}
+
+		fmt.Printf("name: %s\n", flattenName(n.Name))
+		fmt.Printf(" type: %s\n", flattenType(n.InfType))
 		return nil
 	case *t.NodeExprBinary:
 		e := ctExpr(c, n.Left)
@@ -302,24 +384,74 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		}
 
 		switch n.Operator {
-		case t.KwCmpEq, t.KwCmpNeq:
+		case t.KwCmpEq, t.KwCmpNeq, t.KwCmpLt, t.KwCmpGt, t.KwCmpLtEq, t.KwCmpGtEq:
 			n.InfType = makeNamedType("bool")
+		case t.KwAndAnd, t.KwOrOr:
+			leftT := n.Left.GetInferredType()
+			rightT := n.Right.GetInferredType()
+
+			if !isBoolType(leftT) || !isBoolType(rightT) {
+				return fmt.Errorf("logical operators require both operands to be bool")
+			}
+
+			n.InfType = makeNamedType("bool")
+			return nil
+		case t.KwAmpersand, t.KwPipe, t.KwCaret:
+			leftT := n.Left.GetInferredType()
+			rightT := n.Right.GetInferredType()
+
+			if isBoolType(leftT) || isBoolType(rightT) {
+				if !isBoolType(leftT) || !isBoolType(rightT) {
+					return fmt.Errorf("bitwise operators on bool require both operands to be bool")
+				}
+				n.InfType = makeNamedType("bool")
+				return nil
+			}
+
+			if !isIntegerType(leftT) || !isIntegerType(rightT) {
+				fmt.Printf("lType: %s\n", flattenType(leftT))
+				fmt.Printf("rType: %s\n", flattenType(rightT))
+				return fmt.Errorf("bitwise operators require integer operands. operator: %s", t.KwTypeToRepr[n.Operator])
+			}
+			n.InfType = leftT
+			return nil
+		case t.KwShiftLeft, t.KwShiftRight:
+			leftT := n.Left.GetInferredType()
+			rightT := n.Right.GetInferredType()
+			if !isIntegerType(leftT) || !isIntegerType(rightT) {
+				return fmt.Errorf("shift operators require integer operands")
+			}
+			n.InfType = leftT
+			return nil
 		default:
 			// TODO: implicit casting rules
 			n.InfType = n.Left.GetInferredType()
 		}
 		return nil
 	case *t.NodeExprUnary:
+		e := ctExpr(c, n.Operand)
+		if e != nil {
+			return e
+		}
+
 		switch n.Operator {
 		case t.KwAsterisk:
-			e := ctExpr(c, n.Operand)
-			if e != nil {
-				return e
-			}
 			n.InfType = makePtrType(n.Operand.GetInferredType())
 			return nil
+		case t.KwTilde:
+			operandT := n.Operand.GetInferredType()
+			if isBoolType(operandT) {
+				n.InfType = makeNamedType("bool")
+				return nil
+			}
+			if !isIntegerType(operandT) {
+				return fmt.Errorf("bitwise not (~) requires an integer or bool operand")
+			}
+			n.InfType = operandT
+			return nil
+		default:
+			return fmt.Errorf("unexpected unary expression type")
 		}
-		return fmt.Errorf("unexpected unary expression type")
 	case *t.NodeExprVarDef:
 		return nil
 	case *t.NodeExprVarDefAssign:

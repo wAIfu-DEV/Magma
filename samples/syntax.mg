@@ -48,7 +48,7 @@ MyStruct.memberFunc() void:
 ..
 
 allocs() !void:
-    heap_ptr MyStruct* = try heap.alloc(sizeof(MyStruct))
+    heap_ptr MyStruct* = try heap.alloc(sizeof MyStruct)
     defer heap.free(heap_ptr)
 
     rfcnt_ptr MyStruct$ = rfc MyStruct() # moves a copy of MyStruct to heap
@@ -63,7 +63,7 @@ pub main(args str[]) !void:
     # only works from within functions with a return type of !T
     ret_val bool = try myFunc(0, 0.0)
 
-    # handle error, equivalent to previous
+    # handle error, equivalent to example with try and similar to usual Go-style handling
     ret_val2 bool, e error = myFunc(0, 0.0)
     if errors.errCode(e) != 0:
         throw e # throw itself is conditional, if err == ok then control flow is resumed

@@ -14,22 +14,14 @@ Codepoint(
     width u8,
 )
 
-decode(it Utf8Iterator*) !Codepoint:
-    if cast.ptou(it.start) == 0:
-        throw errors.invalidArgument("Utf8Iterator was not correctly initialized, use utf8.iterateStr")
+decodeOnce(it Utf8Iterator*) !Codepoint:
+    if cast.ptou(it.start) == 0 || cast.ptou(it.end) == 0:
+        throw errors.invalidArgument("Utf8Iterator was not correctly initialized, use utf8.iterator")
     ..
-
-    cp Codepoint
-
-    start ptr = it.start
-    end   ptr = it.end
-
-    # utf8.decode defined in llvm fragment utf8.ll
-
-    llvm "  %i0 = load ptr, ptr %start\n"
-    llvm "  %i1 = load ptr, ptr %end\n"
-    llvm "  %c = call i64 @utf8.decode(ptr %i0, ptr %i1)\n"
-    llvm "  store i64 %c, ptr %cp\n"
+    cp Codepoint = decodeFirst(it.start, it.end)
+    if cp.width == 0:
+        throw errors.failure("failed to decode utf8 codepoint")
+    ..
     ret cp
 ..
 
@@ -45,7 +37,7 @@ pub iterator(s str) Utf8Iterator:
 ..
 
 Utf8Iterator.peek() !Codepoint:
-    ret try decode(this)
+    ret try decodeOnce(this)
 ..
 
 Utf8Iterator.next() !Codepoint:
@@ -55,8 +47,86 @@ Utf8Iterator.next() !Codepoint:
 ..
 
 Utf8Iterator.hasData() bool:
-    if cast.ptou(this.start) == 0:
+    if cast.ptou(this.start) == 0 || cast.ptou(this.end) == 0:
         ret false
     ..
     ret cast.ptou(this.start) < cast.ptou(this.end)
+..
+
+decodeFirst(start u8*, end u8*) Codepoint:
+    outCp Codepoint
+    outCp.value = 0
+    outCp.width = 0
+
+    bytes ptr = cast.utop(cast.ptou(start))
+    first u8 = start[0]
+
+    width u8 = 0
+    codepoint u32 = 0
+
+    if (first & 128) == 0:
+        width = 1
+        codepoint = cast.u64to32(cast.u8to64(first))
+    elif (first & 224) == 192:
+        width = 2
+        tmp0 u64 = cast.u8to64(first & 31)
+        codepoint = cast.u64to32(tmp0)
+    elif (first & 240) == 224:
+        width = 3
+        tmp1 u64 = cast.u8to64(first & 15)
+        codepoint = cast.u64to32(tmp1)
+    elif (first & 248) == 240:
+        width = 4
+        tmp2 u64 = cast.u8to64(first & 7)
+        codepoint = cast.u64to32(tmp2)
+    else:
+        ret outCp
+    ..
+
+    if width > 1:
+        ptdiff u64 = cast.ptou(end) - cast.ptou(start)
+        if ptdiff < cast.u8to64(width):
+            ret outCp
+        ..
+    ..
+
+    cont u8
+    i1 u64 = 1
+
+    while i1 < width:
+        cont = start[i1]
+
+        if (cont & 192) != 128:
+            ret outCp
+        ..
+        codepoint = (codepoint << 6) | cast.u64to32(cast.u8to64(cont & 63))
+        i1 = i1 + 1
+    ..
+
+    if width == 1:
+    elif width == 2:
+        if codepoint < 128:
+            ret outCp
+        ..
+    elif width == 3:
+        if codepoint < 2048:
+            ret outCp
+        ..
+        if codepoint >= 55296 && codepoint <= 57343:
+            ret outCp
+        ..
+    elif width == 4:
+        if codepoint < 65536:
+            ret outCp
+        ..
+        if codepoint > 1114111:
+            ret outCp
+        ..
+    else:
+        ret outCp
+    ..
+
+    outCp.value = codepoint
+    outCp.width = width
+    ret outCp
 ..

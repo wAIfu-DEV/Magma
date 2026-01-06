@@ -60,6 +60,14 @@ const (
 	KwCmpGt
 	KwCmpLtEq
 	KwCmpGtEq
+	KwPipe
+	KwCaret
+	KwTilde
+	KwShiftLeft
+	KwShiftRight
+	KwAndAnd
+	KwOrOr
+	KwSizeof
 )
 
 var KwTypeToRepr []string = []string{
@@ -100,6 +108,14 @@ var KwTypeToRepr []string = []string{
 	KwCmpGt:     ">",
 	KwCmpLtEq:   "<=",
 	KwCmpGtEq:   ">=",
+	KwPipe:      "|",
+	KwCaret:     "^",
+	KwTilde:     "~",
+	KwShiftLeft: "<<",
+	KwShiftRight: ">>",
+	KwAndAnd:    "&&",
+	KwOrOr:      "||",
+	KwSizeof:    "sizeof",
 }
 
 var KwReprToType map[string]KwType = map[string]KwType{
@@ -140,6 +156,14 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	">":     KwCmpGt,
 	"<=":    KwCmpLtEq,
 	">=":    KwCmpGtEq,
+	"|":     KwPipe,
+	"^":     KwCaret,
+	"~":     KwTilde,
+	"<<":    KwShiftLeft,
+	">>":    KwShiftRight,
+	"&&":    KwAndAnd,
+	"||":    KwOrOr,
+	"sizeof": KwSizeof,
 }
 
 type Token struct {

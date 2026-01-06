@@ -1,6 +1,7 @@
 ; Fragment="Utils"
 ; Use="miscellaneous utilities for bootstrapping magma"
 
+declare void @llvm.memset.p0i8.i64(ptr, i8, i64, i32, i1)
 declare i64 @strlen(ptr nocapture readonly) nounwind
 
 ; converts a argc, argv pair into a magma slice of str

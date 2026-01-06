@@ -217,6 +217,8 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token) error {
 
 func parseSimplePrimaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
 	if tk.KeywType == t.KwParenOp {
+		consume(ctx)
+
 		next, e := peek(ctx)
 		if e != nil {
 			return nil, e
@@ -478,9 +480,32 @@ func parsePrimaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
 }
 
 func parseUnaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
-	if tk.Type != t.TokKeyword {
+	if tk.Type == t.TokKeyword {
 		switch tk.KeywType {
-		case t.KwExclam, t.KwMinus, t.KwAsterisk, t.KwAmpersand:
+		case t.KwSizeof:
+			consume(ctx)
+			next, e := peek(ctx)
+			if e != nil {
+				return nil, e
+			}
+
+			if next.KeywType == t.KwNewline {
+				return nil, comp_err.CompilationErrorToken(
+					ctx.Fctx,
+					&next,
+					"syntax error: expected type after 'sizeof'",
+					"expected: `sizeof <type>`",
+				)
+			}
+
+			typeNd, e := parseType(ctx, next, false)
+			if e != nil {
+				return nil, e
+			}
+
+			return &t.NodeExprSizeof{Type: typeNd}, nil
+
+		case t.KwExclam, t.KwMinus, t.KwAsterisk, t.KwAmpersand, t.KwTilde:
 			consume(ctx)
 			next, e := peek(ctx)
 			if e != nil {
@@ -503,12 +528,8 @@ func parseUnaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
 }
 
 func tokenEndsExpr(tk t.Token) bool {
-	if tk.KeywType == t.KwNewline {
-		return true
-	}
-
 	switch tk.KeywType {
-	case t.KwComma, t.KwParenCl, t.KwColon, t.KwDots, t.KwBrackCl:
+	case t.KwNewline, t.KwComma, t.KwParenCl, t.KwColon, t.KwDots, t.KwBrackCl:
 		return true
 	default:
 		return false
@@ -529,8 +550,26 @@ func getBinaryPrecedence(tk t.Token) int {
 	case t.KwPlus, t.KwMinus:
 		return 40
 
+	case t.KwShiftLeft, t.KwShiftRight:
+		return 35
+
 	case t.KwCmpEq, t.KwCmpNeq, t.KwCmpLt, t.KwCmpGt, t.KwCmpLtEq, t.KwCmpGtEq:
 		return 32
+
+	case t.KwAmpersand:
+		return 31
+
+	case t.KwCaret:
+		return 30
+
+	case t.KwPipe:
+		return 29
+
+	case t.KwAndAnd:
+		return 28
+
+	case t.KwOrOr:
+		return 27
 
 	case t.KwEqual:
 		return 20
@@ -708,7 +747,7 @@ func parseExpression(ctx *ParseCtx, tk t.Token, minPrecedence int) (t.NodeExpr, 
 				}
 				left = varDefAssign
 				continue
-			case *t.NodeExprName:
+			case *t.NodeExprName, *t.NodeExprSubscript:
 				left = &t.NodeExprAssign{
 					Left:  left,
 					Right: right,

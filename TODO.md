@@ -5,6 +5,7 @@
 - codepoint counter in str (replace `count()` ?)
 
 ## To implement
+- fix suspicious bitcasts in IR for HeapAllocator.allocator()
 - bitwise operators
 - UTF16 parsing/iterator
 - intercept windows argv and make UTF8 before magma.argsToSlice()

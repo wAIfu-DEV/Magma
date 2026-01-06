@@ -42,7 +42,7 @@ type IrCtx struct {
 	CurrFunc  *t.NodeFuncDef
 
 	CurrNestedScopeIdx int
-	SeenNestedScopes   int
+	SeenNestedScopes   *int
 	CurrDeferIdx       int
 }
 
@@ -123,6 +123,21 @@ func isVoidType(node *t.NodeType) bool {
 	return false
 }
 
+func isBoolType(node *t.NodeType) bool {
+	if node == nil {
+		return false
+	}
+
+	switch n := node.KindNode.(type) {
+	case *t.NodeTypeNamed:
+		switch nn := n.NameNode.(type) {
+		case *t.NodeNameSingle:
+			return nn.Name == "bool"
+		}
+	}
+	return false
+}
+
 func isPointerType(node *t.NodeType) bool {
 	if node == nil {
 		return false
@@ -131,6 +146,13 @@ func isPointerType(node *t.NodeType) bool {
 	switch node.KindNode.(type) {
 	case *t.NodeTypePointer:
 		return true
+	case *t.NodeTypeRfc:
+		return true
+	case *t.NodeTypeNamed:
+		switch nn := node.KindNode.(*t.NodeTypeNamed).NameNode.(type) {
+		case *t.NodeNameSingle:
+			return nn.Name == "ptr"
+		}
 	}
 	return false
 }
@@ -295,9 +317,27 @@ func irVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) (SsaName, error) {
 			}
 			irWrite(&cpy, " ]\n")
 
-			fldSsa := irSsaName(ctx)
-			irWritef(ctx, "  %%%s = getelementptr %%type.slice, ptr %%%s, i64 0, i32 0\n", fldSsa.Repr, allocSsa.Repr)
-			irWritef(ctx, "  store ptr %%%s, ptr %%%s\n", arrSsa.Repr, fldSsa.Repr)
+			sizeofSsa, e := irExprSizeof(ctx, &t.NodeExprSizeof{
+				Type: elemType,
+			})
+
+			if e != nil {
+				return SsaName{}, e
+			}
+
+			totalSizeSsa := irSsaName(ctx)
+			irWritef(ctx, "  %%%s = mul i64 ", totalSizeSsa.Repr)
+			irPossibleLitSsa(ctx, sizeofSsa)
+			irWritef(ctx, ", %d\n", sliceT.Size)
+
+			irWritef(ctx, "  call void @llvm.memset.p0i8.i64(ptr %%%s, i8 0, i64 %%%s, i32 1, i1 0)\n", arrSsa.Repr, totalSizeSsa.Repr)
+
+			fldPtrSsa := irSsaName(ctx)
+			fldSizSsa := irSsaName(ctx)
+
+			irWritef(ctx, "  %%%s = insertvalue %%type.slice zeroinitializer, ptr %%%s, 0\n", fldPtrSsa.Repr, arrSsa.Repr)
+			irWritef(ctx, "  %%%s = insertvalue %%type.slice %%%s, i64 %d, 1\n", fldSizSsa.Repr, fldPtrSsa.Repr, sliceT.Size)
+			irWritef(ctx, "  store %%type.slice %%%s, ptr %%%s\n", fldSizSsa.Repr, allocSsa.Repr)
 		}
 	}
 
@@ -685,6 +725,60 @@ func irExprLit(ctx *IrCtx, lit *t.NodeExprLit, expectedType *t.NodeType) (SsaNam
 	return ssaName(""), nil
 }
 
+func irExprSizeof(ctx *IrCtx, sz *t.NodeExprSizeof) (SsaName, error) {
+	if sz.Type == nil {
+		return SsaName{}, fmt.Errorf("sizeof: missing type")
+	}
+
+	if isVoidType(sz.Type) {
+		return SsaName{Repr: "0", IsLiteral: true}, nil
+	}
+
+	switch n := sz.Type.KindNode.(type) {
+	case *t.NodeTypePointer, *t.NodeTypeRfc, *t.NodeTypeFunc:
+		ptrBytes := magmatypes.NumberTypes["ptr"].ByteSize / 8
+		return SsaName{Repr: strconv.Itoa(ptrBytes), IsLiteral: true}, nil
+	case *t.NodeTypeNamed:
+		if nn, ok := n.NameNode.(*t.NodeNameSingle); ok {
+			if nn.Name == "ptr" {
+				ptrBytes := magmatypes.NumberTypes["ptr"].ByteSize / 8
+				return SsaName{Repr: strconv.Itoa(ptrBytes), IsLiteral: true}, nil
+			}
+			if nn.Name == "bool" {
+				return SsaName{Repr: "1", IsLiteral: true}, nil
+			}
+			if desc, ok := magmatypes.NumberTypes[nn.Name]; ok {
+				return SsaName{Repr: strconv.Itoa(desc.ByteSize / 8), IsLiteral: true}, nil
+			}
+		}
+	}
+
+	typeBld := &bytes.Buffer{}
+	cpy := *ctx
+	cpy.bld = ScopeBuilder{
+		Global: typeBld,
+		Head:   typeBld,
+		Tail:   typeBld,
+		Body:   typeBld,
+	}
+
+	if err := irType(&cpy, sz.Type); err != nil {
+		return SsaName{}, err
+	}
+
+	typeStr := strings.TrimSpace(typeBld.String())
+	if typeStr == "" || strings.Contains(typeStr, "<") {
+		return SsaName{}, fmt.Errorf("sizeof: unsupported type for sizing")
+	}
+
+	gepSsa := irSsaName(ctx)
+	irWritef(ctx, "  %%%s = getelementptr %s, ptr null, i64 1\n", gepSsa.Repr, typeStr)
+
+	sizeSsa := irSsaName(ctx)
+	irWritef(ctx, "  %%%s = ptrtoint ptr %%%s to i64\n", sizeSsa.Repr, gepSsa.Repr)
+	return sizeSsa, nil
+}
+
 func irMemberAccess(ctx *IrCtx, fromType *t.NodeType, fromSsa SsaName, fieldNb int, fieldType *t.NodeType, isPtrDeref bool) (SsaName, error) {
 	fieldSsa := irSsaName(ctx)
 
@@ -866,42 +960,72 @@ func irExprSubscript(ctx *IrCtx, subs *t.NodeExprSubscript) (SsaName, error) {
 
 	switch subs.BoxType.KindNode.(type) {
 	case *t.NodeTypeSlice:
-		target, e := irExpression(ctx, makeNamedType("slice"), subs.Target)
-		if e != nil {
-			return SsaName{}, e
-		}
+		var loadedTarget SsaName
+		if subs.IsTargetSsa {
+			loadedTarget, e = irExpression(ctx, makeNamedType("slice"), subs.Target)
+			if e != nil {
+				return SsaName{}, e
+			}
+		} else {
+			targetPtr, e := irExpressionLvalue(ctx, subs.Target)
+			if e != nil {
+				return SsaName{}, e
+			}
 
-		loadedTarget := target
-
-		if !subs.IsTargetSsa {
+			loadedTarget = irSsaName(ctx)
 			irWritef(ctx, "  %%%s = load ", loadedTarget.Repr)
-
 			e = irType(ctx, subs.BoxType)
 			if e != nil {
 				return SsaName{}, e
 			}
-			irWritef(ctx, ", ptr %%%s\n", target.Repr)
+			irWritef(ctx, ", ptr %%%s\n", targetPtr.Repr)
 		}
 		// extract ptr from struct first
 		extracted := irSsaName(ctx)
 		irWritef(ctx, "  %%%s = extractvalue %%type.slice %%%s, 0\n", extracted.Repr, loadedTarget.Repr)
 		return irExprSubscriptPtr(ctx, subs, extracted, subsExpr)
 	case *t.NodeTypePointer:
-		target, e := irExpression(ctx, nil, subs.Target)
-		if e != nil {
-			return SsaName{}, e
-		}
+		var loadedTarget SsaName
+		if subs.IsTargetSsa {
+			loadedTarget, e = irExpression(ctx, nil, subs.Target)
+			if e != nil {
+				return SsaName{}, e
+			}
+		} else {
+			targetPtr, e := irExpressionLvalue(ctx, subs.Target)
+			if e != nil {
+				return SsaName{}, e
+			}
 
-		loadedTarget := target
-
-		if !subs.IsTargetSsa {
+			loadedTarget = irSsaName(ctx)
 			irWritef(ctx, "  %%%s = load ", loadedTarget.Repr)
-
 			e = irType(ctx, subs.BoxType)
 			if e != nil {
 				return SsaName{}, e
 			}
-			irWritef(ctx, ", ptr %%%s\n", target.Repr)
+			irWritef(ctx, ", ptr %%%s\n", targetPtr.Repr)
+		}
+		return irExprSubscriptPtr(ctx, subs, loadedTarget, subsExpr)
+	case *t.NodeTypeRfc:
+		var loadedTarget SsaName
+		if subs.IsTargetSsa {
+			loadedTarget, e = irExpression(ctx, nil, subs.Target)
+			if e != nil {
+				return SsaName{}, e
+			}
+		} else {
+			targetPtr, e := irExpressionLvalue(ctx, subs.Target)
+			if e != nil {
+				return SsaName{}, e
+			}
+
+			loadedTarget = irSsaName(ctx)
+			irWritef(ctx, "  %%%s = load ", loadedTarget.Repr)
+			e = irType(ctx, subs.BoxType)
+			if e != nil {
+				return SsaName{}, e
+			}
+			irWritef(ctx, ", ptr %%%s\n", targetPtr.Repr)
 		}
 		return irExprSubscriptPtr(ctx, subs, loadedTarget, subsExpr)
 	}
@@ -933,6 +1057,80 @@ func irExprSubscriptPtr(ctx *IrCtx, subs *t.NodeExprSubscript, targetSsa SsaName
 
 	irWritef(ctx, ", ptr %%%s\n", elemPtr.Repr)
 	return loadedElem, nil
+}
+
+func irExprSubscriptLvalue(ctx *IrCtx, subs *t.NodeExprSubscript) (SsaName, error) {
+	subsExpr, e := irExpression(ctx, makeNamedType("i64"), subs.Expr)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	var targetPtrSsa SsaName
+
+	switch subs.BoxType.KindNode.(type) {
+	case *t.NodeTypeSlice:
+		var loadedTarget SsaName
+		if subs.IsTargetSsa {
+			loadedTarget, e = irExpression(ctx, makeNamedType("slice"), subs.Target)
+			if e != nil {
+				return SsaName{}, e
+			}
+		} else {
+			targetPtr, e := irExpressionLvalue(ctx, subs.Target)
+			if e != nil {
+				return SsaName{}, e
+			}
+
+			loadedTarget = irSsaName(ctx)
+			irWritef(ctx, "  %%%s = load ", loadedTarget.Repr)
+			e = irType(ctx, subs.BoxType)
+			if e != nil {
+				return SsaName{}, e
+			}
+			irWritef(ctx, ", ptr %%%s\n", targetPtr.Repr)
+		}
+
+		// extract ptr from struct first
+		extracted := irSsaName(ctx)
+		irWritef(ctx, "  %%%s = extractvalue %%type.slice %%%s, 0\n", extracted.Repr, loadedTarget.Repr)
+		targetPtrSsa = extracted
+	case *t.NodeTypePointer, *t.NodeTypeRfc:
+		if subs.IsTargetSsa {
+			targetPtrSsa, e = irExpression(ctx, nil, subs.Target)
+			if e != nil {
+				return SsaName{}, e
+			}
+		} else {
+			targetPtr, e := irExpressionLvalue(ctx, subs.Target)
+			if e != nil {
+				return SsaName{}, e
+			}
+
+			targetPtrSsa = irSsaName(ctx)
+			irWritef(ctx, "  %%%s = load ", targetPtrSsa.Repr)
+			e = irType(ctx, subs.BoxType)
+			if e != nil {
+				return SsaName{}, e
+			}
+			irWritef(ctx, ", ptr %%%s\n", targetPtr.Repr)
+		}
+	default:
+		return SsaName{}, fmt.Errorf("invalid box type in subscript lvalue lowering")
+	}
+
+	elemPtr := irSsaName(ctx)
+	irWritef(ctx, "  %%%s = getelementptr ", elemPtr.Repr)
+
+	e = irType(ctx, subs.ElemType)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	irWritef(ctx, ", ptr %%%s, i64 ", targetPtrSsa.Repr)
+	irPossibleLitSsa(ctx, subsExpr)
+	irWrite(ctx, "\n")
+
+	return elemPtr, nil
 }
 
 func irExprAssign(ctx *IrCtx, lhs t.NodeExpr, rhs t.NodeExpr) (SsaName, error) {
@@ -1237,17 +1435,249 @@ func irPromoteToNum(ctx *IrCtx, expectedType *t.NodeType, leftSsa SsaName, leftT
 
 	// integers
 	if leftNum.ByteSize > rightNum.ByteSize {
-		// extend lhs int
+		// extend rhs int
 		outSsa, e := irExtendInt(ctx, rightSsa, rightNum.IsSigned, rightType, leftType)
 		return leftSsa, outSsa, leftType, e
 	} else if leftNum.ByteSize < rightNum.ByteSize {
 		outSsa, e := irExtendInt(ctx, leftSsa, leftNum.IsSigned, leftType, rightType)
-		return outSsa, rightSsa, leftType, e
+		return outSsa, rightSsa, rightType, e
 	} else {
 		return leftSsa, rightSsa, leftType, nil
 	}
 
 	//return SsaName{}, SsaName{}, nil, fmt.Errorf("unhandled type in numerical promotion")
+}
+
+func irExprUnary(ctx *IrCtx, expectedType *t.NodeType, unaryExpr *t.NodeExprUnary) (SsaName, error) {
+	operandType := unaryExpr.Operand.GetInferredType()
+	operandSsa, e := irExpression(ctx, operandType, unaryExpr.Operand)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	switch unaryExpr.Operator {
+	case t.KwTilde:
+		if isPointerType(operandType) {
+			return SsaName{}, fmt.Errorf("bitwise not (~) is not supported for pointer types")
+		}
+		if isFloatType(operandType) {
+			return SsaName{}, fmt.Errorf("bitwise not (~) is not supported for floating-point types")
+		}
+		if !isBoolType(operandType) && !isNumberType(operandType) {
+			return SsaName{}, fmt.Errorf("bitwise not (~) requires an integer or bool operand")
+		}
+
+		resSsa := irSsaName(ctx)
+		irWritef(ctx, "  %%%s = xor ", resSsa.Repr)
+		e = irType(ctx, operandType)
+		if e != nil {
+			return SsaName{}, e
+		}
+		irWrite(ctx, " ")
+		irPossibleLitSsa(ctx, operandSsa)
+		irWrite(ctx, ", -1\n")
+		return resSsa, nil
+	default:
+		return SsaName{}, fmt.Errorf("unsupported unary expression")
+	}
+}
+
+func irExprBinBitwise(ctx *IrCtx, expectedType *t.NodeType, binaryExpr *t.NodeExprBinary) (SsaName, error) {
+	leftType := binaryExpr.Left.GetInferredType()
+	rightType := binaryExpr.Right.GetInferredType()
+
+	leftSsa, e := irExpression(ctx, leftType, binaryExpr.Left)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	rightSsa, e := irExpression(ctx, rightType, binaryExpr.Right)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	if isPointerType(leftType) || isPointerType(rightType) {
+		return SsaName{}, fmt.Errorf("bitwise operators are not supported for pointer types")
+	}
+
+	resultType := leftType
+
+	if isBoolType(leftType) || isBoolType(rightType) {
+		if !isBoolType(leftType) || !isBoolType(rightType) {
+			return SsaName{}, fmt.Errorf("bitwise operators on bool require both operands to be bool")
+		}
+	} else {
+		if !isNumberType(leftType) || !isNumberType(rightType) {
+			return SsaName{}, fmt.Errorf("bitwise operators require integer operands")
+		}
+		if isFloatType(leftType) || isFloatType(rightType) {
+			return SsaName{}, fmt.Errorf("bitwise operators are not supported for floating-point types")
+		}
+
+		if expectedType == nil {
+			expectedType = binaryExpr.InfType
+		}
+		if expectedType == nil {
+			expectedType = leftType
+		}
+
+		leftSsa, rightSsa, resultType, e = irPromoteToNum(ctx, expectedType, leftSsa, leftType, rightSsa, rightType)
+		if e != nil {
+			return SsaName{}, e
+		}
+	}
+
+	resSsa := irSsaName(ctx)
+	irWritef(ctx, "  %%%s = ", resSsa.Repr)
+
+	switch binaryExpr.Operator {
+	case t.KwAmpersand:
+		irWrite(ctx, "and ")
+	case t.KwPipe:
+		irWrite(ctx, "or ")
+	case t.KwCaret:
+		irWrite(ctx, "xor ")
+	default:
+		return SsaName{}, fmt.Errorf("unexpected bitwise operator")
+	}
+
+	e = irType(ctx, resultType)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	irWrite(ctx, " ")
+	irPossibleLitSsa(ctx, leftSsa)
+	irWrite(ctx, ", ")
+	irPossibleLitSsa(ctx, rightSsa)
+	irWrite(ctx, "\n")
+	return resSsa, nil
+}
+
+func irExprBinShift(ctx *IrCtx, expectedType *t.NodeType, binaryExpr *t.NodeExprBinary) (SsaName, error) {
+	leftType := binaryExpr.Left.GetInferredType()
+	rightType := binaryExpr.Right.GetInferredType()
+
+	leftSsa, e := irExpression(ctx, leftType, binaryExpr.Left)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	rightSsa, e := irExpression(ctx, rightType, binaryExpr.Right)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	if isPointerType(leftType) || isPointerType(rightType) {
+		return SsaName{}, fmt.Errorf("shift operators are not supported for pointer types")
+	}
+	if !isNumberType(leftType) || !isNumberType(rightType) {
+		return SsaName{}, fmt.Errorf("shift operators require integer operands")
+	}
+	if isFloatType(leftType) || isFloatType(rightType) {
+		return SsaName{}, fmt.Errorf("shift operators are not supported for floating-point types")
+	}
+
+	if expectedType == nil {
+		expectedType = binaryExpr.InfType
+	}
+	if expectedType == nil {
+		expectedType = leftType
+	}
+
+	leftSsa, rightSsa, leftType, e = irPromoteToNum(ctx, expectedType, leftSsa, leftType, rightSsa, rightType)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	resSsa := irSsaName(ctx)
+	irWritef(ctx, "  %%%s = ", resSsa.Repr)
+
+	switch binaryExpr.Operator {
+	case t.KwShiftLeft:
+		irWrite(ctx, "shl ")
+	case t.KwShiftRight:
+		if getNumDesc(leftType).IsSigned {
+			irWrite(ctx, "ashr ")
+		} else {
+			irWrite(ctx, "lshr ")
+		}
+	default:
+		return SsaName{}, fmt.Errorf("unexpected shift operator")
+	}
+
+	e = irType(ctx, leftType)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	irWrite(ctx, " ")
+	irPossibleLitSsa(ctx, leftSsa)
+	irWrite(ctx, ", ")
+	irPossibleLitSsa(ctx, rightSsa)
+	irWrite(ctx, "\n")
+	return resSsa, nil
+}
+
+func irExprBinLogical(ctx *IrCtx, binaryExpr *t.NodeExprBinary) (SsaName, error) {
+	boolType := makeNamedType("bool")
+
+	leftSsa, e := irExpression(ctx, boolType, binaryExpr.Left)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	// Allocate the result in the function entry (head) so we can avoid `phi`.
+	resultPtr := irSsaName(ctx)
+	cpy := *ctx
+	cpy.bld.Body = ctx.bld.Head
+	irWritef(&cpy, "  %%%s = alloca i1\n", resultPtr.Repr)
+
+	rhsLabel := irSsaName(ctx)
+	shortCircuitLabel := irSsaName(ctx)
+	endLabel := irSsaName(ctx)
+
+	irWrite(ctx, "  br i1 ")
+	irPossibleLitSsa(ctx, leftSsa)
+
+	switch binaryExpr.Operator {
+	case t.KwAndAnd:
+		irWritef(ctx, ", label %%%s, label %%%s\n", rhsLabel.Repr, shortCircuitLabel.Repr)
+	case t.KwOrOr:
+		irWritef(ctx, ", label %%%s, label %%%s\n", shortCircuitLabel.Repr, rhsLabel.Repr)
+	default:
+		return SsaName{}, fmt.Errorf("unexpected logical operator")
+	}
+
+	irWritef(ctx, "%s:\n", rhsLabel.Repr)
+
+	rightSsa, e := irExpression(ctx, boolType, binaryExpr.Right)
+	if e != nil {
+		return SsaName{}, e
+	}
+	irWrite(ctx, "  store i1 ")
+	irPossibleLitSsa(ctx, rightSsa)
+	irWritef(ctx, ", ptr %%%s\n", resultPtr.Repr)
+	irWritef(ctx, "  br label %%%s\n", endLabel.Repr)
+
+	irWritef(ctx, "%s:\n", shortCircuitLabel.Repr)
+	irWrite(ctx, "  store i1 ")
+	switch binaryExpr.Operator {
+	case t.KwAndAnd:
+		irWrite(ctx, "0")
+	case t.KwOrOr:
+		irWrite(ctx, "1")
+	default:
+		return SsaName{}, fmt.Errorf("unexpected logical operator")
+	}
+	irWritef(ctx, ", ptr %%%s\n", resultPtr.Repr)
+	irWritef(ctx, "  br label %%%s\n", endLabel.Repr)
+
+	irWritef(ctx, "%s:\n", endLabel.Repr)
+
+	resSsa := irSsaName(ctx)
+	irWritef(ctx, "  %%%s = load i1, ptr %%%s\n", resSsa.Repr, resultPtr.Repr)
+	return resSsa, nil
 }
 
 /*
@@ -1394,6 +1824,62 @@ func irExprBinSubstraction(ctx *IrCtx, expectedType *t.NodeType, binaryExpr *t.N
 	return resSsa, nil
 }
 
+func irExprBinMultiplication(ctx *IrCtx, expectedType *t.NodeType, binaryExpr *t.NodeExprBinary) (SsaName, error) {
+	// Generate IR for the left-hand side expression
+	lhsSsa, e := irExpression(ctx, binaryExpr.Left.GetInferredType(), binaryExpr.Left)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	// Generate IR for the right-hand side expression
+	rhsSsa, e := irExpression(ctx, binaryExpr.Right.GetInferredType(), binaryExpr.Right)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	// Promote both sides to a compatible numeric type
+	lhs, rhs, newType, e := irPromoteToNum(
+		ctx,
+		expectedType,
+		lhsSsa,
+		binaryExpr.Left.GetInferredType(),
+		rhsSsa,
+		binaryExpr.Right.GetInferredType(),
+	)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	// Allocate a new SSA name for the result
+	resSsa := irSsaName(ctx)
+
+	// Start writing the IR instruction
+	irWritef(ctx, "  %%%s = ", resSsa.Repr)
+
+	// Write the appropriate multiplication opcode
+	if isFloatType(newType) {
+		irWrite(ctx, "fmul ")
+	} else {
+		irWrite(ctx, "mul ")
+	}
+
+	// Write the type
+	e = irType(ctx, newType)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	// Write the operands
+	irWrite(ctx, " ")
+	irPossibleLitSsa(ctx, lhs)
+	irWrite(ctx, ", ")
+	irPossibleLitSsa(ctx, rhs)
+	irWrite(ctx, "\n")
+
+	// Return the resulting SSA name
+	return resSsa, nil
+}
+
 func irExprBinCmp(ctx *IrCtx, binaryExpr *t.NodeExprBinary) (SsaName, error) {
 	lhsSsa, e := irExpression(ctx, binaryExpr.Left.GetInferredType(), binaryExpr.Left)
 	if e != nil {
@@ -1491,6 +1977,14 @@ func irExprBinary(ctx *IrCtx, expectedType *t.NodeType, binaryExpr *t.NodeExprBi
 		return irExprBinAddition(ctx, expectedType, binaryExpr)
 	case t.KwMinus:
 		return irExprBinSubstraction(ctx, expectedType, binaryExpr)
+	case t.KwAsterisk:
+		return irExprBinMultiplication(ctx, expectedType, binaryExpr)
+	case t.KwAndAnd, t.KwOrOr:
+		return irExprBinLogical(ctx, binaryExpr)
+	case t.KwAmpersand, t.KwPipe, t.KwCaret:
+		return irExprBinBitwise(ctx, expectedType, binaryExpr)
+	case t.KwShiftLeft, t.KwShiftRight:
+		return irExprBinShift(ctx, expectedType, binaryExpr)
 	case t.KwCmpEq, t.KwCmpNeq, t.KwCmpGt, t.KwCmpLt, t.KwCmpGtEq, t.KwCmpLtEq:
 		return irExprBinCmp(ctx, binaryExpr)
 	}
@@ -1543,6 +2037,8 @@ func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr) (SsaNam
 		return irExprFuncCall(ctx, ne, false)
 	case *t.NodeExprDestructor:
 		return irExprDestructor(ctx, ne)
+	case *t.NodeExprUnary:
+		return irExprUnary(ctx, expectedType, ne)
 	case *t.NodeExprTry:
 		callSsa, e := irExprFuncCall(ctx, ne.Call.(*t.NodeExprCall), true)
 		if e != nil {
@@ -1555,20 +2051,24 @@ func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr) (SsaNam
 		return irExprSubscript(ctx, ne)
 	case *t.NodeExprLit:
 		return irExprLit(ctx, ne, expectedType)
+	case *t.NodeExprSizeof:
+		return irExprSizeof(ctx, ne)
 	case *t.NodeExprName:
 		return irExprName(ctx, ne)
 	case *t.NodeExprBinary:
 		return irExprBinary(ctx, expectedType, ne)
 	}
-	return ssaName(""), nil
+	return ssaName(""), fmt.Errorf("unsupported expression")
 }
 
 func irExpressionLvalue(ctx *IrCtx, expr t.NodeExpr) (SsaName, error) {
 	switch ne := expr.(type) {
 	case *t.NodeExprName:
 		return irExprNameLvalue(ctx, ne)
+	case *t.NodeExprSubscript:
+		return irExprSubscriptLvalue(ctx, ne)
 	}
-	return ssaName(""), nil
+	return ssaName(""), fmt.Errorf("expression is not assignable")
 }
 
 func irJmpToDefer(ctx *IrCtx) {
@@ -1949,7 +2449,7 @@ func irStmtWhile(ctx *IrCtx, ifStmt *t.NodeStmtWhile, fnDef *t.NodeFuncDef) erro
 }
 
 func irBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
-	ctx.SeenNestedScopes++
+	*ctx.SeenNestedScopes = (*ctx.SeenNestedScopes) + 1
 
 	cpy := *ctx
 	cpy.bld = ScopeBuilder{
@@ -1959,7 +2459,7 @@ func irBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 		Body:   &bytes.Buffer{},
 	}
 
-	cpy.CurrNestedScopeIdx = ctx.SeenNestedScopes
+	cpy.CurrNestedScopeIdx = *ctx.SeenNestedScopes
 	cpy.CurrDeferIdx = 0
 	var deferred []*t.NodeStmtDefer = nil
 
@@ -2643,6 +3143,7 @@ func irWriteModule(
 	i int,
 ) error {
 	nextSsa := 0
+	seenScopes := 0
 
 	ctx := &IrCtx{
 		Shared: shared,
@@ -2663,8 +3164,9 @@ func irWriteModule(
 			Tail:    &bytes.Buffer{},
 			Body:    &bytes.Buffer{},
 		},
-		nextSsa:   &nextSsa,
-		moduleIdx: i,
+		nextSsa:          &nextSsa,
+		moduleIdx:        i,
+		SeenNestedScopes: &seenScopes,
 	}
 	builder.Grow(512)
 

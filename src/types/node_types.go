@@ -415,6 +415,27 @@ func (n *NodeExprTry) Print(indent int) {
 	n.Call.Print(indent + 1)
 }
 
+type NodeExprSizeof struct {
+	Type    *NodeType
+	InfType *NodeType
+}
+
+func (n *NodeExprSizeof) GetInferredType() *NodeType {
+	fmt.Println("ExprSizeof")
+	return n.InfType
+}
+
+func (n *NodeExprSizeof) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprSizeof\n")
+	if n.Type == nil {
+		PrintIndent(indent + 1)
+		fmt.Println("<null type>")
+		return
+	}
+	n.Type.Print(indent + 1)
+}
+
 type NodeExprDestructor struct {
 	VarDef     *NodeExprVarDef
 	Destructor *NodeFuncDef
@@ -675,6 +696,7 @@ func (*NodeExprAssign) IsExpr()            {}
 func (*NodeExprTry) IsExpr()               {}
 func (*NodeExprDestructureAssign) IsExpr() {}
 func (*NodeExprDestructor) IsExpr()        {}
+func (*NodeExprSizeof) IsExpr()            {}
 func (*NodeTypeNamed) IsType()             {}
 func (*NodeTypePointer) IsType()           {}
 func (*NodeTypeRfc) IsType()               {}
