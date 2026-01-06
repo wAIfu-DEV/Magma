@@ -60,7 +60,6 @@ decodeFirst(start u8*, end u8*) Codepoint:
 
     bytes ptr = cast.utop(cast.ptou(start))
     first u8 = start[0]
-
     width u8 = 0
     codepoint u32 = 0
 
@@ -69,16 +68,13 @@ decodeFirst(start u8*, end u8*) Codepoint:
         codepoint = cast.u64to32(cast.u8to64(first))
     elif (first & 224) == 192:
         width = 2
-        tmp0 u64 = cast.u8to64(first & 31)
-        codepoint = cast.u64to32(tmp0)
+        codepoint = cast.u64to32(cast.u8to64(first & 31))
     elif (first & 240) == 224:
         width = 3
-        tmp1 u64 = cast.u8to64(first & 15)
-        codepoint = cast.u64to32(tmp1)
+        codepoint = cast.u64to32(cast.u8to64(first & 15))
     elif (first & 248) == 240:
         width = 4
-        tmp2 u64 = cast.u8to64(first & 7)
-        codepoint = cast.u64to32(tmp2)
+        codepoint = cast.u64to32(cast.u8to64(first & 7))
     else:
         ret outCp
     ..
@@ -90,17 +86,17 @@ decodeFirst(start u8*, end u8*) Codepoint:
         ..
     ..
 
-    cont u8
-    i1 u64 = 1
+    cont u8 = 0
+    i u64 = 1
 
-    while i1 < width:
-        cont = start[i1]
+    while i < width:
+        cont = start[i]
 
         if (cont & 192) != 128:
             ret outCp
         ..
         codepoint = (codepoint << 6) | cast.u64to32(cast.u8to64(cont & 63))
-        i1 = i1 + 1
+        i = i + 1
     ..
 
     if width == 1:
