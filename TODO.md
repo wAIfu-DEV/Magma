@@ -5,6 +5,9 @@
 - codepoint counter in str (replace `count()` ?)
 
 ## To implement
+- implement rfc ref counting system
+- prevent empty initialization of pointers
+- prevent empty initialization of rfc
 - fix suspicious bitcasts in IR for HeapAllocator.allocator()
 - bitwise operators
 - UTF16 parsing/iterator
