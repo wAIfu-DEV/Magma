@@ -1,6 +1,7 @@
 package llvmir
 
 import (
+	"Magma/src/comp_err"
 	llvmfragments "Magma/src/llvm_fragments"
 	magmatypes "Magma/src/magma_types"
 	t "Magma/src/types"
@@ -44,6 +45,39 @@ type IrCtx struct {
 	CurrNestedScopeIdx int
 	SeenNestedScopes   *int
 	CurrDeferIdx       int
+	NestedLoopCnt      *int
+
+	LoopCondLbl SsaName
+	LoopExitLbl SsaName
+}
+
+func flattenTypeKind(nodeKind t.NodeTypeKind) string {
+	switch n := nodeKind.(type) {
+	case *t.NodeTypeNamed:
+		switch nn := n.NameNode.(type) {
+		case *t.NodeNameSingle:
+			return nn.Name
+		case *t.NodeNameComposite:
+			return strings.Join(nn.Parts, ".")
+		}
+	case *t.NodeTypePointer:
+		return flattenTypeKind(n.Kind) + "*"
+	case *t.NodeTypeSlice:
+		return flattenTypeKind(n.ElemKind) + "[]"
+	case *t.NodeTypeFunc:
+		return flattenTypeKind(n.RetType.KindNode) + "()"
+	case *t.NodeTypeAbsolute:
+		return n.AbsoluteName
+	}
+	return "undef"
+}
+
+func flattenType(node *t.NodeType) string {
+	if node == nil {
+		return "nil"
+	}
+
+	return flattenTypeKind(node.KindNode)
 }
 
 func makeFuncPtrTypeFromDef(fnDef *t.NodeFuncDef) *t.NodeType {
@@ -366,7 +400,12 @@ func irVarDefAssign(ctx *IrCtx, vda *t.NodeExprVarDefAssign) (SsaName, error) {
 	if isNumberType(vda.GetInferredType()) {
 		if !isSameNumType(vda.GetInferredType(), vda.AssignExpr.GetInferredType()) {
 			if !assignSsa.IsLiteral {
-				return SsaName{}, fmt.Errorf("implicit number cast is forbidden on assignment")
+				return SsaName{}, comp_err.CompilationErrorToken(
+					ctx.fCtx,
+					&vda.Tk,
+					"implicit number cast is forbidden on assignment",
+					fmt.Sprintf("left side type is: %s, right side type is: %s", flattenType(vda.GetInferredType()), flattenType(vda.AssignExpr.GetInferredType())),
+				)
 			}
 		}
 	}
@@ -484,13 +523,17 @@ func irExprCallFuncNonPtr(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 			return ssaName(""), e
 		}
 
-		if isNumberType(argT) && !exprSsa.IsLiteral {
-			if !isSameNumType(expr.GetInferredType(), argT) {
-				outSsa, e := irPromoteSingleToNum(ctx, argT, exprSsa, expr.GetInferredType())
-				if e != nil {
-					return SsaName{}, e
+		switch expr.(type) {
+		case *t.NodeExprUnary, *t.NodeExprBinary:
+		default:
+			if isNumberType(argT) && !exprSsa.IsLiteral {
+				if !isSameNumType(expr.GetInferredType(), argT) {
+					outSsa, e := irPromoteSingleToNum(ctx, argT, exprSsa, expr.GetInferredType())
+					if e != nil {
+						return SsaName{}, e
+					}
+					exprSsa = outSsa
 				}
-				exprSsa = outSsa
 			}
 		}
 
@@ -562,21 +605,50 @@ func irExprCallFuncMember(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 			return ssaName(""), e
 		}
 
-		if isNumberType(argT) && !exprSsa.IsLiteral {
-			if !isSameNumType(expr.GetInferredType(), argT) {
-				outSsa, e := irPromoteSingleToNum(ctx, argT, exprSsa, expr.GetInferredType())
-				if e != nil {
-					return SsaName{}, e
+		switch expr.(type) {
+		case *t.NodeExprUnary, *t.NodeExprBinary:
+		default:
+			if isNumberType(argT) && !exprSsa.IsLiteral {
+				if !isSameNumType(expr.GetInferredType(), argT) {
+					outSsa, e := irPromoteSingleToNum(ctx, argT, exprSsa, expr.GetInferredType())
+					if e != nil {
+						return SsaName{}, e
+					}
+					exprSsa = outSsa
 				}
-				exprSsa = outSsa
 			}
 		}
 
 		argsSsa[i] = exprSsa
 	}
 
+	var isSsaOwner = false
+	switch n := fnCall.Callee.(type) {
+	case *t.NodeExprName:
+		isSsaOwner = n.IsSsa
+	}
+
 	// implicit this
 	ownerSsa, e := irExprNameLvalue(ctx, fnCall.MemberOwnerName)
+
+	if isSsaOwner && !fnCall.MemberOwnerIsPtr {
+		allocSsa := irSsaName(ctx)
+		irWritef(ctx, "  %%%s = alloca ", allocSsa.Repr)
+		e := irType(ctx, fnCall.MemberOwnerType)
+		if e != nil {
+			return SsaName{}, e
+		}
+		irWrite(ctx, "\n")
+
+		irWrite(ctx, "  store ")
+		e = irType(ctx, fnCall.MemberOwnerType)
+		if e != nil {
+			return SsaName{}, e
+		}
+		irWritef(ctx, " %%%s, ptr %%%s\n", ownerSsa.Repr, allocSsa.Repr)
+
+		ownerSsa = allocSsa
+	}
 	argsSsa = slices.Insert(argsSsa, 0, ownerSsa)
 
 	ssa := irSsaName(ctx)
@@ -588,7 +660,7 @@ func irExprCallFuncMember(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 		irWrite(ctx, "  ")
 	}
 
-	irWritef(ctx, "call ")
+	irWrite(ctx, "call ")
 
 	e = irThrowingType(ctx, fnCall.InfType)
 	if e != nil {
@@ -1133,7 +1205,7 @@ func irExprSubscriptLvalue(ctx *IrCtx, subs *t.NodeExprSubscript) (SsaName, erro
 	return elemPtr, nil
 }
 
-func irExprAssign(ctx *IrCtx, lhs t.NodeExpr, rhs t.NodeExpr) (SsaName, error) {
+func irExprAssign(ctx *IrCtx, ass *t.NodeExprAssign, lhs t.NodeExpr, rhs t.NodeExpr) (SsaName, error) {
 	lhsPtr, e := irExpressionLvalue(ctx, lhs)
 	if e != nil {
 		return SsaName{}, e
@@ -1147,7 +1219,12 @@ func irExprAssign(ctx *IrCtx, lhs t.NodeExpr, rhs t.NodeExpr) (SsaName, error) {
 	if isNumberType(lhs.GetInferredType()) {
 		if !isSameNumType(lhs.GetInferredType(), rhs.GetInferredType()) {
 			if !rhsVal.IsLiteral {
-				return SsaName{}, fmt.Errorf("implicit number cast is forbidden on assignment")
+				return SsaName{}, comp_err.CompilationErrorToken(
+					ctx.fCtx,
+					&ass.Tk,
+					"implicit number cast is forbidden on assignment",
+					fmt.Sprintf("left side type is: %s, right side type is: %s", flattenType(lhs.GetInferredType()), flattenType(rhs.GetInferredType())),
+				)
 			}
 		}
 	}
@@ -2032,7 +2109,7 @@ func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr) (SsaNam
 	case *t.NodeExprVarDef:
 		return irVarDef(ctx, ne)
 	case *t.NodeExprAssign:
-		return irExprAssign(ctx, ne.Left, ne.Right)
+		return irExprAssign(ctx, ne, ne.Left, ne.Right)
 	case *t.NodeExprCall:
 		return irExprFuncCall(ctx, ne, false)
 	case *t.NodeExprDestructor:
@@ -2177,6 +2254,25 @@ func irStmtReturn(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
 
 		irWrite(ctx, "\n")
 		return nil*/
+}
+
+func irStmtBreak(ctx *IrCtx, stmtBreak *t.NodeStmtBreak) error {
+	if *ctx.NestedLoopCnt <= 0 {
+		return fmt.Errorf("used break statement outside loop body")
+	}
+
+	// set flag for break after deferred statements
+	irWrite(ctx, "  store i1 1, ptr %.defer.brk\n")
+	irJmpToDefer(ctx)
+	return nil
+}
+
+func irStmtContinue(ctx *IrCtx, stmtBreak *t.NodeStmtContinue) error {
+	if *ctx.NestedLoopCnt <= 0 {
+		return fmt.Errorf("used continue statement outside loop body")
+	}
+	irJmpToDefer(ctx)
+	return nil
 }
 
 func irMakeThrowingRetVal(ctx *IrCtx, retType *t.NodeType, errSsa SsaName, valSsa SsaName) (SsaName, error) {
@@ -2366,6 +2462,10 @@ func irStatement(ctx *IrCtx, stmtNode t.NodeStatement, fnDef *t.NodeFuncDef) err
 		e = irStmtIf(ctx, s, fnDef)
 	case *t.NodeStmtWhile:
 		e = irStmtWhile(ctx, s, fnDef)
+	case *t.NodeStmtContinue:
+		e = irStmtContinue(ctx, s)
+	case *t.NodeStmtBreak:
+		e = irStmtBreak(ctx, s)
 	}
 	return e
 }
@@ -2387,7 +2487,7 @@ func irStmtIf(ctx *IrCtx, ifStmt *t.NodeStmtIf, fnDef *t.NodeFuncDef) error {
 
 	irWritef(ctx, "%s:\n", eqLabel.Repr)
 
-	e = irBody(ctx, &ifStmt.Body, fnDef)
+	e = irBody(ctx, &ifStmt.Body, fnDef, false)
 	if e != nil {
 		return e
 	}
@@ -2403,7 +2503,7 @@ func irStmtIf(ctx *IrCtx, ifStmt *t.NodeStmtIf, fnDef *t.NodeFuncDef) error {
 				return e
 			}
 		case *t.NodeStmtElse:
-			e = irBody(ctx, &n.Body, fnDef)
+			e = irBody(ctx, &n.Body, fnDef, false)
 			if e != nil {
 				return e
 			}
@@ -2420,6 +2520,9 @@ func irStmtIf(ctx *IrCtx, ifStmt *t.NodeStmtIf, fnDef *t.NodeFuncDef) error {
 func irStmtWhile(ctx *IrCtx, ifStmt *t.NodeStmtWhile, fnDef *t.NodeFuncDef) error {
 	condLbl := irSsaName(ctx)
 	exitLbl := irSsaName(ctx)
+
+	ctx.LoopCondLbl = condLbl
+	ctx.LoopExitLbl = exitLbl
 
 	irWritef(ctx, "  br label %%%s\n", condLbl.Repr)
 	irWritef(ctx, "%s:\n", condLbl.Repr)
@@ -2438,17 +2541,24 @@ func irStmtWhile(ctx *IrCtx, ifStmt *t.NodeStmtWhile, fnDef *t.NodeFuncDef) erro
 
 	irWritef(ctx, "%s:\n", eqLbl.Repr)
 
-	e = irBody(ctx, &ifStmt.Body, fnDef)
+	*ctx.NestedLoopCnt = *ctx.NestedLoopCnt + 1
+
+	e = irBody(ctx, &ifStmt.Body, fnDef, true)
 	if e != nil {
 		return e
 	}
 
+	*ctx.NestedLoopCnt = *ctx.NestedLoopCnt - 1
+
 	irWritef(ctx, "  br label %%%s\n", condLbl.Repr)
 	irWritef(ctx, "%s:\n", exitLbl.Repr)
+
+	ctx.LoopCondLbl = SsaName{}
+	ctx.LoopExitLbl = SsaName{}
 	return nil
 }
 
-func irBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
+func irBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef, isLoopBody bool) error {
 	*ctx.SeenNestedScopes = (*ctx.SeenNestedScopes) + 1
 
 	cpy := *ctx
@@ -2537,6 +2647,14 @@ func irBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 		irWritef(&cpy, "  br i1 %%%s, label %%.defer.%d.%d, label %%%s\n", shouldRetSsa.Repr, ctx.CurrNestedScopeIdx, ctx.CurrDeferIdx, afterSsa.Repr)
 		irWritef(&cpy, "%s:\n", afterSsa.Repr)*/
 
+	if isLoopBody {
+		shouldBrkSsa := irSsaName(ctx)
+		afterSsa := irSsaName(ctx)
+		irWritef(&cpy, "  %%%s = load i1, ptr %%.defer.brk\n", shouldBrkSsa.Repr)
+		irWritef(&cpy, "  br i1 %%%s, label %%%s, label %%%s\n", shouldBrkSsa.Repr, ctx.LoopExitLbl.Repr, afterSsa.Repr)
+		irWritef(&cpy, "%s:\n", afterSsa.Repr)
+	}
+
 	irJmpToParentDeferOnRet(&cpy, ctx)
 
 	irWrite(ctx, cpy.bld.Head.String())
@@ -2568,7 +2686,10 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 	}
 
 	irWrite(&cpy, "  %.defer.ret = alloca i1\n")
+	irWrite(&cpy, "  %.defer.brk = alloca i1\n")
+
 	irWrite(&cpy, "  store i1 0, ptr %.defer.ret\n")
+	irWrite(&cpy, "  store i1 0, ptr %.defer.brk\n")
 
 	if !(isVoidType(fnDef.ReturnType) && !fnDef.ReturnType.Throws) {
 		irWrite(&cpy, "  store ")
@@ -3144,6 +3265,7 @@ func irWriteModule(
 ) error {
 	nextSsa := 0
 	seenScopes := 0
+	nestedLoop := 0
 
 	ctx := &IrCtx{
 		Shared: shared,
@@ -3167,6 +3289,7 @@ func irWriteModule(
 		nextSsa:          &nextSsa,
 		moduleIdx:        i,
 		SeenNestedScopes: &seenScopes,
+		NestedLoopCnt:    &nestedLoop,
 	}
 	builder.Grow(512)
 

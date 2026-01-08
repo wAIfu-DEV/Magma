@@ -30,6 +30,11 @@ pub toPtr(s str) u8*:
     llvm "  ret ptr %l0\n"
 ..
 
+pub fromPtr(p ptr, bytesCount u64) str:
+    llvm "  %s0 = insertvalue %type.str zeroinitializer, ptr %p, 0\n"
+    llvm "  %s1 = insertvalue %type.str %s0, i64 %bytesCount, 1\n"
+    llvm "  ret %type.str %s1\n"
+..
 
 pub byteAt(s str, idx u64) u8:
     llvm "  %l0 = extractvalue %type.str %s, 0\n"

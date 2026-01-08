@@ -517,6 +517,7 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 	var nameExpr *t.NodeExprName = nil
 
 	var isMemberCall = false
+	var isSsaOwner = false
 
 	switch n := call.Callee.(type) {
 	case *t.NodeExprName:
@@ -533,6 +534,7 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 		}
 
 		n.IsSsa = isSsa
+		isSsaOwner = isSsa
 		n.AssociatedNode = expr
 
 		if n.AssociatedNode == nil {
@@ -567,7 +569,7 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 			ownerName := &t.NodeExprName{
 				InfType:        n.Type,
 				AssociatedNode: n,
-				IsSsa:          false,
+				IsSsa:          isSsaOwner,
 			}
 
 			if len(ownerNameParts) == 1 {

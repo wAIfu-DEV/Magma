@@ -359,6 +359,8 @@ func (n *NodeExprVarDef) Print(indent int) {
 }
 
 type NodeExprVarDefAssign struct {
+	Tk Token
+
 	VarDef     *NodeExprVarDef
 	AssignExpr NodeExpr
 }
@@ -378,6 +380,8 @@ func (n *NodeExprVarDefAssign) Print(indent int) {
 }
 
 type NodeExprAssign struct {
+	Tk Token
+
 	Left  NodeExpr
 	Right NodeExpr
 
@@ -458,6 +462,20 @@ func (n *NodeStmtRet) Print(indent int) {
 	PrintIndent(indent)
 	fmt.Printf("StmtRet\n")
 	n.Expression.Print(indent + 1)
+}
+
+type NodeStmtContinue struct{}
+
+func (n *NodeStmtContinue) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("StmtContinue\n")
+}
+
+type NodeStmtBreak struct{}
+
+func (n *NodeStmtBreak) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("StmtBreak\n")
 }
 
 type NodeStmtIf struct {
@@ -706,6 +724,8 @@ func (*NodeTypeAbsolute) IsType()          {}
 func (*NodeNameSingle) IsName()            {}
 func (*NodeNameComposite) IsName()         {}
 func (*NodeStmtRet) IsStatement()          {}
+func (*NodeStmtContinue) IsStatement()     {}
+func (*NodeStmtBreak) IsStatement()        {}
 func (*NodeStmtExpr) IsStatement()         {}
 func (*NodeStmtThrow) IsStatement()        {}
 func (*NodeStmtIf) IsStatement()           {}

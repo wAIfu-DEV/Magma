@@ -3,6 +3,7 @@ mod main
 use "../std/errors.mg" errors
 use "../std/cast.mg"   cast
 use "../std/io.mg"     io
+use "../std/strings.mg" strings
 use "../std/slices.mg" slices
 use "../std/heap.mg"   heap
 use "../std/utf8.mg"   utf8
@@ -327,19 +328,22 @@ testSizeof() !void:
 testUtf8() !void:
     io.printLn("Testing: utf8")
 
-    #s str = "This is é test"
-    #it utf8.Utf8Iterator = utf8.iterator(s)
+    s0 str = "This is é test"
+    nc u64 = try strings.countCodepoints(s0)
 
-    #codepoints utf8.Codepoint* = heap.alloc(strings.countBytes(s) * sizeof utf8.Codepoint)
+    if nc != 14:
+        io.print("s0 codepoints: ")
+        io.printUint(nc)
+        io.printLn("")
+        throw errors.failure("from `if nc != 14:` block") 
+    ..
 
-    #i u64 = 0
-    #while it.hasData():
-    #    cp utf8.Codepoint = try it.next()
-    #    codepoints[i] = cp
-    #    i = i+1
-    #..
+    nb u64 = strings.countBytes(s0)
 
-    #if i != 14:
-    #    throw errors.failure("from `if i != 14:` block") 
-    #..
+    if nb != 15:
+        io.print("s0 bytes: ")
+        io.printUint(nb)
+        io.printLn("")
+        throw errors.failure("from `if nb != 15:` block") 
+    ..
 ..

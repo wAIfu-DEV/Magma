@@ -15,7 +15,7 @@ if %ERRORLEVEL% GEQ 1 GOTO :End
 
 ECHO.
 ECHO Running Compiler Backend ...
-CALL clang.exe -O1 out.ll -o out.exe
+CALL clang.exe out.ll -o out.exe
 
 if %ERRORLEVEL% GEQ 1 GOTO :End
 

@@ -6,6 +6,22 @@ import (
 	"fmt"
 )
 
+func printLine(ctx *types.FileCtx, line int) {
+	lnStart := ctx.LineIdx[line] + 1
+	lnEnd := ctx.LineIdx[line+1] + 1
+
+	lineStr := ctx.Content[lnStart:lnEnd]
+	fmt.Printf("%d| %s", line, lineStr)
+}
+
+func printLineTok(ctx *types.FileCtx, line int) {
+	lnStart := ctx.LineIdx[line]
+	lnEnd := ctx.LineIdx[line+1]
+
+	lineStr := ctx.Content[lnStart:lnEnd]
+	fmt.Printf("%d| %s", line, lineStr)
+}
+
 func CompilationErrorToken(ctx *types.FileCtx, tk *types.Token, shortDesc string, additional string) error {
 	fmt.Printf("%s:l%d:c%d %s\n", ctx.FilePath, tk.Pos.Line, tk.Pos.Col, shortDesc)
 
@@ -13,36 +29,28 @@ func CompilationErrorToken(ctx *types.FileCtx, tk *types.Token, shortDesc string
 
 	// previous line
 	if pos.Line > 1 {
-		prevLine := pos.Line - 2
-		lnStart := ctx.LineIdx[prevLine] + 1
-		lnEnd := ctx.LineIdx[prevLine+1] - 1
-
-		line := ctx.Content[lnStart:lnEnd]
-		fmt.Printf("%d| %s\n", pos.Line-1, line)
+		printLine(ctx, int(pos.Line)-2)
 	}
 
 	if true {
-		// current line
-		currLine := pos.Line - 1
-		lnStart := ctx.LineIdx[currLine] + 1
-		lnEnd := ctx.LineIdx[currLine+1] - 1
-		line := ctx.Content[lnStart:lnEnd]
+		printLine(ctx, int(pos.Line)-1)
+		/*
+			// current line
+			currLine := pos.Line - 1
+			lnStart := ctx.LineIdx[currLine] + 1
+			lnEnd := ctx.LineIdx[currLine+1] - 1
+			line := ctx.Content[lnStart:lnEnd]
 
-		left := line[:pos.Col-1]
-		middle := line[pos.Col-1 : int(pos.Col-1)+len(tk.Repr)]
-		right := line[int(pos.Col-1)+len(tk.Repr):]
+			left := line[:pos.Col-1]
+			middle := line[pos.Col-1 : int(pos.Col-1)+len(tk.Repr)]
+			right := line[int(pos.Col-1)+len(tk.Repr):]
 
-		fmt.Printf("%d| %s\x1b[31m\x1b[4:3m%s\x1b[0m%s\n", pos.Line, left, middle, right)
+			fmt.Printf("%d| %s\x1b[31m\x1b[4:3m%s\x1b[0m%s\n", pos.Line, left, middle, right)*/
 	}
 
 	// next line
 	if int(pos.Line)+1 < len(ctx.LineIdx)-1 {
-		nextLine := pos.Line
-		lnStart := ctx.LineIdx[nextLine] + 1
-		lnEnd := ctx.LineIdx[nextLine+1] - 1
-
-		line := ctx.Content[lnStart:lnEnd]
-		fmt.Printf("%d| %s\n", pos.Line+1, line)
+		printLine(ctx, int(pos.Line))
 	}
 
 	fmt.Printf("%s\n\n", additional)

@@ -742,6 +742,7 @@ func parseExpression(ctx *ParseCtx, tk t.Token, minPrecedence int) (t.NodeExpr, 
 			switch vd := left.(type) {
 			case *t.NodeExprVarDef:
 				varDefAssign := &t.NodeExprVarDefAssign{
+					Tk:         tk,
 					VarDef:     vd,
 					AssignExpr: right,
 				}
@@ -749,6 +750,7 @@ func parseExpression(ctx *ParseCtx, tk t.Token, minPrecedence int) (t.NodeExpr, 
 				continue
 			case *t.NodeExprName, *t.NodeExprSubscript:
 				left = &t.NodeExprAssign{
+					Tk:    tk,
 					Left:  left,
 					Right: right,
 				}
@@ -1191,6 +1193,16 @@ func parseStmtReturn(ctx *ParseCtx) (t.NodeStatement, error) {
 	return &t.NodeStmtRet{Expression: expr}, nil
 }
 
+func parseStmtContinue(ctx *ParseCtx) (t.NodeStatement, error) {
+	consume(ctx) // consume ret kw
+	return &t.NodeStmtContinue{}, nil
+}
+
+func parseStmtBreak(ctx *ParseCtx) (t.NodeStatement, error) {
+	consume(ctx) // consume ret kw
+	return &t.NodeStmtBreak{}, nil
+}
+
 func parseStmtThrow(ctx *ParseCtx) (t.NodeStatement, error) {
 	consume(ctx) // consume ret kw
 
@@ -1211,6 +1223,10 @@ func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
 	switch tk.KeywType {
 	case t.KwReturn:
 		return parseStmtReturn(ctx)
+	case t.KwBreak:
+		return parseStmtBreak(ctx)
+	case t.KwContinue:
+		return parseStmtContinue(ctx)
 	case t.KwThrow:
 		return parseStmtThrow(ctx)
 	case t.KwLlvm:
