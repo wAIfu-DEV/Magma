@@ -15,6 +15,8 @@ const (
 	tkModeNormal tkMode = iota
 	tkModeString
 	tkModeComment
+	tkModeNumber
+	tkModeHexNum
 )
 
 type TkCtx struct {
@@ -242,10 +244,8 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 			continue
 		}
 
-		if ctx.Mode == tkModeNormal && r == '#' {
-			if ctx.Mode == tkModeNormal {
-				pushTokenBuff(ctx)
-			}
+		if (ctx.Mode == tkModeNormal || ctx.Mode == tkModeNumber || ctx.Mode == tkModeHexNum) && r == '#' {
+			pushTokenBuff(ctx)
 			toggleMode(ctx, tkModeComment)
 
 			consume(ctx)
@@ -296,7 +296,7 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 
 		ctx.IsEscaped = false
 
-		if ctx.Mode == tkModeNormal && unicode.IsSpace(r) {
+		if (ctx.Mode == tkModeNormal || ctx.Mode == tkModeNumber || ctx.Mode == tkModeHexNum) && unicode.IsSpace(r) {
 			pushTokenBuff(ctx)
 
 			if r == '\n' {
@@ -311,6 +311,7 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 				ctx.Pos.Col = 0
 			}
 
+			ctx.Mode = tkModeNormal
 			consume(ctx)
 			continue
 		}
@@ -318,6 +319,8 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 		if ctx.Mode == tkModeNormal && (unicode.IsDigit(r) || r == '-') && len(ctx.TokReprBuff) == 0 {
 			prev := ctx.CurrTok.Type
 			ctx.CurrTok.Type = t.TokLitNum
+
+			ctx.Mode = tkModeNumber
 
 			if r == '-' {
 				r2, err := peekMany(ctx, 2)
@@ -330,9 +333,22 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 					goto write_num
 				}
 			}
+
+			if r == '0' {
+				runes, err := peekMany(ctx, 2)
+				if err != nil {
+					return nil, err
+				}
+				if runes[1] == 'x' || runes[1] == 'X' {
+					ctx.TokReprBuff = append(ctx.TokReprBuff, 'u') // prefix for LLVM
+					ctx.Mode = tkModeHexNum
+				} else {
+					goto write_num
+				}
+			}
 		}
 
-		if ctx.Mode == tkModeNormal && !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+		if (ctx.Mode == tkModeNormal || ctx.Mode == tkModeNumber || ctx.Mode == tkModeHexNum) && !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
 			pushTokenBuff(ctx)
 
 			tk, size, err := handleNonAlphaKeyword(ctx, r)
@@ -345,7 +361,7 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 		}
 
 	write_num:
-		if ctx.Mode == tkModeNormal && ctx.CurrTok.Type == t.TokLitNum {
+		if ctx.Mode == tkModeNumber {
 			if !(unicode.IsDigit(r) || r == '.' || r == '-') {
 				ctx.TokReprBuff = append(ctx.TokReprBuff, r)
 				return nil, comp_err.CompilationErrorToken(
@@ -353,6 +369,18 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 					&t.Token{Repr: string(ctx.TokReprBuff), Pos: ctx.CurrTok.Pos},
 					fmt.Sprintf("invalid character '%c' in number literal", r),
 					"valid characters in number literal are: [0-9.]",
+				)
+			}
+		}
+
+		if ctx.Mode == tkModeHexNum {
+			if !(unicode.IsDigit(r) || unicode.IsLetter(r)) {
+				ctx.TokReprBuff = append(ctx.TokReprBuff, r)
+				return nil, comp_err.CompilationErrorToken(
+					ctx.fCtx,
+					&t.Token{Repr: string(ctx.TokReprBuff), Pos: ctx.CurrTok.Pos},
+					fmt.Sprintf("invalid character '%c' in hex number literal", r),
+					"valid characters in hex number literal are: [0-9a-zA-Z]",
 				)
 			}
 		}

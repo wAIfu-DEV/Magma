@@ -19,10 +19,10 @@ myFunc(first_arg u64, second_arg f32) !bool:
 
     if first_arg == 0:
         io.printLn("first branch")
-        throw errors.invalidArgument()
+        throw errors.errInvalidArgument()
     elif second_arg < 0.0:
         io.printLn("second branch")
-        throw errors.invalidArgument()
+        throw errors.errInvalidArgument()
     else:
         io.printLn("third branch")
     ..
@@ -65,11 +65,11 @@ pub main(args str[]) !void:
 
     # handle error, equivalent to example with try and similar to usual Go-style handling
     ret_val2 bool, e error = myFunc(0, 0.0)
-    if errors.errCode(e) != 0:
+    if errors.code(e) != 0:
         throw e # throw itself is conditional, if err == ok then control flow is resumed
     ..
 
-    throw errors.ok() # is a no-op
+    throw errors.errOk() # is a no-op
 
     my_struct MyStruct = MyStruct(first_field=0, second_field=5.0) # rest is 0-init
 

@@ -4,43 +4,37 @@ use "allocator.mg" a
 use "errors.mg"    e
 use "cast.mg"      cast
 
-llvm "declare ptr @malloc(i64)\n"
-llvm "declare ptr @realloc(ptr, i64)\n"
-llvm "declare void @free(ptr)\n"
+ext ext_malloc  malloc(size u64) ptr
+ext ext_realloc realloc(block ptr, newSize u64) ptr
+ext ext_free    free(block ptr) void
 
 HeapAllocator(
     _ ptr,
 )
 
 heapAlloc(impl ptr, nBytes u64) !u8*:
-    p ptr
-
-    llvm "  %p1 = call ptr @malloc(i64 %nBytes)\n"
-    llvm "  store ptr %p1, ptr %p\n"
+    p ptr = ext_malloc(nBytes)
 
     if cast.ptou(p) == 0:
         if nBytes == 0:
-            throw e.invalidArgument("requested size is 0")
+            throw e.errInvalidArgument("requested size is 0")
         ..
-        throw e.outOfMemory("OOM")
+        throw e.errOutOfMemory("OOM")
     ..
     ret p
 ..
 
 heapRealloc(impl ptr, in u8*, nBytes u64) !u8*:
-    p ptr
-
-    llvm "  %p1 = call ptr @realloc(ptr %in, i64 %nBytes)\n"
-    llvm "  store ptr %p1, ptr %p\n"
+    p ptr = ext_realloc(in, nBytes)
 
     if cast.ptou(p) == 0:
         if cast.ptou(in) == 0:
-            throw e.invalidArgument("input pointer is null")
+            throw e.errInvalidArgument("input pointer is null")
         ..
         if nBytes == 0:
-            throw e.invalidArgument("requested size is 0")
+            throw e.errInvalidArgument("requested size is 0")
         ..
-        throw e.outOfMemory("OOM")
+        throw e.errOutOfMemory("OOM")
     ..
     ret p
 ..
@@ -49,7 +43,7 @@ heapFree(impl ptr, in u8*) void:
     if cast.ptou(in) == 0:
         ret
     ..
-    llvm "  call void @free(ptr %in)\n"
+    ext_free(in)
 ..
 
 HeapAllocator.allocator() a.Allocator:

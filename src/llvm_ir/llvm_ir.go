@@ -447,6 +447,8 @@ func irFuncPtrType(ctx *IrCtx, fnType *t.NodeTypeFunc) error {
 }
 
 func irExprCallFuncPtr(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
+	irWrite(ctx, "  ; call fnptr\n")
+
 	fnType := fnCall.FuncPtrType.KindNode.(*t.NodeTypeFunc)
 
 	argsSsa := make([]SsaName, len(fnCall.Args))
@@ -514,6 +516,8 @@ func irExprCallFuncPtr(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 }
 
 func irExprCallFuncNonPtr(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
+	irWritef(ctx, "  ; call %s\n", fnCall.AssociatedFnDef.AbsName)
+
 	argsSsa := make([]SsaName, len(fnCall.Args))
 	for i, expr := range fnCall.Args {
 		argT := fnCall.AssociatedFnDef.Class.ArgsNode.Args[i].TypeNode
@@ -558,15 +562,23 @@ func irExprCallFuncNonPtr(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 
 	irWrite(ctx, " @")
 
-	switch expr := fnCall.Callee.(type) {
-	case *t.NodeExprName:
-		e := irName(ctx, expr.Name, true)
-		if e != nil {
-			return ssaName(""), e
-		}
-	default:
-		irWrite(ctx, "<name>")
+	if fnCall.AssociatedFnDef.NoAliasName != "" {
+		// NoAliasName has precedence, used for extern func aliasing
+		irWrite(ctx, fnCall.AssociatedFnDef.NoAliasName)
+	} else {
+		irWrite(ctx, fnCall.AssociatedFnDef.AbsName)
 	}
+
+	/*
+		switch expr := fnCall.Callee.(type) {
+		case *t.NodeExprName:
+			e := irName(ctx, expr.Name, true)
+			if e != nil {
+				return ssaName(""), e
+			}
+		default:
+			irWrite(ctx, "<name>")
+		}*/
 
 	irWrite(ctx, "(")
 
@@ -596,6 +608,8 @@ func irExprCallFuncNonPtr(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 }
 
 func irExprCallFuncMember(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
+	irWritef(ctx, "  ; call member %s\n", fnCall.AssociatedFnDef.AbsName)
+
 	argsSsa := make([]SsaName, len(fnCall.Args))
 	for i, expr := range fnCall.Args {
 		argT := fnCall.AssociatedFnDef.Class.ArgsNode.Args[i+1].TypeNode
@@ -669,12 +683,18 @@ func irExprCallFuncMember(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 
 	irWrite(ctx, " @")
 
-	irWritef(ctx, "%s.", fnCall.MemberOwnerModule)
-
-	e = irName(ctx, fnCall.AssociatedFnDef.Class.NameNode, false)
-	if e != nil {
-		return ssaName(""), e
+	//irWritef(ctx, "%s.", fnCall.MemberOwnerModule)
+	if fnCall.AssociatedFnDef.NoAliasName != "" {
+		return SsaName{}, fmt.Errorf("cannot call aliased or external function as member function, something went terribly wrong.")
+	} else {
+		irWrite(ctx, fnCall.AssociatedFnDef.AbsName)
 	}
+
+	/*
+		e = irName(ctx, fnCall.AssociatedFnDef.Class.NameNode, false)
+		if e != nil {
+			return ssaName(""), e
+		}*/
 
 	irWrite(ctx, "(")
 
@@ -704,13 +724,29 @@ func irExprCallFuncMember(ctx *IrCtx, fnCall *t.NodeExprCall) (SsaName, error) {
 }
 
 func irExprDestructor(ctx *IrCtx, destructor *t.NodeExprDestructor) (SsaName, error) {
-	irWrite(ctx, "  call void @")
+	continueLbl := irSsaName(ctx)
+	preventLbl := irSsaName(ctx)
 
-	e := irName(ctx, destructor.Destructor.Class.NameNode, true)
-	if e != nil {
-		return ssaName(""), e
+	if destructor.VarDef.IsReturned {
+		condSsa := irSsaName(ctx)
+		irWritef(ctx, "  %%%s = load i1, ptr %%.destr%s\n", condSsa.Repr, destructor.VarDef.RetFlagId)
+		irWritef(ctx, "  br i1 %%%s, label %%%s, label %%%s\n", condSsa.Repr, preventLbl.Repr, continueLbl.Repr)
+		irWritef(ctx, "%s:\n", continueLbl.Repr)
 	}
+
+	irWrite(ctx, "  call void @")
+	irWrite(ctx, destructor.Destructor.AbsName)
+	/*
+		e := irName(ctx, destructor.Destructor.Class.NameNode, true)
+		if e != nil {
+			return ssaName(""), e
+		}*/
 	irWritef(ctx, "(ptr %%%s)\n", destructor.VarDef.Name.(*t.NodeNameSingle).Name)
+
+	if destructor.VarDef.IsReturned {
+		irWritef(ctx, "  br label %%%s\n", preventLbl.Repr)
+		irWritef(ctx, "%s:\n", preventLbl.Repr)
+	}
 
 	return SsaName{}, nil
 }
@@ -943,14 +979,21 @@ func irExprName(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 	} else if isFuncName {
 		irWritef(ctx, "  %%%s = bitcast ptr @", ssa.Repr)
 
-		e := irName(ctx, fnDef.Class.NameNode, true)
-		if e != nil {
-			return ssaName(""), e
+		if fnDef.NoAliasName != "" {
+			// NoAliasName has precedence, used for extern func aliasing
+			irWrite(ctx, fnDef.NoAliasName)
+		} else {
+			irWrite(ctx, fnDef.AbsName)
 		}
+		/*
+			e := irName(ctx, fnDef.Class.NameNode, true)
+			if e != nil {
+				return ssaName(""), e
+			}*/
 
 		irWrite(ctx, " to ")
 
-		e = irFuncPtrType(ctx, typeNd.KindNode.(*t.NodeTypeFunc))
+		e := irFuncPtrType(ctx, typeNd.KindNode.(*t.NodeTypeFunc))
 		if e != nil {
 			return ssaName(""), e
 		}
@@ -2172,6 +2215,21 @@ func irJmpToParentDeferOnRet(ctx *IrCtx, parentCtx *IrCtx) {
 }
 
 func irStmtReturnDeferred(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
+	switch ne := stmtRet.Expression.(type) {
+	case *t.NodeExprName:
+		switch ne2 := ne.AssociatedNode.(type) {
+		case *t.NodeExprVarDef:
+			if !ne2.IsReturned && ne2.Type.Destructor != nil {
+				ne2.IsReturned = true
+				irWriteHdf(ctx, "  %%.destr%s = alloca i1\n", ne2.RetFlagId)
+				irWriteHdf(ctx, "  store i1 0, ptr %%.destr%s\n", ne2.RetFlagId)
+
+				// on branch that returns a destructible value, prevent destructor
+				irWritef(ctx, "  store i1 1, ptr %%.destr%s\n", ne2.RetFlagId)
+			}
+		}
+	}
+
 	// set flag for return after deferred statements
 	irWrite(ctx, "  store i1 1, ptr %.defer.ret\n")
 
@@ -2635,10 +2693,10 @@ func irBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef, isLoopBody b
 		}
 	}
 
-	if defLen == 0 {
-		irWritef(&cpy, "  br label %%.defer.%d.base\n", cpy.CurrNestedScopeIdx)
-		irWritef(&cpy, ".defer.%d.base:\n", cpy.CurrNestedScopeIdx)
-	}
+	//if defLen == 0 {
+	irWritef(&cpy, "  br label %%.defer.%d.base\n", cpy.CurrNestedScopeIdx)
+	irWritef(&cpy, ".defer.%d.base:\n", cpy.CurrNestedScopeIdx)
+	//}
 
 	/*
 		shouldRetSsa := irSsaName(ctx)
@@ -2719,6 +2777,7 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 			case *t.NodeExprVarDef:
 				if n2.Type.Destructor != nil {
 					cpy.CurrDeferIdx++
+					n2.RetFlagId = irSsaName(ctx).Repr
 					fnDef.Deferred = append(fnDef.Deferred, &t.NodeStmtDefer{
 						Expression: &t.NodeExprDestructor{
 							VarDef:     n2,
@@ -2729,6 +2788,7 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 			case *t.NodeExprVarDefAssign:
 				if n2.VarDef.Type.Destructor != nil {
 					cpy.CurrDeferIdx++
+					n2.VarDef.RetFlagId = irSsaName(ctx).Repr
 					fnDef.Deferred = append(fnDef.Deferred, &t.NodeStmtDefer{
 						Expression: &t.NodeExprDestructor{
 							VarDef:     n2.VarDef,
@@ -2776,10 +2836,10 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 		}
 	}
 
-	if defLen == 0 {
-		irWrite(&cpy, "  br label %.defer.0.base\n")
-		irWrite(&cpy, ".defer.0.base:\n")
-	}
+	//if defLen == 0 {
+	irWrite(&cpy, "  br label %.defer.0.base\n")
+	irWrite(&cpy, ".defer.0.base:\n")
+	//}
 
 	if !(isVoidType(fnDef.ReturnType) && !fnDef.ReturnType.Throws) {
 		irWrite(&cpy, "  %rv = load ")
@@ -2901,7 +2961,38 @@ func irMainWrapper(ctx *IrCtx, mainFnDef *t.NodeFuncDef) error {
 	return nil
 }
 
+func irFunDefAliased(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
+	irWrite(ctx, "declare ")
+	e := irThrowingType(ctx, fnDefNode.ReturnType)
+	if e != nil {
+		return e
+	}
+
+	irWrite(ctx, " @")
+	irWrite(ctx, fnDefNode.NoAliasName)
+
+	irWrite(ctx, "(")
+	bound := len(fnDefNode.Class.ArgsNode.Args)
+	for i, field := range fnDefNode.Class.ArgsNode.Args {
+		e = irType(ctx, field.TypeNode)
+		if e != nil {
+			return e
+		}
+
+		if i < bound-1 {
+			irWrite(ctx, ", ")
+		}
+	}
+	irWrite(ctx, ")\n")
+	return nil
+}
+
 func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
+	if fnDefNode.NoAliasName != "" {
+		// func declared elsewhere, just emit declaration
+		return irFunDefAliased(ctx, fnDefNode)
+	}
+
 	isMemberFunc := false
 	singleName := ""
 
@@ -2926,10 +3017,13 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 	}
 
 	irWrite(ctx, " @")
-	e = irName(ctx, fnDefNode.Class.NameNode, true)
-	if e != nil {
-		return e
-	}
+	irWrite(ctx, fnDefNode.AbsName)
+
+	/*
+		e = irName(ctx, fnDefNode.Class.NameNode, true)
+		if e != nil {
+			return e
+		}*/
 
 	e = irArgsList(ctx, &fnDefNode.Class.ArgsNode, isMemberFunc)
 	if e != nil {

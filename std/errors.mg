@@ -5,7 +5,7 @@ mod errors
 # @param e input error
 # @returns error code
 
-pub errCode(e error) u32:
+pub code(e error) u32:
     llvm "  %e0 = extractvalue %type.error %e, 0\n"
     llvm "  ret i32 %e0\n"
 ..
@@ -14,7 +14,7 @@ pub errCode(e error) u32:
 # @param e input error
 # @returns error message
 
-pub errMsg(e error) str:
+pub message(e error) str:
     llvm "  %e0 = extractvalue %type.error %e, 1\n"
     llvm "  ret %type.str %e0\n"
 ..
@@ -52,14 +52,14 @@ makeErr(code i32, msg str) error:
 # an error no matter what.
 # @returns error
 
-pub ok() error:
+pub errOk() error:
     llvm "  ret %type.error zeroinitializer\n"
 ..
 
 # Returns an error with code 1 indicating an opaque error.
 # @returns error
 
-pub failure(message str) error:
+pub errFailure(message str) error:
     ret makeErr(1, message)
 ..
 
@@ -67,13 +67,22 @@ pub failure(message str) error:
 # argument to a function or protocol.
 # @returns error
 
-pub invalidArgument(message str) error:
+pub errInvalidArgument(message str) error:
     ret makeErr(2, message)
 ..
 
 # Returns an error with code 3 indicating that the system is out of memory.
 # @returns error
 
-pub outOfMemory(message str) error:
+pub errOutOfMemory(message str) error:
     ret makeErr(3, message)
+..
+
+# Returns an error with code 4 indicating the operation hitting the end of a file.
+# This may or may not be an error condition, so good documentation is warranted
+# if this error is thrown and should be handled by the consumer.
+# @returns error
+
+pub errEndOfFile(message str) error:
+    ret makeErr(4, message)
 ..

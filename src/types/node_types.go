@@ -341,9 +341,11 @@ type NameTypePair struct {
 }
 
 type NodeExprVarDef struct {
-	Name  NodeName
-	Type  *NodeType
-	IsSsa bool
+	Name       NodeName
+	Type       *NodeType
+	IsSsa      bool
+	IsReturned bool
+	RetFlagId  string
 }
 
 func (n *NodeExprVarDef) GetInferredType() *NodeType {
@@ -647,9 +649,11 @@ func (n *NodeGenericClass) Print(indent int) {
 }
 
 type NodeFuncDef struct {
-	Class      NodeGenericClass
-	ReturnType *NodeType
-	Body       NodeBody
+	Class       NodeGenericClass
+	ReturnType  *NodeType
+	Body        NodeBody
+	AbsName     string
+	NoAliasName string
 
 	Deferred []*NodeStmtDefer
 	DeferCnt int

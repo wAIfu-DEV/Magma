@@ -70,6 +70,8 @@ const (
 	KwSizeof
 	KwContinue
 	KwBreak
+	KwAt
+	KwExtern
 )
 
 var KwTypeToRepr []string = []string{
@@ -120,6 +122,8 @@ var KwTypeToRepr []string = []string{
 	KwSizeof:     "sizeof",
 	KwContinue:   "continue",
 	KwBreak:      "break",
+	KwAt:         "@",
+	KwExtern:     "ext",
 }
 
 var KwReprToType map[string]KwType = map[string]KwType{
@@ -170,6 +174,8 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"sizeof":   KwSizeof,
 	"continue": KwContinue,
 	"break":    KwBreak,
+	"@":        KwAt,
+	"ext":      KwExtern,
 }
 
 type Token struct {

@@ -1,11 +1,11 @@
 mod io
 
-# Forward declarations
-# - compiler does a pass on the IR to remove duplicate declarations
-llvm "declare i32 @puts(ptr)\n"
-llvm "declare i32 @printf(ptr, ...)\n"
+use "strings.mg" strings
 
-llvm "\n"
+ext ext_puts puts(text ptr) i32
+
+# printf extern declaration is still LLVM as we do not support variadic args yet
+llvm "declare i32 @printf(ptr, ...)\n"
 
 # Format strings
 llvm "@.io.const.true  = private constant [5 x i8] c\"true\\00\"\n"
@@ -20,8 +20,8 @@ llvm "@.io.fmt.str  = private constant [3 x i8] c\"%s\\00\"\n"
 # @param text input string
 
 pub printLn (text str) void:
-    llvm "  %s = extractvalue %type.str %text, 0\n"  # extract string pointer
-    llvm "  call i32 @puts(ptr %s)\n"                # call stdlib puts
+    cStr ptr = strings.toPtr(text)
+    ext_puts(cStr)
 ..
 
 # Writes a string to stdout without suffix newline character.

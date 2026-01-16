@@ -6,6 +6,7 @@ import (
 	t "Magma/src/types"
 	"errors"
 	"fmt"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,6 +28,45 @@ type ParseCtx struct {
 	TokIdx          int
 	NextModifiers   []ModifierType
 	CurrentFunction *t.NodeFuncDef
+
+	PruneNext bool
+}
+
+type parsedName struct {
+	First    string
+	Parts    []string
+	HasParts bool
+}
+
+func parseNameNode(name t.NodeName) parsedName {
+	switch n := name.(type) {
+	case *t.NodeNameSingle:
+		return parsedName{
+			First:    n.Name,
+			HasParts: false,
+		}
+	case *t.NodeNameComposite:
+		return parsedName{
+			First:    n.Parts[0],
+			HasParts: true,
+			Parts:    n.Parts[1:],
+		}
+	}
+	return parsedName{}
+}
+
+func flattenName(name t.NodeName) string {
+	s := ""
+
+	parsed := parseNameNode(name)
+
+	s += parsed.First
+	if parsed.HasParts {
+		for _, x := range parsed.Parts {
+			s += "." + x
+		}
+	}
+	return s
 }
 
 func peek(ctx *ParseCtx) (t.Token, error) {
@@ -132,7 +172,7 @@ func parseModuleDecl(ctx *ParseCtx, _ t.Token) error {
 	return nil
 }
 
-func parseUseDecl(ctx *ParseCtx, tk t.Token) error {
+func parseUseDecl(ctx *ParseCtx, tk t.Token, prune bool) error {
 	e := ensureNoModifiers(ctx, tk)
 	if e != nil {
 		return e
@@ -169,7 +209,7 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token) error {
 	}
 
 	_, ok := ctx.Fctx.ImportAlias[alias.Repr]
-	if ok {
+	if ok && !prune { // alias shadowing is valid state if we will prune the use afterwards
 		return comp_err.CompilationErrorToken(
 			ctx.Fctx,
 			&alias,
@@ -188,7 +228,7 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token) error {
 		)
 	}
 
-	if slices.Contains(ctx.Fctx.Imports, absPath) {
+	if slices.Contains(ctx.Fctx.Imports, absPath) && !prune { // file import shadowing is valid state if we will prune the use afterwards
 		return comp_err.CompilationErrorToken(
 			ctx.Fctx,
 			&path,
@@ -201,6 +241,10 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token) error {
 	consume(ctx) // path
 	consume(ctx) // alias
 	consume(ctx) // newln
+
+	if prune {
+		return nil
+	}
 
 	ctx.Fctx.Imports = append(ctx.Fctx.Imports, absPath)
 	ctx.Fctx.ImportAlias[alias.Repr] = absPath
@@ -1413,6 +1457,9 @@ func ensureSimpleName(ctx *ParseCtx, tk t.Token, name t.NodeName) error {
 }
 
 func parseStructDef(ctx *ParseCtx, tk t.Token, gncls t.NodeGenericClass) (*t.NodeStructDef, error) {
+	if ctx.PruneNext {
+		return nil, nil
+	}
 
 	// check if struct name is valid (complex name not allowed)
 	e := ensureSimpleName(ctx, tk, gncls.NameNode)
@@ -1443,7 +1490,7 @@ func parseStructDef(ctx *ParseCtx, tk t.Token, gncls t.NodeGenericClass) (*t.Nod
 	}, nil
 }
 
-func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGenericClass) (*t.NodeFuncDef, error) {
+func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGenericClass, alias string) (*t.NodeFuncDef, error) {
 	isMemberFunc := false
 	fnNameSimple := ""
 
@@ -1459,6 +1506,13 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 		Class: gncls,
 	}
 
+	if alias != "" {
+		fnDef.NoAliasName = flattenName(gncls.NameNode)
+		aliasedNameNode := &t.NodeNameSingle{Name: alias}
+		fnDef.Class.NameNode = aliasedNameNode
+		fnNameSimple = aliasedNameNode.Name
+	}
+
 	ctx.CurrentFunction = fnDef
 	defer func() {
 		ctx.CurrentFunction = nil
@@ -1469,20 +1523,31 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 		return nil, e
 	}
 
-	bodyStart, e := peek(ctx)
-	if e != nil {
-		return nil, e
+	if alias == "" {
+		bodyStart, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+
+		bodyNode, e := parseBody(ctx, bodyStart)
+		if e != nil {
+			return nil, e
+		}
+		fnDef.Body = bodyNode
 	}
 
-	bodyNode, e := parseBody(ctx, bodyStart)
-	if e != nil {
-		return nil, e
-	}
-
-	fnDef.Body = bodyNode
 	fnDef.ReturnType = typeNode
+	fnDef.AbsName = ctx.Fctx.PackageName + "." + flattenName(gncls.NameNode)
 
-	if isMemberFunc {
+	// =========================================================================
+	// pruning should result in NO SIDE EFFECT
+	// section beyond this point is basically all side effects and nothing else
+	if ctx.PruneNext {
+		return nil, nil
+	}
+	// =========================================================================
+
+	if isMemberFunc && alias == "" { // alias == "" since aliased functions cannot be also member funcs
 		complexName := gncls.NameNode.(*t.NodeNameComposite)
 		if len(complexName.Parts) > 2 {
 			return nil, comp_err.CompilationErrorToken(
@@ -1544,6 +1609,70 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 	return fnDef, nil
 }
 
+func parseExternalFunc(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
+	consume(ctx) // consume "extern"
+
+	nAlias, e := parseName(ctx, tk, false)
+	if e != nil {
+		return nil, e
+	}
+
+	next, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	if next.Type != t.TokName {
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&next,
+			fmt.Sprintf("syntax error: expected external function name after alias but got '%s'", next.Repr),
+			"expected: `extern <alias> <actual name> (<args>) <return type>`",
+		)
+	}
+
+	n, e := parseName(ctx, next, false)
+	if e != nil {
+		return nil, e
+	}
+
+	next, e = peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	if next.Type != t.TokKeyword {
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&next,
+			fmt.Sprintf("syntax error: unexpected '%s' after name in extern function declaration", next.Repr),
+			"expected: `extern <name> (`",
+		)
+	}
+
+	gncls, e := parseGenericClass(ctx, n)
+	if e != nil {
+		return nil, e
+	}
+
+	after, e := peek(ctx)
+	if e != nil && !errors.Is(e, errOutOfBounds) {
+		return nil, e
+	}
+
+	if errors.Is(e, errOutOfBounds) || after.KeywType == t.KwNewline {
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&next,
+			fmt.Sprintf("syntax error: unexpected '%s' after argument list in external function declaration", next.Repr),
+			"expected: `extern <name> (<args>) <return type>",
+		)
+	}
+
+	alias := flattenName(nAlias)
+	return parseFuncDef(ctx, tk, after, gncls, alias)
+}
+
 func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
 	n, e := parseName(ctx, tk, true)
 	if e != nil {
@@ -1583,7 +1712,7 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 			return parseStructDef(ctx, tk, gncls)
 		}
 
-		return parseFuncDef(ctx, tk, after, gncls)
+		return parseFuncDef(ctx, tk, after, gncls, "")
 	default:
 		return nil, comp_err.CompilationErrorToken(
 			ctx.Fctx,
@@ -1695,6 +1824,93 @@ func parseLlvm(ctx *ParseCtx, tk t.Token) (*t.NodeLlvm, error) {
 	)
 }
 
+func parseCompilerDirective(ctx *ParseCtx, tk t.Token) error {
+	consume(ctx) // @
+
+	tk, e := peek(ctx)
+	if e != nil {
+		return e
+	}
+
+	if tk.Type != t.TokName {
+		return comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&tk,
+			fmt.Sprintf("syntax error: expected directive name after '@', but got '%s'", tk.Repr),
+			"expected: `@<name>`, ex: `@platform(\"windows\")`",
+		)
+	}
+	consume(ctx)
+
+	dirName := tk.Repr
+	dirArgs := []t.Token{}
+
+	next, e := peek(ctx)
+	if e != nil {
+		return e
+	}
+
+	if next.KeywType == t.KwParenOp {
+		consume(ctx)
+
+		next, e = peek(ctx)
+		if e != nil {
+			return e
+		}
+
+		for next.KeywType != t.KwParenCl {
+			switch next.Type {
+			case t.TokLitBool, t.TokLitNum, t.TokLitStr:
+				dirArgs = append(dirArgs, next)
+				consume(ctx)
+			default:
+				return comp_err.CompilationErrorToken(
+					ctx.Fctx,
+					&next,
+					"syntax error: argument in compiler directive needs to be a constant literal",
+					"expected: `@<name>(<literal>, ...)`, ex: `@platform(\"windows\")`",
+				)
+			}
+
+			next, e = peek(ctx)
+			if e != nil {
+				return e
+			}
+		}
+		consume(ctx)
+	}
+
+	switch dirName {
+	case "platform":
+		if len(dirArgs) < 1 {
+			return comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&tk,
+				"syntax error: directive 'platform' takes in 1 or many arguments",
+				"expected: `@platform(\"<platform/os>, ...\")`",
+			)
+		}
+
+		found := false
+
+		for _, tok := range dirArgs {
+			if runtime.GOOS == tok.Repr {
+				found = true
+			}
+		}
+
+		ctx.PruneNext = !found
+		return nil
+	default:
+		return comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&next,
+			"syntax error: invalid compiler directive name",
+			"expected: `@platform(...)`",
+		)
+	}
+}
+
 func parseGlobalDecl(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
 	var n t.NodeGlobalDecl = nil
 	var e error = nil
@@ -1706,6 +1922,10 @@ outer:
 		if e != nil {
 			return nil, e
 		}
+		if ctx.PruneNext {
+			ctx.PruneNext = false
+			return nil, nil
+		}
 		return n, nil
 
 	case t.TokKeyword:
@@ -1715,12 +1935,33 @@ outer:
 			return nil, nil
 		case t.KwPublic:
 			e = parseApplyModifier(ctx, tk, MdPublic)
+		case t.KwAt:
+			e = parseCompilerDirective(ctx, tk)
 		case t.KwModule:
 			e = parseModuleDecl(ctx, tk)
 		case t.KwUse:
-			e = parseUseDecl(ctx, tk)
+			e = parseUseDecl(ctx, tk, ctx.PruneNext)
+			if ctx.PruneNext {
+				ctx.PruneNext = false
+				return nil, nil
+			}
 		case t.KwLlvm:
-			return parseLlvm(ctx, tk)
+			n, e = parseLlvm(ctx, tk)
+			if e != nil {
+				return nil, e
+			}
+			if ctx.PruneNext {
+				ctx.PruneNext = false
+				return nil, nil
+			}
+			return n, nil
+		case t.KwExtern:
+			n, e = parseExternalFunc(ctx, tk)
+			if ctx.PruneNext {
+				ctx.PruneNext = false
+				return nil, nil
+			}
+			return n, nil
 
 		default:
 			break outer

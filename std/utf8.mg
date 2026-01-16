@@ -34,11 +34,11 @@ u32to16(v u32) u16:
 
 decodeOnce(it Utf8Iterator*) !Codepoint:
     if cast.ptou(it.start) == 0 || cast.ptou(it.end) == 0:
-        throw errors.invalidArgument("Utf8Iterator was not correctly initialized, use utf8.iterator")
+        throw errors.errInvalidArgument("Utf8Iterator was not correctly initialized, use utf8.iterator")
     ..
     cp Codepoint = decodeFirst(it.start, it.end)
     if cp.width == 0:
-        throw errors.failure("failed to decode utf8 codepoint")
+        throw errors.errFailure("failed to decode utf8 codepoint")
     ..
     ret cp
 ..
@@ -194,7 +194,9 @@ pub utf8To16(a alc.Allocator, s str) !u16[]:
 
     elemCount u64 = try utf8to16size(s)
     outSize u64 = elemCount * sizeof u16
-    outPtr u16* = try a.alloc(outSize)
+    outPtr u16* = try a.alloc(outSize + 1)
+
+    outPtr[outSize] = 0
 
     i u64 = 0
     while it.hasData():
@@ -229,7 +231,7 @@ encodeUtf8(cp u32, out u8*) !u64:
         ret 2
     elif cp <= 65535:
         if cp >= 55296 && cp <= 57343:
-            throw errors.failure("invalid unicode scalar value")
+            throw errors.errFailure("invalid unicode scalar value")
         ..
         out[0] = u32to8(224 | (cp >> 12))
         out[1] = u32to8(128 | ((cp >> 6) & 63))
@@ -242,7 +244,7 @@ encodeUtf8(cp u32, out u8*) !u64:
         out[3] = u32to8(128 | (cp & 63))
         ret 4
     else:
-        throw errors.failure("invalid unicode codepoint")
+        throw errors.errFailure("invalid unicode codepoint")
     ..
     ret 0
 ..
@@ -262,7 +264,7 @@ pub utf16to8size(in u16[]) !u64:
             cp = u16to32(w1)
 
             if cp > 1114111:
-                throw errors.failure("invalid unicode scalar value")
+                throw errors.errFailure("invalid unicode scalar value")
             ..
 
             totalBytes = totalBytes + codepointUtf8Size(cp)
@@ -271,14 +273,14 @@ pub utf16to8size(in u16[]) !u64:
 
         if w1 >= 55296 && w1 <= 56319:
             if i >= n:
-                throw errors.failure("unterminated utf16 surrogate pair")
+                throw errors.errFailure("unterminated utf16 surrogate pair")
             ..
 
             w2 u16 = in[i]
             i = i + 1
 
             if w2 < 56320 || w2 > 57343:
-                throw errors.failure("invalid utf16 surrogate pair")
+                throw errors.errFailure("invalid utf16 surrogate pair")
             ..
 
             high u32 = u16to32(w1 - 55296)
@@ -286,14 +288,14 @@ pub utf16to8size(in u16[]) !u64:
             cp = ((high << 10) | low) + cast.u64to32(65536)
 
             if cp > 1114111:
-                throw errors.failure("invalid unicode scalar value")
+                throw errors.errFailure("invalid unicode scalar value")
             ..
 
             totalBytes = totalBytes + codepointUtf8Size(cp)
             continue
         ..
 
-        throw errors.failure("unexpected low utf16 surrogate")
+        throw errors.errFailure("unexpected low utf16 surrogate")
     ..
     ret totalBytes
 ..
@@ -322,14 +324,14 @@ utf16to8iter(in u16[], out u8*, i u64*, n u64) !u64:
 
     if w1 <= 56319:
         if i[0] >= n:
-            throw errors.failure("unterminated utf16 surrogate pair")
+            throw errors.errFailure("unterminated utf16 surrogate pair")
         ..
 
         w2 u16 = in[i[0]]
         i[0] = i[0] + 1
 
         if w2 < 56320 || w2 > 57343:
-            throw errors.failure("invalid utf16 surrogate pair")
+            throw errors.errFailure("invalid utf16 surrogate pair")
         ..
 
         high u32 = u16to32(w1 - 55296)
@@ -339,7 +341,7 @@ utf16to8iter(in u16[], out u8*, i u64*, n u64) !u64:
         ret try encodeUtf8(cp, out)
     ..
 
-    throw errors.failure("unexpected low utf16 surrogate")
+    throw errors.errFailure("unexpected low utf16 surrogate")
 ..
 
 pub utf16to8(a alc.Allocator, in u16[]) !str:

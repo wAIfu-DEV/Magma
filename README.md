@@ -79,8 +79,8 @@ main() !void:
 
     my_retval i32 = try mightThrow() # try will result in automatic error re-throwing if the result of a function call is an error
 
-    throw errors.outOfMemory("") # throw will conditionally return the given error, only if the error is non-ok
-    throw errors.ok()            # this is a no-op and will cause no control flow changes
+    throw errors.errOutOfMemory("") # throw will conditionally return the given error, only if the error is non-ok
+    throw errors.errOk()            # this is a no-op and will cause no control flow changes
     # this keyword will reduce boilerplate for error handling (think go's err != nil { return err })
 
     # both `try` and `throw` require the current function to be throwing function, indicated by `!` before the return type
@@ -89,7 +89,7 @@ main() !void:
     my_reval i32, err error = mightThrow()
     code i32 = errors.code(err)
     
-    # a code of 0 indicates success (errors.ok)
+    # a code of 0 indicates success (errors.errOk)
 
     if code == 1: # they really should make enums for error code
         # handle specific error type

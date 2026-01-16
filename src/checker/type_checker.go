@@ -284,6 +284,8 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		n.InfType = makeNamedType("u64")
 		return nil
 	case *t.NodeExprCall:
+		fmt.Printf("call: %s\n", flattenName(n.Callee.(*t.NodeExprName).Name))
+
 		for _, a := range n.Args {
 			e := ctExpr(c, a)
 			if e != nil {
@@ -295,6 +297,9 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		if e != nil {
 			return e
 		}
+
+		fmt.Printf("is ptr to func: %t\n", n.IsFuncPointer)
+		fmt.Printf("func type: %s\n", flattenType(n.FuncPtrType))
 
 		if n.IsFuncPointer {
 			n.InfType = n.FuncPtrType.KindNode.(*t.NodeTypeFunc).RetType

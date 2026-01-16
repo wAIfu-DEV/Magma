@@ -234,6 +234,7 @@ func clGetFuncDefFromModule(c *ctx, name parsedName) (*t.NodeFuncDef, error) {
 
 	if !ok {
 		// TODO: compilation error
+		fmt.Printf("(in other module)\n")
 		fmt.Printf("name: %s\n", fnName)
 		return nil, fmt.Errorf("function name not defined in file")
 	}
@@ -251,6 +252,7 @@ func clGetFuncDefFromThisModule(c *ctx, fnName parsedName) (*t.NodeFuncDef, erro
 
 	if !ok {
 		// TODO: compilation error
+		fmt.Printf("(in this module)\n")
 		fmt.Printf("name: %s\n", fnName.First)
 		return nil, fmt.Errorf("function name not defined in file")
 	}
@@ -584,23 +586,30 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 
 			ownerType := n.Type
 
-			if len(nameExpr.MemberAccesses) > 0 {
-				ownerType = nameExpr.MemberAccesses[len(nameExpr.MemberAccesses)-1].Type
-			}
-
-			fmt.Printf("owner struct def: ")
-			ownerType.Print(0)
+			isShallowPtr := false // allow auto deref
+			var shallowPtrType *t.NodeType = nil
 
 			isPointerOwner := false
 
-			switch n2 := ownerType.KindNode.(type) {
-			case *t.NodeTypePointer:
-				isPointerOwner = true
-				ownerType = &t.NodeType{
-					Throws:   false,
-					KindNode: n2.Kind,
+			if isPointerType(ownerType) {
+				elemKind := ownerType.KindNode.(*t.NodeTypePointer).Kind
+				elemType := &t.NodeType{KindNode: elemKind}
+				if !isPointerType(elemType) {
+					isShallowPtr = true
+					shallowPtrType = elemType
 				}
 			}
+
+			if len(nameExpr.MemberAccesses) > 0 {
+				fmt.Printf("from member access: ")
+				last := nameExpr.MemberAccesses[len(nameExpr.MemberAccesses)-1]
+				ownerType = last.Type
+				isPointerOwner = last.PtrDeref
+			}
+
+			fmt.Printf("owner is ptr deref: %t\n", isPointerOwner)
+			fmt.Printf("owner struct def: ")
+			ownerType.Print(0)
 
 			// check if is member func on struct
 			strt, e := clGetStructDefFromType(c, ownerType)
@@ -622,9 +631,32 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 						return nil
 					}
 				}
-			} else {
-				fmt.Printf("failed to find owner struct def\n")
 			}
+
+			if isShallowPtr {
+				strt, e = clGetStructDefFromType(c, shallowPtrType)
+				if e == nil {
+					fmt.Printf("found owner struct def of member call after owner deref\n")
+
+					for mn, v := range strt.Funcs {
+						fmt.Printf("member: %s\n", mn)
+						if mn == memberName {
+							fmt.Printf("is member func call\n")
+
+							call.IsMemberFunc = true
+							call.MemberOwnerType = ownerType
+							call.AssociatedFnDef = v
+							call.MemberOwnerIsPtr = true
+							call.MemberOwnerName = ownerName
+							call.MemberOwnerModule = strt.Module
+							call.MemberOwnerName.MemberAccesses = nameExpr.MemberAccesses
+							return nil
+						}
+					}
+				}
+			}
+
+			fmt.Printf("failed to find owner struct def\n")
 		}
 
 		if len(nameExpr.MemberAccesses) > 0 {

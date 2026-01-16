@@ -8,6 +8,8 @@ use "../std/allocator.mg" alloc
 use "../std/heap.mg"      heap
 # use "../std/utf8.mg"      utf8
 
+use "../std/file.mg"      file
+
 MyNestedStruct(
     field u32
 )
@@ -41,7 +43,7 @@ func3() str:
 
 throwing(isThrowing bool) !i32:
     if isThrowing:
-        throw errors.failure("from throwing func")
+        throw errors.errFailure("from throwing func")
     ..
     ret 2
 ..
@@ -54,10 +56,6 @@ pub main(args str[]) !void:
         io.printLn("YIPPEE!!")
     ..
 
-    if true || true && false:
-        ret
-    ..
-
     allocOnHeap u8* = try heap.alloc(8)
 
     byteSlice u8[] = slices.fromPtr(allocOnHeap, 8)
@@ -65,7 +63,7 @@ pub main(args str[]) !void:
     defer heap.free(allocOnHeap)
 
     myVal i32, myE error = throwing(true)
-    errCode u32 = errors.errCode(myE)
+    errCode u32 = errors.code(myE)
 
     if errCode != 0:
         io.printLn("err destructure worked!!")
@@ -74,7 +72,7 @@ pub main(args str[]) !void:
         io.printLn("")
 
         io.print("err msg: ")
-        io.print(errors.errMsg(myE))
+        io.print(errors.message(myE))
         io.printLn("")
 
         io.print("uninit val: ")
@@ -211,7 +209,7 @@ pub main(args str[]) !void:
 
     val i32 = func2(func1())
 
-    throw errors.invalidArgument("hi from the main function")
+    throw errors.errInvalidArgument("hi from the main function")
 
     io.printLn("Did not throw.")
     ret
