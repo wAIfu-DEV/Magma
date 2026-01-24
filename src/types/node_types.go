@@ -343,9 +343,11 @@ type NameTypePair struct {
 type NodeExprVarDef struct {
 	Name       NodeName
 	Type       *NodeType
+	AbsName    string
+	RetFlagId  string
 	IsSsa      bool
 	IsReturned bool
-	RetFlagId  string
+	IsGlobal   bool
 }
 
 func (n *NodeExprVarDef) GetInferredType() *NodeType {
@@ -440,6 +442,22 @@ func (n *NodeExprSizeof) Print(indent int) {
 		return
 	}
 	n.Type.Print(indent + 1)
+}
+
+type NodeExprAddrof struct {
+	Expr    NodeExpr
+	InfType *NodeType
+}
+
+func (n *NodeExprAddrof) GetInferredType() *NodeType {
+	fmt.Println("ExprAddrof")
+	return n.InfType
+}
+
+func (n *NodeExprAddrof) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprAddrof\n")
+	n.Expr.Print(indent + 1)
 }
 
 type NodeExprDestructor struct {
@@ -719,6 +737,7 @@ func (*NodeExprTry) IsExpr()               {}
 func (*NodeExprDestructureAssign) IsExpr() {}
 func (*NodeExprDestructor) IsExpr()        {}
 func (*NodeExprSizeof) IsExpr()            {}
+func (*NodeExprAddrof) IsExpr()            {}
 func (*NodeTypeNamed) IsType()             {}
 func (*NodeTypePointer) IsType()           {}
 func (*NodeTypeRfc) IsType()               {}
@@ -737,6 +756,7 @@ func (*NodeStmtElse) IsStatement()         {}
 func (*NodeStmtWhile) IsStatement()        {}
 func (*NodeLlvm) IsStatement()             {}
 func (*NodeStmtDefer) IsStatement()        {}
+func (*NodeExprVarDef) IsGlobalDecl()      {}
 func (*NodeFuncDef) IsGlobalDecl()         {}
 func (*NodeStructDef) IsGlobalDecl()       {}
 func (*NodeLlvm) IsGlobalDecl()            {}

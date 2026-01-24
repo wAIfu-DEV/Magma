@@ -243,6 +243,7 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token, prune bool) error {
 	consume(ctx) // newln
 
 	if prune {
+		fmt.Printf("pruning use decl for: \"%s\" %s\n", path.Repr, alias.Repr)
 		return nil
 	}
 
@@ -549,6 +550,29 @@ func parseUnaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
 
 			return &t.NodeExprSizeof{Type: typeNd}, nil
 
+		case t.KwAddrof:
+			consume(ctx)
+			next, e := peek(ctx)
+			if e != nil {
+				return nil, e
+			}
+
+			if next.KeywType == t.KwNewline {
+				return nil, comp_err.CompilationErrorToken(
+					ctx.Fctx,
+					&next,
+					"syntax error: expected expression after 'addrof'",
+					"expected: `addrof <expr>`",
+				)
+			}
+
+			exprNd, e := parseExpression(ctx, next, 0)
+			if e != nil {
+				return nil, e
+			}
+
+			return &t.NodeExprAddrof{Expr: exprNd}, nil
+
 		case t.KwExclam, t.KwMinus, t.KwAsterisk, t.KwAmpersand, t.KwTilde:
 			consume(ctx)
 			next, e := peek(ctx)
@@ -586,11 +610,9 @@ func getBinaryPrecedence(tk t.Token) int {
 	}
 
 	switch tk.KeywType {
-	case t.KwAsterisk:
-		// TODO: implement
-		//case KW_TYPE_SLASH:
-		//case KW_TYPE_PERCENT:
+	case t.KwAsterisk, t.KwPercent, t.KwSlash:
 		return 50
+
 	case t.KwPlus, t.KwMinus:
 		return 40
 
@@ -1184,6 +1206,15 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (*t.NodeType, error) 
 		return nil, e
 	}
 
+	// owned marker
+	if tk.KeywType == t.KwDollar {
+		consume(ctx)
+		tk, e = peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+	}
+
 	if tk.KeywType == t.KwParenOp {
 		n, e := parseFuncType(ctx)
 		if e != nil {
@@ -1684,15 +1715,6 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 		return nil, e
 	}
 
-	if next.Type != t.TokKeyword {
-		return nil, comp_err.CompilationErrorToken(
-			ctx.Fctx,
-			&next,
-			fmt.Sprintf("syntax error: unexpected '%s' after name in global declaration", next.Repr),
-			"expected in global scope: `<name> :`, `<name> (",
-		)
-	}
-
 	switch next.KeywType {
 	case t.KwParenOp:
 		// TODO: apply modifiers
@@ -1714,11 +1736,23 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 
 		return parseFuncDef(ctx, tk, after, gncls, "")
 	default:
+		tNode, e := parseType(ctx, next, false)
+		if e == nil {
+			return &t.NodeExprVarDef{
+				Name:       n,
+				AbsName:    ctx.Fctx.PackageName + "." + flattenName(n),
+				Type:       tNode,
+				IsGlobal:   true,
+				IsSsa:      false,
+				IsReturned: false,
+			}, nil
+		}
+
 		return nil, comp_err.CompilationErrorToken(
 			ctx.Fctx,
 			&next,
 			fmt.Sprintf("syntax error: unexpected '%s' after name in global declaration", next.Repr),
-			"expected in global scope: `<name> :`, `<name> (",
+			"expected in global scope: `<name> <type>`, `<name> (",
 		)
 	}
 }
@@ -1863,6 +1897,13 @@ func parseCompilerDirective(ctx *ParseCtx, tk t.Token) error {
 			case t.TokLitBool, t.TokLitNum, t.TokLitStr:
 				dirArgs = append(dirArgs, next)
 				consume(ctx)
+			case t.TokKeyword:
+				if next.KeywType == t.KwComma {
+					consume(ctx)
+					goto switch_end
+				}
+				consume(ctx)
+				fallthrough
 			default:
 				return comp_err.CompilationErrorToken(
 					ctx.Fctx,
@@ -1871,6 +1912,7 @@ func parseCompilerDirective(ctx *ParseCtx, tk t.Token) error {
 					"expected: `@<name>(<literal>, ...)`, ex: `@platform(\"windows\")`",
 				)
 			}
+		switch_end:
 
 			next, e = peek(ctx)
 			if e != nil {
@@ -1896,6 +1938,11 @@ func parseCompilerDirective(ctx *ParseCtx, tk t.Token) error {
 		for _, tok := range dirArgs {
 			if runtime.GOOS == tok.Repr {
 				found = true
+
+				if found {
+					fmt.Printf("found platform: %s\n", runtime.GOOS)
+					break
+				}
 			}
 		}
 

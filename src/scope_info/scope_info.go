@@ -191,6 +191,8 @@ func bldGlDecl(ctx *lcx, glDecl t.NodeGlobalDecl) error {
 		return bldFuncDef(ctx, n)
 	case *t.NodeStructDef:
 		declStructInStack(ctx, n)
+	case *t.NodeExprVarDef:
+		declVarInStack(ctx, n)
 	}
 	return nil
 }

@@ -23,7 +23,7 @@ pub itof(x i64) f64:
     llvm "ret double %c\n"
 ..
 
-pub utof(x i64) f64:
+pub utof(x u64) f64:
     llvm "%c = uitofp i64 %x to double\n"
     llvm "ret double %c\n"
 ..

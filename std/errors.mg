@@ -4,7 +4,6 @@ mod errors
 # A code of 0 indicates a successful operation.
 # @param e input error
 # @returns error code
-
 pub code(e error) u32:
     llvm "  %e0 = extractvalue %type.error %e, 0\n"
     llvm "  ret i32 %e0\n"
@@ -13,7 +12,6 @@ pub code(e error) u32:
 # Returns the message from an error.
 # @param e input error
 # @returns error message
-
 pub message(e error) str:
     llvm "  %e0 = extractvalue %type.error %e, 1\n"
     llvm "  ret %type.str %e0\n"
@@ -23,21 +21,20 @@ pub message(e error) str:
 # For example: 0 => "ok", 1 => "unexpected"
 # @param e input error
 # @returns error type as string
-
 pub toStr(e error) str:
-    code u32
+    c u32 = code(e)
 
-    llvm "  %e0 = extractvalue %type.error %e, 0\n"
-    llvm "  store i32 %e0, ptr %code\n"
-
-    if code == 0:
+    if c == 0:
         ret "ok"
-    elif code == 1:
+    elif c == 1:
         ret "unexpected"
-    elif code == 2:
-        ret "invalid_argument"
+    elif c == 2:
+        ret "invalid argument"
+    elif c == 3:
+        ret "out of memory"
+    elif c == 4:
+        ret "end of file"
     ..
-
     ret ""
 ..
 
@@ -51,14 +48,12 @@ makeErr(code i32, msg str) error:
 # There isn't any reason to use this function, unless a client code must return 
 # an error no matter what.
 # @returns error
-
 pub errOk() error:
     llvm "  ret %type.error zeroinitializer\n"
 ..
 
 # Returns an error with code 1 indicating an opaque error.
 # @returns error
-
 pub errFailure(message str) error:
     ret makeErr(1, message)
 ..
@@ -66,14 +61,12 @@ pub errFailure(message str) error:
 # Returns an error with code 2 indicating that the client provided an invalid
 # argument to a function or protocol.
 # @returns error
-
 pub errInvalidArgument(message str) error:
     ret makeErr(2, message)
 ..
 
 # Returns an error with code 3 indicating that the system is out of memory.
 # @returns error
-
 pub errOutOfMemory(message str) error:
     ret makeErr(3, message)
 ..
@@ -82,7 +75,6 @@ pub errOutOfMemory(message str) error:
 # This may or may not be an error condition, so good documentation is warranted
 # if this error is thrown and should be handled by the consumer.
 # @returns error
-
 pub errEndOfFile(message str) error:
     ret makeErr(4, message)
 ..

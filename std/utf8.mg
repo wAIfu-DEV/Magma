@@ -1,5 +1,7 @@
 mod utf8
 
+# TODO: rewrite magic numbers using 0x notation
+
 use "errors.mg"    errors
 use "strings.mg"   strings
 use "slices.mg"    slices
@@ -11,10 +13,7 @@ Utf8Iterator(
     end   ptr,
 )
 
-Codepoint(
-    value u32,
-    width u8,
-)
+Codepoint(value u32, width u8)
 
 u8to32(v u8) u32:
     ret cast.u64to32(cast.u8to64(v))
@@ -71,10 +70,11 @@ Utf8Iterator.hasData() bool:
     ret cast.ptou(this.start) < cast.ptou(this.end)
 ..
 
+# Hottest function for UTF8 decoding, most prone to be optimized in the future
+# Keep bloat out of it, no defers or error return as those will increase
+# complexity and obfuscate the happy path.
 decodeFirst(start u8*, end u8*) Codepoint:
     outCp Codepoint
-    outCp.value = 0
-    outCp.width = 0
 
     if cast.ptou(start) >= cast.ptou(end):
         ret outCp
@@ -189,14 +189,14 @@ utf8to16size(s str) !u64:
     ret total
 ..
 
-pub utf8To16(a alc.Allocator, s str) !u16[]:
+pub utf8To16(a alc.Allocator, s str) !$u16[]:
     it Utf8Iterator = iterator(s)
 
     elemCount u64 = try utf8to16size(s)
     outSize u64 = elemCount * sizeof u16
     outPtr u16* = try a.alloc(outSize + 1)
 
-    outPtr[outSize] = 0
+    outPtr[elemCount] = 0
 
     i u64 = 0
     while it.hasData():
@@ -218,7 +218,7 @@ pub utf8To16(a alc.Allocator, s str) !u16[]:
             i = i + 1
         ..
     ..
-    ret slices.fromPtr(outPtr, outSize)
+    ret slices.fromPtr(outPtr, elemCount)
 ..
 
 encodeUtf8(cp u32, out u8*) !u64:
@@ -344,31 +344,25 @@ utf16to8iter(in u16[], out u8*, i u64*, n u64) !u64:
     throw errors.errFailure("unexpected low utf16 surrogate")
 ..
 
-pub utf16to8(a alc.Allocator, in u16[]) !str:
+pub utf16to8(a alc.Allocator, in u16[]) !$str:
     n u64 = slices.count(in)
     if n == 0:
-        ret strings.fromPtr(cast.utop(0), 0)
+        ret strings.fromPtrNoCopy(cast.utop(0), 0)
     ..
 
     outSize u64 = try utf16to8size(in)
     if outSize == 0:
-        ret strings.fromPtr(cast.utop(0), 0)
+        ret strings.fromPtrNoCopy(cast.utop(0), 0)
     ..
 
     outPtr u8* = try a.alloc(outSize)
-
-    # stinky hack to have pointer to stack var
-    tmp u64[1]
-    i u64* = slices.toPtr(tmp)
-
-    i[0] = 0
-
     writePtr u8* = outPtr
+    i u64 = 0
 
-    while i[0] < n:
-        writeSize u64 = try utf16to8iter(in, writePtr, i, n)
+    while i < n:
+        writeSize u64 = try utf16to8iter(in, writePtr, addrof i, n)
         writePtr = cast.utop(cast.ptou(writePtr) + writeSize)
     ..
 
-    ret strings.fromPtr(outPtr, outSize)
+    ret strings.fromPtrNoCopy(outPtr, outSize)
 ..

@@ -283,6 +283,9 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 	case *t.NodeExprSizeof:
 		n.InfType = makeNamedType("u64")
 		return nil
+	case *t.NodeExprAddrof:
+		n.InfType = makeNamedType("ptr")
+		return nil
 	case *t.NodeExprCall:
 		fmt.Printf("call: %s\n", flattenName(n.Callee.(*t.NodeExprName).Name))
 
@@ -671,6 +674,8 @@ func ctGlDecl(c *ctx, glDecl t.NodeGlobalDecl) error {
 	switch n := glDecl.(type) {
 	case *t.NodeFuncDef:
 		return ctFuncDef(c, n)
+	case *t.NodeExprVarDef:
+		return ctExpr(c, n)
 	case *t.NodeStructDef:
 		return nil // TODO: check type names of arguments
 	}

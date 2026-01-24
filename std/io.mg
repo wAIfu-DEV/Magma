@@ -1,8 +1,16 @@
 mod io
 
 use "strings.mg" strings
+use "writer.mg"  writer
+use "reader.mg"  reader
 
-ext ext_puts puts(text ptr) i32
+@platform("windows")
+use "win/io_impl.mg" impl_io
+
+@platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
+use "unix/io_impl.mg" impl_io
+
+ext ext_stdlib_puts puts(text ptr) i32
 
 # printf extern declaration is still LLVM as we do not support variadic args yet
 llvm "declare i32 @printf(ptr, ...)\n"
@@ -16,48 +24,14 @@ llvm "@.io.fmt.int  = private constant [5 x i8] c\"%lld\\00\"\n"
 llvm "@.io.fmt.flt  = private constant [4 x i8] c\"%lf\\00\"\n"
 llvm "@.io.fmt.str  = private constant [3 x i8] c\"%s\\00\"\n"
 
-# Writes a string to stdout followed by a newline character.
-# @param text input string
-
-pub printLn (text str) void:
-    cStr ptr = strings.toPtr(text)
-    ext_puts(cStr)
+pub stdout () writer.Writer:
+    ret impl_io.stdout()
 ..
 
-# Writes a string to stdout without suffix newline character.
-# For the newline variant, use printLn
-# @param text input string
-
-pub print (text str) void:
-    llvm "  %s = extractvalue %type.str %text, 0\n"
-    llvm "  call i32 (ptr, ...) @printf(ptr @.io.fmt.str, ptr %s)\n"
+pub stderr () writer.Writer:
+    ret impl_io.stderr()
 ..
 
-# Writes a unsigned 64bit number (u64) to stdout.
-# @param num input number
-
-pub printUint (num u64) void:
-    llvm "  call i32 (ptr, ...) @printf(ptr @.io.fmt.uint, i64 %num)\n"
-..
-
-# Writes a signed 64bit number (i64) to stdout.
-# @param num input number
-
-pub printInt (num i64) void:
-    llvm "  call i32 (ptr, ...) @printf(ptr @.io.fmt.int, i64 %num)\n"
-..
-
-# Writes a floating point 64bit number (f64) to stdout.
-# @param num input number
-
-pub printFloat (num f64) void:
-    llvm "  call i32 (ptr, ...) @printf(ptr @.io.fmt.flt, double %num)\n"
-..
-
-# Writes a boolean value ("true" / "false") to stdout.
-# @param boolean input bool
-
-pub printBool (boolean bool) void:
-    llvm "  %b = select i1 %boolean, ptr @.io.const.true, ptr @.io.const.false\n"
-    llvm "  call i32 (ptr, ...) @printf(ptr @.io.fmt.str, ptr %b)\n"
+pub stdin () reader.Reader:
+    ret impl_io.stdin()
 ..

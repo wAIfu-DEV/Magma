@@ -72,6 +72,9 @@ const (
 	KwBreak
 	KwAt
 	KwExtern
+	KwPercent
+	KwAddrof
+	KwSlash
 )
 
 var KwTypeToRepr []string = []string{
@@ -124,6 +127,9 @@ var KwTypeToRepr []string = []string{
 	KwBreak:      "break",
 	KwAt:         "@",
 	KwExtern:     "ext",
+	KwPercent:    "%",
+	KwAddrof:     "addrof",
+	KwSlash:      "/",
 }
 
 var KwReprToType map[string]KwType = map[string]KwType{
@@ -176,6 +182,9 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"break":    KwBreak,
 	"@":        KwAt,
 	"ext":      KwExtern,
+	"%":        KwPercent,
+	"addrof":   KwAddrof,
+	"/":        KwSlash,
 }
 
 type Token struct {

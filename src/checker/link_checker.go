@@ -445,7 +445,7 @@ func clExistsInScope(c *ctx, scope *t.Scope, name *t.NodeExprName, ent entryType
 
 		fnDef, e := clGetFuncDefFromName(c, name.Name)
 		if e != nil {
-			return false, false, nil, false, e
+			return false, false, nil, false, nil // we drop error, is that correct?
 		} else if fnDef != nil {
 			return true, false, fnDef, false, nil
 		}
@@ -713,6 +713,8 @@ func clExpr(c *ctx, expr t.NodeExpr) error {
 		return nil
 	case *t.NodeExprSizeof:
 		return clType(c, n.Type)
+	case *t.NodeExprAddrof:
+		return clExpr(c, n.Expr)
 	case *t.NodeExprCall:
 		return clExprCall(c, n)
 	case *t.NodeExprTry:
@@ -1016,6 +1018,8 @@ func clGlDecl(c *ctx, glDecl t.NodeGlobalDecl) error {
 		return clFuncDef(c, n)
 	case *t.NodeStructDef:
 		return clStructDef(c, n)
+	case *t.NodeExprVarDef:
+		return clExpr(c, n)
 	}
 	return nil
 }
