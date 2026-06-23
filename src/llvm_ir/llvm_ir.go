@@ -172,9 +172,9 @@ func extractBoxedPtrType(from *t.NodeType) *t.NodeType {
 	switch n := from.KindNode.(type) {
 	case *t.NodeTypePointer:
 		return &t.NodeType{
-			KindNode:   n.Kind,
-			Throws:     from.Throws,
-			Destructor: from.Destructor,
+			KindNode: n.Kind,
+			Throws:   from.Throws,
+			// Destructor: from.Destructor,
 		}
 	}
 	return nil
@@ -359,7 +359,9 @@ func irGlVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) error {
 	cpy := *ctx
 	cpy.bld.Body = ctx.bld.Head
 
-	irWritef(&cpy, "@%s = internal thread_local global ", vd.AbsName)
+	//irWritef(&cpy, "@%s = internal global ", vd.AbsName)
+	irWritef(&cpy, "@%s = private thread_local global ", vd.AbsName)
+	//irWritef(&cpy, "@%s = private static thread_local global ", vd.AbsName)
 
 	e := irType(&cpy, vd.Type)
 	if e != nil {
@@ -373,9 +375,10 @@ func irGlVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) error {
 func irVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) (SsaName, error) {
 	allocSsa := irNameSsa(ctx, vd.Name, false)
 
+	/* DEPRECATED
 	if vd.Type.Destructor != nil {
 		irWrite(ctx, "  ; has destructor\n")
-	}
+	}*/
 
 	irWriteHdf(ctx, "  %s = alloca ", allocSsa.Repr)
 
@@ -590,6 +593,7 @@ func irExprCallFuncNonPtr(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (Ss
 
 	argsSsa := make([]SsaName, len(fnCall.Args))
 	for i, expr := range fnCall.Args {
+		// TODO: will crash if wrong number of args
 		argT := fnCall.AssociatedFnDef.Class.ArgsNode.Args[i].TypeNode
 
 		exprSsa, e := irExpression(ctx, argT, expr, false)
@@ -793,9 +797,11 @@ func irExprCallFuncMember(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (Ss
 	return ssa, nil
 }
 
+/* DEPRECATED
 func irExprDestructor(ctx *IrCtx, destructor *t.NodeExprDestructor) (SsaName, error) {
 	continueLbl := irSsaName(ctx)
 	preventLbl := irSsaName(ctx)
+
 
 	if destructor.VarDef.IsReturned {
 		condSsa := irSsaLocal(ctx)
@@ -806,11 +812,6 @@ func irExprDestructor(ctx *IrCtx, destructor *t.NodeExprDestructor) (SsaName, er
 
 	irWrite(ctx, "  call void @")
 	irWrite(ctx, destructor.Destructor.AbsName)
-	/*
-		e := irName(ctx, destructor.Destructor.Class.NameNode, true)
-		if e != nil {
-			return ssaName(""), e
-		}*/
 
 	// TODO: use AbsName instead
 	irWritef(ctx, "(ptr %%%s)\n", destructor.VarDef.Name.(*t.NodeNameSingle).Name)
@@ -822,6 +823,7 @@ func irExprDestructor(ctx *IrCtx, destructor *t.NodeExprDestructor) (SsaName, er
 
 	return SsaName{}, nil
 }
+*/
 
 func irExprFuncCall(ctx *IrCtx, fnCall *t.NodeExprCall, keepError bool, topLevel bool) (SsaName, error) {
 	var ssa = SsaName{}
@@ -916,17 +918,18 @@ func irExprSizeof(ctx *IrCtx, sz *t.NodeExprSizeof) (SsaName, error) {
 	}
 
 	if isVoidType(sz.Type) {
+		irWrite(ctx, "; sizeof void type\n")
 		return SsaName{Repr: "0", IsLiteral: true}, nil
 	}
 
 	switch n := sz.Type.KindNode.(type) {
 	case *t.NodeTypePointer, *t.NodeTypeRfc, *t.NodeTypeFunc:
-		ptrBytes := magmatypes.NumberTypes["ptr"].ByteSize / 8
+		ptrBytes := 8 // TODO: make machine specific
 		return SsaName{Repr: strconv.Itoa(ptrBytes), IsLiteral: true}, nil
 	case *t.NodeTypeNamed:
 		if nn, ok := n.NameNode.(*t.NodeNameSingle); ok {
 			if nn.Name == "ptr" {
-				ptrBytes := magmatypes.NumberTypes["ptr"].ByteSize / 8
+				ptrBytes := 8 // TODO: make machine specific
 				return SsaName{Repr: strconv.Itoa(ptrBytes), IsLiteral: true}, nil
 			}
 			if nn.Name == "bool" {
@@ -2422,8 +2425,9 @@ func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr, topLeve
 		return irExprAssign(ctx, ne, ne.Left, ne.Right)
 	case *t.NodeExprCall:
 		return irExprFuncCall(ctx, ne, false, topLevel)
-	case *t.NodeExprDestructor:
-		return irExprDestructor(ctx, ne)
+	// DEPRECATED
+	/*case *t.NodeExprDestructor:
+	return irExprDestructor(ctx, ne)*/
 	case *t.NodeExprUnary:
 		return irExprUnary(ctx, expectedType, ne)
 	case *t.NodeExprTry:
@@ -2484,6 +2488,8 @@ func irJmpToParentDeferOnRet(ctx *IrCtx, parentCtx *IrCtx) {
 }
 
 func irStmtReturnDeferred(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
+
+	/* DEPRECATED
 	switch ne := stmtRet.Expression.(type) {
 	case *t.NodeExprName:
 		switch ne2 := ne.AssociatedNode.(type) {
@@ -2497,7 +2503,7 @@ func irStmtReturnDeferred(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
 				irWritef(ctx, "  store i1 1, ptr %%.destr%s\n", ne2.RetFlagId)
 			}
 		}
-	}
+	}*/
 
 	// set flag for return after deferred statements
 	irWrite(ctx, "  store i1 1, ptr %.defer.ret\n")
@@ -2907,29 +2913,30 @@ func irBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef, isLoopBody b
 		case *t.NodeStmtDefer:
 			cpy.CurrDeferIdx++
 			deferred = append(deferred, n)
-		case *t.NodeStmtExpr:
-			switch n2 := n.Expression.(type) {
-			case *t.NodeExprVarDef:
-				if n2.Type.Destructor != nil {
-					cpy.CurrDeferIdx++
-					deferred = append(deferred, &t.NodeStmtDefer{
-						Expression: &t.NodeExprDestructor{
-							VarDef:     n2,
-							Destructor: n2.Type.Destructor,
-						},
-					})
-				}
-			case *t.NodeExprVarDefAssign:
-				if n2.VarDef.Type.Destructor != nil {
-					cpy.CurrDeferIdx++
-					deferred = append(deferred, &t.NodeStmtDefer{
-						Expression: &t.NodeExprDestructor{
-							VarDef:     n2.VarDef,
-							Destructor: n2.VarDef.Type.Destructor,
-						},
-					})
-				}
-			}
+			/* DEPRECATED
+			case *t.NodeStmtExpr:
+				switch n2 := n.Expression.(type) {
+				case *t.NodeExprVarDef:
+					if n2.Type.Destructor != nil {
+						cpy.CurrDeferIdx++
+						deferred = append(deferred, &t.NodeStmtDefer{
+							Expression: &t.NodeExprDestructor{
+								VarDef:     n2,
+								Destructor: n2.Type.Destructor,
+							},
+						})
+					}
+				case *t.NodeExprVarDefAssign:
+					if n2.VarDef.Type.Destructor != nil {
+						cpy.CurrDeferIdx++
+						deferred = append(deferred, &t.NodeStmtDefer{
+							Expression: &t.NodeExprDestructor{
+								VarDef:     n2.VarDef,
+								Destructor: n2.VarDef.Type.Destructor,
+							},
+						})
+					}
+				}*/
 		}
 
 		e := irStatement(&cpy, stmt, fnDef)
@@ -2978,9 +2985,13 @@ func irBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef, isLoopBody b
 
 	if isLoopBody {
 		shouldBrkSsa := irSsaLocal(ctx)
+		brkLbl := irSsaName(ctx)
 		afterLbl := irSsaName(ctx)
 		irWritef(&cpy, "  %s = load i1, ptr %%.defer.brk\n", shouldBrkSsa.Repr)
-		irWritef(&cpy, "  br i1 %s, label %%%s, label %%%s\n", shouldBrkSsa.Repr, ctx.LoopExitLbl.Repr, afterLbl.Repr)
+		irWritef(&cpy, "  br i1 %s, label %%%s, label %%%s\n", shouldBrkSsa.Repr, brkLbl.Repr, afterLbl.Repr)
+		irWritef(&cpy, "%s:\n", brkLbl.Repr)
+		irWrite(&cpy, "  store i1 0, ptr %.defer.brk\n")
+		irWritef(&cpy, "  br label %%%s\n", ctx.LoopExitLbl.Repr)
 		irWritef(&cpy, "%s:\n", afterLbl.Repr)
 	}
 
@@ -3043,31 +3054,32 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 		case *t.NodeStmtDefer:
 			cpy.CurrDeferIdx++
 			fnDef.Deferred = append(fnDef.Deferred, n)
-		case *t.NodeStmtExpr:
-			switch n2 := n.Expression.(type) {
-			case *t.NodeExprVarDef:
-				if n2.Type.Destructor != nil {
-					cpy.CurrDeferIdx++
-					n2.RetFlagId = irSsaName(ctx).Repr
-					fnDef.Deferred = append(fnDef.Deferred, &t.NodeStmtDefer{
-						Expression: &t.NodeExprDestructor{
-							VarDef:     n2,
-							Destructor: n2.Type.Destructor,
-						},
-					})
-				}
-			case *t.NodeExprVarDefAssign:
-				if n2.VarDef.Type.Destructor != nil {
-					cpy.CurrDeferIdx++
-					n2.VarDef.RetFlagId = irSsaName(ctx).Repr
-					fnDef.Deferred = append(fnDef.Deferred, &t.NodeStmtDefer{
-						Expression: &t.NodeExprDestructor{
-							VarDef:     n2.VarDef,
-							Destructor: n2.VarDef.Type.Destructor,
-						},
-					})
-				}
-			}
+			/* DEPRECATED
+			case *t.NodeStmtExpr:
+				switch n2 := n.Expression.(type) {
+				case *t.NodeExprVarDef:
+					if n2.Type.Destructor != nil {
+						cpy.CurrDeferIdx++
+						n2.RetFlagId = irSsaName(ctx).Repr
+						fnDef.Deferred = append(fnDef.Deferred, &t.NodeStmtDefer{
+							Expression: &t.NodeExprDestructor{
+								VarDef:     n2,
+								Destructor: n2.Type.Destructor,
+							},
+						})
+					}
+				case *t.NodeExprVarDefAssign:
+					if n2.VarDef.Type.Destructor != nil {
+						cpy.CurrDeferIdx++
+						n2.VarDef.RetFlagId = irSsaName(ctx).Repr
+						fnDef.Deferred = append(fnDef.Deferred, &t.NodeStmtDefer{
+							Expression: &t.NodeExprDestructor{
+								VarDef:     n2.VarDef,
+								Destructor: n2.VarDef.Type.Destructor,
+							},
+						})
+					}
+				}*/
 		}
 
 		e := irStatement(&cpy, stmt, fnDef)
@@ -3301,9 +3313,14 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 		return e
 	}
 
-	irWrite(ctx, " alwaysinline ")
-
 	ctx.CurrFunc = fnDefNode
+
+	if len(fnDefNode.Body.Statements) > 10 {
+		irWrite(ctx, " inlinehint ")
+	} else {
+		irWrite(ctx, " alwaysinline ")
+	}
+
 	e = irFuncBody(ctx, &fnDefNode.Body, fnDefNode)
 	if e != nil {
 		return e

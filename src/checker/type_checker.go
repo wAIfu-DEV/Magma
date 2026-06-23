@@ -275,6 +275,70 @@ func sameTypeKind(a t.NodeTypeKind, b t.NodeTypeKind) bool {
 	}
 }
 
+func ctExprLvalue(c *ctx, expr t.NodeExpr) error {
+	switch n := expr.(type) {
+	case *t.NodeExprSubscript:
+		e := ctExpr(c, n.Expr)
+		if e != nil {
+			return e
+		}
+		e = ctExpr(c, n.Target)
+		if e != nil {
+			return e
+		}
+
+		switch n2 := n.AssociatedNode.(type) {
+		case *t.NodeExprVarDef:
+			n.BoxType = n2.GetInferredType()
+		case *t.NodeExprVarDefAssign:
+			n.BoxType = n2.GetInferredType()
+		default:
+			return fmt.Errorf("cannot subscript on type other than pointer or slice")
+		}
+
+		var elemType *t.NodeType = getBoxedType(n.BoxType)
+		if elemType == nil {
+			return fmt.Errorf("failed to infer array element type")
+		}
+
+		n.ElemType = elemType
+
+		fmt.Printf("subscript:\n")
+		fmt.Printf(" type: %s\n", flattenType(n.BoxType))
+		fmt.Printf(" elemtype: %s\n", flattenType(n.ElemType))
+		return nil
+	case *t.NodeExprName:
+		if n.AssociatedNode == nil {
+			fmt.Printf("name: %s\n", flattenName(n.Name))
+			return fmt.Errorf("name node pointing to no valid node")
+		}
+
+		// TODO: following is not correct for member accesses
+		if len(n.MemberAccesses) > 0 {
+			last := n.MemberAccesses[len(n.MemberAccesses)-1]
+			n.InfType = last.Type
+			return nil
+		}
+
+		switch n2 := n.AssociatedNode.(type) {
+		case *t.NodeExprVarDef:
+			n.InfType = n2.GetInferredType()
+		case *t.NodeExprVarDefAssign:
+			n.InfType = n2.GetInferredType()
+		case *t.NodeFuncDef:
+			// TODO: build function type
+			n.InfType = n2.ReturnType
+		default:
+			return fmt.Errorf("name node pointing to invalid node type, failed to infer type")
+		}
+
+		fmt.Printf("name: %s\n", flattenName(n.Name))
+		fmt.Printf(" type: %s\n", flattenType(n.InfType))
+		return nil
+	}
+	return fmt.Errorf("unexpected expression type")
+}
+
 func ctExpr(c *ctx, expr t.NodeExpr) error {
 	switch n := expr.(type) {
 	case *t.NodeExprVoid:
@@ -288,6 +352,28 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		return nil
 	case *t.NodeExprCall:
 		fmt.Printf("call: %s\n", flattenName(n.Callee.(*t.NodeExprName).Name))
+
+		// TODO: compare arg types
+
+		callArgCount := len(n.Args)
+		defArgCount := 0
+
+		if n.IsFuncPointer {
+			defArgCount = len(n.FuncPtrType.KindNode.(*t.NodeTypeFunc).Args)
+		} else {
+			defArgCount = len(n.AssociatedFnDef.Class.ArgsNode.Args)
+
+			if defArgCount > 0 {
+				firstArg := n.AssociatedFnDef.Class.ArgsNode.Args[0]
+				if firstArg.Name == "this" {
+					defArgCount -= 1
+				}
+			}
+		}
+
+		if callArgCount != defArgCount {
+			return fmt.Errorf("call to function %s has invalid number of arguments. Got %d, expected %d", n.AssociatedFnDef.AbsName, callArgCount, defArgCount)
+		}
 
 		for _, a := range n.Args {
 			e := ctExpr(c, a)
@@ -461,15 +547,23 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 			return fmt.Errorf("unexpected unary expression type")
 		}
 	case *t.NodeExprVarDef:
+		if n.Type == nil {
+			return fmt.Errorf("unassigned var def expr cannot have nil type")
+		}
 		return nil
 	case *t.NodeExprVarDefAssign:
 		e := ctExpr(c, n.AssignExpr)
 		if e != nil {
 			return e
 		}
+
+		if n.VarDef.Type == nil {
+			n.VarDef.Type = n.AssignExpr.GetInferredType()
+		}
+
 		return nil
 	case *t.NodeExprAssign:
-		e := ctExpr(c, n.Left)
+		e := ctExprLvalue(c, n.Left)
 		if e != nil {
 			return e
 		}

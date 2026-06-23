@@ -475,39 +475,26 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 				// Only treat `name <type>` as a variable definition when the next token
 				// can actually start a type. Otherwise this would incorrectly swallow
 				// valid expressions like `x = y` by trying to parse `=` as a type.
-				if next.Type != t.TokName {
+				if next.Type != t.TokName && next.KeywType != t.KwInfer {
 					break
 				}
-				typeNd, e := parseType(ctx, next, false)
-				if e != nil {
-					return nil, e
-				}
 
-				/*
-					maybeComma, e := peek(ctx)
+				if next.Type == t.TokName {
+					typeNd, e := parseType(ctx, next, false)
 					if e != nil {
 						return nil, e
 					}
 
-					if maybeComma.KeywType == t.KwComma {
-						expr2, e := parseSimplePrimaryExpr(ctx, tk)
-						if e != nil {
-							return nil, e
-						}
-
-						switch expr2.(type) {
-						case *t.NodeExprName:
-							typeNd2, e := parseType(ctx, next, false)
-							if e != nil {
-								return nil, e
-							}
-						}
-					}*/
-
-				return &t.NodeExprVarDef{
-					Name: n.Name,
-					Type: typeNd,
-				}, nil
+					return &t.NodeExprVarDef{
+						Name: n.Name,
+						Type: typeNd,
+					}, nil
+				} else if next.KeywType == t.KwInfer {
+					return &t.NodeExprVarDef{
+						Name: n.Name,
+						Type: nil,
+					}, nil
+				}
 			}
 		}
 		break
@@ -639,6 +626,9 @@ func getBinaryPrecedence(tk t.Token) int {
 
 	case t.KwEqual:
 		return 20
+
+	case t.KwInfer:
+		return 19
 	default:
 		return 0
 	}
@@ -827,6 +817,48 @@ func parseExpression(ctx *ParseCtx, tk t.Token, minPrecedence int) (t.NodeExpr, 
 					&opTk,
 					"syntax error: invalid assignment target",
 					"left side of '=' must be an assignable expression (e.g. a name)",
+				)
+			}
+		} else if opTk.KeywType == t.KwInfer {
+			switch vd := left.(type) {
+			case *t.NodeExprVarDef:
+				switch vd.Name.(type) {
+				case *t.NodeNameSingle:
+					break
+				default:
+					return nil, comp_err.CompilationErrorToken(
+						ctx.Fctx,
+						&opTk,
+						"syntax error: invalid infered assignment target",
+						"left side of ':=' must be a simple name",
+					)
+				}
+
+				if vd.Type != nil {
+					return nil, comp_err.CompilationErrorToken(
+						ctx.Fctx,
+						&opTk,
+						"syntax error: typed infered assignment",
+						"left side of ':=' must be a name with no type",
+					)
+				}
+
+				varDefAssign := &t.NodeExprVarDefAssign{
+					Tk: tk,
+					VarDef: &t.NodeExprVarDef{
+						Name: vd.Name,
+						Type: nil,
+					},
+					AssignExpr: right,
+				}
+				left = varDefAssign
+				continue
+			default:
+				return nil, comp_err.CompilationErrorToken(
+					ctx.Fctx,
+					&opTk,
+					"syntax error: invalid infered assignment target",
+					"left side of ':=' must be an assignable expression (e.g. a name)",
 				)
 			}
 		}
@@ -1620,6 +1652,7 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 
 		ctx.GlobalNode.StructDefs[ownerName].Funcs[memberName] = fnDef
 
+		/* DEPRECATED: Destructors will not be implemented in language.
 		if memberName == "destructor" {
 
 			if len(fnDef.Class.ArgsNode.Args) > 1 {
@@ -1633,7 +1666,7 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 			// TODO: enforce 0 args and non-throwing void type
 			ctx.GlobalNode.StructDefs[ownerName].Destructor = fnDef
 			fmt.Printf("found destructor function for: %s\n", ownerName)
-		}
+		}*/
 	}
 
 	ctx.GlobalNode.FuncDefs[fnNameSimple] = fnDef

@@ -9,9 +9,12 @@ use "../std/allocator.mg" alloc
 use "../std/heap.mg"      heap
 use "../std/writer.mg"    writer
 use "../std/memory.mg"    memory
-# use "../std/utf8.mg"      utf8
+use "../std/buffered.mg"  buffered
+# use "../std/utf8.mg"    utf8
 
 use "../std/file.mg"      file
+
+out writer.Writer
 
 MyNestedStruct(
     field u32
@@ -23,9 +26,9 @@ MyStruct(
     nested MyNestedStruct,
 )
 
-MyStruct.member(out writer.Writer) !void:
+MyStruct.member() !void:
     this.field = 45
-    out.writeLn("CALLED METHOD")
+    #out.writeLn("CALLED METHOD")
 ..
 
 func2(arg i32) i32:
@@ -48,7 +51,23 @@ throwing(isThrowing bool) !i32:
 ..
 
 pub main(args str[]) !void:
-    out writer.Writer = io.stdout()
+    a alloc.Allocator = heap.allocator()
+
+    stdout buffered.Writer = try io.stdout(a)
+    defer stdout.close()
+
+    stdin buffered.Reader = try io.stdin(a)
+
+    out = stdout.writer()
+
+    out.write("Input: ")
+    stdout.flush()
+
+    input str = try stdin.readLn(a)
+    defer strings.free(a, input)
+
+    out.write("Received: ")
+    out.writeLn(input)
 
     defer out.writeLn("DEFERRED!!")
 
@@ -60,10 +79,10 @@ pub main(args str[]) !void:
     firstArray u8[16]
     secondArray u8[16]
     
-    iii u64 = 0
-    while iii < 16:
-        firstArray[iii] = cast.u64to8(iii) + 97
-        iii = iii + 1
+    j u64 = 0
+    while j < 16:
+        firstArray[j] = cast.u64to8(j) + 97
+        j = j + 1
     ..
 
     memory.copy(slices.toPtr(firstArray), slices.toPtr(secondArray), 16)
@@ -96,19 +115,11 @@ pub main(args str[]) !void:
         out.writeLn("Something went wrong: throwing(true) returned error OK")
     ..
 
-    if true:
-        varWithDestructor MyStruct
-        if true:
-            anotherVarWithDestructor MyStruct
-        ..
-        # varWithDestructor destructor called here
-    ..
-
     myStr str = "test"
     myErr error
     myStrt MyStruct
 
-    myStrt.member(out)
+    myStrt.member()
 
     if myStrt.field != 45:
         out.writeLn("member function failed to modify state of owner")

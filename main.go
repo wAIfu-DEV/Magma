@@ -3,10 +3,10 @@ package main
 import (
 	"Magma/src/checker"
 	ircleaner "Magma/src/ir_cleaner"
+	"Magma/src/join"
 	llvmir "Magma/src/llvm_ir"
 	"Magma/src/makeabs"
 	"Magma/src/pipeline"
-	"Magma/src/program"
 	"Magma/src/shared"
 	"fmt"
 	"os"
@@ -50,7 +50,7 @@ func wrappedMain() error {
 	}
 
 	// wait for other compilation unit goroutines
-	if e = program.JoinCompilationUnits(s, e); e != nil {
+	if e = join.JoinCompilationUnits(s, e); e != nil {
 		os.Exit(1)
 	}
 

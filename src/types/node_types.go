@@ -359,7 +359,13 @@ func (n *NodeExprVarDef) Print(indent int) {
 	PrintIndent(indent)
 	fmt.Printf("ExprVarDef\n")
 	n.Name.Print(indent + 1)
-	n.Type.Print(indent + 1)
+
+	if n.Type != nil {
+		n.Type.Print(indent + 1)
+	} else {
+		PrintIndent(indent + 1)
+		fmt.Printf("Type: <TO INFER>\n")
+	}
 }
 
 type NodeExprVarDefAssign struct {

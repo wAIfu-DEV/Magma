@@ -1,5 +1,6 @@
 mod main
 
+use "../std/allocator.mg" alc
 use "../std/errors.mg" errors
 use "../std/cast.mg"   cast
 use "../std/io.mg"     io
@@ -9,6 +10,9 @@ use "../std/heap.mg"   heap
 use "../std/utf8.mg"   utf8
 
 main() !void:
+    a alc.Allocator = heap.allocator()
+    try io.init(a)
+
     try testErrors()
     try testConds()
     try testVars()
@@ -306,6 +310,9 @@ testSizeof() !void:
 
     s4 u64 = sizeof ptr
     if s4 != 8:
+        io.print("Size of pointer: ")
+        io.printUint(s4)
+        io.printLn("")
         throw errors.errFailure("from `if s4 != 8:` block")
     ..
 

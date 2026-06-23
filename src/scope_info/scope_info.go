@@ -105,7 +105,7 @@ func bldBody(ctx *lcx, bdy *t.NodeBody, makeScope bool) error {
 	// TODO: for nested scopes, set makeScope to true
 
 	for _, stmt := range bdy.Statements {
-		fmt.Printf("iter bldBody\n")
+		//fmt.Printf("iter bldBody\n")
 
 		switch n := stmt.(type) {
 		case *t.NodeStmtRet:

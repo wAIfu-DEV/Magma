@@ -1,6 +1,5 @@
 mod file_impl_win
 
-use "../file.mg"      file
 use "../utf8.mg"      utf8
 use "../allocator.mg" alc
 use "../slices.mg"    slices
@@ -9,26 +8,20 @@ use "../cast.mg"      cast
 use "../errors.mg"    errors
 use "../writer.mg"    writer
 use "../reader.mg"    reader
+use "../file_op_mode.mg" fopm
 
-ext ext_win32_CreateFileW  CreateFileW(pathUtf16 i16*, accessMode u32, _arg0 i32, _arg1 ptr, createMode i32, _arg2 i32, _arg3 ptr) ptr
-ext ext_win32_CloseHandle  CloseHandle(handle ptr) i32
-
-ext ext_win32_WriteFile    WriteFile(handle ptr, arg0 ptr, arg1 u32, arg2 ptr, arg3 ptr) u32
-llvm "declare i32 @WriteFile(ptr readonly nocapture, ptr, i32, ptr, ptr)\n"
-
-ext ext_win32_ReadFile     ReadFile(handle ptr, arg0 ptr, arg1 u32, arg2 ptr, arg3 ptr) u32
-
-ext ext_win32_GetStdHandle GetStdHandle(handleNum i32) ptr
-llvm "declare nonnull ptr @GetStdHandle(i32) readnone\n"
+ext ext_win32_CreateFileW    CreateFileW(pathUtf16 i16*, accessMode u32, _arg0 i32, _arg1 ptr, createMode i32, _arg2 i32, _arg3 ptr) ptr
+ext ext_win32_CloseHandle    CloseHandle(handle ptr) i32
+ext ext_win32_WriteFile      WriteFile(handle ptr, arg0 ptr, arg1 u32, arg2 ptr, arg3 ptr) u32
+ext ext_win32_ReadFile       ReadFile(handle ptr, arg0 ptr, arg1 u32, arg2 ptr, arg3 ptr) u32
+ext ext_win32_GetStdHandle   GetStdHandle(handleNum i32) ptr
+ext ext_win32_SetFilePointer SetFilePointer(handle ptr, arg0 i32, arg1 ptr, arg2 u32) u32
 
 gl_writeOnce_written u32
 gl_readOnce_read u32
 
-gl_handles_cached bool
-gl_stdout_handle ptr
-gl_stderr_handle ptr
-gl_stdin_handle ptr
-
+# Writes up to amount bytes once using Win32 WriteFile.
+# O(1) per call.
 writeOnce(handle ptr, next ptr, amount u32) !u64:
    # HACK: using global var for out ptr
    # in order to minimize stack allocations, allows extreme inlining
@@ -45,6 +38,11 @@ writeOnce(handle ptr, next ptr, amount u32) !u64:
    ret cast.u32to64(gl_writeOnce_written)
 ..
 
+# Writes a string to a Win32 file handle.
+# O(N) for byte count.
+# @param handle file handle
+# @param bytes string to write
+# @returns bytes written
 pub write(handle ptr, bytes str) !u64:
    bound u64 = strings.countBytes(bytes)
 
@@ -59,7 +57,6 @@ pub write(handle ptr, bytes str) !u64:
    ..
 
    p ptr = strings.toPtr(bytes)
-
    total u64 = 0
 
    while total < bound:
@@ -87,6 +84,8 @@ pub write(handle ptr, bytes str) !u64:
    ret total
 ..
 
+# Reads up to amount bytes once using Win32 ReadFile.
+# O(1) per call.
 readOnce(handle ptr, next ptr, amount u32) !u64:
 
    # HACK: see writeOnce
@@ -101,6 +100,12 @@ readOnce(handle ptr, next ptr, amount u32) !u64:
    ret cast.u32to64(gl_readOnce_read)
 ..
 
+# Reads into a buffer from a Win32 file handle.
+# O(N) for byte count.
+# @param handle file handle
+# @param buff destination buffer
+# @param n max bytes to read
+# @returns bytes read
 pub read(handle ptr, buff u8[], n u64) !u64:
    # happy path (short string)
    # should help optimize if size is known at comptime
@@ -141,44 +146,37 @@ pub read(handle ptr, buff u8[], n u64) !u64:
    ret total
 ..
 
+# Returns a writer for the Win32 standard output handle.
+# O(1).
 pub stdout() writer.Writer:
-   if cast.ptou(gl_stdout_handle) == 0:
-      gl_stdout_handle = ext_win32_GetStdHandle(-11)
-   ..
-
-   wr writer.Writer
-   wr.impl = gl_stdout_handle
-   wr.fn_write = write
-   ret wr
+   ret writer.new(ext_win32_GetStdHandle(-11), write)
 ..
 
+# Returns a writer for the Win32 standard error handle.
+# O(1).
 pub stderr() writer.Writer:
-   if cast.ptou(gl_stderr_handle) == 0:
-      gl_stderr_handle = ext_win32_GetStdHandle(-12)
-   ..
-
-   wr writer.Writer
-   wr.impl = gl_stderr_handle
-   wr.fn_write = write
-   ret wr
+   ret writer.new(ext_win32_GetStdHandle(-12), write)
 ..
 
+# Returns a reader for the Win32 standard input handle.
+# O(1).
 pub stdin() reader.Reader:
-   if cast.ptou(gl_stdin_handle) == 0:
-      gl_stdin_handle = ext_win32_GetStdHandle(-10)
-   ..
-
-   rr reader.Reader
-   rr.impl = gl_stdin_handle
-   rr.fn_read = read
-   ret rr
+   ret reader.new(ext_win32_GetStdHandle(-10), read)
 ..
 
+# Closes a Win32 file handle.
+# O(1).
 pub closeFile(handle ptr) void:
    ext_win32_CloseHandle(handle)
 ..
 
-pub openFile(a alc.Allocator, path str, openMode file.OpenMode) !$ptr:
+# Opens a file using Win32 CreateFileW.
+# O(1) aside from path conversion and syscalls.
+# @param a allocator to use
+# @param path UTF-8 path
+# @param openMode desired open mode
+# @returns handle to the opened file
+pub openFile(a alc.Allocator, path str, openMode fopm.OpenMode) !$ptr:
    READ  u32 = 0x80000000
    WRITE u32 = 0x40000000
 
@@ -210,8 +208,10 @@ pub openFile(a alc.Allocator, path str, openMode file.OpenMode) !$ptr:
       throw errors.errInvalidArgument("invalid open mode")
    ..
 
-   path_u16 u16[] = try utf8.utf8To16(a, path)
+   path_u16 u16[] = try utf8.utf8To16NT(a, path)
    path_ptr u16* =  slices.toPtr(path_u16)
+
+   defer a.free(path_ptr) # frees created utf16 string
 
    handle ptr = ext_win32_CreateFileW(path_ptr, access_mode, 0, cast.utop(0), open_mode, 0, cast.utop(0))
 
@@ -227,6 +227,35 @@ pub openFile(a alc.Allocator, path str, openMode file.OpenMode) !$ptr:
          throw errors.errFailure("open failure")
       ..
    ..
-
    ret handle
+..
+
+pub seek(handle ptr, offset i64, whence u8) !u64:
+   # Convert whence to Windows constants
+   FILE_BEGIN   u32 = 0
+   FILE_CURRENT u32 = 1
+   FILE_END     u32 = 2
+    
+   moveMethod u32 = 0
+   if whence == 0:
+      moveMethod = FILE_BEGIN
+   elif whence == 1:
+      moveMethod = FILE_CURRENT
+   elif whence == 2:
+      moveMethod = FILE_END
+   else:
+      throw errors.errInvalidArgument("invalid whence")
+   ..
+    
+   # Handle 64-bit offset (Windows uses 32-bit low/high)
+   lowOffset i32 = cast.i64to32(offset & 0xFFFFFFFF)
+   highOffset i32 = cast.i64to32(offset >> 32)
+    
+   newPos u32 = ext_win32_SetFilePointer(handle, lowOffset, addrof highOffset, moveMethod)
+    
+   if newPos == 0xFFFFFFFF:
+      throw errors.errFailure("seek failed")
+   ..
+    
+   ret cast.u32to64(newPos) | (cast.i32to64(highOffset) << 32)
 ..

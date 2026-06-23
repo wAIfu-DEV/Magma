@@ -2,6 +2,7 @@ mod errors
 
 # Returns the error code of an error.
 # A code of 0 indicates a successful operation.
+# O(1).
 # @param e input error
 # @returns error code
 pub code(e error) u32:
@@ -10,6 +11,7 @@ pub code(e error) u32:
 ..
 
 # Returns the message from an error.
+# O(1).
 # @param e input error
 # @returns error message
 pub message(e error) str:
@@ -17,8 +19,13 @@ pub message(e error) str:
     llvm "  ret %type.str %e0\n"
 ..
 
+pub is(a error, b error) bool:
+    ret code(a) == code(b)
+..
+
 # Returns the error type as a string.
 # For example: 0 => "ok", 1 => "unexpected"
+# O(1).
 # @param e input error
 # @returns error type as string
 pub toStr(e error) str:
@@ -34,10 +41,14 @@ pub toStr(e error) str:
         ret "out of memory"
     elif c == 4:
         ret "end of file"
+    elif c == 5:
+        ret "would overflow"
     ..
     ret ""
 ..
 
+# Creates an error value from a code and message.
+# O(1).
 makeErr(code i32, msg str) error:
     llvm "  %e0 = insertvalue %type.error zeroinitializer, i32 %code, 0\n"
     llvm "  %e1 = insertvalue %type.error %e0, %type.str %msg, 1\n"
@@ -47,12 +58,14 @@ makeErr(code i32, msg str) error:
 # Returns an error with code 0 indicating success.
 # There isn't any reason to use this function, unless a client code must return 
 # an error no matter what.
+# O(1).
 # @returns error
 pub errOk() error:
     llvm "  ret %type.error zeroinitializer\n"
 ..
 
 # Returns an error with code 1 indicating an opaque error.
+# O(1).
 # @returns error
 pub errFailure(message str) error:
     ret makeErr(1, message)
@@ -60,12 +73,14 @@ pub errFailure(message str) error:
 
 # Returns an error with code 2 indicating that the client provided an invalid
 # argument to a function or protocol.
+# O(1).
 # @returns error
 pub errInvalidArgument(message str) error:
     ret makeErr(2, message)
 ..
 
 # Returns an error with code 3 indicating that the system is out of memory.
+# O(1).
 # @returns error
 pub errOutOfMemory(message str) error:
     ret makeErr(3, message)
@@ -74,7 +89,15 @@ pub errOutOfMemory(message str) error:
 # Returns an error with code 4 indicating the operation hitting the end of a file.
 # This may or may not be an error condition, so good documentation is warranted
 # if this error is thrown and should be handled by the consumer.
+# O(1).
 # @returns error
 pub errEndOfFile(message str) error:
     ret makeErr(4, message)
+..
+
+# Returns an error with code 5 indicating a would-overflow condition.
+# O(1).
+# @returns error
+pub errWouldOverflow(message str) error:
+    ret makeErr(5, message)
 ..

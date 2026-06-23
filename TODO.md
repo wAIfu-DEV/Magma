@@ -4,19 +4,15 @@
 - UTF8 parsing/iterator
 
 ## To implement
-- add "internal" IR attribute to private glvars, functions
+- prevent use of throwing funcs without catching (destructure or try)
 - fix not being able to assign to args
-- fix issue when assigning function from another module to func ptr
-- remove destructor implementation
-- call nested destructors from owner destructor (struct fields lifetime ended)
 - keep signedness on implicit number cast
-- implement rfc ref counting system
-- prevent empty initialization of pointers and rfc
+- fix issue when assigning function from another module to func ptr
 - intercept windows argv and make UTF8 before magma.argsToSlice()
-- file impl for windows
-- file impl for unix
-- modify io.* funcs to make use of std* file writes
 - error on using try with non-fallible function
+- "panic: interface conversion: types.NodeTypeKind is *types.NodeTypeAbsolute, not *types.NodeTypeFunc" when calling inexistant method on struct
+- error on dereferencing this
+- error on chaining method calls: `file.mode().readable()`
 
 ## Bugs
 - extern func decl without ret type silently fails

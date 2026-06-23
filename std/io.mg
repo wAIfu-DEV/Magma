@@ -1,37 +1,49 @@
 mod io
 
-use "strings.mg" strings
-use "writer.mg"  writer
-use "reader.mg"  reader
+use "strings.mg"   strings
+use "writer.mg"    writer
+use "reader.mg"    reader
+use "buffered.mg"  buffered
+use "allocator.mg" alc
 
 @platform("windows")
-use "win/io_impl.mg" impl_io
+use "win/file_impl.mg" impl_file
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "unix/io_impl.mg" impl_io
+use "unix/file_impl.mg" impl_file
 
-ext ext_stdlib_puts puts(text ptr) i32
-
-# printf extern declaration is still LLVM as we do not support variadic args yet
-llvm "declare i32 @printf(ptr, ...)\n"
-
-# Format strings
-llvm "@.io.const.true  = private constant [5 x i8] c\"true\\00\"\n"
-llvm "@.io.const.false = private constant [6 x i8] c\"false\\00\"\n\n"
-
-llvm "@.io.fmt.uint = private constant [5 x i8] c\"%llu\\00\"\n"
-llvm "@.io.fmt.int  = private constant [5 x i8] c\"%lld\\00\"\n"
-llvm "@.io.fmt.flt  = private constant [4 x i8] c\"%lf\\00\"\n"
-llvm "@.io.fmt.str  = private constant [3 x i8] c\"%s\\00\"\n"
-
-pub stdout () writer.Writer:
-    ret impl_io.stdout()
+# Returns a buffered writer for standard output.
+# O(1).
+pub stdout(a alc.Allocator) !$buffered.Writer:
+    ret try buffered.writerBuffered(a, impl_file.stdout())
 ..
 
-pub stderr () writer.Writer:
-    ret impl_io.stderr()
+# Returns a writer for standard output.
+# O(1).
+pub stdoutUnbuffered() writer.Writer:
+    ret impl_file.stdout()
 ..
 
-pub stdin () reader.Reader:
-    ret impl_io.stdin()
+# Returns a buffered writer for standard error.
+# O(1).
+pub stderr(a alc.Allocator) !$buffered.Writer:
+    ret try buffered.writerBuffered(a, impl_file.stderr())
+..
+
+# Returns a writer for standard error.
+# O(1).
+pub stderrUnbuffered() writer.Writer:
+    ret impl_file.stderr()
+..
+
+# Returns a buffered reader for standard input.
+# O(1).
+pub stdin(a alc.Allocator) !$buffered.Reader:
+    ret try buffered.readerBuffered(a, impl_file.stdin())
+..
+
+# Returns a reader for standard input.
+# O(1).
+pub stdinUnbuffered() reader.Reader:
+    ret impl_file.stdin()
 ..

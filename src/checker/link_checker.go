@@ -121,10 +121,18 @@ func clGetStructDefFromModule(c *ctx, name parsedName) (*t.StructDef, error) {
 
 	if !ok {
 		// TODO: compilation error
-		return nil, fmt.Errorf("module alias does not exist in file")
+		fmt.Printf("alias: %s\n", moduleAlias)
+		fmt.Printf("full name: %s\n", name.First+"."+strings.Join(name.Parts, "."))
+		return nil, fmt.Errorf("module alias %s does not exist in file", moduleAlias)
 	}
 
 	moduleGlNode := c.ModuleBundle.Modules[moduleName]
+
+	// TODO: fix null pointer deref
+	if moduleGlNode.StructDefs == nil {
+		return nil, fmt.Errorf("struct defs map is null in module node")
+	}
+
 	structDef, ok := moduleGlNode.StructDefs[structName]
 
 	if !ok {
@@ -214,7 +222,7 @@ func clGetFuncDefFromModule(c *ctx, name parsedName) (*t.NodeFuncDef, error) {
 		// TODO: compilation error
 		fmt.Printf("alias: %s\n", moduleAlias)
 		fmt.Printf("full name: %s\n", name.First+"."+strings.Join(name.Parts, "."))
-		return nil, fmt.Errorf("module alias does not exist in file")
+		return nil, fmt.Errorf("module alias %s does not exist in file", moduleAlias)
 	}
 
 	moduleGlNode, ok := c.ModuleBundle.Modules[moduleName]
@@ -270,11 +278,15 @@ func clGetFuncDefFromName(c *ctx, nameNode t.NodeName) (*t.NodeFuncDef, error) {
 	return nil, fmt.Errorf("failed to get struct def from name")
 }
 
-func clVarNameChainValid(c *ctx, scope *t.Scope, name *parsedName, varName string, varType *t.NodeType) (lastIsFunc bool, accesses []*t.MemberAccess, e error) {
+func clVarNameChainValid(c *ctx, scope *t.Scope, name *parsedName, varName string, varType *t.NodeType, lvalue bool) (lastIsFunc bool, accesses []*t.MemberAccess, e error) {
 	e = clType(c, varType)
 	if e != nil {
 		return false, nil, e
 	}
+
+	fmt.Println("VarName:", varName)
+	fmt.Println("VarType:", varType)
+	fmt.Println("ParsedName:", name.First, name.Parts)
 
 	var lastDerefType *t.NodeType = varType
 
@@ -327,6 +339,10 @@ func clVarNameChainValid(c *ctx, scope *t.Scope, name *parsedName, varName strin
 			}
 
 			if i == last {
+				if lvalue {
+					derefFieldType = fieldType
+				}
+
 				accesses = append(accesses, &t.MemberAccess{
 					Type:     derefFieldType,
 					FieldNb:  fieldNb,
@@ -368,7 +384,7 @@ func clVarNameChainValid(c *ctx, scope *t.Scope, name *parsedName, varName strin
 	return foundMemberFunc, accesses, nil
 }
 
-func clExistsInScope(c *ctx, scope *t.Scope, name *t.NodeExprName, ent entryType) (exists bool, lastIsFunc bool, associated t.Node, isSsa bool, e error) {
+func clExistsInScope(c *ctx, scope *t.Scope, name *t.NodeExprName, ent entryType, lvalue bool) (exists bool, lastIsFunc bool, associated t.Node, isSsa bool, e error) {
 	parsed := parseName(name.Name)
 
 	switch ent {
@@ -391,7 +407,7 @@ func clExistsInScope(c *ctx, scope *t.Scope, name *t.NodeExprName, ent entryType
 			}
 
 			// TODO: this won't work for access to vars declared in other modules
-			lastFunc, accesses, e := clVarNameChainValid(c, scope, &parsed, vName.First, v.Type)
+			lastFunc, accesses, e := clVarNameChainValid(c, scope, &parsed, vName.First, v.Type, lvalue)
 
 			if e != nil {
 				return false, false, nil, false, e
@@ -468,7 +484,7 @@ func clExistsInScope(c *ctx, scope *t.Scope, name *t.NodeExprName, ent entryType
 	return false, false, nil, false, nil
 }
 
-func clExistsInScopeTree(c *ctx, name *t.NodeExprName, ent entryType) (found bool, isLastFunc bool, expr t.Node, isSsa bool, err error) {
+func clExistsInScopeTree(c *ctx, name *t.NodeExprName, ent entryType, lvalue bool) (found bool, isLastFunc bool, expr t.Node, isSsa bool, err error) {
 	currScope := c.CurrScope
 
 	for {
@@ -476,7 +492,7 @@ func clExistsInScopeTree(c *ctx, name *t.NodeExprName, ent entryType) (found boo
 			return false, false, nil, false, nil
 		}
 
-		found, isLastFunc, expr, isSsa, e := clExistsInScope(c, currScope, name, ent)
+		found, isLastFunc, expr, isSsa, e := clExistsInScope(c, currScope, name, ent, lvalue)
 		if e != nil {
 			return false, false, nil, false, e
 		}
@@ -489,9 +505,9 @@ func clExistsInScopeTree(c *ctx, name *t.NodeExprName, ent entryType) (found boo
 	}
 }
 
-func clName(c *ctx, name *t.NodeExprName, expected entryType) error {
+func clName(c *ctx, name *t.NodeExprName, expected entryType, lvalue bool) error {
 	// TODO: get associated node for easier type checking later
-	found, _, expr, isSsa, err := clExistsInScopeTree(c, name, expected)
+	found, _, expr, isSsa, err := clExistsInScopeTree(c, name, expected, lvalue)
 
 	if err != nil {
 		return err
@@ -523,7 +539,7 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 
 	switch n := call.Callee.(type) {
 	case *t.NodeExprName:
-		found, imc, expr, isSsa, err := clExistsInScopeTree(c, n, enumEntFuncAndVar)
+		found, imc, expr, isSsa, err := clExistsInScopeTree(c, n, enumEntFuncAndVar, false)
 
 		isMemberCall = imc
 
@@ -550,7 +566,7 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 	}
 
 	for _, arg := range call.Args {
-		e := clExpr(c, arg)
+		e := clExpr(c, arg, false)
 		if e != nil {
 			return e
 		}
@@ -690,7 +706,7 @@ func clExprSubscript(c *ctx, subs *t.NodeExprSubscript) error {
 
 	switch n := subs.Target.(type) {
 	case *t.NodeExprName:
-		e := clName(c, n, enumEntVar)
+		e := clName(c, n, enumEntVar, true)
 		if e != nil {
 			return e
 		}
@@ -700,21 +716,21 @@ func clExprSubscript(c *ctx, subs *t.NodeExprSubscript) error {
 		return fmt.Errorf("cannot subscript expression that is not a name")
 	}
 
-	e := clExpr(c, subs.Expr)
+	e := clExpr(c, subs.Expr, false)
 	if e != nil {
 		return e
 	}
 	return nil
 }
 
-func clExpr(c *ctx, expr t.NodeExpr) error {
+func clExpr(c *ctx, expr t.NodeExpr, lvalue bool) error {
 	switch n := expr.(type) {
 	case *t.NodeExprVoid:
 		return nil
 	case *t.NodeExprSizeof:
 		return clType(c, n.Type)
 	case *t.NodeExprAddrof:
-		return clExpr(c, n.Expr)
+		return clExpr(c, n.Expr, lvalue)
 	case *t.NodeExprCall:
 		return clExprCall(c, n)
 	case *t.NodeExprTry:
@@ -722,13 +738,31 @@ func clExpr(c *ctx, expr t.NodeExpr) error {
 	case *t.NodeExprSubscript:
 		return clExprSubscript(c, n)
 	case *t.NodeExprVarDefAssign:
-		e := clExpr(c, n.AssignExpr)
+		e := clExpr(c, n.AssignExpr, lvalue)
 		if e != nil {
 			return e
 		}
+
+		infer := false
+		if n.VarDef.Type == nil {
+			infer = true
+			// TODO: see if better way to do it
+			// used for type inference
+			e = ctExpr(c, n.AssignExpr)
+			if e != nil {
+				return e
+			}
+			n.VarDef.Type = n.AssignExpr.GetInferredType()
+		}
+
 		e = clType(c, n.VarDef.Type)
 		if e != nil {
 			return e
+		}
+
+		if infer {
+			fmt.Println("Infered Type:")
+			n.VarDef.Type.Print(0)
 		}
 	case *t.NodeExprVarDef:
 		e := clType(c, n.Type)
@@ -736,27 +770,27 @@ func clExpr(c *ctx, expr t.NodeExpr) error {
 			return e
 		}
 	case *t.NodeExprAssign:
-		e := clExpr(c, n.Left)
+		e := clExpr(c, n.Left, true)
 		if e != nil {
 			return e
 		}
-		e = clExpr(c, n.Right)
+		e = clExpr(c, n.Right, lvalue)
 		if e != nil {
 			return e
 		}
 	case *t.NodeExprDestructureAssign:
 		return clExprCall(c, n.Call)
 	case *t.NodeExprName:
-		e := clName(c, n, enumEntFuncAndVar)
+		e := clName(c, n, enumEntFuncAndVar, lvalue)
 		if e != nil {
 			return e
 		}
 	case *t.NodeExprBinary:
-		e := clExpr(c, n.Left)
+		e := clExpr(c, n.Left, lvalue)
 		if e != nil {
 			return e
 		}
-		e = clExpr(c, n.Right)
+		e = clExpr(c, n.Right, lvalue)
 		if e != nil {
 			return e
 		}
@@ -768,12 +802,12 @@ func clDefer(c *ctx, def *t.NodeStmtDefer) error {
 	if def.IsBody {
 		return clBody(c, &def.Body)
 	} else {
-		return clExpr(c, def.Expression)
+		return clExpr(c, def.Expression, false)
 	}
 }
 
 func clReturn(c *ctx, ret *t.NodeStmtRet) error {
-	e := clExpr(c, ret.Expression)
+	e := clExpr(c, ret.Expression, false)
 	if e != nil {
 		return e
 	}
@@ -781,7 +815,7 @@ func clReturn(c *ctx, ret *t.NodeStmtRet) error {
 }
 
 func clThrow(c *ctx, throw *t.NodeStmtThrow) error {
-	e := clExpr(c, throw.Expression)
+	e := clExpr(c, throw.Expression, false)
 	if e != nil {
 		return e
 	}
@@ -789,7 +823,7 @@ func clThrow(c *ctx, throw *t.NodeStmtThrow) error {
 }
 
 func clIf(c *ctx, ifStmt *t.NodeStmtIf) error {
-	e := clExpr(c, ifStmt.CondExpr)
+	e := clExpr(c, ifStmt.CondExpr, false)
 	if e != nil {
 		return e
 	}
@@ -815,7 +849,7 @@ func clIf(c *ctx, ifStmt *t.NodeStmtIf) error {
 }
 
 func clWhile(c *ctx, whileStmt *t.NodeStmtWhile) error {
-	e := clExpr(c, whileStmt.CondExpr)
+	e := clExpr(c, whileStmt.CondExpr, false)
 	if e != nil {
 		return e
 	}
@@ -836,7 +870,7 @@ func clBody(c *ctx, bdy *t.NodeBody) error {
 				return e
 			}
 		case *t.NodeStmtExpr:
-			e := clExpr(c, n.Expression)
+			e := clExpr(c, n.Expression, false)
 			if e != nil {
 				return e
 			}
@@ -880,9 +914,10 @@ func clTypeKind(c *ctx, parentType *t.NodeType, kind t.NodeTypeKind, topLevel bo
 
 			sd, e := clGetStructDefFromName(c, n.NameNode)
 
+			/* DEPRECATED
 			if e == nil && sd.Destructor != nil && topLevel {
 				parentType.Destructor = sd.Destructor
-			}
+			}*/
 
 			if e == nil {
 				return &t.NodeTypeAbsolute{
@@ -957,6 +992,10 @@ func clTypeKind(c *ctx, parentType *t.NodeType, kind t.NodeTypeKind, topLevel bo
 }
 
 func clType(c *ctx, typeNd *t.NodeType) error {
+	if typeNd == nil {
+		return nil
+	}
+
 	newT, e := clTypeKind(c, typeNd, typeNd.KindNode, true)
 	if e != nil {
 		return e
@@ -1019,7 +1058,7 @@ func clGlDecl(c *ctx, glDecl t.NodeGlobalDecl) error {
 	case *t.NodeStructDef:
 		return clStructDef(c, n)
 	case *t.NodeExprVarDef:
-		return clExpr(c, n)
+		return clExpr(c, n, false)
 	}
 	return nil
 }
@@ -1081,11 +1120,78 @@ func CheckLinks(s *t.SharedState) error {
 		},
 	}
 
+	// Sorted by dependency resolution order
+	// Needed for type inference on assignment
+	// Otherwise link checker would have no idea of the shape of
+	// inferred variables.
+	// In-order link checking allows resolution of absolute names for types
+	// allowing in turn early type checking needed for type inference across modules.
+
+	pathCtxMap := map[string]*t.FileCtx{}
+
 	for _, v := range s.Files {
 		ctx.ModuleBundle.Modules[v.PackageName] = v.GlNode
+		pathCtxMap[v.FilePath] = v
 	}
 
+	queue := []*t.FileCtx{}
+	sorted := []*t.FileCtx{}
+	graph := map[*t.FileCtx][]*t.FileCtx{}
+	n_deps := map[*t.FileCtx]int{}
+
 	for _, fCtx := range s.Files {
+		n := len(fCtx.Imports)
+		n_deps[fCtx] = n
+
+		fmt.Println(fCtx.FilePath+":", n)
+
+		if n == 0 {
+			fmt.Println("Added to queue (baseline):", fCtx.FilePath)
+			queue = append(queue, fCtx)
+		}
+
+		if graph[fCtx] == nil {
+			graph[fCtx] = []*t.FileCtx{}
+		}
+
+		for _, path := range fCtx.Imports {
+			p := pathCtxMap[path]
+			if graph[p] == nil {
+				graph[p] = []*t.FileCtx{}
+			}
+			graph[p] = append(graph[p], fCtx)
+		}
+	}
+
+	if len(queue) == 0 {
+		return fmt.Errorf("found no file with 0 dependencies, this may be sign of circular dependcy.")
+	}
+
+	fmt.Println("Resolving dependency order...")
+
+	for len(queue) > 0 {
+		curr := queue[0]
+		queue = queue[1:]
+
+		sorted = append(sorted, curr)
+
+		for _, dep := range graph[curr] {
+			n_deps[dep] = n_deps[dep] - 1
+
+			fmt.Println(dep.FilePath+":", n_deps[dep])
+
+			if n_deps[dep] <= 0 {
+				fmt.Println("Added to queue:", dep.FilePath)
+				queue = append(queue, dep)
+			}
+		}
+	}
+
+	if len(sorted) != len(s.Files) {
+		return fmt.Errorf("failed to produce dependency-sorted file list, this may be sign of a circular dependency.")
+	}
+
+	for _, fCtx := range sorted {
 		n := fCtx.GlNode
 		ctx.GlobalNode = n
 		ctx.ScopeTree = &fCtx.ScopeTree

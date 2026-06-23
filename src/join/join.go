@@ -1,4 +1,4 @@
-package program
+package join
 
 import (
 	"Magma/src/types"

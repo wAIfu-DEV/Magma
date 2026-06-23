@@ -75,6 +75,7 @@ const (
 	KwPercent
 	KwAddrof
 	KwSlash
+	KwInfer
 )
 
 var KwTypeToRepr []string = []string{
@@ -130,6 +131,7 @@ var KwTypeToRepr []string = []string{
 	KwPercent:    "%",
 	KwAddrof:     "addrof",
 	KwSlash:      "/",
+	KwInfer:      ":=",
 }
 
 var KwReprToType map[string]KwType = map[string]KwType{
@@ -185,6 +187,7 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"%":        KwPercent,
 	"addrof":   KwAddrof,
 	"/":        KwSlash,
+	":=":       KwInfer,
 }
 
 type Token struct {

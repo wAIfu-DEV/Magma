@@ -4,22 +4,42 @@ use "strings.mg" strings
 use "slices.mg"  slices
 use "cast.mg"    cast
 
+# Writer interface for emitting bytes and formatted values.
+# O(1) wrapper calls; underlying writer decides cost.
 Writer(
     impl ptr,
-
     fn_write (ptr, str) !u64,
 )
 
+pub new(impl ptr, writeFunc (ptr, str) !u64) Writer:
+    w Writer
+    w.impl = impl
+    w.fn_write = writeFunc
+    ret w
+..
+
+# Writes the provided bytes and returns the count written.
+# O(N) for byte count.
+# @param bytes string to write
+# @returns number of bytes written
 Writer.write(bytes str) !u64:
     ret try this.fn_write(this.impl, bytes)
 ..
 
+# Writes the provided bytes followed by a newline.
+# O(N) for byte count.
+# @param bytes string to write
+# @returns number of bytes written
 Writer.writeLn(bytes str) !u64:
     written u64 = try this.fn_write(this.impl, bytes)
     written = written + try this.fn_write(this.impl, "\n")
     ret written
 ..
 
+# Writes "true" or "false" based on the boolean value.
+# O(1).
+# @param b boolean value
+# @returns number of bytes written
 Writer.writeBool(b bool) !u64:
     if b == true:
         ret try this.fn_write(this.impl, "true")
@@ -28,6 +48,8 @@ Writer.writeBool(b bool) !u64:
     ..
 ..
 
+# Converts a digit 0-9 to its ASCII character.
+# O(1).
 digitToChar(i i16) u8:
     if i > 9:
         ret 0
@@ -36,6 +58,10 @@ digitToChar(i i16) u8:
     ret strings.byteAt(digits, i)
 ..
 
+# Writes a signed 64-bit integer in decimal form.
+# O(1) bounded by integer width.
+# @param num integer value
+# @returns number of bytes written
 Writer.writeInt64(num i64) !u64:
     buf u8[20]
     n i64 = num
@@ -71,6 +97,10 @@ Writer.writeInt64(num i64) !u64:
     ret try this.fn_write(this.impl, toWrite)
 ..
 
+# Writes an unsigned 64-bit integer in decimal form.
+# O(1) bounded by integer width.
+# @param num integer value
+# @returns number of bytes written
 Writer.writeUint64(num u64) !u64:
     buf u8[20]
     n u64 = num
@@ -96,6 +126,11 @@ Writer.writeUint64(num u64) !u64:
 ..
 
 
+# Writes a floating point value with the provided precision.
+# O(P) for precision digits.
+# @param flt floating point value
+# @param precision digits after decimal point
+# @returns number of bytes written
 Writer.writeFloat64(flt f64, precision u64) !u64:
     # bitcast and read bits as u64
 

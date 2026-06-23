@@ -8,29 +8,43 @@ use "slices.mg"    slices
 use "cast.mg"      cast
 use "allocator.mg" alc
 
+# Iterator over a UTF-8 byte range.
+# O(1) for iterator operations.
 Utf8Iterator(
     start ptr,
     end   ptr,
 )
 
+# A decoded Unicode codepoint and its UTF-8 width in bytes.
+# O(1).
 Codepoint(value u32, width u8)
 
+# Converts an 8-bit value to u32.
+# O(1).
 u8to32(v u8) u32:
     ret cast.u64to32(cast.u8to64(v))
 ..
 
+# Converts a u32 to an 8-bit value.
+# O(1).
 u32to8(v u32) u8:
     ret cast.u64to8(cast.u32to64(v))
 ..
 
+# Converts a u16 to u32.
+# O(1).
 u16to32(v u16) u32:
     ret cast.u64to32(cast.u16to64(v))
 ..
 
+# Converts a u32 to u16.
+# O(1).
 u32to16(v u32) u16:
     ret cast.u64to16(cast.u32to64(v))
 ..
 
+# Decodes the next codepoint without advancing the iterator.
+# O(1) for a single codepoint.
 decodeOnce(it Utf8Iterator*) !Codepoint:
     if cast.ptou(it.start) == 0 || cast.ptou(it.end) == 0:
         throw errors.errInvalidArgument("Utf8Iterator was not correctly initialized, use utf8.iterator")
@@ -42,6 +56,10 @@ decodeOnce(it Utf8Iterator*) !Codepoint:
     ret cp
 ..
 
+# Creates a UTF-8 iterator over a string.
+# O(1).
+# @param s input string
+# @returns iterator over UTF-8 bytes in s
 pub iterator(s str) Utf8Iterator:
     i Utf8Iterator
 
@@ -53,16 +71,22 @@ pub iterator(s str) Utf8Iterator:
     ret i
 ..
 
+# Returns the next codepoint without advancing.
+# O(1) for a single codepoint.
 Utf8Iterator.peek() !Codepoint:
     ret try decodeOnce(this)
 ..
 
+# Returns the next codepoint and advances the iterator.
+# O(1) for a single codepoint.
 Utf8Iterator.next() !Codepoint:
     cp Codepoint = try this.peek()
     this.start = cast.utop(cast.ptou(this.start) + cast.u8to64(cp.width))
     ret cp
 ..
 
+# Returns true if there are more bytes to decode.
+# O(1).
 Utf8Iterator.hasData() bool:
     if cast.ptou(this.start) == 0 || cast.ptou(this.end) == 0:
         ret false
@@ -70,6 +94,8 @@ Utf8Iterator.hasData() bool:
     ret cast.ptou(this.start) < cast.ptou(this.end)
 ..
 
+# Decodes a single UTF-8 codepoint from start, validating bounds.
+# O(1) for a single codepoint.
 # Hottest function for UTF8 decoding, most prone to be optimized in the future
 # Keep bloat out of it, no defers or error return as those will increase
 # complexity and obfuscate the happy path.
@@ -172,6 +198,8 @@ decodeFirst(start u8*, end u8*) Codepoint:
     ret outCp
 ..
 
+# Returns the number of UTF-16 code units needed to encode a UTF-8 string.
+# O(N) for UTF-8 byte count.
 utf8to16size(s str) !u64:
     it Utf8Iterator = iterator(s)
     total u64 = 0
@@ -189,13 +217,53 @@ utf8to16size(s str) !u64:
     ret total
 ..
 
+# Converts UTF-8 string to UTF-16 code units.
+# O(N) for UTF-8 byte count.
+# @param a allocator to use
+# @param s input UTF-8 string
+# @returns UTF-16 slice
 pub utf8To16(a alc.Allocator, s str) !$u16[]:
     it Utf8Iterator = iterator(s)
 
     elemCount u64 = try utf8to16size(s)
     outSize u64 = elemCount * sizeof u16
-    outPtr u16* = try a.alloc(outSize + 1)
+    outPtr u16* = try a.alloc(outSize)
 
+    i u64 = 0
+    while it.hasData():
+        cp Codepoint = try it.next()
+        v u32 = cp.value
+
+        if v <= 65535 && (v < 55296 || v > 57343):
+            outPtr[i] = u32to16(v)
+            i = i + 1
+        else:
+            v = v - 65536
+            high u16 = u32to16((v >> 10) + 55296)
+            low u16 = u32to16((v & 1023) + 56320)
+
+            outPtr[i] = high
+            i = i + 1
+
+            outPtr[i] = low
+            i = i + 1
+        ..
+    ..
+    ret slices.fromPtr(outPtr, elemCount)
+..
+
+# Converts UTF-8 string to null-terminated UTF-16 code units.
+# O(N) for UTF-8 byte count.
+# @param a allocator to use
+# @param s input UTF-8 string
+# @returns UTF-16 slice, null-terminated
+pub utf8To16NT(a alc.Allocator, s str) !$u16[]:
+    it Utf8Iterator = iterator(s)
+
+    elemCount u64 = try utf8to16size(s)
+    outSize u64 = elemCount * sizeof u16
+    outPtr u16* = try a.alloc(outSize + 1)
+    
     outPtr[elemCount] = 0
 
     i u64 = 0
@@ -221,6 +289,8 @@ pub utf8To16(a alc.Allocator, s str) !$u16[]:
     ret slices.fromPtr(outPtr, elemCount)
 ..
 
+# Encodes a single codepoint into UTF-8.
+# O(1).
 encodeUtf8(cp u32, out u8*) !u64:
     if cp <= 127:
         out[0] = u32to8(cp)
@@ -249,6 +319,10 @@ encodeUtf8(cp u32, out u8*) !u64:
     ret 0
 ..
 
+# Returns the number of UTF-8 bytes needed to encode a UTF-16 slice.
+# O(N) for UTF-16 length.
+# @param in input UTF-16 slice
+# @returns required UTF-8 byte count
 pub utf16to8size(in u16[]) !u64:
     n u64 = slices.count(in)
     totalBytes u64 = 0
@@ -300,6 +374,8 @@ pub utf16to8size(in u16[]) !u64:
     ret totalBytes
 ..
 
+# Returns UTF-8 byte length for a codepoint.
+# O(1).
 codepointUtf8Size(cp u32) u64:
     if cp <= 127:
         ret 1
@@ -314,6 +390,8 @@ codepointUtf8Size(cp u32) u64:
     ..
 ..
 
+# Encodes one UTF-16 codepoint (or surrogate pair) to UTF-8.
+# O(1) for a single codepoint or surrogate pair.
 utf16to8iter(in u16[], out u8*, i u64*, n u64) !u64:
     w1 u16 = in[i[0]]
     i[0] = i[0] + 1
@@ -344,6 +422,11 @@ utf16to8iter(in u16[], out u8*, i u64*, n u64) !u64:
     throw errors.errFailure("unexpected low utf16 surrogate")
 ..
 
+# Converts UTF-16 code units to a UTF-8 string.
+# O(N) for UTF-16 length.
+# @param a allocator to use
+# @param in input UTF-16 slice
+# @returns UTF-8 string
 pub utf16to8(a alc.Allocator, in u16[]) !$str:
     n u64 = slices.count(in)
     if n == 0:
@@ -365,4 +448,20 @@ pub utf16to8(a alc.Allocator, in u16[]) !$str:
     ..
 
     ret strings.fromPtrNoCopy(outPtr, outSize)
+..
+
+# Returns size in bytes of string, for UTF8 strings codepoint (UTF8 character) count may be
+# different from byte size.
+# O(N) depending on string size.
+# @param s input string
+# @returns size in bytes of string
+pub countCodepoints(s str) !u64:
+    cnt u64 = 0
+    it Utf8Iterator = iterator(s)
+
+    while it.hasData():
+        try it.next()
+        cnt = cnt + 1
+    ..
+    ret cnt
 ..

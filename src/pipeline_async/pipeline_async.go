@@ -41,7 +41,7 @@ func PipelineAsync(shared *types.SharedState, c chan error, fCtx *types.FileCtx,
 		return
 	}
 
-	scopeinfo.PrintScopeTree(&fCtx.ScopeTree, 0)
+	//scopeinfo.PrintScopeTree(&fCtx.ScopeTree, 0)
 
 	c <- nil
 	close(c)

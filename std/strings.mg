@@ -1,6 +1,5 @@
 mod strings
 
-use "utf8.mg"      utf8
 use "allocator.mg" alc
 use "memory.mg"    mem
 
@@ -14,22 +13,6 @@ pub countBytes(s str) u64:
     llvm "  ret i64 %l0\n"
 ..
 
-# Returns size in bytes of string, for UTF8 strings codepoint (UTF8 character) count may be
-# different from byte size.
-# O(N) depending on string size.
-# @param s input string
-# @returns size in bytes of string
-pub countCodepoints(s str) !u64:
-    cnt u64 = 0
-    it utf8.Utf8Iterator = utf8.iterator(s)
-
-    while it.hasData():
-        try it.next()
-        cnt = cnt + 1
-    ..
-    ret cnt
-..
-
 # Returns the pointer to the underlying data of the string (u8 array)
 # Note that this array is not null-terminated, see toCstr for a null-terminated
 # version.
@@ -37,6 +20,17 @@ pub countCodepoints(s str) !u64:
 pub toPtr(s str) u8*:
     llvm "  %l0 = extractvalue %type.str %s, 0\n"
     llvm "  ret ptr %l0\n"
+..
+
+# Frees a allocated string using the provided allocator.
+# Only use if the string is a owned $str from a function taking an Allocator
+# as parameter.
+# Allocator should be the exact same that the string was allocated with.
+# @param a allocator
+# @param s allocated slice
+pub free(a alc.Allocator, s str) void:
+    p ptr = toPtr(s)
+    a.free(p)
 ..
 
 # Returns a str from a pointer and a length in bytes.
@@ -57,9 +51,9 @@ pub fromPtrNoCopy(p ptr, bytesCount u64) str:
 # This copies the contents of p into a newly allocated str
 # O(N) depending on byte count
 # @param s input string
-pub fromPtr(a alc.Allocator, p ptr, byteCount u64) $str:
+pub fromPtr(a alc.Allocator, p ptr, byteCount u64) !$str:
     inData u8* = p
-    strData u8* = a.alloc(byteCount)
+    strData u8* = try a.alloc(byteCount)
 
     i u64 = 0
     while i < byteCount:
@@ -90,9 +84,9 @@ pub byteAt(s str, idx u64) u8:
 # @param a allocator to use
 # @param s string to copy
 # @returns a null-terminated c-style string
-pub toCstr(a alc.Allocator, s str) $u8*:
+pub toCstr(a alc.Allocator, s str) !$u8*:
     size u64 = countBytes(s)
-    cStr u8* = a.alloc(size + 1)
+    cStr u8* = try a.alloc(size + 1)
 
     i u64 = 0
     while i < size:
@@ -136,9 +130,9 @@ pub fromCstrNoCopy(cstr u8*) str:
 # This function copies the C-string to the new str.
 # @param cstr null-terminated C-string
 # @returns magma-style str
-pub fromCstr(a alc.Allocator, cstr u8*) $str:
+pub fromCstr(a alc.Allocator, cstr u8*) !$str:
     size u64 = cStrLen(cstr)
-    strData u8* = a.alloc(size)
+    strData u8* = try a.alloc(size)
 
     i u64 = 0
     while i < size:
@@ -160,5 +154,5 @@ pub compare(a str, b str) bool:
     if aLen != bLen:
         ret false
     ..
-    ret mem.compare( toPtr(a), toPtr(b), aLen)
+    ret mem.compare(toPtr(a), toPtr(b), aLen)
 ..

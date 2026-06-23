@@ -48,13 +48,9 @@ MyStruct.memberFunc() void:
 ..
 
 allocs() !void:
-    heap_ptr MyStruct* = try heap.alloc(sizeof MyStruct)
+    # $ before a type informs that it is owned, purely visual
+    heap_ptr $MyStruct* = try heap.alloc(sizeof MyStruct)
     defer heap.free(heap_ptr)
-
-    rfcnt_ptr MyStruct$ = rfc MyStruct() # moves a copy of MyStruct to heap
-    # ref counted '$' vars are freed once every references fall out of scope
-
-    rfcnt_ptr2 MyStruct$ = rfcnt_ptr # adds another reference, until rfcnt_ptr2 falls out of scope
 ..
 
 pub main(args str[]) !void:
