@@ -11,29 +11,29 @@ ext ext_stdlib_free    free(block ptr) void
 
 # Internals for alloc, used by both alloc() and HeapAllocator.alloc()
 heapAlloc(impl ptr, nBytes u64) !$u8*:
+    if nBytes == 0:
+        throw e.invalidArgument("requested size is 0")
+    ..
     p ptr = ext_stdlib_malloc(nBytes)
 
     if cast.ptou(p) == 0:
-        if nBytes == 0:
-            throw e.errInvalidArgument("requested size is 0")
-        ..
-        throw e.errOutOfMemory("OOM")
+        throw e.outOfMemory("OOM")
     ..
     ret p
 ..
 
 # Internals for realloc, used by both realloc() and HeapAllocator.realloc()
 heapRealloc(impl ptr, in u8*, nBytes u64) !$u8*:
+    if cast.ptou(in) == 0:
+        throw e.invalidArgument("input pointer is null")
+    ..
+    if nBytes == 0:
+        throw e.invalidArgument("requested size is 0")
+    ..
     p ptr = ext_stdlib_realloc(in, nBytes)
 
     if cast.ptou(p) == 0:
-        if cast.ptou(in) == 0:
-            throw e.errInvalidArgument("input pointer is null")
-        ..
-        if nBytes == 0:
-            throw e.errInvalidArgument("requested size is 0")
-        ..
-        throw e.errOutOfMemory("OOM")
+        throw e.outOfMemory("OOM")
     ..
     ret p
 ..

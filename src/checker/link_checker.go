@@ -199,6 +199,63 @@ func clGetStructDefFromType(c *ctx, typeNode *t.NodeType) (*t.StructDef, error) 
 	return nil, fmt.Errorf("failed to get struct def from type")
 }
 
+func clDerefOne(typeNode *t.NodeType) (*t.NodeType, bool) {
+	switch n := typeNode.KindNode.(type) {
+	case *t.NodeTypePointer:
+		return &t.NodeType{
+			Throws:   typeNode.Throws,
+			KindNode: n.Kind,
+		}, true
+	}
+	return typeNode, false
+}
+
+func clResolveFieldAccess(c *ctx, ownerType *t.NodeType, member string, lvalue bool) (*t.MemberAccess, error) {
+	lookupType, ptrDeref := clDerefOne(ownerType)
+	structDef, e := clGetStructDefFromType(c, lookupType)
+	if e != nil {
+		return nil, e
+	}
+
+	fieldType, ok := structDef.Fields[member]
+	if !ok {
+		return nil, fmt.Errorf("type %s has no field '%s'", flattenType(ownerType), member)
+	}
+
+	e = clType(c, fieldType)
+	if e != nil {
+		return nil, e
+	}
+
+	accessType := fieldType
+	if !lvalue {
+		if derefFieldType, isPtr := clDerefOne(fieldType); isPtr {
+			accessType = derefFieldType
+		}
+	}
+
+	return &t.MemberAccess{
+		Type:     accessType,
+		FieldNb:  structDef.FieldNb[member],
+		PtrDeref: ptrDeref,
+	}, nil
+}
+
+func clResolveMemberFunc(c *ctx, ownerType *t.NodeType, member string) (*t.StructDef, *t.NodeFuncDef, *t.NodeType, bool, error) {
+	lookupType, ptrDeref := clDerefOne(ownerType)
+	structDef, e := clGetStructDefFromType(c, lookupType)
+	if e != nil {
+		return nil, nil, nil, false, e
+	}
+
+	fnDef, ok := structDef.Funcs[member]
+	if !ok {
+		return nil, nil, nil, false, fmt.Errorf("type %s has no member function '%s'", flattenType(ownerType), member)
+	}
+
+	return structDef, fnDef, lookupType, ptrDeref, nil
+}
+
 func clGetFuncDefFromModule(c *ctx, name parsedName) (*t.NodeFuncDef, error) {
 	if !name.HasParts {
 		// TODO: compiler error
@@ -561,8 +618,45 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 
 		ownerExpr = expr
 		nameExpr = n
+	case *t.NodeExprMemberAccess:
+		if err := clExpr(c, n.Target, false); err != nil {
+			return err
+		}
+		if err := ctExpr(c, n.Target); err != nil {
+			return err
+		}
+
+		ownerType := n.Target.GetInferredType()
+		structDef, fnDef, memberOwnerType, isPointerOwner, err := clResolveMemberFunc(c, ownerType, n.Member)
+		if err != nil {
+			return err
+		}
+
+		call.IsMemberFunc = true
+		call.MemberOwnerType = memberOwnerType
+		call.AssociatedFnDef = fnDef
+		call.MemberOwnerIsPtr = isPointerOwner
+		call.MemberOwnerExpr = n.Target
+		call.MemberOwnerModule = structDef.Module
+		n.InfType = fnDef.ReturnType
 	default:
-		return fmt.Errorf("cannot call expression that is not a name")
+		if err := clExpr(c, n, false); err != nil {
+			return err
+		}
+		if err := ctExpr(c, n); err != nil {
+			return err
+		}
+
+		fnType := n.GetInferredType()
+		if fnType == nil {
+			return fmt.Errorf("cannot call expression with unknown type")
+		}
+		if _, ok := fnType.KindNode.(*t.NodeTypeFunc); !ok {
+			return fmt.Errorf("cannot call expression of type %s", flattenType(fnType))
+		}
+
+		call.IsFuncPointer = true
+		call.FuncPtrType = fnType
 	}
 
 	for _, arg := range call.Args {
@@ -570,6 +664,10 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 		if e != nil {
 			return e
 		}
+	}
+
+	if nameExpr == nil {
+		return nil
 	}
 
 	fmt.Printf("call to: %s\n", flattenName(nameExpr.Name))
@@ -701,6 +799,27 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 	return nil
 }
 
+func clExprMemberAccess(c *ctx, member *t.NodeExprMemberAccess, lvalue bool) error {
+	e := clExpr(c, member.Target, false)
+	if e != nil {
+		return e
+	}
+
+	e = ctExpr(c, member.Target)
+	if e != nil {
+		return e
+	}
+
+	access, e := clResolveFieldAccess(c, member.Target.GetInferredType(), member.Member, lvalue)
+	if e != nil {
+		return e
+	}
+
+	member.Access = access
+	member.InfType = access.Type
+	return nil
+}
+
 func clExprSubscript(c *ctx, subs *t.NodeExprSubscript) error {
 	fmt.Printf("check expr subscript\n")
 
@@ -737,6 +856,8 @@ func clExpr(c *ctx, expr t.NodeExpr, lvalue bool) error {
 		return clExprCall(c, n.Call.(*t.NodeExprCall))
 	case *t.NodeExprSubscript:
 		return clExprSubscript(c, n)
+	case *t.NodeExprMemberAccess:
+		return clExprMemberAccess(c, n, lvalue)
 	case *t.NodeExprVarDefAssign:
 		e := clExpr(c, n.AssignExpr, lvalue)
 		if e != nil {
@@ -794,6 +915,11 @@ func clExpr(c *ctx, expr t.NodeExpr, lvalue bool) error {
 		if e != nil {
 			return e
 		}
+	case *t.NodeExprUnary:
+		// Unary operators consume the value of their operand.  In particular,
+		// dereferencing produces an lvalue, but the pointer expression itself is
+		// still evaluated as a value.
+		return clExpr(c, n.Operand, false)
 	}
 	return nil
 }

@@ -5,8 +5,9 @@ import (
 )
 
 type StructDef struct {
-	Module string
-	Name   string
+	Module     string
+	Name       string
+	TypeParams []string
 
 	FieldNb map[string]int
 	Fields  map[string]*NodeType

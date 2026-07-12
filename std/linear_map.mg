@@ -1,29 +1,32 @@
 mod linear_map
 
-use "list.mg" list
+use "array.mg" arr
 use "allocator.mg" alc
 use "strings.mg" stg
 use "errors.mg" err
-use "memory.mg" mem
+use "cast.mg" cast
 
-LinearMap(
-    keys list.List
-    values list.List
+LinearMap[T](
     allocator alc.Allocator
-    typeSize u64
+    keys arr.Array[str]
+    values arr.Array[T]
 )
 
-pub new(a alc.Allocator, valueTypeSize u64) !$LinearMap:
-    lm LinearMap
+pub new[T](a alc.Allocator) !$LinearMap[T]:
+    lm LinearMap[T]
     lm.allocator = a
     
-    lm.keys = list.new(a, sizeof str)
-    lm.values = list.new(a, valueTypeSize)
-    lm.typeSize = valueTypeSize
+    lm.keys = try arr.new[str](a)
+    values arr.Array[T], valuesErr error = arr.new[T](a)
+    if err.code(valuesErr) != 0:
+        lm.keys.free(a)
+        throw valuesErr
+    ..
+    lm.values = values
     ret lm
 ..
 
-LinearMap.indexOf(key str) !u64:
+LinearMap[T].indexOf(key str) !u64:
     view str[] = this.keys.view()
     bound := this.keys.count()
 
@@ -34,62 +37,89 @@ LinearMap.indexOf(key str) !u64:
         ..
         i = i + 1
     ..
-    throw err.errFailure("key not found in linear map")
+    throw err.failure("key not found in linear map")
 ..
 
-LinearMap.delete(key str) !void:
+LinearMap[T].delete(key str) !void:
     idx := try this.indexOf(key)
     lastIdx := this.keys.count() - 1
 
-    # is already last idx, just pop
-    if this.keys.count() == 1 || idx == lastIdx:
-        try this.keys.popRight(this.allocator)
-        try this.values.popRight(this.allocator)
-        ret
+    keyView str[] = this.keys.view()
+    valView T[] = this.values.view()
+
+    stg.free(this.allocator, keyView[lastIdx])
+
+    if idx != lastIdx:
+        keyView[idx] = keyView[lastIdx]
+        valView[idx] = valView[lastIdx]
     ..
-
-    # swap with last entry, then pop last
-
-    keyView u8[] = this.keys.view()
-    valView u8[] = this.values.view()
-
-    key0 ptr = &keyView[idx * sizeof str]
-    key1 ptr = &keyView[lastIdx * sizeof str]
-    mem.swap(key0, key1, sizeof str)
-
-    val0 ptr = &valView[idx * this.typeSize]
-    val1 ptr = &valView[lastIdx * this.typeSize]
-    mem.swap(val0, val1, this.typeSize)
-
-    try this.keys.popRight(this.allocator)
-    try this.values.popRight(this.allocator)
+    # Remove both entries together without an allocation that could fail between
+    # the two state changes.
+    this.keys.padRight = this.keys.padRight + 1
+    this.values.padRight = this.values.padRight + 1
 ..
 
-LinearMap.get(key str) !ptr:
+LinearMap[T].get(key str) !T:
     idx := try this.indexOf(key)
-    view u8[] = this.values.view()
-    ret &view[idx * this.typeSize]
+    view T[] = this.values.view()
+    ret view[idx]
 ..
 
-LinearMap.set(key str, itemPtr ptr) !void:
+LinearMap[T].count() u64:
+    ret this.keys.count()
+..
+
+LinearMap[T].keysView() str[]:
+    ret this.keys.view()
+..
+
+LinearMap[T].valuesView() T[]:
+    ret this.values.view()
+..
+
+LinearMap[T].set(key str, item T) !void:
     idx u64, e error = this.indexOf(key)
     if err.code(e) != 0:
-        tmp str = key
-        try this.keys.pushRight(this.allocator, &tmp)
-        try this.values.pushRight(this.allocator, itemPtr)
+        keyIdx u64 = try this.keys.expandRight(this.allocator)
+        valueIdx u64, valueErr error = this.values.expandRight(this.allocator)
+        if err.code(valueErr) != 0:
+            this.keys.padRight = this.keys.padRight + 1
+            throw valueErr
+        ..
+        keyView str[] = this.keys.view()
+        valueView T[] = this.values.view()
+        keyView[keyIdx] = stg.copy(this.allocator, key)
+        valueView[valueIdx] = item
     else:
-        view u8[] = this.values.view()
-        idxPtr u8* = &view[idx * this.typeSize]
-        mem.copy(itemPtr, idxPtr, this.typeSize)
+        view T[] = this.values.view()
+        view[idx] = item
     ..
 ..
 
-LinearMap.clear() !void:
-    try this.keys.clearShrink(this.allocator)
-    try this.values.clearShrink(this.allocator)
-..
+LinearMap[T].free() void:
+    i u64 = 0
+    bound u64 = this.keys.count()
+    view str[] = this.keys.view()
 
-LinearMap.free() void:
+    while i < bound:
+        stg.free(this.allocator, view[i])
+        i = i + 1
+    ..
+
     this.keys.free(this.allocator)
     this.values.free(this.allocator)
+..
+
+
+LinearMap[T].clear() !void:
+    newKeys arr.Array[str] = try arr.new[str](this.allocator)
+    newValues arr.Array[T], valuesErr error = arr.new[T](this.allocator)
+    if err.code(valuesErr) != 0:
+        newKeys.free(this.allocator)
+        throw valuesErr
+    ..
+
+    this.free()
+    this.keys = newKeys
+    this.values = newValues
 ..

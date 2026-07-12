@@ -54,6 +54,10 @@ Writer.flush() !u64:
     while remaining > 0:
         toWrite str = strings.fromPtrNoCopy(writePtr, remaining)
         written u64 = try this.underlying.write(toWrite)
+        if written > remaining:
+            this.position = remaining
+            throw errors.failure("flush failed: writer returned too many bytes")
+        ..
         
         totalWritten = totalWritten + written
         remaining = remaining - written
@@ -66,10 +70,11 @@ Writer.flush() !u64:
         if written > 0:
             unwrittenPtr ptr = cast.utop(cast.ptou(this.buffer) + written)
             mem.move(unwrittenPtr, this.buffer, remaining)
+            this.position = remaining
             writePtr = this.buffer
         else:
             this.position = remaining
-            throw errors.errFailure("flush failed: underlying writer wrote 0 bytes")
+            throw errors.failure("flush failed: underlying writer wrote 0 bytes")
         ..
     ..
     
@@ -117,8 +122,8 @@ Writer.writer() writer.Writer:
 
 # Closes the buffered writer, flushing any remaining data.
 # O(N) for remaining buffered bytes.
-Writer.close() void:
-    this.flush()
+Writer.close() !void:
+    try this.flush()
     this.allocator.free(this.buffer)
     this.buffer = cast.utop(0)
     this.bufferSize = 0
@@ -159,16 +164,16 @@ pub readerBuffered(a alc.Allocator, r reader.Reader) !$Reader:
 
 # Fills the internal buffer from underlying reader.
 # O(N) for buffer size.
-Reader.fillBuffer() !void:
+Reader.fillBuffer() !bool:
     if this.eof:
-        ret
+        ret false
     ..
     
     # If there's unread data, move it to front of buffer
     if this.position < this.filled:
         unread u64 = this.filled - this.position
         srcPtr ptr = cast.utop(cast.ptou(this.buffer) + this.position)
-        mem.copy(srcPtr, this.buffer, unread)
+        mem.move(srcPtr, this.buffer, unread)
         this.filled = unread
         this.position = 0
     else:
@@ -182,11 +187,15 @@ Reader.fillBuffer() !void:
     buffSlice u8[] = slices.fromPtr(readPtr, toRead)
     
     readCount u64 = try this.underlying.readToBuff(buffSlice, toRead)
+    if readCount > toRead:
+        throw errors.failure("buffered reader returned too many bytes")
+    ..
     this.filled = this.filled + readCount
     
     if readCount == 0:
         this.eof = true
     ..
+    ret readCount > 0
 ..
 
 # Internal read implementation for Reader.
@@ -229,6 +238,9 @@ bufferedRead(br Reader*, buff u8[], nBytes u64) !u64:
             dstPtr = cast.utop(cast.ptou(slices.toPtr(buff)) + totalRead)
             directBuff u8[] = slices.fromPtr(dstPtr, remaining)
             directRead u64 = try br.underlying.readToBuff(directBuff, remaining)
+            if directRead > remaining:
+                throw errors.failure("buffered reader returned too many bytes")
+            ..
             totalRead = totalRead + directRead
             
             if directRead == 0:
@@ -248,6 +260,15 @@ Reader.reader() reader.Reader:
     ret reader.new(this, bufferedRead)
 ..
 
+resizeLineBuffer(a alc.Allocator, old u8*, newCapacity u64) !$u8*:
+    resized u8*, resizeErr error = a.realloc(old, newCapacity)
+    if errors.code(resizeErr) != 0:
+        a.free(old)
+        throw resizeErr
+    ..
+    ret resized
+..
+
 # Reads a line (up to \n) from the buffered reader.
 # Returns string without the newline character.
 # O(N) for line length.
@@ -265,7 +286,7 @@ Reader.readLn(a alc.Allocator) !$str:
         # Check if we need more buffer space
         if lineLen >= capacity:
             newCapacity = capacity * 2
-            lineBuffer = try a.realloc(lineBuffer, newCapacity)
+            lineBuffer = try resizeLineBuffer(a, lineBuffer, newCapacity)
             capacity = newCapacity
         ..
         
@@ -280,6 +301,7 @@ Reader.readLn(a alc.Allocator) !$str:
             found bool = false
             foundPos u64 = 0
             nlLen u64 = 1
+            nextPos u64 = 0
             
             while i < available:
                 if searchPtr[i] == 10:  # '\n'
@@ -289,7 +311,8 @@ Reader.readLn(a alc.Allocator) !$str:
                 ..
 
                 if searchPtr[i] == 13 && i+1 < available: # '\r'
-                    if searchPtr[i+1] == 10:  # '\n'
+                    nextPos = i + 1
+                    if searchPtr[nextPos] == 10:  # '\n'
                         found = true
                         foundPos = i
                         nlLen = 2
@@ -306,7 +329,7 @@ Reader.readLn(a alc.Allocator) !$str:
                     # Ensure capacity
                     if lineLen + foundPos > capacity:
                         newCapacity = lineLen + foundPos
-                        lineBuffer = try a.realloc(lineBuffer, newCapacity)
+                        lineBuffer = try resizeLineBuffer(a, lineBuffer, newCapacity)
                         capacity = newCapacity
                     ..
                     
@@ -323,7 +346,7 @@ Reader.readLn(a alc.Allocator) !$str:
             # No newline found, copy all available
             if lineLen + available > capacity:
                 newCapacity = lineLen + available
-                lineBuffer = try a.realloc(lineBuffer, newCapacity)
+                lineBuffer = try resizeLineBuffer(a, lineBuffer, newCapacity)
                 capacity = newCapacity
             ..
             
@@ -340,15 +363,19 @@ Reader.readLn(a alc.Allocator) !$str:
                 ret strings.fromPtrNoCopy(lineBuffer, lineLen)
             ..
             a.free(lineBuffer)
-            throw errors.errEndOfFile("end of file")
+            throw errors.endOfFile("end of file")
         ..
         
-        try this.fillBuffer()
+        filled bool, fillErr error = this.fillBuffer()
+        if errors.code(fillErr) != 0:
+            a.free(lineBuffer)
+            throw fillErr
+        ..
     ..
     
     # Should never reach here
     a.free(lineBuffer)
-    throw errors.errFailure("unexpected error in readLn")
+    throw errors.failure("unexpected error in readLn")
 ..
 
 # Closes the buffered reader and frees buffer.

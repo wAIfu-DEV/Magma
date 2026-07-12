@@ -23,6 +23,12 @@ pub is(a error, b error) bool:
     ret code(a) == code(b)
 ..
 
+# Returns whether an error belongs to a numeric category. Error equality is
+# category-based; messages and platform details are not compared.
+pub hasCode(e error, expected u32) bool:
+    ret code(e) == expected
+..
+
 # Returns the error type as a string.
 # For example: 0 => "ok", 1 => "unexpected"
 # O(1).
@@ -43,16 +49,32 @@ pub toStr(e error) str:
         ret "end of file"
     elif c == 5:
         ret "would overflow"
+    elif c == 6:
+        ret "invalid type"
     ..
-    ret ""
+    ret "unknown error"
 ..
 
 # Creates an error value from a code and message.
 # O(1).
-makeErr(code i32, msg str) error:
+makeErr(code u32, msg str) error:
     llvm "  %e0 = insertvalue %type.error zeroinitializer, i32 %code, 0\n"
     llvm "  %e1 = insertvalue %type.error %e0, %type.str %msg, 1\n"
     llvm "  ret %type.error %e1\n"
+..
+
+# Wraps a platform error code without allocating a formatted message. The high
+# bit distinguishes native codes from standard-library categories.
+pub native(code u32, message str) error:
+    ret makeErr(0x80000000 | code, message)
+..
+
+pub isNative(e error) bool:
+    ret (code(e) & 0x80000000) != 0
+..
+
+pub nativeCode(e error) u32:
+    ret code(e) & 0x7FFFFFFF
 ..
 
 # Returns an error with code 0 indicating success.
@@ -60,14 +82,14 @@ makeErr(code i32, msg str) error:
 # an error no matter what.
 # O(1).
 # @returns error
-pub errOk() error:
+pub ok() error:
     llvm "  ret %type.error zeroinitializer\n"
 ..
 
 # Returns an error with code 1 indicating an opaque error.
 # O(1).
 # @returns error
-pub errFailure(message str) error:
+pub failure(message str) error:
     ret makeErr(1, message)
 ..
 
@@ -75,14 +97,14 @@ pub errFailure(message str) error:
 # argument to a function or protocol.
 # O(1).
 # @returns error
-pub errInvalidArgument(message str) error:
+pub invalidArgument(message str) error:
     ret makeErr(2, message)
 ..
 
 # Returns an error with code 3 indicating that the system is out of memory.
 # O(1).
 # @returns error
-pub errOutOfMemory(message str) error:
+pub outOfMemory(message str) error:
     ret makeErr(3, message)
 ..
 
@@ -91,13 +113,20 @@ pub errOutOfMemory(message str) error:
 # if this error is thrown and should be handled by the consumer.
 # O(1).
 # @returns error
-pub errEndOfFile(message str) error:
+pub endOfFile(message str) error:
     ret makeErr(4, message)
 ..
 
 # Returns an error with code 5 indicating a would-overflow condition.
 # O(1).
 # @returns error
-pub errWouldOverflow(message str) error:
+pub wouldOverflow(message str) error:
     ret makeErr(5, message)
+..
+
+# Returns an error with code 6 indicating an invalid type.
+# O(1).
+# @returns error
+pub invalidType(message str) error:
+    ret makeErr(6, message)
 ..

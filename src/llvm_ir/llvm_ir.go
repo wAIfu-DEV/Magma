@@ -533,7 +533,10 @@ func irExprCallFuncPtr(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (SsaNa
 		argsSsa[i] = exprSsa
 	}
 
-	fnPtrSsa, e := irExprName(ctx, fnCall.Callee.(*t.NodeExprName))
+	fnPtrSsa, e := irExpression(ctx, fnCall.FuncPtrType, fnCall.Callee, false)
+	if e != nil {
+		return ssaName(""), e
+	}
 	bitCastPtr := irSsaLocal(ctx)
 
 	irWritef(ctx, "  %s = bitcast ptr %s to ", bitCastPtr.Repr, fnPtrSsa.Repr)
@@ -565,7 +568,7 @@ func irExprCallFuncPtr(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (SsaNa
 
 	bound := len(argsSsa)
 	for i, ssa := range argsSsa {
-		e = irType(ctx, fnCall.Args[i].GetInferredType())
+		e = irType(ctx, fnType.Args[i])
 		if e != nil {
 			return ssaName(""), e
 		}
@@ -710,32 +713,64 @@ func irExprCallFuncMember(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (Ss
 		argsSsa[i] = exprSsa
 	}
 
-	var isSsaOwner = false
-	switch n := fnCall.Callee.(type) {
-	case *t.NodeExprName:
-		isSsaOwner = n.IsSsa
-	}
-
 	// implicit this
-	ownerSsa, e := irExprNameLvalue(ctx, fnCall.MemberOwnerName)
+	var ownerSsa SsaName
+	var e error
 
-	if isSsaOwner && !fnCall.MemberOwnerIsPtr {
-		allocSsa := irSsaLocal(ctx)
-		irWritef(ctx, "  %s = alloca ", allocSsa.Repr)
-		e := irType(ctx, fnCall.MemberOwnerType)
+	if fnCall.MemberOwnerExpr != nil {
+		ownerSsa, e = irExpression(ctx, fnCall.MemberOwnerType, fnCall.MemberOwnerExpr, false)
 		if e != nil {
 			return SsaName{}, e
 		}
-		irWrite(ctx, "\n")
 
-		irWrite(ctx, "  store ")
-		e = irType(ctx, fnCall.MemberOwnerType)
+		if !fnCall.MemberOwnerIsPtr {
+			allocSsa := irSsaLocal(ctx)
+			irWritef(ctx, "  %s = alloca ", allocSsa.Repr)
+			e := irType(ctx, fnCall.MemberOwnerType)
+			if e != nil {
+				return SsaName{}, e
+			}
+			irWrite(ctx, "\n")
+
+			irWrite(ctx, "  store ")
+			e = irType(ctx, fnCall.MemberOwnerType)
+			if e != nil {
+				return SsaName{}, e
+			}
+			irWritef(ctx, " %s, ptr %s\n", ownerSsa.Repr, allocSsa.Repr)
+
+			ownerSsa = allocSsa
+		}
+	} else {
+		var isSsaOwner = false
+		switch n := fnCall.Callee.(type) {
+		case *t.NodeExprName:
+			isSsaOwner = n.IsSsa
+		}
+
+		ownerSsa, e = irExprNameLvalue(ctx, fnCall.MemberOwnerName)
 		if e != nil {
 			return SsaName{}, e
 		}
-		irWritef(ctx, " %s, ptr %s\n", ownerSsa.Repr, allocSsa.Repr)
 
-		ownerSsa = allocSsa
+		if isSsaOwner && !fnCall.MemberOwnerIsPtr {
+			allocSsa := irSsaLocal(ctx)
+			irWritef(ctx, "  %s = alloca ", allocSsa.Repr)
+			e := irType(ctx, fnCall.MemberOwnerType)
+			if e != nil {
+				return SsaName{}, e
+			}
+			irWrite(ctx, "\n")
+
+			irWrite(ctx, "  store ")
+			e = irType(ctx, fnCall.MemberOwnerType)
+			if e != nil {
+				return SsaName{}, e
+			}
+			irWritef(ctx, " %s, ptr %s\n", ownerSsa.Repr, allocSsa.Repr)
+
+			ownerSsa = allocSsa
+		}
 	}
 	argsSsa = slices.Insert(argsSsa, 0, ownerSsa)
 
@@ -1152,6 +1187,26 @@ func irExprName(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 		return lastSsa, nil
 	}
 	return ssa, nil
+}
+
+func irExprMemberAccess(ctx *IrCtx, member *t.NodeExprMemberAccess) (SsaName, error) {
+	if member.Access == nil {
+		return SsaName{}, fmt.Errorf("member access '%s' has no resolved access info", member.Member)
+	}
+
+	targetSsa, e := irExpression(ctx, member.Target.GetInferredType(), member.Target, false)
+	if e != nil {
+		return SsaName{}, e
+	}
+
+	return irMemberAccess(
+		ctx,
+		member.Target.GetInferredType(),
+		targetSsa,
+		member.Access.FieldNb,
+		member.Access.Type,
+		member.Access.PtrDeref,
+	)
 }
 
 func irExprNameLvalue(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
@@ -1715,6 +1770,15 @@ func irExprUnary(ctx *IrCtx, expectedType *t.NodeType, unaryExpr *t.NodeExprUnar
 	}
 
 	switch unaryExpr.Operator {
+	case t.KwAsterisk:
+		resSsa := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = load ", resSsa.Repr)
+		e = irType(ctx, unaryExpr.InfType)
+		if e != nil {
+			return SsaName{}, e
+		}
+		irWritef(ctx, ", ptr %s\n", operandSsa.Repr)
+		return resSsa, nil
 	case t.KwTilde:
 		if isPointerType(operandType) {
 			return SsaName{}, fmt.Errorf("bitwise not (~) is not supported for pointer types")
@@ -2448,6 +2512,8 @@ func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr, topLeve
 		return irExprAddrof(ctx, ne)
 	case *t.NodeExprName:
 		return irExprName(ctx, ne)
+	case *t.NodeExprMemberAccess:
+		return irExprMemberAccess(ctx, ne)
 	case *t.NodeExprBinary:
 		return irExprBinary(ctx, expectedType, ne)
 	}
@@ -2460,6 +2526,10 @@ func irExpressionLvalue(ctx *IrCtx, expr t.NodeExpr) (SsaName, error) {
 		return irExprNameLvalue(ctx, ne)
 	case *t.NodeExprSubscript:
 		return irExprSubscriptLvalue(ctx, ne)
+	case *t.NodeExprUnary:
+		if ne.Operator == t.KwAsterisk {
+			return irExpression(ctx, ne.Operand.GetInferredType(), ne.Operand, false)
+		}
 	}
 	return ssaName(""), fmt.Errorf("expr not lvalue")
 }
@@ -3315,7 +3385,7 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 
 	ctx.CurrFunc = fnDefNode
 
-	if len(fnDefNode.Body.Statements) > 10 {
+	if len(fnDefNode.Body.Statements) > 5 {
 		irWrite(ctx, " inlinehint ")
 	} else {
 		irWrite(ctx, " alwaysinline ")

@@ -4,6 +4,7 @@ use "allocator.mg" alc
 use "slices.mg"    slices
 use "strings.mg"   strings
 use "errors.mg"    errors
+use "cast.mg"      cast
 
 # Reader interface for pulling bytes into strings or buffers.
 # O(1) wrapper calls; underlying reader decides cost.
@@ -26,9 +27,16 @@ pub new(impl ptr, readFunc (ptr, u8[], u64) !u64) Reader:
 # @param nBytes maximum bytes to read
 # @returns string with read bytes
 Reader.read(a alc.Allocator, nBytes u64) !$str:
+    if nBytes == 0:
+        ret strings.fromPtrNoCopy(cast.utop(0), 0)
+    ..
     buffPtr u8* = try a.alloc(nBytes)
     buff u8[] = slices.fromPtr(buffPtr, nBytes)
-    readCnt u64 = try this.readToBuff(buff, nBytes)
+    readCnt u64, readErr error = this.readToBuff(buff, nBytes)
+    if errors.code(readErr) != 0:
+        a.free(buffPtr)
+        throw readErr
+    ..
     ret strings.fromPtrNoCopy(buffPtr, readCnt)
 ..
 
@@ -39,8 +47,11 @@ Reader.read(a alc.Allocator, nBytes u64) !$str:
 # @returns number of bytes read
 Reader.readToBuff(buff u8[], nBytes u64) !u64:
     if slices.count(buff) < nBytes:
-        throw errors.errInvalidArgument("would overflow")
+        throw errors.invalidArgument("would overflow")
     ..
     readCnt u64 = try this.fn_read(this.impl, buff, nBytes)
+    if readCnt > nBytes:
+        throw errors.failure("reader returned more bytes than requested")
+    ..
     ret readCnt
 ..

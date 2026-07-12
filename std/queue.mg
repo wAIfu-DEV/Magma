@@ -1,40 +1,40 @@
 mod queue
 
-use "list.mg"      list
+use "array.mg"     arr
 use "allocator.mg" alc
 
-Queue(
+Queue[T](
     allocator alc.Allocator
-    data list.List
+    array     arr.Array[T]
 )
 
-pub new(a alc.Allocator, typeSize u64) !$Queue:
-    q Queue
-    q.data = try list.new(a, typeSize)
+pub new[T](a alc.Allocator) !$Queue[T]:
+    q Queue[T]
+    q.array = try arr.new[T](a)
     q.allocator = a
     ret q
 ..
 
-Queue.enqueue(itemPtr ptr) !void:
-    try this.data.pushRight(this.allocator, itemPtr)
+Queue[T].enqueue(item T) !void:
+    try this.array.pushRight(this.allocator, item)
 ..
 
-Queue.dequeue() !ptr:
-    ret try this.data.popLeft(this.allocator)
+Queue[T].dequeue() !T:
+    ret try this.array.popLeft(this.allocator)
 ..
 
-Queue.view() slice:
-    ret this.data.view()
+Queue[T].view() T[]:
+    ret this.array.view()
 ..
 
-Queue.count() u64:
-    ret this.data.count()
+Queue[T].count() u64:
+    ret this.array.count()
 ..
 
-Queue.clear() !void:
-    try this.data.clearShrink(this.allocator)
+Queue[T].clear() !void:
+    try this.array.clearShrink(this.allocator)
 ..
 
-Queue.free() void:
-    this.data.free(this.allocator)
+Queue[T].free() void:
+    this.array.free(this.allocator)
 ..

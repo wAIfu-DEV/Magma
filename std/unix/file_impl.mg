@@ -8,11 +8,13 @@ use "../cast.mg"      cast
 use "../errors.mg"    errors
 use "../writer.mg"    writer
 use "../reader.mg"    reader
+use "../file_op_mode.mg" fopm
 
 ext ext_unix_open  open(path u8*, flags i32, mode i32) i32
 ext ext_unix_close close(fd i32) i32
 ext ext_unix_write write(fd i32, buf ptr, count u64) i64
 ext ext_unix_read  read(fd i32, buf ptr, count u64) i64
+ext ext_unix_lseek lseek(fd i32, offset i64, whence i32) i64
 
 gl_writeOnce_written i64
 gl_readOnce_read i64
@@ -35,7 +37,7 @@ writeOnce(fd i32, next ptr, amount u64) !u64:
    gl_writeOnce_written = ext_unix_write(fd, next, amount)
    
    if gl_writeOnce_written < 0:
-      throw errors.errFailure("write failed")
+      throw errors.failure("write failed")
    ..
    ret cast.itou(gl_writeOnce_written)
 ..
@@ -46,7 +48,7 @@ writeOnce(fd i32, next ptr, amount u64) !u64:
 # @param bytes string to write
 # @returns bytes written
 pub write(handle ptr, bytes str) !u64:
-    fd i32 = cast.ptoi32(handle)
+    fd i32 = ptoi32(handle)
     bound u64 = strings.countBytes(bytes)
 
     if bound == 0:
@@ -77,7 +79,7 @@ readOnce(fd i32, next ptr, amount u64) !u64:
    gl_readOnce_read = ext_unix_read(fd, next, amount)
 
    if gl_readOnce_read < 0:
-      throw errors.errFailure("read failed")
+      throw errors.failure("read failed")
    ..
 
    ret cast.itou(gl_readOnce_read)
@@ -90,7 +92,10 @@ readOnce(fd i32, next ptr, amount u64) !u64:
 # @param n max bytes to read
 # @returns bytes read
 pub read(handle ptr, buff u8[], n u64) !u64:
-   fd i32 = cast.ptoi32(handle)
+   if slices.count(buff) < n:
+      throw errors.invalidArgument("read would overflow buffer")
+   ..
+   fd i32 = ptoi32(handle)
    bound u64 = n
    p ptr = slices.toPtr(buff)
 
@@ -135,9 +140,11 @@ pub stdin() reader.Reader:
 
 # Closes a unix file handle.
 # O(1).
-pub closeFile(handle ptr) void:
+pub closeFile(handle ptr) !void:
    fd i32 = ptoi32(handle)
-   ext_unix_close(fd)
+   if ext_unix_close(fd) != 0:
+      throw errors.failure("close failed")
+   ..
 ..
 
 # Opens a file using unix open.
@@ -146,7 +153,7 @@ pub closeFile(handle ptr) void:
 # @param path UTF-8 path
 # @param openMode desired open mode
 # @returns handle to the opened file
-pub openFile(a alc.Allocator, path str, openMode file.OpenMode) !$ptr:
+pub openFile(a alc.Allocator, path str, openMode fopm.OpenMode) !$ptr:
     O_RDONLY i32 = 0
     O_WRONLY i32 = 1
     O_RDWR   i32 = 2
@@ -157,24 +164,24 @@ pub openFile(a alc.Allocator, path str, openMode file.OpenMode) !$ptr:
     flags i32 = 0
     mode i32 = 438  # 0666 in octal
 
-    if openMode.read && openMode.write == false:
+    if openMode.r && openMode.w == false:
         flags = O_RDONLY
-    elif openMode.write && openMode.read == false:
+    elif openMode.w && openMode.r == false:
         flags = O_WRONLY
-        if openMode.append == false:
+        if openMode.a == false:
             flags = flags | O_CREAT | O_TRUNC
         else:
             flags = flags | O_CREAT | O_APPEND
         ..
-    elif openMode.read && openMode.write:
+    elif openMode.r && openMode.w:
         flags = O_RDWR
-        if openMode.append == false && openMode.write:
+        if openMode.a == false && openMode.w:
             flags = flags | O_CREAT | O_TRUNC
-        elif openMode.append:
+        elif openMode.a:
             flags = flags | O_CREAT | O_APPEND
         ..
     else:
-        throw errors.errInvalidArgument("invalid open mode")
+        throw errors.invalidArgument("invalid open mode")
     ..
 
     path_cstr u8* = try strings.toCstr(a, path)
@@ -183,7 +190,37 @@ pub openFile(a alc.Allocator, path str, openMode file.OpenMode) !$ptr:
     fd i32 = ext_unix_open(path_cstr, flags, mode)
 
     if fd < 0:
-        throw errors.errFailure("open failure")
+        throw errors.failure("open failure")
     ..
-    ret cast.i32top(fd)
+    ret i32top(fd)
+..
+
+# Moves a unix file descriptor's file offset.
+# O(1).
+# @param handle file handle
+# @param offset signed offset relative to whence
+# @param whence 0 for start, 1 for current position, 2 for end
+# @returns the resulting absolute file position
+pub seek(handle ptr, offset i64, whence u8) !u64:
+    SEEK_SET i32 = 0
+    SEEK_CUR i32 = 1
+    SEEK_END i32 = 2
+
+    origin i32 = 0
+    if whence == 0:
+        origin = SEEK_SET
+    elif whence == 1:
+        origin = SEEK_CUR
+    elif whence == 2:
+        origin = SEEK_END
+    else:
+        throw errors.invalidArgument("invalid whence")
+    ..
+
+    position i64 = ext_unix_lseek(ptoi32(handle), offset, origin)
+    if position < 0:
+        throw errors.failure("seek failed")
+    ..
+
+    ret cast.itou(position)
 ..

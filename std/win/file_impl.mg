@@ -15,7 +15,8 @@ ext ext_win32_CloseHandle    CloseHandle(handle ptr) i32
 ext ext_win32_WriteFile      WriteFile(handle ptr, arg0 ptr, arg1 u32, arg2 ptr, arg3 ptr) u32
 ext ext_win32_ReadFile       ReadFile(handle ptr, arg0 ptr, arg1 u32, arg2 ptr, arg3 ptr) u32
 ext ext_win32_GetStdHandle   GetStdHandle(handleNum i32) ptr
-ext ext_win32_SetFilePointer SetFilePointer(handle ptr, arg0 i32, arg1 ptr, arg2 u32) u32
+ext ext_win32_SetFilePointerEx SetFilePointerEx(handle ptr, distance i64, newPosition i64*, moveMethod u32) i32
+ext ext_win32_GetLastError     GetLastError() u32
 
 gl_writeOnce_written u32
 gl_readOnce_read u32
@@ -31,8 +32,7 @@ writeOnce(handle ptr, next ptr, amount u32) !u64:
    ok u32 = ext_win32_WriteFile(handle, next, amount, addrof gl_writeOnce_written, cast.utop(0))
    
    if ok == 0:
-      # TODO: throw
-      ret 0
+      throw errors.native(ext_win32_GetLastError(), "WriteFile failed")
    ..
 
    ret cast.u32to64(gl_writeOnce_written)
@@ -92,8 +92,7 @@ readOnce(handle ptr, next ptr, amount u32) !u64:
    ok u32 = ext_win32_ReadFile(handle, next, amount, addrof gl_readOnce_read, cast.utop(0))
 
    if ok == 0:
-      # TODO: throw
-      ret 0
+      throw errors.native(ext_win32_GetLastError(), "ReadFile failed")
    ..
 
    # Note: if read == 0 should set EOF flag
@@ -107,6 +106,12 @@ readOnce(handle ptr, next ptr, amount u32) !u64:
 # @param n max bytes to read
 # @returns bytes read
 pub read(handle ptr, buff u8[], n u64) !u64:
+   if slices.count(buff) < n:
+      throw errors.invalidArgument("read would overflow buffer")
+   ..
+   if n == 0:
+      ret 0
+   ..
    # happy path (short string)
    # should help optimize if size is known at comptime
    if n <= 0xFFFFFFFF:
@@ -115,10 +120,6 @@ pub read(handle ptr, buff u8[], n u64) !u64:
 
    bound u64 = n
    p ptr = slices.toPtr(buff)
-
-   if n == 0:
-      ret 0
-   ..
 
    total u64 = 0
 
@@ -166,8 +167,10 @@ pub stdin() reader.Reader:
 
 # Closes a Win32 file handle.
 # O(1).
-pub closeFile(handle ptr) void:
-   ext_win32_CloseHandle(handle)
+pub closeFile(handle ptr) !void:
+   if ext_win32_CloseHandle(handle) == 0:
+      throw errors.native(ext_win32_GetLastError(), "CloseHandle failed")
+   ..
 ..
 
 # Opens a file using Win32 CreateFileW.
@@ -179,33 +182,32 @@ pub closeFile(handle ptr) void:
 pub openFile(a alc.Allocator, path str, openMode fopm.OpenMode) !$ptr:
    READ  u32 = 0x80000000
    WRITE u32 = 0x40000000
+   APPEND u32 = 4
 
    OPEN_EXISTING i32 = 3
    CREATE_ALWAYS i32 = 2
+   OPEN_ALWAYS i32 = 4
 
    access_mode u32
    open_mode i32
 
-   if openMode.read:
-      access_mode = READ
-      if openMode.write:
-         access_mode = access_mode | WRITE
-      ..
-      open_mode = OPEN_EXISTING
-   elif openMode.write && openMode.append == false:
-      access_mode = WRITE
-      if openMode.read:
+   if openMode.a:
+      access_mode = APPEND
+      if openMode.r:
          access_mode = access_mode | READ
       ..
+      open_mode = OPEN_ALWAYS
+   elif openMode.r && openMode.w:
+      access_mode = READ | WRITE
       open_mode = CREATE_ALWAYS
-   elif openMode.append && openMode.write:
-      access_mode = WRITE
-      if openMode.read:
-         access_mode = access_mode | READ
-      ..
+   elif openMode.r:
+      access_mode = READ
       open_mode = OPEN_EXISTING
+   elif openMode.w:
+      access_mode = WRITE
+      open_mode = CREATE_ALWAYS
    else:
-      throw errors.errInvalidArgument("invalid open mode")
+      throw errors.invalidArgument("invalid open mode")
    ..
 
    path_u16 u16[] = try utf8.utf8To16NT(a, path)
@@ -217,14 +219,14 @@ pub openFile(a alc.Allocator, path str, openMode fopm.OpenMode) !$ptr:
 
    # invalid handle
    if cast.ptou(handle) == cast.itou(-1):
-      if openMode.append:
+      if openMode.a:
          # create file if append mode
          handle = ext_win32_CreateFileW(path_ptr, access_mode, 0, cast.utop(0), 2, 0, cast.utop(0))
       ..
 
       if cast.ptou(handle) == cast.itou(-1):
          # TODO: map windows API errs to magma errs
-         throw errors.errFailure("open failure")
+          throw errors.native(ext_win32_GetLastError(), "CreateFileW failed")
       ..
    ..
    ret handle
@@ -244,18 +246,15 @@ pub seek(handle ptr, offset i64, whence u8) !u64:
    elif whence == 2:
       moveMethod = FILE_END
    else:
-      throw errors.errInvalidArgument("invalid whence")
+      throw errors.invalidArgument("invalid whence")
    ..
     
-   # Handle 64-bit offset (Windows uses 32-bit low/high)
-   lowOffset i32 = cast.i64to32(offset & 0xFFFFFFFF)
-   highOffset i32 = cast.i64to32(offset >> 32)
-    
-   newPos u32 = ext_win32_SetFilePointer(handle, lowOffset, addrof highOffset, moveMethod)
-    
-   if newPos == 0xFFFFFFFF:
-      throw errors.errFailure("seek failed")
+   newPos i64 = 0
+   if ext_win32_SetFilePointerEx(handle, offset, addrof newPos, moveMethod) == 0:
+      throw errors.native(ext_win32_GetLastError(), "SetFilePointerEx failed")
    ..
-    
-   ret cast.u32to64(newPos) | (cast.i32to64(highOffset) << 32)
+   if newPos < 0:
+      throw errors.failure("seek returned a negative position")
+   ..
+   ret cast.itou(newPos)
 ..

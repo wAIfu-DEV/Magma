@@ -341,7 +341,7 @@ func parseSimplePrimaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
 	)
 }
 
-func parsePostfixCallExpr(ctx *ParseCtx, tk t.Token, calleeExpr t.NodeExpr) (*t.NodeExprCall, error) {
+func parsePostfixCallExpr(ctx *ParseCtx, tk t.Token, calleeExpr t.NodeExpr, genericArgs []*t.NodeType) (*t.NodeExprCall, error) {
 	consume(ctx)
 	argExprs := []t.NodeExpr{}
 
@@ -394,9 +394,33 @@ func parsePostfixCallExpr(ctx *ParseCtx, tk t.Token, calleeExpr t.NodeExpr) (*t.
 	}
 
 	return &t.NodeExprCall{
-		Callee: calleeExpr,
-		Args:   argExprs,
+		Callee:      calleeExpr,
+		Args:        argExprs,
+		GenericArgs: genericArgs,
 	}, nil
+}
+
+func tryParseGenericCallTypeArgs(ctx *ParseCtx) ([]*t.NodeType, bool) {
+	startIdx := ctx.TokIdx
+
+	open, e := peek(ctx)
+	if e != nil || open.KeywType != t.KwBrackOp {
+		return nil, false
+	}
+
+	typeArgs, e := parseTypeArgList(ctx)
+	if e != nil {
+		ctx.TokIdx = startIdx
+		return nil, false
+	}
+
+	next, e := peek(ctx)
+	if e != nil || next.KeywType != t.KwParenOp {
+		ctx.TokIdx = startIdx
+		return nil, false
+	}
+
+	return typeArgs, true
 }
 
 func parsePostfixSubscriptExpr(ctx *ParseCtx, tk t.Token, targetExpr t.NodeExpr) (*t.NodeExprSubscript, error) {
@@ -432,6 +456,31 @@ func parsePostfixSubscriptExpr(ctx *ParseCtx, tk t.Token, targetExpr t.NodeExpr)
 	}, nil
 }
 
+func parsePostfixMemberExpr(ctx *ParseCtx, tk t.Token, targetExpr t.NodeExpr) (*t.NodeExprMemberAccess, error) {
+	consume(ctx)
+
+	memberTk, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	if memberTk.Type != t.TokName {
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&memberTk,
+			fmt.Sprintf("syntax error: expected member name after '.' but got '%s'", memberTk.Repr),
+			"expected: `<expr>.<member>`",
+		)
+	}
+
+	consume(ctx)
+
+	return &t.NodeExprMemberAccess{
+		Target: targetExpr,
+		Member: memberTk.Repr,
+	}, nil
+}
+
 func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExpr, error) {
 	expr := baseExpr
 
@@ -454,7 +503,7 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 		}
 
 		if next.KeywType == t.KwParenOp {
-			expr, e = parsePostfixCallExpr(ctx, tk, expr)
+			expr, e = parsePostfixCallExpr(ctx, tk, expr, nil)
 			if e != nil {
 				return nil, e
 			}
@@ -462,7 +511,26 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 		}
 
 		if next.KeywType == t.KwBrackOp {
+			if _, ok := expr.(*t.NodeExprName); ok {
+				typeArgs, isGenericCall := tryParseGenericCallTypeArgs(ctx)
+				if isGenericCall {
+					expr, e = parsePostfixCallExpr(ctx, tk, expr, typeArgs)
+					if e != nil {
+						return nil, e
+					}
+					continue
+				}
+			}
+
 			expr, e = parsePostfixSubscriptExpr(ctx, tk, expr)
+			if e != nil {
+				return nil, e
+			}
+			continue
+		}
+
+		if next.KeywType == t.KwDot {
+			expr, e = parsePostfixMemberExpr(ctx, tk, expr)
 			if e != nil {
 				return nil, e
 			}
@@ -937,6 +1005,160 @@ func parseName(ctx *ParseCtx, tk t.Token, allowComposite bool) (t.NodeName, erro
 	}
 }
 
+type parsedDeclName struct {
+	NameNode        t.NodeName
+	TypeParams      []string
+	OwnerTypeParams []string
+}
+
+func parseDeclNameWithGenerics(ctx *ParseCtx) (*parsedDeclName, error) {
+	firstTk, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+	if firstTk.Type != t.TokName {
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&firstTk,
+			fmt.Sprintf("syntax error: expected declaration name but got '%s'", firstTk.Repr),
+			"",
+		)
+	}
+
+	firstName := firstTk.Repr
+	consume(ctx)
+
+	firstParams := []string{}
+	maybeOpen, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+	if maybeOpen.KeywType == t.KwBrackOp {
+		firstParams, e = parseTypeParamList(ctx)
+		if e != nil {
+			return nil, e
+		}
+	}
+
+	maybeDot, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	if maybeDot.KeywType != t.KwDot {
+		return &parsedDeclName{
+			NameNode:   &t.NodeNameSingle{Name: firstName},
+			TypeParams: firstParams,
+		}, nil
+	}
+
+	consume(ctx) // dot
+
+	secondTk, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+	if secondTk.Type != t.TokName {
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&secondTk,
+			fmt.Sprintf("syntax error: expected member name after '.' but got '%s'", secondTk.Repr),
+			"",
+		)
+	}
+
+	secondName := secondTk.Repr
+	consume(ctx)
+
+	secondParams := []string{}
+	maybeOpen2, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+	if maybeOpen2.KeywType == t.KwBrackOp {
+		secondParams, e = parseTypeParamList(ctx)
+		if e != nil {
+			return nil, e
+		}
+	}
+
+	return &parsedDeclName{
+		NameNode: &t.NodeNameComposite{
+			Parts: []string{firstName, secondName},
+		},
+		TypeParams:      secondParams,
+		OwnerTypeParams: firstParams,
+	}, nil
+}
+
+func parseNameTemplated(ctx *ParseCtx, tk t.Token, allowComposite bool) (t.NodeName, error) {
+	parts := []string{}
+
+	for {
+		namePart, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+
+		if namePart.Type != t.TokName {
+			return nil, comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&tk,
+				"syntax error: expected name after dot",
+				"",
+			)
+		}
+
+		consume(ctx)
+
+		maybeDot, e := peek(ctx)
+		if e != nil {
+			if errors.Is(e, errOutOfBounds) {
+				break
+			}
+			return nil, e
+		}
+
+		if maybeDot.KeywType == t.KwBrackOp {
+			consume(ctx) // [
+
+			// TODO: implement parsing of generics
+		}
+
+		if maybeDot.KeywType != t.KwDot {
+			break
+		}
+
+		if !allowComposite {
+			return nil, comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&tk,
+				"syntax error: context does not allow for name to be a composite name",
+				"a name chain joined by '.' is a composite name, some contexts do not allow them.",
+			)
+		}
+		consume(ctx)
+	}
+
+	switch len(parts) {
+	case 0:
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&tk,
+			"syntax error: name parsing failure, unexpected state",
+			"",
+		)
+	case 1:
+		return &t.NodeNameSingle{
+			Name: parts[0],
+		}, nil
+	default:
+		return &t.NodeNameComposite{
+			Parts: parts,
+		}, nil
+	}
+}
+
 func parseArgument(ctx *ParseCtx) (t.NodeArg, error) {
 	name, e := peek(ctx)
 	if e != nil {
@@ -1032,9 +1254,139 @@ func parseArgsList(ctx *ParseCtx) (t.NodeArgList, error) {
 	}
 }
 
-func parseGenericClass(ctx *ParseCtx, nameNode t.NodeName) (t.NodeGenericClass, error) {
+func parseTypeParamList(ctx *ParseCtx) ([]string, error) {
+	params := []string{}
+
+	open, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	if open.KeywType != t.KwBrackOp {
+		return params, nil
+	}
+
+	consume(ctx)
+
+	for {
+		tk, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+
+		if tk.KeywType == t.KwBrackCl {
+			consume(ctx)
+			if len(params) == 0 {
+				return nil, comp_err.CompilationErrorToken(
+					ctx.Fctx,
+					&tk,
+					"syntax error: empty generic parameter list",
+					"expected at least one type parameter name inside '[' and ']'",
+				)
+			}
+			return params, nil
+		}
+
+		if tk.Type != t.TokName {
+			return nil, comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&tk,
+				fmt.Sprintf("syntax error: expected generic type parameter name but got '%s'", tk.Repr),
+				"expected: `[T]`, `[T, U]`, ...",
+			)
+		}
+
+		params = append(params, tk.Repr)
+		consume(ctx)
+
+		sep, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+
+		if sep.KeywType == t.KwComma {
+			consume(ctx)
+			continue
+		}
+		if sep.KeywType == t.KwBrackCl {
+			continue
+		}
+
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&sep,
+			fmt.Sprintf("syntax error: expected ',' or ']' in generic parameter list but got '%s'", sep.Repr),
+			"",
+		)
+	}
+}
+
+func parseTypeArgList(ctx *ParseCtx) ([]*t.NodeType, error) {
+	out := []*t.NodeType{}
+
+	open, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	if open.KeywType != t.KwBrackOp {
+		return out, nil
+	}
+
+	consume(ctx)
+
+	for {
+		tk, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+
+		if tk.KeywType == t.KwBrackCl {
+			consume(ctx)
+			if len(out) == 0 {
+				return nil, comp_err.CompilationErrorToken(
+					ctx.Fctx,
+					&tk,
+					"syntax error: empty generic argument list",
+					"expected at least one type argument inside '[' and ']'",
+				)
+			}
+			return out, nil
+		}
+
+		typeNd, e := parseType(ctx, tk, false)
+		if e != nil {
+			return nil, e
+		}
+		out = append(out, typeNd)
+
+		sep, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+
+		if sep.KeywType == t.KwComma {
+			consume(ctx)
+			continue
+		}
+		if sep.KeywType == t.KwBrackCl {
+			continue
+		}
+
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&sep,
+			fmt.Sprintf("syntax error: expected ',' or ']' in generic argument list but got '%s'", sep.Repr),
+			"",
+		)
+	}
+}
+
+func parseGenericClass(ctx *ParseCtx, nameNode t.NodeName, typeParams []string, ownerTypeParams []string) (t.NodeGenericClass, error) {
 	n := t.NodeGenericClass{
-		NameNode: nameNode,
+		NameNode:        nameNode,
+		TypeParams:      typeParams,
+		OwnerTypeParams: ownerTypeParams,
 	}
 	al, e := parseArgsList(ctx)
 	if e != nil {
@@ -1265,6 +1617,29 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (*t.NodeType, error) 
 		KindNode: &t.NodeTypeNamed{
 			NameNode: named,
 		},
+	}
+
+	tk, e = peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	if tk.KeywType == t.KwBrackOp {
+		maybeInner, e := peekNth(ctx, 1)
+		if e != nil {
+			return nil, e
+		}
+
+		// In type context, [] / [num] are slice/array suffixes.
+		// Any other bracket content is parsed as generic type arguments.
+		if maybeInner.KeywType != t.KwBrackCl && maybeInner.Type != t.TokLitNum {
+			typeArgs, e := parseTypeArgList(ctx)
+			if e != nil {
+				return nil, e
+			}
+
+			outT.KindNode.(*t.NodeTypeNamed).GenericArgs = typeArgs
+		}
 	}
 
 	tk, e = peek(ctx)
@@ -1534,11 +1909,12 @@ func parseStructDef(ctx *ParseCtx, tk t.Token, gncls t.NodeGenericClass) (*t.Nod
 
 	// create struct def in global node for easir type checking later
 	structMap := &t.StructDef{
-		Module:  ctx.Fctx.PackageName,
-		Name:    simpleName.Name,
-		Fields:  map[string]*t.NodeType{},
-		Funcs:   map[string]*t.NodeFuncDef{},
-		FieldNb: map[string]int{},
+		Module:     ctx.Fctx.PackageName,
+		Name:       simpleName.Name,
+		TypeParams: gncls.TypeParams,
+		Fields:     map[string]*t.NodeType{},
+		Funcs:      map[string]*t.NodeFuncDef{},
+		FieldNb:    map[string]int{},
 	}
 
 	for i, arg := range gncls.ArgsNode.Args {
@@ -1639,13 +2015,26 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 
 		fmt.Printf("added implicit this to: %s.%s()\n", ownerName, memberName)
 
+		thisOwnerNamed := &t.NodeTypeNamed{
+			NameNode: &t.NodeNameSingle{Name: ownerName},
+		}
+		if len(fnDef.Class.OwnerTypeParams) > 0 {
+			typeArgs := make([]*t.NodeType, 0, len(fnDef.Class.OwnerTypeParams))
+			for _, p := range fnDef.Class.OwnerTypeParams {
+				typeArgs = append(typeArgs, &t.NodeType{
+					KindNode: &t.NodeTypeNamed{
+						NameNode: &t.NodeNameSingle{Name: p},
+					},
+				})
+			}
+			thisOwnerNamed.GenericArgs = typeArgs
+		}
+
 		fnDef.Class.ArgsNode.Args = slices.Insert(fnDef.Class.ArgsNode.Args, 0, t.NodeArg{
 			Name: "this",
 			TypeNode: &t.NodeType{
 				KindNode: &t.NodeTypePointer{
-					Kind: &t.NodeTypeNamed{
-						NameNode: &t.NodeNameSingle{Name: ownerName},
-					},
+					Kind: thisOwnerNamed,
 				},
 			},
 		})
@@ -1714,7 +2103,7 @@ func parseExternalFunc(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
 		)
 	}
 
-	gncls, e := parseGenericClass(ctx, n)
+	gncls, e := parseGenericClass(ctx, n, nil, nil)
 	if e != nil {
 		return nil, e
 	}
@@ -1738,7 +2127,7 @@ func parseExternalFunc(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
 }
 
 func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
-	n, e := parseName(ctx, tk, true)
+	declName, e := parseDeclNameWithGenerics(ctx)
 	if e != nil {
 		return nil, e
 	}
@@ -1753,7 +2142,7 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 		// TODO: apply modifiers
 		ctx.NextModifiers = []ModifierType{}
 
-		gncls, e := parseGenericClass(ctx, n)
+		gncls, e := parseGenericClass(ctx, declName.NameNode, declName.TypeParams, declName.OwnerTypeParams)
 		if e != nil {
 			return nil, e
 		}
@@ -1769,11 +2158,20 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 
 		return parseFuncDef(ctx, tk, after, gncls, "")
 	default:
+		if len(declName.TypeParams) > 0 || len(declName.OwnerTypeParams) > 0 {
+			return nil, comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&next,
+				"syntax error: generic parameters are only valid on struct/function declarations",
+				"",
+			)
+		}
+
 		tNode, e := parseType(ctx, next, false)
 		if e == nil {
 			return &t.NodeExprVarDef{
-				Name:       n,
-				AbsName:    ctx.Fctx.PackageName + "." + flattenName(n),
+				Name:       declName.NameNode,
+				AbsName:    ctx.Fctx.PackageName + "." + flattenName(declName.NameNode),
 				Type:       tNode,
 				IsGlobal:   true,
 				IsSsa:      false,

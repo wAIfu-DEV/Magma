@@ -1,5 +1,7 @@
 mod allocator
 
+use "errors.mg" errors
+
 # Generic allocator interface with function pointers.
 # O(1) for wrapper calls; underlying allocator decides cost.
 Allocator(
@@ -18,13 +20,30 @@ Allocator.alloc(byteCount u64) !$u8*:
     ret try this.fn_alloc(this.impl, byteCount)
 ..
 
-# Reallocates a block to byteCount bytes.
+# Allocates a new block of size count * sizeof T.
+# O(1) wrapper call; allocator-dependent.
+# @param byteCount number of bytes to allocate
+# @returns owned memory block
+Allocator.allocT[T](count u64) !$T*:
+    ret try this.fn_alloc(this.impl, count * sizeof T)
+..
+
+# Reallocates a block of byteCount bytes.
 # O(1) wrapper call; allocator-dependent.
 # @param block existing allocation
 # @param byteCount new size in bytes
 # @returns owned memory block
 Allocator.realloc(block u8*, byteCount u64) !$u8*:
     ret try this.fn_realloc(this.impl, block, byteCount)
+..
+
+# Reallocates a block of size count * sizeof T.
+# O(1) wrapper call; allocator-dependent.
+# @param block existing allocation
+# @param byteCount new size in bytes
+# @returns owned memory block
+Allocator.reallocT[T](block T*, count u64) !$T*:
+    ret try this.fn_realloc(this.impl, block, count * sizeof T)
 ..
 
 # Frees a previously allocated block.

@@ -3,6 +3,7 @@ mod writer
 use "strings.mg" strings
 use "slices.mg"  slices
 use "cast.mg"    cast
+use "errors.mg"  errors
 
 # Writer interface for emitting bytes and formatted values.
 # O(1) wrapper calls; underlying writer decides cost.
@@ -26,13 +27,42 @@ Writer.write(bytes str) !u64:
     ret try this.fn_write(this.impl, bytes)
 ..
 
+# Writes the complete byte string or returns an error if the adapter makes no
+# progress or reports an invalid count.
+Writer.writeAll(bytes str) !u64:
+    firstWritten u64 = try this.fn_write(this.impl, bytes)
+
+    # Happy path, mean and lean
+    if firstWritten == strings.countBytes(bytes):
+        ret firstWritten
+    ..
+
+    total u64 = firstWritten
+    bound u64 = strings.countBytes(bytes)
+    base ptr = strings.toPtr(bytes)
+
+    while total < bound:
+        remaining u64 = bound - total
+        next ptr = cast.utop(cast.ptou(base) + total)
+        written u64 = try this.fn_write(this.impl, strings.fromPtrNoCopy(next, remaining))
+        if written > remaining:
+            throw errors.failure("writer returned more bytes than requested")
+        ..
+        if written == 0:
+            throw errors.failure("writer made no progress")
+        ..
+        total = total + written
+    ..
+    ret total
+..
+
 # Writes the provided bytes followed by a newline.
 # O(N) for byte count.
 # @param bytes string to write
 # @returns number of bytes written
 Writer.writeLn(bytes str) !u64:
-    written u64 = try this.fn_write(this.impl, bytes)
-    written = written + try this.fn_write(this.impl, "\n")
+    written u64 = try this.writeAll(bytes)
+    written = written + try this.writeAll("\n")
     ret written
 ..
 
@@ -42,9 +72,9 @@ Writer.writeLn(bytes str) !u64:
 # @returns number of bytes written
 Writer.writeBool(b bool) !u64:
     if b == true:
-        ret try this.fn_write(this.impl, "true")
+        ret try this.writeAll("true")
     else:
-        ret try this.fn_write(this.impl, "false")
+        ret try this.writeAll("false")
     ..
 ..
 
@@ -64,22 +94,23 @@ digitToChar(i i16) u8:
 # @returns number of bytes written
 Writer.writeInt64(num i64) !u64:
     buf u8[20]
-    n i64 = num
+    n u64 = cast.itou(num)
     idx u64 = 20
     isNeg bool = false
 
     if n == 0:
-        ret try this.fn_write(this.impl, "0")
+        ret try this.writeAll("0")
     ..
 
-    if n < 0:
+    if num < 0:
         isNeg = true
-        n = 0 - n
+        # -(num + 1) is representable even for INT64_MIN.
+        n = cast.itou(0 - (num + 1)) + 1
     ..
 
     while n != 0:
         idx = idx - 1
-        d i16 = cast.i64to16(n % 10)
+        d i16 = cast.u64to16(n % 10)
         buf[idx] = digitToChar(d)
         n = n / 10
     ..
@@ -94,7 +125,7 @@ Writer.writeInt64(num i64) !u64:
     writePtr ptr = cast.utop(cast.ptou(bufPtr) + idx)
     toWrite str = strings.fromPtrNoCopy(writePtr, len)
 
-    ret try this.fn_write(this.impl, toWrite)
+    ret try this.writeAll(toWrite)
 ..
 
 # Writes an unsigned 64-bit integer in decimal form.
@@ -107,7 +138,7 @@ Writer.writeUint64(num u64) !u64:
     idx u64 = 20
 
     if n == 0:
-        ret try this.fn_write(this.impl, "0")
+        ret try this.writeAll("0")
     ..
 
     while n != 0:
@@ -122,7 +153,7 @@ Writer.writeUint64(num u64) !u64:
     writePtr ptr = cast.utop(cast.ptou(bufPtr) + idx)
     toWrite str = strings.fromPtrNoCopy(writePtr, len)
 
-    ret try this.fn_write(this.impl, toWrite)
+    ret try this.writeAll(toWrite)
 ..
 
 
@@ -153,15 +184,15 @@ Writer.writeFloat64(flt f64, precision u64) !u64:
 
     # is Nan
     if (exp == EXP_MASK) && (frac != 0):
-        ret try this.fn_write(this.impl, "nan")
+        ret try this.writeAll("nan")
     ..
 
     # is infinitte
     if (exp == EXP_MASK) && (frac == 0):
         if sign:
-            ret try this.fn_write(this.impl, "-inf")
+            ret try this.writeAll("-inf")
         else:
-            ret try this.fn_write(this.impl, "inf")
+            ret try this.writeAll("inf")
         ..
     ..
 
@@ -240,5 +271,5 @@ Writer.writeFloat64(flt f64, precision u64) !u64:
     writePtr ptr = cast.utop(cast.ptou(bufPtr) + idx)
     toWrite str = strings.fromPtrNoCopy(writePtr, len)
 
-    ret try this.fn_write(this.impl, toWrite)
+    ret try this.writeAll(toWrite)
 ..

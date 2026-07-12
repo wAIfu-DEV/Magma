@@ -30,12 +30,14 @@ pub move(from ptr, to ptr, n u64) void:
     reg0 u64 = cast.ptou(from)
     reg1 u64 = cast.ptou(to)
 
-    if reg1 > reg0 && reg1 < reg0 + n:
+    # Subtraction is used instead of reg0 + n so an address-range check cannot
+    # wrap at U64_MAX.
+    if reg1 > reg0 && (reg1 - reg0) < n:
         au u8* = from
         bu u8* = to
 
         bound u64 = 0 - 1 # U64_MAX
-        i u64 = n
+        i u64 = n - 1
         while i != bound: # stops after 0
             bu[i] = au[i]
             i = i - 1

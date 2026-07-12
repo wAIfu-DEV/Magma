@@ -3,7 +3,6 @@ package scopeinfo
 import (
 	t "Magma/src/types"
 	"fmt"
-	"strings"
 )
 
 type sh *t.SharedState
@@ -49,7 +48,14 @@ func declFuncInStack(ctx *lcx, f *t.NodeFuncDef) *t.Scope {
 	case *t.NodeNameSingle:
 		s.DeclFuncs[n.Name] = fnScope
 	case *t.NodeNameComposite:
-		name := strings.Join(n.Parts, ".")
+		name := ""
+		for _, x := range n.Parts {
+			if name != "" {
+				name += "."
+			}
+			name += x
+		}
+
 		if len(name) > 2 {
 			// TODO: Error
 		}

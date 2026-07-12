@@ -16,6 +16,22 @@ func makeNamedType(name string) *t.NodeType {
 	}
 }
 
+func makeFuncPtrTypeFromDef(fnDef *t.NodeFuncDef) *t.NodeType {
+	k := &t.NodeTypeFunc{
+		Args:    []*t.NodeType{},
+		RetType: fnDef.ReturnType,
+	}
+
+	for _, v := range fnDef.Class.ArgsNode.Args {
+		k.Args = append(k.Args, v.TypeNode)
+	}
+
+	return &t.NodeType{
+		Throws:   false,
+		KindNode: k,
+	}
+}
+
 func makePtrType(from *t.NodeType) *t.NodeType {
 	cpy := *from
 
@@ -191,11 +207,19 @@ func getBoxedType(node *t.NodeType) *t.NodeType {
 func flattenTypeKind(nodeKind t.NodeTypeKind) string {
 	switch n := nodeKind.(type) {
 	case *t.NodeTypeNamed:
+		suffix := ""
+		if len(n.GenericArgs) > 0 {
+			parts := make([]string, 0, len(n.GenericArgs))
+			for _, a := range n.GenericArgs {
+				parts = append(parts, flattenType(a))
+			}
+			suffix = "[" + strings.Join(parts, ",") + "]"
+		}
 		switch nn := n.NameNode.(type) {
 		case *t.NodeNameSingle:
-			return nn.Name
+			return nn.Name + suffix
 		case *t.NodeNameComposite:
-			return strings.Join(nn.Parts, ".")
+			return strings.Join(nn.Parts, ".") + suffix
 		}
 	case *t.NodeTypePointer:
 		return "ptr<" + flattenTypeKind(n.Kind) + ">"
@@ -217,6 +241,19 @@ func flattenType(node *t.NodeType) string {
 	return flattenTypeKind(node.KindNode)
 }
 
+func flattenCallee(expr t.NodeExpr) string {
+	switch n := expr.(type) {
+	case *t.NodeExprName:
+		return flattenName(n.Name)
+	case *t.NodeExprMemberAccess:
+		return flattenCallee(n.Target) + "." + n.Member
+	case *t.NodeExprCall:
+		return flattenCallee(n.Callee) + "()"
+	default:
+		return "<expr>"
+	}
+}
+
 func sameType(a *t.NodeType, b *t.NodeType) bool {
 	if a == nil || b == nil {
 		return a == b
@@ -233,6 +270,14 @@ func sameTypeKind(a t.NodeTypeKind, b t.NodeTypeKind) bool {
 		tb, ok := b.(*t.NodeTypeNamed)
 		if !ok {
 			return false
+		}
+		if len(ta.GenericArgs) != len(tb.GenericArgs) {
+			return false
+		}
+		for i := range ta.GenericArgs {
+			if !sameType(ta.GenericArgs[i], tb.GenericArgs[i]) {
+				return false
+			}
 		}
 		return flattenName(ta.NameNode) == flattenName(tb.NameNode)
 	case *t.NodeTypePointer:
@@ -270,6 +315,12 @@ func sameTypeKind(a t.NodeTypeKind, b t.NodeTypeKind) bool {
 			}
 		}
 		return sameType(ta.RetType, tb.RetType)
+	case *t.NodeTypeAbsolute:
+		tb, ok := b.(*t.NodeTypeAbsolute)
+		if !ok {
+			return false
+		}
+		return ta.AbsoluteName == tb.AbsoluteName
 	default:
 		return false
 	}
@@ -351,7 +402,7 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		n.InfType = makeNamedType("ptr")
 		return nil
 	case *t.NodeExprCall:
-		fmt.Printf("call: %s\n", flattenName(n.Callee.(*t.NodeExprName).Name))
+		fmt.Printf("call: %s\n", flattenCallee(n.Callee))
 
 		// TODO: compare arg types
 
@@ -372,7 +423,7 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		}
 
 		if callArgCount != defArgCount {
-			return fmt.Errorf("call to function %s has invalid number of arguments. Got %d, expected %d", n.AssociatedFnDef.AbsName, callArgCount, defArgCount)
+			return fmt.Errorf("call to function %s has invalid number of arguments. Got %d, expected %d", flattenCallee(n.Callee), callArgCount, defArgCount)
 		}
 
 		for _, a := range n.Args {
@@ -382,13 +433,17 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 			}
 		}
 
-		e := ctExpr(c, n.Callee)
-		if e != nil {
-			return e
+		if !n.IsMemberFunc {
+			e := ctExpr(c, n.Callee)
+			if e != nil {
+				return e
+			}
 		}
 
 		fmt.Printf("is ptr to func: %t\n", n.IsFuncPointer)
-		fmt.Printf("func type: %s\n", flattenType(n.FuncPtrType))
+		if n.IsFuncPointer {
+			fmt.Printf("func type: %s\n", flattenType(n.FuncPtrType))
+		}
 
 		if n.IsFuncPointer {
 			n.InfType = n.FuncPtrType.KindNode.(*t.NodeTypeFunc).RetType
@@ -457,14 +512,25 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		case *t.NodeExprVarDefAssign:
 			n.InfType = n2.GetInferredType()
 		case *t.NodeFuncDef:
-			// TODO: build function type
-			n.InfType = n2.ReturnType
+			n.InfType = makeFuncPtrTypeFromDef(n2)
 		default:
 			return fmt.Errorf("name node pointing to invalid node type, failed to infer type")
 		}
 
 		fmt.Printf("name: %s\n", flattenName(n.Name))
 		fmt.Printf(" type: %s\n", flattenType(n.InfType))
+		return nil
+	case *t.NodeExprMemberAccess:
+		e := ctExpr(c, n.Target)
+		if e != nil {
+			return e
+		}
+		if n.InfType == nil && n.Access != nil {
+			n.InfType = n.Access.Type
+		}
+		if n.InfType == nil {
+			return fmt.Errorf("member access '%s' has no inferred type", n.Member)
+		}
 		return nil
 	case *t.NodeExprBinary:
 		e := ctExpr(c, n.Left)
@@ -530,7 +596,15 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 
 		switch n.Operator {
 		case t.KwAsterisk:
-			n.InfType = makePtrType(n.Operand.GetInferredType())
+			operandType := n.Operand.GetInferredType()
+			pointerType, ok := operandType.KindNode.(*t.NodeTypePointer)
+			if !ok {
+				return fmt.Errorf("dereference (*) requires a pointer operand")
+			}
+			n.InfType = &t.NodeType{
+				Throws:   false,
+				KindNode: pointerType.Kind,
+			}
 			return nil
 		case t.KwTilde:
 			operandT := n.Operand.GetInferredType()

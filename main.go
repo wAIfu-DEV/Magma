@@ -6,6 +6,7 @@ import (
 	"Magma/src/join"
 	llvmir "Magma/src/llvm_ir"
 	"Magma/src/makeabs"
+	"Magma/src/monomorph"
 	"Magma/src/pipeline"
 	"Magma/src/shared"
 	"fmt"
@@ -52,6 +53,10 @@ func wrappedMain() error {
 	// wait for other compilation unit goroutines
 	if e = join.JoinCompilationUnits(s, e); e != nil {
 		os.Exit(1)
+	}
+
+	if e = monomorph.Run(s); e != nil {
+		return e
 	}
 
 	// check/resolve name->node

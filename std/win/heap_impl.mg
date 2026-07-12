@@ -27,14 +27,14 @@ getHeap() ptr:
 # O(1) for allocation itself, O(N) for zeroing if requested.
 heapAlloc(impl ptr, nBytes u64) !$u8*:
     if nBytes == 0:
-        throw e.errInvalidArgument("requested size is 0")
+        throw e.invalidArgument("requested size is 0")
     ..
 
     heap ptr = getHeap()
     p ptr = ext_win32_HeapAlloc(heap, 0, nBytes)
 
     if cast.ptou(p) == 0:
-        throw e.errOutOfMemory("OOM")
+        throw e.outOfMemory("OOM")
     ..
     ret p
 ..
@@ -43,18 +43,18 @@ heapAlloc(impl ptr, nBytes u64) !$u8*:
 # O(1) for reallocation itself.
 heapRealloc(impl ptr, in u8*, nBytes u64) !$u8*:
     if cast.ptou(in) == 0:
-        throw e.errInvalidArgument("input pointer is null")
+        throw e.invalidArgument("input pointer is null")
     ..
 
     if nBytes == 0:
-        throw e.errInvalidArgument("requested size is 0")
+        throw e.invalidArgument("requested size is 0")
     ..
 
     heap ptr = getHeap()
     p ptr = ext_win32_HeapReAlloc(heap, 0, in, nBytes)
 
     if cast.ptou(p) == 0:
-        throw e.errOutOfMemory("OOM")
+        throw e.outOfMemory("OOM")
     ..
     ret p
 ..

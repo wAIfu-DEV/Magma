@@ -75,7 +75,11 @@ type NodeNameComposite struct {
 
 func (n *NodeNameComposite) Print(indent int) {
 	PrintIndent(indent)
-	fmt.Printf("NameComposite(name=%s)\n", strings.Join(n.Parts, "."))
+	fmt.Printf("NameComposite\n")
+	for _, x := range n.Parts {
+		PrintIndent(indent + 1)
+		fmt.Printf("%s\n", x)
+	}
 }
 
 type NodeType struct {
@@ -91,13 +95,21 @@ func (n *NodeType) Print(indent int) {
 }
 
 type NodeTypeNamed struct {
-	NameNode NodeName
+	NameNode    NodeName
+	GenericArgs []*NodeType
 }
 
 func (n *NodeTypeNamed) Print(indent int) {
 	PrintIndent(indent)
 	fmt.Printf("TypeNamed\n")
 	n.NameNode.Print(indent + 1)
+	if len(n.GenericArgs) > 0 {
+		PrintIndent(indent + 1)
+		fmt.Printf("GenericArgs\n")
+		for _, g := range n.GenericArgs {
+			g.Print(indent + 2)
+		}
+	}
 }
 
 type NodeTypeAbsolute struct {
@@ -243,8 +255,9 @@ func (n *NodeExprName) Print(indent int) {
 }
 
 type NodeExprCall struct {
-	Callee NodeExpr
-	Args   []NodeExpr
+	Callee      NodeExpr
+	Args        []NodeExpr
+	GenericArgs []*NodeType
 
 	AssociatedFnDef *NodeFuncDef
 	InfType         *NodeType
@@ -252,6 +265,7 @@ type NodeExprCall struct {
 	IsMemberFunc      bool
 	MemberOwnerType   *NodeType
 	MemberOwnerName   *NodeExprName
+	MemberOwnerExpr   NodeExpr
 	MemberOwnerIsPtr  bool
 	MemberOwnerModule string
 
@@ -278,6 +292,13 @@ func (n *NodeExprCall) Print(indent int) {
 	for _, expr := range n.Args {
 		expr.Print(indent + 2)
 	}
+	if len(n.GenericArgs) > 0 {
+		PrintIndent(indent + 1)
+		fmt.Printf("GenericArgs\n")
+		for _, g := range n.GenericArgs {
+			g.Print(indent + 2)
+		}
+	}
 }
 
 type NodeExprSubscript struct {
@@ -291,9 +312,22 @@ type NodeExprSubscript struct {
 	ElemType *NodeType
 }
 
+type NodeExprMemberAccess struct {
+	Target NodeExpr
+	Member string
+
+	Access  *MemberAccess
+	InfType *NodeType
+}
+
 func (n *NodeExprSubscript) GetInferredType() *NodeType {
 	fmt.Println("ExprSubscript")
 	return n.ElemType
+}
+
+func (n *NodeExprMemberAccess) GetInferredType() *NodeType {
+	fmt.Println("ExprMemberAccess")
+	return n.InfType
 }
 
 func (n *NodeExprSubscript) Print(indent int) {
@@ -307,6 +341,15 @@ func (n *NodeExprSubscript) Print(indent int) {
 	PrintIndent(indent + 1)
 	fmt.Printf("Expr\n")
 	n.Expr.Print(indent + 2)
+}
+
+func (n *NodeExprMemberAccess) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprMemberAccess(member=%s)\n", n.Member)
+
+	PrintIndent(indent + 1)
+	fmt.Printf("Target\n")
+	n.Target.Print(indent + 2)
 }
 
 type NodeExprBinary struct {
@@ -661,14 +704,32 @@ func (n *NodeBody) Print(indent int) {
 }
 
 type NodeGenericClass struct {
-	NameNode NodeName
-	ArgsNode NodeArgList
+	NameNode        NodeName
+	ArgsNode        NodeArgList
+	TypeParams      []string
+	OwnerTypeParams []string
 }
 
 func (n *NodeGenericClass) Print(indent int) {
 	PrintIndent(indent)
 	fmt.Printf("GenericClass\n")
 	n.NameNode.Print(indent + 1)
+	if len(n.TypeParams) > 0 {
+		PrintIndent(indent + 1)
+		fmt.Printf("TypeParams\n")
+		for _, p := range n.TypeParams {
+			PrintIndent(indent + 2)
+			fmt.Printf("%s\n", p)
+		}
+	}
+	if len(n.OwnerTypeParams) > 0 {
+		PrintIndent(indent + 1)
+		fmt.Printf("OwnerTypeParams\n")
+		for _, p := range n.OwnerTypeParams {
+			PrintIndent(indent + 2)
+			fmt.Printf("%s\n", p)
+		}
+	}
 	n.ArgsNode.Print(indent + 1)
 }
 
@@ -735,6 +796,7 @@ func (*NodeExprLit) IsExpr()               {}
 func (*NodeExprName) IsExpr()              {}
 func (*NodeExprCall) IsExpr()              {}
 func (*NodeExprSubscript) IsExpr()         {}
+func (*NodeExprMemberAccess) IsExpr()      {}
 func (*NodeExprBinary) IsExpr()            {}
 func (*NodeExprVarDef) IsExpr()            {}
 func (*NodeExprVarDefAssign) IsExpr()      {}

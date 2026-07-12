@@ -1,5 +1,9 @@
 mod cast
 
+pub reinterpret[T](x ptr) T*:
+    ret x
+..
+
 # Casts a pointer to u64.
 # O(1).
 pub ptou(x ptr) u64:
@@ -24,6 +28,36 @@ pub itou(x i64) u64:
 # O(1).
 pub utoi(x u64) i64:
     llvm "ret i64 %x\n"
+..
+
+# Zero-extends u64 to u128.
+# O(1).
+pub u64to128(x u64) u128:
+    llvm "%c = zext i64 %x to i128\n"
+    llvm "ret i128 %c\n"
+..
+
+# Truncates u128 to u64.
+# Warning: higher bits are discarded on overflow.
+# O(1).
+pub u128to64(x u128) u64:
+    llvm "%c = trunc i128 %x to i64\n"
+    llvm "ret i64 %c\n"
+..
+
+# Sign-extends i64 to i128.
+# O(1).
+pub i64to128(x i64) i128:
+    llvm "%c = sext i64 %x to i128\n"
+    llvm "ret i128 %c\n"
+..
+
+# Truncates i128 to i64.
+# Warning: higher bits are discarded on overflow.
+# O(1).
+pub i128to64(x i128) i64:
+    llvm "%c = trunc i128 %x to i64\n"
+    llvm "ret i64 %c\n"
 ..
 
 # Converts signed i64 to f64.

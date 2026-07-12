@@ -1,143 +1,264 @@
 # Magma
 ## Yet another programming language
 
-Magma is a [enter list of all the paradigms that are hip and cool in this day and age] language.
-It appeals to [what jobs makes money currently], especially as a replacement to COBOL.
+Magma is a small, low-level, compiled language that currently lowers to LLVM IR.
+It is trying to be practical enough to write real programs, sharp enough to cut
+your desk in half, and unfinished enough that you should not point it at payroll
+software unless payroll has personally wronged you.
 
-That's cool and all but it doesn't really give you an idea of what the language is about, does it?
-Here's some snippets so we can start boiling the frog (you):
+The compiler frontend is written in Go. It tokenizes, parses, gathers scope
+information, checks links and types, monomorphizes generics, emits LLVM IR, then
+lets Clang turn that IR into something your operating system can be blamed for.
 
-### 1. The classic
+For the full language tour, read [SYNTAX.md](SYNTAX.md). This README is the version for people that can't read too good.
 
-```
+## A Taste
+
+```magma
 mod main
-use "std:io" io
 
-main() void:
-    io.printLn("Hello, World!")
-..
-
-# wow, nearly less boilerplate than Java!!
-```
-
-### 2. The classic but more usable
-
-```
-mod main
-use "std:io" io
+use "../std/allocator.mg" alc
+use "../std/heap.mg" heap
+use "../std/io.mg" io
 
 main(args str[]) !void:
-    io.printLn("Hello, World!")
+    a alc.Allocator = heap.allocator()
+
+    stdout := try io.stdout(a)
+    defer stdout.close()
+
+    out := stdout.writer()
+    try out.writeLn("Hello, World!")
 ..
-
-# on the edge of unreasonable
 ```
 
-## Features
+Yes, `main` can take `args str[]`. Yes, it can throw. No, this does not make it
+enterprise-grade. Please stop asking.
 
-Let's take a look at what Magma will allow you to do at the current and very present time.
+## What Works Today
 
-### 1. The basics
+Magma currently has:
 
-1. define functions
-2. define variables
-3. call functions
-4. define structs
-5. assignment
-6. nested member access
-7. array indexed access
-8. first class error system
-9. while loops
-10. WIP conditionals
+1. modules declared with `mod`
+2. imports with `use "path" alias`
+3. functions, throwing functions, and `void`
+4. structs and methods with implicit `this`
+5. generic structs, generic functions, and generic receiver methods
+6. local variables with explicit types or `:=` inference
+7. zero-initialized locals and globals
+8. assignments to names, fields, nested fields, and indexed values
+9. pointers, slices, fixed-size arrays, `sizeof`, `addrof`, `&`, `*`, and indexing
+10. conditionals with `if`, `elif`, and `else`
+11. `while`, `break`, and `continue`
+12. `defer` statements and `defer:` blocks
+13. a first-class `error` type with `try`, `throw`, and result destructuring
+14. external function declarations with `ext`
+15. inline LLVM strings with `llvm`
+16. `@platform(...)` directives for platform-specific imports/declarations
+17. a standard library covering allocation, heap, files, buffered IO, readers,
+    writers, strings, slices, memory, UTF-8 helpers, lists, queues, maps, casts,
+    and errors
 
-Here is a sweet little example prepared by our unpaid intern to demonstrate:
+Here is a less tiny example, because apparently some people will judge a language beyond just "hello world":
 
-```
-mod main        # first line of file, must define a module name
-use "std:io" io # import other modules and give it an alias `io`
-use "std:errors" errors
+```magma
+mod main
 
-# struct definition
-MyStruct(
-    whatever i32
+use "../std/allocator.mg" alc
+use "../std/errors.mg" errors
+use "../std/heap.mg" heap
+use "../std/io.mg" io
+use "../std/list.mg" list
+
+Pair[A, B](
+    left A,
+    right B,
 )
 
-# main function definition
-main() !void:
-    my_var MyStruct       # var definition `<name> <type>`, no assignment will result in zero initialization
-    my_var.whatever = 420 # assignment to deeply nested member field
+swap[A, B](p Pair[A, B]) Pair[B, A]:
+    out Pair[B, A]
+    out.left = p.right
+    out.right = p.left
+    ret out
+..
 
-    # casting is required (on assignment), in expressions implicit casting may occur without loss of precision or truncations
-    my_bigint i64 = cast.i32to64(my_var.whatever)
-
-    io.printInt() # this prints 420 to console
-
-    my_array str[3]         # defines a slice pointing to a stack allocated array of size 3 * sizeof str
-    my_array[0] = "bruh"    # assignment to first index
-    my_array[1] = "sigma"
-    my_array[2] = "skibidi"
-
-    my_retval i32 = try mightThrow() # try will result in automatic error re-throwing if the result of a function call is an error
-
-    throw errors.errOutOfMemory("") # throw will conditionally return the given error, only if the error is non-ok
-    throw errors.errOk()            # this is a no-op and will cause no control flow changes
-    # this keyword will reduce boilerplate for error handling (think go's err != nil { return err })
-
-    # both `try` and `throw` require the current function to be throwing function, indicated by `!` before the return type
-
-    # errors can be inspected using result destructuring (only available for error results (for now))
-    my_reval i32, err error = mightThrow()
-    code i32 = errors.code(err)
-    
-    # a code of 0 indicates success (errors.errOk)
-
-    if code == 1: # they really should make enums for error code
-        # handle specific error type
-    elif code != 0:
-        # handle all other errors
+mightThrow(fail bool) !u8:
+    if fail:
+        throw errors.failure("asked to fail")
     ..
+    ret 42
+..
+
+main(args str[]) !void:
+    a := heap.allocator()
+
+    stdout := try io.stdout(a)
+    defer stdout.close()
+
+    out := stdout.writer()
+
+    value u8, err error = mightThrow(false)
+    if errors.code(err) != 0:
+        throw err
+    ..
+
+    xs := try list.new[u8](a)
+    try xs.pushRight(a, value)
+
+    got u8 = try xs.popLeft(a)
+    if got != 42:
+        throw errors.failure("math has abandoned us")
+    ..
+
+    try out.writeLn("Passed the tiny trial.")
 ..
 ```
 
-## Get started
+## Error Handling
 
-Building the compiler and compiling magma code will require:
+Throwing return types use `!`:
 
-1. Golang runtime: [https://go.dev/](https://go.dev/)
+```magma
+readByte() !u8:
+    ret 42
+..
+```
 
-Required to build the compiler frontend.
+`try` unwraps a throwing call or returns the error from the current throwing
+function:
 
-2. Clang C compiler*: [https://releases.llvm.org/download.html](https://releases.llvm.org/download.html)
+```magma
+byte u8 = try readByte()
+```
 
-Currently required for going from LLVM IR -> binary, this will likely change in the future.
+`throw` conditionally returns an error. Throwing `errors.ok()` is a no-op,
+which is weirdly elegant if you squint:
 
-Run either of the FULL_COMP_*.bat scripts on windows to get the full compiled executable.
-You might have to modify the script to change `clang.exe` to an absolute path depending
-on where you installed it, and if the folder is in the system env variables.
+```magma
+throw errors.invalidArgument("bad argument")
+throw errors.ok()
+```
 
-If you are on linux, please install windows specifically for this project then proceed
-to uninstall it (windows) after every use. This is crucial to the installation process.
+You can also destructure a throwing call when you want to handle the error
+yourself:
 
-## Politics
+```magma
+value u8, err error = readByte()
+if errors.code(err) != 0:
+    throw err
+..
+```
 
-As you get more into this language, you'll be glad to notice that we do not have
-any of the niceties that makes languages nowadays usable even by the most human-adjacent
-homunculi.
+## Blocks
 
-Our philosophy is one of exclusivity, gatekeeping, excellence and irreverence.
-We think that in an age of sanitized minds and speech, performative everything,
-the new normal ought to be a little more human and rough.
-We are proud to think that way, and we are glad that YOU also agree with us.
+Blocks start with `:` and end with `..`. Indentation is for humans, and humans
+are on probation.
 
-Now you may feel the need to ask why we feel the need to talk about philosophy and
-politics in the README of a damn programming language, and that would be a QUITE
-VALID QUESTION, but apparently every project needs to have politics involved now,
-so take it or leave it, we won't really care that much.
+```magma
+while i < n:
+    if shouldStop:
+        break
+    ..
+    i = i + 1
+..
+```
 
----
+The same block shape is used for functions, methods, conditionals, loops, and
+multi-line `defer`.
 
-## The end.
+## Standard Library
 
-The unpaid intern ran away. The README will stay like this until we fetch a new one from the nearest orphanage.
+The `std/` directory is already doing useful low-level work:
 
-### Thank you for your patience.
+- `allocator`, `heap`: allocation interfaces and platform heap implementations
+- `io`, `file`, `reader`, `writer`, `buffered`: file and stream IO
+- `errors`: error constructors, codes, messages, comparison helpers
+- `strings`, `slices`, `utf8`: string/slice utilities and UTF-8/UTF-16 helpers
+- `memory`, `cast`: memory operations and explicit casts
+- `array`, `list`, `queue`, `linear_map`, `hash_map`, `builder`: containers and builders
+
+Platform-specific pieces live under `std/win/` and `std/unix/`, selected with
+`@platform(...)`.
+
+## Compiler Layout
+
+The interesting bits live here:
+
+- `main.go`: command-line entry point
+- `src/tokenizer`: tokenization
+- `src/parser`: AST construction
+- `src/scope_info`: scope maps
+- `src/checker`: link and type checking
+- `src/monomorph`: generic monomorphization
+- `src/llvm_ir`: LLVM IR lowering
+- `src/ir_cleaner`: cleanup pass for emitted IR
+- `std/`: Magma standard library
+- `samples/`: sample programs and smoke tests
+- `SYNTAX.md`: syntax reference and current edge cases
+
+The compiler currently accepts one input `.mg` file and writes `out.ll`.
+
+```powershell
+go build
+.\Magma.exe samples\minimal.mg
+clang.exe out.ll -o out.exe
+.\out.exe
+```
+
+## Get Started
+
+You need:
+
+1. Go matching the module requirement in [go.mod](go.mod), currently `1.24.6`
+2. Clang/LLVM, because Magma emits LLVM IR and Clang does the final lowering
+
+On Windows, the batch scripts are the paved road:
+
+- `BUILD&RUN_TESTS.bat`: build the compiler, lower `samples/tests.mg`, compile
+  `out.ll`, and run the result
+- `BUILD&LOWER_SAMPLE.bat`: build and lower `samples/impl.mg`, also emitting
+  optimized LLVM snapshots
+- `FULL_COMP_O1&RUN_SAMPLE.bat`: build, lower `samples/minimal.mg`, compile
+  with `-O1`, and run it
+- `FULL_COMP_O3&RUN_SAMPLE.bat`: same idea, with `-O3`
+- `COMP&RUN.bat`: compile an existing `out.ll` and run `out.exe`
+
+If `clang.exe` is not on `PATH`, either put it there or edit the scripts. This
+is not a Magma feature. This is your machine expressing itself.
+
+Unix support exists in the standard library via `std/unix/`, but the checked-in
+automation is Windows batch files. Bring your own shell commands and emotional
+stability.
+
+## Current Caveats
+
+Magma is still a compiler project, not a lifestyle brand. The useful caveats:
+
+1. `for` loops are planned; use `while` for now.
+2. Global variables are zero-initialized; top-level initializers are still WIP.
+3. Implicit struct constructors are planned, not something to rely on today.
+4. `$` is currently an ownership/reference cue, not enforced ownership.
+5. The checker is incomplete. Some invalid return values, casts, throwing calls,
+   and pointer adventures may get farther than they deserve.
+6. There are no bounds checks, null checks, or read-only string mutation guards.
+7. Inline LLVM is accepted as text. If it is nonsense, LLVM will have opinions.
+
+See [TODO.md](TODO.md) for the current pile of sharp edges.
+
+## Philosophy
+
+Magma is deliberately direct: explicit blocks, explicit allocation, explicit
+errors, explicit casts, explicit enough that the compiler sometimes hands you
+the screwdriver and walks away.
+
+The goal is not to become the language equivalent of a padded meeting room. The
+goal is a small systems language with readable syntax, first-class errors,
+generics, a usable standard library, and enough low-level escape hatches to make
+bad decisions efficiently.
+
+That may sound irresponsible, but at least it is honest.
+
+## The End
+
+Read [SYNTAX.md](SYNTAX.md), run `BUILD&RUN_TESTS.bat`, and remember: if the
+generated program segfaults, that still counts as native performance.

@@ -2,6 +2,7 @@ mod strings
 
 use "allocator.mg" alc
 use "memory.mg"    mem
+use "cast.mg"      cast
 
 # Returns size in bytes of string, for UTF8 strings codepoint (UTF8 character) count may be
 # different from byte size.
@@ -52,7 +53,26 @@ pub fromPtrNoCopy(p ptr, bytesCount u64) str:
 # O(N) depending on byte count
 # @param s input string
 pub fromPtr(a alc.Allocator, p ptr, byteCount u64) !$str:
+    if byteCount == 0:
+        ret fromPtrNoCopy(cast.utop(0), 0)
+    ..
     inData u8* = p
+    strData u8* = try a.alloc(byteCount)
+
+    i u64 = 0
+    while i < byteCount:
+        strData[i] = inData[i]
+        i = i + 1
+    ..
+    ret fromPtrNoCopy(strData, byteCount)
+..
+
+pub copy(a alc.Allocator, s str) !$str:
+    byteCount u64 = countBytes(s)
+    if byteCount == 0:
+        ret fromPtrNoCopy(cast.utop(0), 0)
+    ..
+    inData u8* = toPtr(s)
     strData u8* = try a.alloc(byteCount)
 
     i u64 = 0
@@ -132,6 +152,9 @@ pub fromCstrNoCopy(cstr u8*) str:
 # @returns magma-style str
 pub fromCstr(a alc.Allocator, cstr u8*) !$str:
     size u64 = cStrLen(cstr)
+    if size == 0:
+        ret fromPtrNoCopy(cast.utop(0), 0)
+    ..
     strData u8* = try a.alloc(size)
 
     i u64 = 0
@@ -149,9 +172,8 @@ pub fromCstr(a alc.Allocator, cstr u8*) !$str:
 # @returns true if both strings are equal
 pub compare(a str, b str) bool:
     aLen u64 = countBytes(a)
-    bLen u64 = countBytes(b)
 
-    if aLen != bLen:
+    if aLen != countBytes(b):
         ret false
     ..
     ret mem.compare(toPtr(a), toPtr(b), aLen)

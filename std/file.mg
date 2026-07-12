@@ -5,6 +5,7 @@ use "errors.mg"    errors
 use "writer.mg"    w
 use "reader.mg"    r
 use "file_op_mode.mg" fopm
+use "cast.mg"      cast
 
 @platform("windows")
 use "win/file_impl.mg" impl_file
@@ -22,9 +23,9 @@ File(
 
 # Closes the file if open.
 # O(1).
-File.close() void:
+File.close() !void:
     if this.open:
-        impl_file.closeFile(this.handle)
+        try impl_file.closeFile(this.handle)
         this.open = false
     ..
 ..
@@ -33,7 +34,7 @@ File.close() void:
 # O(N) for byte count.
 write(f File*, bytes str) !u64:
     if f.open == false:
-        throw errors.errInvalidArgument("write to closed file")
+        throw errors.invalidArgument("write to closed file")
     ..
     ret try impl_file.write(f.handle, bytes)
 ..
@@ -41,8 +42,8 @@ write(f File*, bytes str) !u64:
 # Returns a writer for this file.
 # O(1).
 File.writer() !w.Writer:
-    if this.openMode.write == false:
-        throw errors.errInvalidArgument("file not open in write mode")
+    if this.open == false || this.openMode.w == false:
+        throw errors.invalidArgument("file not open in write mode")
     ..
     ret w.new(this, write)
 ..
@@ -51,7 +52,7 @@ File.writer() !w.Writer:
 # O(N) for byte count.
 read(f File*, buff u8[], n u64) !u64:
     if f.open == false:
-        throw errors.errInvalidArgument("read from closed file")
+        throw errors.invalidArgument("read from closed file")
     ..
     ret try impl_file.read(f.handle, buff, n)
 ..
@@ -59,18 +60,33 @@ read(f File*, buff u8[], n u64) !u64:
 # Returns a reader for this file.
 # O(1).
 File.reader() !r.Reader:
-    if this.openMode.read == false:
-        throw errors.errInvalidArgument("file not open in read mode")
+    if this.open == false || this.openMode.r == false:
+        throw errors.invalidArgument("file not open in read mode")
     ..
-    ret reader.new(this, read)
+    ret r.new(this, read)
 ..
 
 # Advances the file pointer to the desired position.
 File.seek(offset i64, whence u8) !u64:
     if this.open == false:
-        throw errors.errInvalidArgument("seek on closed file")
+        throw errors.invalidArgument("seek on closed file")
     ..
     ret try impl_file.seek(this.handle, offset, whence)
+..
+
+File.count() !u64:
+    if this.open == false:
+        throw errors.invalidArgument("count on closed file")
+    ..
+    position u64 = try impl_file.seek(this.handle, 0, 1)
+    count u64, countErr error = impl_file.seek(this.handle, 0, 2)
+    if errors.code(countErr) != 0:
+        # Best effort restoration; preserve the original seek failure.
+        impl_file.seek(this.handle, cast.utoi(position), 0)
+        throw countErr
+    ..
+    try impl_file.seek(this.handle, cast.utoi(position), 0)
+    ret count
 ..
 
 # Opens a file with the provided path and mode.
@@ -90,26 +106,7 @@ pub open(a alc.Allocator, path str, openMode fopm.OpenMode) !$File:
     ret f
 ..
 
-pub modeRead() fopm.OpenMode:
+pub mode() fopm.OpenMode:
     om fopm.OpenMode
-    om.write = false
-    om.read = true
-    om.append = false
-    ret om
-..
-
-pub modeWrite() fopm.OpenMode:
-    om fopm.OpenMode
-    om.write = true
-    om.read = false
-    om.append = false
-    ret om
-..
-
-pub modeAppend() fopm.OpenMode:
-    om fopm.OpenMode
-    om.write = true
-    om.read = false
-    om.append = true
     ret om
 ..
