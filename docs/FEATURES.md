@@ -231,10 +231,18 @@ File.close() !void:
 receiver parameter, yet assignments through `this` mutate the caller. Calls use
 ordinary member syntax: `file.close()`.
 
-Methods must follow their owner struct in the same source file. The parser also
-recognizes the specially named zero-argument method `Owner.destructor() void`,
-although no `std/` or `samples/` file demonstrates it; it should therefore be
-treated as an implemented but unexercised facility rather than a core idiom.
+Methods must follow their owner struct in the same source file. Prefixing a
+member with `destr` marks it as a destructor:
+
+```magma
+destr File.close() !void:
+    # ...
+..
+```
+
+Destructors may take arguments, may be throwing, and must return `void` or
+`!void`. A struct may expose multiple destructors. Calls are explicit; the
+compiler does not automatically insert them.
 
 ## 4. Type system
 
@@ -284,11 +292,15 @@ pub utf8To16(a alc.Allocator, s str) !$u16[]:
 ..
 ```
 
-In the corpus it documents that the returned pointer, string, slice, or struct
-owns allocated storage. Callers still free it manually. No borrow checker,
-automatic destructor insertion, move checking, or alias restriction is visible.
-Thus `$` currently communicates an ownership convention more than it enforces
-one. It is valuable documentation, but it is not a memory-safety guarantee.
+Prefix `$` marks ownership transfer without changing runtime layout. On a return
+type it gives ownership to the caller; on a parameter it consumes the argument.
+The unmarked form borrows. For structs with a `destr` member, a warning-only
+flow checker tracks these transfers through direct locals, assignments, calls,
+returns, control flow, and explicit destructor calls. It catches common leaks,
+double consumption, consuming borrows, use after transfer, and discarded owned
+results. It does not model aliases, pointers, fields, indexed values, aggregate
+contents, or partial moves, so it is not a memory-safety guarantee. Detailed
+rules are in [OWNERSHIP.md](OWNERSHIP.md).
 
 ### 4.4 Function types and interface-like structs
 
@@ -543,19 +555,21 @@ mismatched IR is deferred to LLVM and can compromise optimizer assumptions.
 
 ### 8.4 Memory model in practice
 
-Allocation is explicit and allocator-driven. Owned results are manually freed;
-containers expose `free` or `close` methods rather than automatic lifetime
-management. Pointer arithmetic is normally performed by converting pointers to
+Allocation is explicit and allocator-driven. Resource-owning structs expose
+explicit `destr` methods such as `free` or `close`; callers invoke or defer them.
+The destroy checker warns if a tracked owner is not consumed on every path.
+Pointer arithmetic is normally performed by converting pointers to
 `u64`, doing byte arithmetic, and converting back:
 
 ```magma
 next ptr = cast.utop(cast.ptou(base) + offset)
 ```
 
-There are no observed bounds checks, null checks, lifetime checks, data-race
-rules, or protection against writing string literal storage. Fixed arrays are
-zeroed, but pointer validity is the programmer's responsibility. Magma should
-therefore be classified as memory-unsafe in its current form.
+There are no bounds checks, null checks, general lifetime or alias checks,
+data-race rules, or protection against writing string literal storage. The
+warning-only ownership analysis is intentionally local and incomplete. Fixed
+arrays are zeroed, but pointer validity remains the programmer's responsibility.
+Magma should therefore be classified as memory-unsafe in its current form.
 
 ## 9. Standard-library feature picture
 
@@ -583,8 +597,9 @@ operations compose beyond toy programs.
 
 Several restrictions matter when reading or writing present-day Magma:
 
-1. **No automatic memory safety.** `$` records intent but does not enforce
-   ownership; pointer and indexed operations are unchecked.
+1. **No automatic memory safety.** `$` drives warning-only checking for direct
+   destructible locals; pointers, aliases, fields, indexed values, aggregate
+   contents, and partial moves are unchecked.
 2. **Incomplete static checking.** Some invalid assignments, returns, casts, or
    throwing-call uses can survive farther into lowering than a mature language
    would permit.
@@ -628,9 +643,10 @@ pattern.
 
 The central tradeoff is that a small core pushes substantial responsibility into
 conventions and library code. Interfaces are vtable structs, variants are tagged
-raw storage, conversions are LLVM-backed functions, and ownership is advisory.
-That keeps compiler and language mechanisms direct, but it also means correctness
-depends heavily on disciplined library implementation.
+raw storage, and conversions are LLVM-backed functions. Ownership annotations
+receive useful warning-only checking, but remain deliberately short of a general
+lifetime or memory-safety proof. Correctness still depends heavily on disciplined
+library implementation.
 
 In summary, the observed language is already capable of practical low-level
 programs and reusable generic libraries. It is best understood as an early,

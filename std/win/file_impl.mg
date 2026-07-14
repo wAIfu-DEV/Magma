@@ -10,11 +10,11 @@ use "../writer.mg"    writer
 use "../reader.mg"    reader
 use "../file_op_mode.mg" fopm
 
-ext ext_win32_CreateFileW    CreateFileW(pathUtf16 i16*, accessMode u32, _arg0 i32, _arg1 ptr, createMode i32, _arg2 i32, _arg3 ptr) ptr
-ext ext_win32_CloseHandle    CloseHandle(handle ptr) i32
-ext ext_win32_WriteFile      WriteFile(handle ptr, arg0 ptr, arg1 u32, arg2 ptr, arg3 ptr) u32
-ext ext_win32_ReadFile       ReadFile(handle ptr, arg0 ptr, arg1 u32, arg2 ptr, arg3 ptr) u32
-ext ext_win32_GetStdHandle   GetStdHandle(handleNum i32) ptr
+ext ext_win32_CreateFileW      CreateFileW(pathUtf16 i16*, accessMode u32, _arg0 i32, _arg1 ptr, createMode i32, _arg2 i32, _arg3 ptr) ptr
+ext ext_win32_CloseHandle      CloseHandle(handle ptr) i32
+ext ext_win32_WriteFile        WriteFile(handle ptr, arg0 ptr, arg1 u32, arg2 ptr, arg3 ptr) u32
+ext ext_win32_ReadFile         ReadFile(handle ptr, arg0 ptr, arg1 u32, arg2 ptr, arg3 ptr) u32
+ext ext_win32_GetStdHandle     GetStdHandle(handleNum i32) ptr
 ext ext_win32_SetFilePointerEx SetFilePointerEx(handle ptr, distance i64, newPosition i64*, moveMethod u32) i32
 ext ext_win32_GetLastError     GetLastError() u32
 
@@ -96,6 +96,7 @@ readOnce(handle ptr, next ptr, amount u32) !u64:
    ..
 
    # Note: if read == 0 should set EOF flag
+   # Future me: what the fuck are you talking about
    ret cast.u32to64(gl_readOnce_read)
 ..
 
@@ -225,7 +226,6 @@ pub openFile(a alc.Allocator, path str, openMode fopm.OpenMode) !$ptr:
       ..
 
       if cast.ptou(handle) == cast.itou(-1):
-         # TODO: map windows API errs to magma errs
           throw errors.native(ext_win32_GetLastError(), "CreateFileW failed")
       ..
    ..

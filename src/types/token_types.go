@@ -35,6 +35,7 @@ const (
 	KwExclam
 	KwModule
 	KwUse
+	KwLink
 	KwPublic
 	KwReturn
 	KwNewline
@@ -76,6 +77,7 @@ const (
 	KwAddrof
 	KwSlash
 	KwInfer
+	KwDestructor
 )
 
 var KwTypeToRepr []string = []string{
@@ -91,6 +93,7 @@ var KwTypeToRepr []string = []string{
 	KwExclam:     "!",
 	KwModule:     "mod",
 	KwUse:        "use",
+	KwLink:       "link",
 	KwPublic:     "pub",
 	KwReturn:     "ret",
 	KwNewline:    "\n",
@@ -132,6 +135,7 @@ var KwTypeToRepr []string = []string{
 	KwAddrof:     "addrof",
 	KwSlash:      "/",
 	KwInfer:      ":=",
+	KwDestructor: "destr",
 }
 
 var KwReprToType map[string]KwType = map[string]KwType{
@@ -147,6 +151,7 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"!":        KwExclam,
 	"mod":      KwModule,
 	"use":      KwUse,
+	"link":     KwLink,
 	"pub":      KwPublic,
 	"ret":      KwReturn,
 	"\n":       KwNewline,
@@ -188,6 +193,7 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"addrof":   KwAddrof,
 	"/":        KwSlash,
 	":=":       KwInfer,
+	"destr":    KwDestructor,
 }
 
 type Token struct {

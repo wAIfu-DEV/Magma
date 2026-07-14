@@ -86,6 +86,8 @@ type NodeType struct {
 	KindNode   NodeTypeKind
 	Destructor *NodeFuncDef
 	Throws     bool
+	// Owned marks an ownership-transfer position. It does not affect layout.
+	Owned bool
 }
 
 func (n *NodeType) Print(indent int) {
@@ -180,7 +182,7 @@ type NodeExprVoid struct {
 }
 
 func (n *NodeExprVoid) GetInferredType() *NodeType {
-	fmt.Println("ExprVoid")
+	//fmt.Println("ExprVoid")
 	return n.VoidType
 }
 
@@ -197,7 +199,7 @@ type NodeExprUnary struct {
 }
 
 func (n *NodeExprUnary) GetInferredType() *NodeType {
-	fmt.Println("ExprUnary")
+	//fmt.Println("ExprUnary")
 	return n.InfType
 }
 
@@ -215,7 +217,7 @@ type NodeExprLit struct {
 }
 
 func (n *NodeExprLit) GetInferredType() *NodeType {
-	fmt.Println("ExprLit")
+	//fmt.Println("ExprLit")
 	return n.InfType
 }
 
@@ -235,6 +237,9 @@ func (n *NodeLlvm) Print(indent int) {
 
 type NodeExprName struct {
 	Name NodeName
+	// GenericArgs specializes a generic function when its name is used as a
+	// value (as opposed to being called immediately).
+	GenericArgs []*NodeType
 
 	InfType        *NodeType
 	MemberAccesses []*MemberAccess
@@ -244,7 +249,7 @@ type NodeExprName struct {
 }
 
 func (n *NodeExprName) GetInferredType() *NodeType {
-	fmt.Println("ExprName")
+	//fmt.Println("ExprName")
 	return n.InfType
 }
 
@@ -252,6 +257,9 @@ func (n *NodeExprName) Print(indent int) {
 	PrintIndent(indent)
 	fmt.Printf("ExprName\n")
 	n.Name.Print(indent + 1)
+	for _, g := range n.GenericArgs {
+		g.Print(indent + 1)
+	}
 }
 
 type NodeExprCall struct {
@@ -275,7 +283,7 @@ type NodeExprCall struct {
 }
 
 func (n *NodeExprCall) GetInferredType() *NodeType {
-	fmt.Println("ExprCall")
+	//fmt.Println("ExprCall")
 	return n.InfType
 }
 
@@ -321,12 +329,12 @@ type NodeExprMemberAccess struct {
 }
 
 func (n *NodeExprSubscript) GetInferredType() *NodeType {
-	fmt.Println("ExprSubscript")
+	//fmt.Println("ExprSubscript")
 	return n.ElemType
 }
 
 func (n *NodeExprMemberAccess) GetInferredType() *NodeType {
-	fmt.Println("ExprMemberAccess")
+	//fmt.Println("ExprMemberAccess")
 	return n.InfType
 }
 
@@ -361,7 +369,7 @@ type NodeExprBinary struct {
 }
 
 func (n *NodeExprBinary) GetInferredType() *NodeType {
-	fmt.Println("ExprBinary")
+	//fmt.Println("ExprBinary")
 	return n.InfType
 }
 
@@ -394,7 +402,7 @@ type NodeExprVarDef struct {
 }
 
 func (n *NodeExprVarDef) GetInferredType() *NodeType {
-	fmt.Println("ExprVarDef")
+	//fmt.Println("ExprVarDef")
 	return n.Type
 }
 
@@ -419,7 +427,7 @@ type NodeExprVarDefAssign struct {
 }
 
 func (n *NodeExprVarDefAssign) GetInferredType() *NodeType {
-	fmt.Println("ExprVarDefAssign")
+	//fmt.Println("ExprVarDefAssign")
 	return n.VarDef.Type
 }
 
@@ -442,7 +450,7 @@ type NodeExprAssign struct {
 }
 
 func (n *NodeExprAssign) GetInferredType() *NodeType {
-	fmt.Println("ExprAssign")
+	//fmt.Println("ExprAssign")
 	return n.InfType
 }
 
@@ -462,7 +470,7 @@ type NodeExprTry struct {
 }
 
 func (n *NodeExprTry) GetInferredType() *NodeType {
-	fmt.Println("ExprTry")
+	//fmt.Println("ExprTry")
 	return n.Call.GetInferredType()
 }
 
@@ -478,7 +486,7 @@ type NodeExprSizeof struct {
 }
 
 func (n *NodeExprSizeof) GetInferredType() *NodeType {
-	fmt.Println("ExprSizeof")
+	//fmt.Println("ExprSizeof")
 	return n.InfType
 }
 
@@ -499,7 +507,7 @@ type NodeExprAddrof struct {
 }
 
 func (n *NodeExprAddrof) GetInferredType() *NodeType {
-	fmt.Println("ExprAddrof")
+	//fmt.Println("ExprAddrof")
 	return n.InfType
 }
 
@@ -515,7 +523,7 @@ type NodeExprDestructor struct {
 }
 
 func (n *NodeExprDestructor) GetInferredType() *NodeType {
-	fmt.Println("ExprTry")
+	//fmt.Println("ExprTry")
 	return nil
 }
 
@@ -645,7 +653,7 @@ type NodeExprDestructureAssign struct {
 }
 
 func (n *NodeExprDestructureAssign) GetInferredType() *NodeType {
-	fmt.Println("ExprDestructureAssign")
+	//fmt.Println("ExprDestructureAssign")
 	return n.ValueDef.Type
 }
 
@@ -743,6 +751,9 @@ type NodeFuncDef struct {
 	Deferred []*NodeStmtDefer
 	DeferCnt int
 	HasDefer bool
+
+	IsDestructor bool
+	IsExternal   bool
 }
 
 func (n *NodeFuncDef) Print(indent int) {

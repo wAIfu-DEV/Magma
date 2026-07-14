@@ -15,5 +15,5 @@ A small allocator-backed string map implemented with parallel arrays and linear 
 - `count() u64` returns the number of entries.
 - `keysView() str[]` and `valuesView() T[]` return borrowed parallel slices. Mutating, clearing, or freeing the map may invalidate them.
 - `clear() !void` removes all entries, frees keys, and retains reusable array capacity.
-- `free() void` frees all copied keys and storage.
+- `free() void` is the map's `destr` method and frees all copied keys and storage.
 - `indexOf(key str) !u64` is the internal linear search routine.

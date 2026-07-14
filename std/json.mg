@@ -16,13 +16,13 @@ Value(
     kind u8
 )
 
-# JSON object backed by a linear map. values are borrowed; free releases the keys
-# and map storage.
+# JSON object backed by a linear map. Cleanup policy for stored values is
+# supplied by the caller when the object is constructed.
 Object(
     entries linear_map.LinearMap[Value]
 )
 
-# JSON array. Values are borrowed; free only releases the array storage.
+# JSON array. Cleanup policy for stored values is supplied at construction.
 Array(
     allocator alc.Allocator
     values arr.Array[Value]
@@ -89,16 +89,16 @@ Value.asArray() !Array*:
     ret *r
 ..
 
-pub newObject(a alc.Allocator) !$Object:
+pub newObject(a alc.Allocator, cleanup ($Value) void) !$Object:
     object Object
-    object.entries = try linear_map.new[Value](a)
+    object.entries = try linear_map.new[Value](a, cleanup)
     ret object
 ..
 
-pub newArray(a alc.Allocator) !$Array:
+pub newArray(a alc.Allocator, cleanup ($Value) void) !$Array:
     array Array
     array.allocator = a
-    array.values = try arr.new[Value](a)
+    array.values = try arr.new[Value](a, cleanup)
     ret array
 ..
 
@@ -155,7 +155,7 @@ pub array(value Array*) Value:
     ret out
 ..
 
-Object.set(key str, value Value) !void:
+Object.set(key str, value $Value) !void:
     try this.entries.set(key, value)
 ..
 
@@ -167,15 +167,19 @@ Object.delete(key str) !void:
     try this.entries.delete(key)
 ..
 
+Object.take(key str) !$Value:
+    ret try this.entries.take(key)
+..
+
 Object.count() u64:
     ret this.entries.count()
 ..
 
-Object.free() void:
+destr Object.free() void:
     this.entries.free()
 ..
 
-Array.append(value Value) !void:
+Array.append(value $Value) !void:
     try this.values.pushRight(this.allocator, value)
 ..
 
@@ -183,7 +187,7 @@ Array.count() u64:
     ret this.values.count()
 ..
 
-Array.free() void:
+destr Array.free() void:
     this.values.free(this.allocator)
 ..
 

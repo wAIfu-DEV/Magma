@@ -1169,8 +1169,9 @@ func irExprName(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 	if isMemberAccess {
 		lastSsa := ssa
 		if len(nameExpr.MemberAccesses) == 0 {
-			fmt.Printf("member access but no member access history\n")
-			fmt.Printf("name: %s\n", flattenName(nameExpr.Name))
+			// TODO: compilation error
+			//fmt.Printf("member access but no member access history\n")
+			//fmt.Printf("name: %s\n", flattenName(nameExpr.Name))
 			return SsaName{}, fmt.Errorf("member access but no member access history")
 		}
 
@@ -2542,16 +2543,24 @@ func irJmpToDefer(ctx *IrCtx) {
 	}
 }
 
-func irJmpToParentDeferOnRet(ctx *IrCtx, parentCtx *IrCtx) {
-	ssa := irSsaLocal(ctx)
+func irJmpToParentDeferOnControl(ctx *IrCtx, parentCtx *IrCtx) {
+	retSsa := irSsaLocal(ctx)
+	brkSsa := irSsaLocal(ctx)
+	contSsa := irSsaLocal(ctx)
+	retOrBrkSsa := irSsaLocal(ctx)
+	pendingSsa := irSsaLocal(ctx)
 	after := irSsaName(ctx)
 
-	irWritef(ctx, "  %s = load i1, ptr %%.defer.ret\n", ssa.Repr)
+	irWritef(ctx, "  %s = load i1, ptr %%.defer.ret\n", retSsa.Repr)
+	irWritef(ctx, "  %s = load i1, ptr %%.defer.brk\n", brkSsa.Repr)
+	irWritef(ctx, "  %s = load i1, ptr %%.defer.cont\n", contSsa.Repr)
+	irWritef(ctx, "  %s = or i1 %s, %s\n", retOrBrkSsa.Repr, retSsa.Repr, brkSsa.Repr)
+	irWritef(ctx, "  %s = or i1 %s, %s\n", pendingSsa.Repr, retOrBrkSsa.Repr, contSsa.Repr)
 
 	if parentCtx.CurrDeferIdx == 0 {
-		irWritef(ctx, "  br i1 %s, label %%.defer.%d.base, label %%%s\n", ssa.Repr, parentCtx.CurrNestedScopeIdx, after.Repr)
+		irWritef(ctx, "  br i1 %s, label %%.defer.%d.base, label %%%s\n", pendingSsa.Repr, parentCtx.CurrNestedScopeIdx, after.Repr)
 	} else {
-		irWritef(ctx, "  br i1 %s, label %%.defer.%d.%d, label %%%s\n", ssa.Repr, parentCtx.CurrNestedScopeIdx, parentCtx.CurrDeferIdx-1, after.Repr)
+		irWritef(ctx, "  br i1 %s, label %%.defer.%d.%d, label %%%s\n", pendingSsa.Repr, parentCtx.CurrNestedScopeIdx, parentCtx.CurrDeferIdx-1, after.Repr)
 	}
 
 	irWritef(ctx, "%s:\n", after.Repr)
@@ -2674,6 +2683,7 @@ func irStmtContinue(ctx *IrCtx, stmtBreak *t.NodeStmtContinue) error {
 	if *ctx.NestedLoopCnt <= 0 {
 		return fmt.Errorf("used continue statement outside loop body")
 	}
+	irWrite(ctx, "  store i1 1, ptr %.defer.cont\n")
 	irJmpToDefer(ctx)
 	return nil
 }
@@ -3056,16 +3066,26 @@ func irBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef, isLoopBody b
 	if isLoopBody {
 		shouldBrkSsa := irSsaLocal(ctx)
 		brkLbl := irSsaName(ctx)
-		afterLbl := irSsaName(ctx)
+		checkContLbl := irSsaName(ctx)
 		irWritef(&cpy, "  %s = load i1, ptr %%.defer.brk\n", shouldBrkSsa.Repr)
-		irWritef(&cpy, "  br i1 %s, label %%%s, label %%%s\n", shouldBrkSsa.Repr, brkLbl.Repr, afterLbl.Repr)
+		irWritef(&cpy, "  br i1 %s, label %%%s, label %%%s\n", shouldBrkSsa.Repr, brkLbl.Repr, checkContLbl.Repr)
 		irWritef(&cpy, "%s:\n", brkLbl.Repr)
 		irWrite(&cpy, "  store i1 0, ptr %.defer.brk\n")
 		irWritef(&cpy, "  br label %%%s\n", ctx.LoopExitLbl.Repr)
+		irWritef(&cpy, "%s:\n", checkContLbl.Repr)
+
+		shouldContSsa := irSsaLocal(ctx)
+		contLbl := irSsaName(ctx)
+		afterLbl := irSsaName(ctx)
+		irWritef(&cpy, "  %s = load i1, ptr %%.defer.cont\n", shouldContSsa.Repr)
+		irWritef(&cpy, "  br i1 %s, label %%%s, label %%%s\n", shouldContSsa.Repr, contLbl.Repr, afterLbl.Repr)
+		irWritef(&cpy, "%s:\n", contLbl.Repr)
+		irWrite(&cpy, "  store i1 0, ptr %.defer.cont\n")
+		irWritef(&cpy, "  br label %%%s\n", ctx.LoopCondLbl.Repr)
 		irWritef(&cpy, "%s:\n", afterLbl.Repr)
 	}
 
-	irJmpToParentDeferOnRet(&cpy, ctx)
+	irJmpToParentDeferOnControl(&cpy, ctx)
 
 	irWrite(ctx, cpy.bld.Head.String())
 	irWrite(ctx, cpy.bld.Body.String())
@@ -3097,9 +3117,11 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 
 	irWrite(&cpy, "  %.defer.ret = alloca i1\n")
 	irWrite(&cpy, "  %.defer.brk = alloca i1\n")
+	irWrite(&cpy, "  %.defer.cont = alloca i1\n")
 
 	irWrite(&cpy, "  store i1 0, ptr %.defer.ret\n")
 	irWrite(&cpy, "  store i1 0, ptr %.defer.brk\n")
+	irWrite(&cpy, "  store i1 0, ptr %.defer.cont\n")
 
 	if !(isVoidType(fnDef.ReturnType) && !fnDef.ReturnType.Throws) {
 		irWrite(&cpy, "  store ")

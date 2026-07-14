@@ -354,13 +354,13 @@ func ctExprLvalue(c *ctx, expr t.NodeExpr) error {
 
 		n.ElemType = elemType
 
-		fmt.Printf("subscript:\n")
-		fmt.Printf(" type: %s\n", flattenType(n.BoxType))
-		fmt.Printf(" elemtype: %s\n", flattenType(n.ElemType))
+		//fmt.Printf("subscript:\n")
+		//fmt.Printf(" type: %s\n", flattenType(n.BoxType))
+		//fmt.Printf(" elemtype: %s\n", flattenType(n.ElemType))
 		return nil
 	case *t.NodeExprName:
 		if n.AssociatedNode == nil {
-			fmt.Printf("name: %s\n", flattenName(n.Name))
+			//fmt.Printf("name: %s\n", flattenName(n.Name))
 			return fmt.Errorf("name node pointing to no valid node")
 		}
 
@@ -383,8 +383,8 @@ func ctExprLvalue(c *ctx, expr t.NodeExpr) error {
 			return fmt.Errorf("name node pointing to invalid node type, failed to infer type")
 		}
 
-		fmt.Printf("name: %s\n", flattenName(n.Name))
-		fmt.Printf(" type: %s\n", flattenType(n.InfType))
+		//fmt.Printf("name: %s\n", flattenName(n.Name))
+		//fmt.Printf(" type: %s\n", flattenType(n.InfType))
 		return nil
 	}
 	return fmt.Errorf("unexpected expression type")
@@ -402,7 +402,7 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		n.InfType = makeNamedType("ptr")
 		return nil
 	case *t.NodeExprCall:
-		fmt.Printf("call: %s\n", flattenCallee(n.Callee))
+		//fmt.Printf("call: %s\n", flattenCallee(n.Callee))
 
 		// TODO: compare arg types
 
@@ -410,7 +410,11 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		defArgCount := 0
 
 		if n.IsFuncPointer {
-			defArgCount = len(n.FuncPtrType.KindNode.(*t.NodeTypeFunc).Args)
+			funcType, ok := n.FuncPtrType.KindNode.(*t.NodeTypeFunc)
+			if !ok {
+				return fmt.Errorf("call to %s was resolved as a function pointer with non-function type %T", flattenCallee(n.Callee), n.FuncPtrType.KindNode)
+			}
+			defArgCount = len(funcType.Args)
 		} else {
 			defArgCount = len(n.AssociatedFnDef.Class.ArgsNode.Args)
 
@@ -440,9 +444,9 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 			}
 		}
 
-		fmt.Printf("is ptr to func: %t\n", n.IsFuncPointer)
+		//fmt.Printf("is ptr to func: %t\n", n.IsFuncPointer)
 		if n.IsFuncPointer {
-			fmt.Printf("func type: %s\n", flattenType(n.FuncPtrType))
+			//fmt.Printf("func type: %s\n", flattenType(n.FuncPtrType))
 		}
 
 		if n.IsFuncPointer {
@@ -477,9 +481,9 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 
 		n.ElemType = elemType
 
-		fmt.Printf("subscript:\n")
-		fmt.Printf(" type: %s\n", flattenType(n.BoxType))
-		fmt.Printf(" elemtype: %s\n", flattenType(n.ElemType))
+		//fmt.Printf("subscript:\n")
+		//fmt.Printf(" type: %s\n", flattenType(n.BoxType))
+		//fmt.Printf(" elemtype: %s\n", flattenType(n.ElemType))
 		return nil
 	case *t.NodeExprLit:
 		switch n.LitType {
@@ -495,7 +499,7 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		}
 	case *t.NodeExprName:
 		if n.AssociatedNode == nil {
-			fmt.Printf("name: %s\n", flattenName(n.Name))
+			//fmt.Printf("name: %s\n", flattenName(n.Name))
 			return fmt.Errorf("name node pointing to no valid node")
 		}
 
@@ -517,8 +521,8 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 			return fmt.Errorf("name node pointing to invalid node type, failed to infer type")
 		}
 
-		fmt.Printf("name: %s\n", flattenName(n.Name))
-		fmt.Printf(" type: %s\n", flattenType(n.InfType))
+		//fmt.Printf("name: %s\n", flattenName(n.Name))
+		//fmt.Printf(" type: %s\n", flattenType(n.InfType))
 		return nil
 	case *t.NodeExprMemberAccess:
 		e := ctExpr(c, n.Target)
@@ -569,8 +573,9 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 			}
 
 			if !isIntegerType(leftT) || !isIntegerType(rightT) {
-				fmt.Printf("lType: %s\n", flattenType(leftT))
-				fmt.Printf("rType: %s\n", flattenType(rightT))
+				// TODO: compilation error
+				//("lType: %s\n", flattenType(leftT))
+				//fmt.Printf("rType: %s\n", flattenType(rightT))
 				return fmt.Errorf("bitwise operators require integer operands. operator: %s", t.KwTypeToRepr[n.Operator])
 			}
 			n.InfType = leftT
@@ -703,7 +708,8 @@ func ctIfStmt(c *ctx, ifStmt *t.NodeStmtIf) error {
 	isBool := isBoolType(infType)
 
 	if !isBool {
-		fmt.Printf("inferred type: %s\n", flattenType(infType))
+		// TODO: compilation error
+		//("inferred type: %s\n", flattenType(infType))
 		return fmt.Errorf("type of expression in if statement must be of type 'bool'")
 	}
 
@@ -737,7 +743,8 @@ func ctWhileStmt(c *ctx, whileStmt *t.NodeStmtWhile) error {
 	isBool := isBoolType(infType)
 
 	if !isBool {
-		fmt.Printf("inferred type: %s\n", flattenType(infType))
+		// TODO: compilation error
+		//fmt.Printf("inferred type: %s\n", flattenType(infType))
 		return fmt.Errorf("type of expression in if statement must be of type 'bool'")
 	}
 
@@ -757,7 +764,8 @@ func ctThrow(c *ctx, throw *t.NodeStmtThrow) error {
 	isErr := isErrType(infType)
 
 	if !isErr {
-		fmt.Printf("inferred type: %s\n", flattenType(infType))
+		// TODO: compilation error
+		// fmt.Printf("inferred type: %s\n", flattenType(infType))
 		return fmt.Errorf("type of expression in throw statement must be of type 'error'")
 	}
 
@@ -866,7 +874,7 @@ func TypeChecker(s *t.SharedState) error {
 	}
 
 	for _, fCtx := range s.Files {
-		fmt.Printf("check types of: %s\n", fCtx.PackageName)
+		// fmt.Printf("check types of: %s\n", fCtx.PackageName)
 
 		n := fCtx.GlNode
 		ctx.GlobalNode = n

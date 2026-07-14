@@ -1,7 +1,8 @@
 mod bytes
 
-use "slices.mg" slc
-use "errors.mg" errors
+use "slices.mg"   slc
+use "errors.mg"   errors
+use "iterator.mg" iter
 
 pub equal(a u8[], b u8[]) bool:
     n := slc.count(a)
@@ -74,4 +75,25 @@ pub reverse(in u8[]) void:
         in[right] = tmp
         i = i + 1
     ..
+..
+
+iterHasData(impl ptr, index u64*) bool:
+    bytesPtr u8[]* = impl
+    bytes u8[] = *bytesPtr
+    count := slc.count(bytes)
+    ret index[0] < count
+..
+
+iterNext(impl ptr, index u64*) u8:
+    bytesPtr u8[]* = impl
+    bytes u8[] = *bytesPtr
+    count := slc.count(bytes)
+    idx := index[0]
+    item := bytes[idx]
+    index[0] = idx + 1
+    ret item
+..
+
+pub iterator(bytes u8[]*) iter.Iterator[u8]:
+    ret iter.new[u8](bytes, iterHasData, iterNext)
 ..

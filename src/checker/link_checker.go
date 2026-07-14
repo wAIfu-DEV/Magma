@@ -121,8 +121,8 @@ func clGetStructDefFromModule(c *ctx, name parsedName) (*t.StructDef, error) {
 
 	if !ok {
 		// TODO: compilation error
-		fmt.Printf("alias: %s\n", moduleAlias)
-		fmt.Printf("full name: %s\n", name.First+"."+strings.Join(name.Parts, "."))
+		//fmt.Printf("alias: %s\n", moduleAlias)
+		//fmt.Printf("full name: %s\n", name.First+"."+strings.Join(name.Parts, "."))
 		return nil, fmt.Errorf("module alias %s does not exist in file", moduleAlias)
 	}
 
@@ -137,7 +137,7 @@ func clGetStructDefFromModule(c *ctx, name parsedName) (*t.StructDef, error) {
 
 	if !ok {
 		// TODO: compilation error
-		fmt.Printf("struct name: %s\n", structName)
+		//fmt.Printf("struct name: %s\n", structName)
 		return nil, fmt.Errorf("struct name not defined in file")
 	}
 
@@ -155,7 +155,7 @@ func clGetStructDefFromAbsolute(c *ctx, name string) (*t.StructDef, error) {
 
 	if !ok {
 		// TODO: compilation error
-		fmt.Printf("struct name: %s\n", structName)
+		//fmt.Printf("struct name: %s\n", structName)
 		return nil, fmt.Errorf("struct name not defined in file")
 	}
 
@@ -172,7 +172,7 @@ func clGetStructDefFromThisModule(c *ctx, structName parsedName) (*t.StructDef, 
 
 	if !ok {
 		// TODO: compilation error
-		fmt.Printf("struct name: %s\n", structName.First)
+		//fmt.Printf("struct name: %s\n", structName.First)
 		return nil, fmt.Errorf("struct name not defined in file")
 	}
 
@@ -277,20 +277,22 @@ func clGetFuncDefFromModule(c *ctx, name parsedName) (*t.NodeFuncDef, error) {
 		}
 
 		// TODO: compilation error
-		fmt.Printf("alias: %s\n", moduleAlias)
-		fmt.Printf("full name: %s\n", name.First+"."+strings.Join(name.Parts, "."))
+		//fmt.Printf("alias: %s\n", moduleAlias)
+		//fmt.Printf("full name: %s\n", name.First+"."+strings.Join(name.Parts, "."))
 		return nil, fmt.Errorf("module alias %s does not exist in file", moduleAlias)
 	}
 
 	moduleGlNode, ok := c.ModuleBundle.Modules[moduleName]
 
 	if !ok {
-		fmt.Printf("module name: %s\n", moduleName)
-		fmt.Print("available modules:\n")
+		// TODO: Compilation error
 
-		for k := range c.ModuleBundle.Modules {
-			fmt.Printf("- %s\n", k)
-		}
+		//fmt.Printf("module name: %s\n", moduleName)
+		//fmt.Print("available modules:\n")
+
+		//for k := range c.ModuleBundle.Modules {
+		//	fmt.Printf("- %s\n", k)
+		//}
 
 		return nil, fmt.Errorf("failed to find module in module bundle")
 	}
@@ -299,8 +301,8 @@ func clGetFuncDefFromModule(c *ctx, name parsedName) (*t.NodeFuncDef, error) {
 
 	if !ok {
 		// TODO: compilation error
-		fmt.Printf("(in other module)\n")
-		fmt.Printf("name: %s\n", fnName)
+		//fmt.Printf("(in other module)\n")
+		//fmt.Printf("name: %s\n", fnName)
 		return nil, fmt.Errorf("function name not defined in file")
 	}
 
@@ -317,8 +319,8 @@ func clGetFuncDefFromThisModule(c *ctx, fnName parsedName) (*t.NodeFuncDef, erro
 
 	if !ok {
 		// TODO: compilation error
-		fmt.Printf("(in this module)\n")
-		fmt.Printf("name: %s\n", fnName.First)
+		//fmt.Printf("(in this module)\n")
+		//fmt.Printf("name: %s\n", fnName.First)
 		return nil, fmt.Errorf("function name not defined in file")
 	}
 
@@ -341,9 +343,9 @@ func clVarNameChainValid(c *ctx, scope *t.Scope, name *parsedName, varName strin
 		return false, nil, e
 	}
 
-	fmt.Println("VarName:", varName)
-	fmt.Println("VarType:", varType)
-	fmt.Println("ParsedName:", name.First, name.Parts)
+	//fmt.Println("VarName:", varName)
+	//fmt.Println("VarType:", varType)
+	//fmt.Println("ParsedName:", name.First, name.Parts)
 
 	var lastDerefType *t.NodeType = varType
 
@@ -410,9 +412,10 @@ func clVarNameChainValid(c *ctx, scope *t.Scope, name *parsedName, varName strin
 
 			structDef, e = clGetStructDefFromType(c, derefFieldType)
 			if e != nil {
-				fmt.Printf("from ptr type: %t\n", isFromPtrType)
-				fmt.Printf("problem type: ")
-				fieldType.Print(0)
+				// TODO: compilation error? unsure
+				//fmt.Printf("from ptr type: %t\n", isFromPtrType)
+				//fmt.Printf("problem type: ")
+				//fieldType.Print(0)
 				return false, nil, e
 			}
 
@@ -577,11 +580,12 @@ func clName(c *ctx, name *t.NodeExprName, expected entryType, lvalue bool) error
 	name.IsSsa = isSsa
 	name.AssociatedNode = expr
 
-	fmt.Printf("name: %s\n", flattenName(name.Name))
-	fmt.Printf("associated: ")
-	name.AssociatedNode.Print(0)
+	// fmt.Printf("name: %s\n", flattenName(name.Name))
+	// fmt.Printf("associated: ")
+	// name.AssociatedNode.Print(0)
 
 	if name.AssociatedNode == nil {
+		// compilation error
 		return fmt.Errorf("name expression: %s does not point to any existing vars, even though there was no errors?", flattenName(name.Name))
 	}
 	return nil
@@ -670,7 +674,7 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 		return nil
 	}
 
-	fmt.Printf("call to: %s\n", flattenName(nameExpr.Name))
+	//fmt.Printf("call to: %s\n", flattenName(nameExpr.Name))
 
 	switch n := ownerExpr.(type) {
 	case *t.NodeExprVarDef:
@@ -715,25 +719,25 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 			}
 
 			if len(nameExpr.MemberAccesses) > 0 {
-				fmt.Printf("from member access: ")
+				//fmt.Printf("from member access: ")
 				last := nameExpr.MemberAccesses[len(nameExpr.MemberAccesses)-1]
 				ownerType = last.Type
 				isPointerOwner = last.PtrDeref
 			}
 
-			fmt.Printf("owner is ptr deref: %t\n", isPointerOwner)
-			fmt.Printf("owner struct def: ")
-			ownerType.Print(0)
+			//fmt.Printf("owner is ptr deref: %t\n", isPointerOwner)
+			//fmt.Printf("owner struct def: ")
+			//ownerType.Print(0)
 
 			// check if is member func on struct
 			strt, e := clGetStructDefFromType(c, ownerType)
 			if e == nil {
-				fmt.Printf("found owner struct def of member call\n")
+				//fmt.Printf("found owner struct def of member call\n")
 
 				for mn, v := range strt.Funcs {
-					fmt.Printf("member: %s\n", mn)
+					//fmt.Printf("member: %s\n", mn)
 					if mn == memberName {
-						fmt.Printf("is member func call\n")
+						//fmt.Printf("is member func call\n")
 
 						call.IsMemberFunc = true
 						call.MemberOwnerType = ownerType
@@ -750,12 +754,12 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 			if isShallowPtr {
 				strt, e = clGetStructDefFromType(c, shallowPtrType)
 				if e == nil {
-					fmt.Printf("found owner struct def of member call after owner deref\n")
+					//fmt.Printf("found owner struct def of member call after owner deref\n")
 
 					for mn, v := range strt.Funcs {
-						fmt.Printf("member: %s\n", mn)
+						//fmt.Printf("member: %s\n", mn)
 						if mn == memberName {
-							fmt.Printf("is member func call\n")
+							//fmt.Printf("is member func call\n")
 
 							call.IsMemberFunc = true
 							call.MemberOwnerType = ownerType
@@ -770,14 +774,14 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 				}
 			}
 
-			fmt.Printf("failed to find owner struct def\n")
+			//fmt.Printf("failed to find owner struct def\n")
 		}
 
 		if len(nameExpr.MemberAccesses) > 0 {
 			fnType = nameExpr.MemberAccesses[len(nameExpr.MemberAccesses)-1].Type
 		}
 
-		fmt.Printf("is func ptr call\n")
+		//fmt.Printf("is func ptr call\n")
 
 		call.IsFuncPointer = true
 		call.FuncPtrOwner = nameExpr
@@ -791,7 +795,7 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 			return fmt.Errorf("associated function def is null")
 		}
 
-		fmt.Printf("is func call\n")
+		//fmt.Printf("is func call\n")
 
 		call.AssociatedFnDef = fnDef
 	}
@@ -821,7 +825,7 @@ func clExprMemberAccess(c *ctx, member *t.NodeExprMemberAccess, lvalue bool) err
 }
 
 func clExprSubscript(c *ctx, subs *t.NodeExprSubscript) error {
-	fmt.Printf("check expr subscript\n")
+	//fmt.Printf("check expr subscript\n")
 
 	switch n := subs.Target.(type) {
 	case *t.NodeExprName:
@@ -882,8 +886,8 @@ func clExpr(c *ctx, expr t.NodeExpr, lvalue bool) error {
 		}
 
 		if infer {
-			fmt.Println("Infered Type:")
-			n.VarDef.Type.Print(0)
+			//fmt.Println("Infered Type:")
+			//n.VarDef.Type.Print(0)
 		}
 	case *t.NodeExprVarDef:
 		e := clType(c, n.Type)
@@ -1112,8 +1116,9 @@ func clTypeKind(c *ctx, parentType *t.NodeType, kind t.NodeTypeKind, topLevel bo
 		return nil, e
 	}
 
-	fmt.Print("problem type: ")
-	kind.Print(0)
+	// TODO: Compilation error
+	//fmt.Print("problem type: ")
+	//kind.Print(0)
 	return nil, fmt.Errorf("failed to find definition for type")
 }
 
@@ -1269,10 +1274,10 @@ func CheckLinks(s *t.SharedState) error {
 		n := len(fCtx.Imports)
 		n_deps[fCtx] = n
 
-		fmt.Println(fCtx.FilePath+":", n)
+		//fmt.Println(fCtx.FilePath+":", n)
 
 		if n == 0 {
-			fmt.Println("Added to queue (baseline):", fCtx.FilePath)
+			//fmt.Println("Added to queue (baseline):", fCtx.FilePath)
 			queue = append(queue, fCtx)
 		}
 
@@ -1293,7 +1298,7 @@ func CheckLinks(s *t.SharedState) error {
 		return fmt.Errorf("found no file with 0 dependencies, this may be sign of circular dependcy.")
 	}
 
-	fmt.Println("Resolving dependency order...")
+	//fmt.Println("Resolving dependency order...")
 
 	for len(queue) > 0 {
 		curr := queue[0]
@@ -1304,10 +1309,10 @@ func CheckLinks(s *t.SharedState) error {
 		for _, dep := range graph[curr] {
 			n_deps[dep] = n_deps[dep] - 1
 
-			fmt.Println(dep.FilePath+":", n_deps[dep])
+			//fmt.Println(dep.FilePath+":", n_deps[dep])
 
 			if n_deps[dep] <= 0 {
-				fmt.Println("Added to queue:", dep.FilePath)
+				//fmt.Println("Added to queue:", dep.FilePath)
 				queue = append(queue, dep)
 			}
 		}
@@ -1322,7 +1327,7 @@ func CheckLinks(s *t.SharedState) error {
 		ctx.GlobalNode = n
 		ctx.ScopeTree = &fCtx.ScopeTree
 
-		fmt.Printf("check links of: %s\n", fCtx.PackageName)
+		//fmt.Printf("check links of: %s\n", fCtx.PackageName)
 		e := clGlobal(ctx, n)
 		if e != nil {
 			return e

@@ -10,7 +10,7 @@ The compiler frontend is written in Go. It tokenizes, parses, gathers scope
 information, checks links and types, monomorphizes generics, emits LLVM IR, then
 lets Clang turn that IR into something your operating system can be blamed for.
 
-For the full language tour, read [SYNTAX.md](SYNTAX.md). This README is the version for people that can't read too good.
+For the full language tour, read [docs/SYNTAX.md](docs/SYNTAX.md). This README is the version for people that can't read too good.
 
 ## A Taste
 
@@ -55,7 +55,9 @@ Magma currently has:
 14. external function declarations with `ext`
 15. inline LLVM strings with `llvm`
 16. `@platform(...)` directives for platform-specific imports/declarations
-17. a standard library covering allocation, heap, files, buffered IO, readers,
+17. ownership-transfer annotations, destructor declarations, and a warning-only
+    destroy/borrow checker
+18. a standard library covering allocation, heap, files, buffered IO, readers,
     writers, strings, slices, memory, UTF-8 helpers, lists, queues, maps, casts,
     and errors
 
@@ -166,6 +168,40 @@ while i < n:
 The same block shape is used for functions, methods, conditionals, loops, and
 multi-line `defer`.
 
+## Ownership and Destruction
+
+`$T` marks an ownership-transfer position. An owned return gives the result to
+the caller, while an owned parameter consumes its argument. The same `T`
+without `$` is borrowed:
+
+```magma
+Resource(data ptr)
+
+destr Resource.free() void:
+    # release this.data
+..
+
+make() $Resource:
+    value Resource
+    ret value
+..
+
+consume(value $Resource) void:
+    value.free()
+..
+```
+
+The `destr` modifier marks a struct member as a destructor. Destructors may have
+arguments and may throw, but their result type must be `void`/`!void`. They are
+not called automatically: call one explicitly or register it with `defer`.
+
+The compiler's destroy checker follows owned destructible locals across direct
+assignments, calls, returns, branches, loops, and scope exits. It warns about
+leaks, consuming borrowed values, double consumption, use after transfer,
+overwrites, and discarded owned results. Warnings do not stop compilation, and
+the analysis intentionally does not model fields, indexed storage, pointers,
+aliases, or partial moves. See [Ownership and Destruction](docs/OWNERSHIP.md).
+
 ## Standard Library
 
 The `std/` directory is already doing useful low-level work:
@@ -176,6 +212,8 @@ The `std/` directory is already doing useful low-level work:
 - `strings`, `slices`, `utf8`: string/slice utilities and UTF-8/UTF-16 helpers
 - `memory`, `cast`: memory operations and explicit casts
 - `array`, `list`, `queue`, `linear_map`, `hash_map`, `builder`: containers and builders
+- `http`: Windows streaming HTTP through WinHTTP
+- `raylib`: initial Windows raylib 5.5 window, drawing, and input bindings
 
 Platform-specific pieces live under `std/win/` and `std/unix/`, selected with
 `@platform(...)`.
@@ -194,9 +232,10 @@ The interesting bits live here:
 - `src/ir_cleaner`: cleanup pass for emitted IR
 - `std/`: Magma standard library
 - `samples/`: sample programs and smoke tests
-- `SYNTAX.md`: syntax reference and current edge cases
+- `docs/SYNTAX.md`: syntax reference and current edge cases
+- `docs/OWNERSHIP.md`: ownership, borrowing, destructors, and checker limits
 
-The compiler currently accepts one input `.mg` file and writes `out.ll`.
+The compiler accepts one input `.mg` file and emits LLVM IR by default.
 
 ```powershell
 go build
@@ -204,6 +243,23 @@ go build
 clang.exe out.ll -o out.exe
 .\out.exe
 ```
+
+Compiler options:
+
+```text
+--debug                     print compiler diagnostics
+--version, -v               print the compiler version
+--out, -o <path>            choose the output path
+--emit, -e <llvm|object|exe>
+--opt, -O <0|1|2|3>         choose the LLVM optimization level
+--clang-path                print the resolved Clang executable path
+--clang-version, -cv        print the resolved Clang version and path
+```
+
+Object, executable, and optimized LLVM output require Clang. Magma searches
+`MAGMA_CLANG` first, followed by `PATH`, `LLVM_HOME`/`LLVM_PATH`, standard LLVM
+install locations, Visual Studio's LLVM directories on Windows, and common
+LLVM locations on Unix and macOS.
 
 ## Get Started
 
@@ -237,7 +293,8 @@ Magma is still a compiler project, not a lifestyle brand. The useful caveats:
 1. `for` loops are planned; use `while` for now.
 2. Global variables are zero-initialized; top-level initializers are still WIP.
 3. Implicit struct constructors are planned, not something to rely on today.
-4. `$` is currently an ownership/reference cue, not enforced ownership.
+4. Ownership checking is warning-only and limited to direct local variables;
+   raw pointers, aliases, fields, indexed values, and partial moves remain unchecked.
 5. The checker is incomplete. Some invalid return values, casts, throwing calls,
    and pointer adventures may get farther than they deserve.
 6. There are no bounds checks, null checks, or read-only string mutation guards.
@@ -260,5 +317,5 @@ That may sound irresponsible, but at least it is honest.
 
 ## The End
 
-Read [SYNTAX.md](SYNTAX.md), run `BUILD&RUN_TESTS.bat`, and remember: if the
+Read [docs/SYNTAX.md](docs/SYNTAX.md), run `BUILD&RUN_TESTS.bat`, and remember: if the
 generated program segfaults, that still counts as native performance.

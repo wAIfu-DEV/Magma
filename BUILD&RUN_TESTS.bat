@@ -8,14 +8,8 @@ CALL go build
 if %ERRORLEVEL% GEQ 1 GOTO :End
 
 ECHO.
-ECHO Running Compiler Frontend w. file sample/tests.mg ...
-CALL Magma.exe samples/tests.mg
-
-if %ERRORLEVEL% GEQ 1 GOTO :End
-
-ECHO.
-ECHO Running Compiler Backend ...
-CALL clang.exe out.ll -o out.exe
+ECHO Compiling sample/tests.mg to out.exe ...
+CALL Magma.exe --emit exe --out out.exe samples/tests.mg
 
 if %ERRORLEVEL% GEQ 1 GOTO :End
 

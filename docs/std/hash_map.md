@@ -13,6 +13,6 @@ An allocator-backed, open-addressed map from borrowed string keys to values of `
 - `HashMap[T].set(key str, value T) !void` inserts or replaces an entry and grows the table as needed. New keys are copied using the map's allocator.
 - `HashMap[T].delete(key str) !void` removes an entry or errors when absent.
 - `HashMap[T].count() u64` returns the number of live entries.
-- `HashMap[T].free() void` releases table storage and owned key strings, but not resources contained in values.
+- `HashMap[T].free() void` is a `destr` method that releases table storage and owned key strings, but not resources contained in values.
 
 `indexOf(key str) !u64` is the internal probe routine. `resize(newCapacity u64) !void` rebuilds the table without copying keys or values.

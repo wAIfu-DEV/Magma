@@ -21,4 +21,4 @@ A generic double-ended dynamic array whose allocator is supplied to each allocat
 - `expandRight(a alc.Allocator) !u64` and `expandLeft(a alc.Allocator) !void` are growth primitives used by pushes.
 - `popRight(a alc.Allocator) !T` / `popLeft(a alc.Allocator) !T` remove and return an end element; an empty array produces `wouldOverflow`.
 - `pushRight(a alc.Allocator, item T) !void` / `pushLeft(a alc.Allocator, item T) !void` add an end element.
-- `free(a alc.Allocator) void` releases backing storage. The allocator must match the one used for allocation.
+- `free(a alc.Allocator) void` is the array's `destr` method and releases backing storage. The allocator must match the one used for allocation.

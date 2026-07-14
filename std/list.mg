@@ -7,20 +7,21 @@ mod list
 
 use "allocator.mg" alc
 use "array.mg"     arr
+use "iterator.mg"  iter
 
 List[T](
     allocator alc.Allocator
     array     arr.Array[T]
 )
 
-pub new[T](a alc.Allocator) !$List[T]:
+pub new[T](a alc.Allocator, cleanup ($T) void) !$List[T]:
     l List[T]
     l.allocator = a
-    l.array = try arr.new[T](a)
+    l.array = try arr.new[T](a, cleanup)
     ret l
 ..
 
-pub fromArray[T](a alc.Allocator, array arr.Array[T]) $List[T]:
+pub fromArray[T](a alc.Allocator, array $arr.Array[T]) $List[T]:
     l List[T]
     l.allocator = a
     l.array = array
@@ -59,22 +60,26 @@ List[T].expandLeft() !void:
     ret try this.array.expandLeft(this.allocator)
 ..
 
-List[T].popRight() !T:
+List[T].popRight() !$T:
     ret try this.array.popRight(this.allocator)
 ..
 
-List[T].popLeft() !T:
+List[T].popLeft() !$T:
     ret try this.array.popLeft(this.allocator)
 ..
 
-List[T].pushRight(item T) !void:
+List[T].pushRight(item $T) !void:
     try this.array.pushRight(this.allocator, item)
 ..
 
-List[T].pushLeft(item T) !void:
+List[T].pushLeft(item $T) !void:
     try this.array.pushLeft(this.allocator, item)
 ..
 
-List[T].free() void:
+destr List[T].free() void:
     this.array.free(this.allocator)
+..
+
+List[T].iterator() iter.Iterator[T]:
+    ret this.array.iterator()
 ..

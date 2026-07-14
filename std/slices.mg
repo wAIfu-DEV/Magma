@@ -22,6 +22,12 @@ pub fromPtr(p ptr, elemCount u64) slice:
     llvm "  ret %type.slice %s1\n"
 ..
 
+pub reinterpret[T, R](in T[]) R[]:
+    byteSize u64 = count(in) * sizeof T
+    newSize u64 = byteSize / sizeof R
+    ret fromPtr(toPtr(in), newSize)
+..
+
 # Returns the underlying data pointer of a slice.
 # O(1).
 # @param s input slice

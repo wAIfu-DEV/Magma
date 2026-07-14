@@ -19,7 +19,6 @@ main(args str[]) !void:
     ..
 
     out := stdout.writer()
-
     out.writeLn("Started program. Write file path to print.")
 
     while true:
@@ -32,22 +31,11 @@ main(args str[]) !void:
         f := try file.open(a, input, file.mode().read())
         defer f.close()
 
-        reader := buff.readerBuffered(a, f.reader())
-        defer reader.close()
+        contents := f.reader().read(a, f.count())
+        defer strs.free(a, contents)
 
-        while true:
-            line str, e error = reader.readLn(a)
-
-            if err.is(e, err.endOfFile("")):
-                out.writeLn("<EOF>")
-                break
-            else:
-                throw e
-            ..
-            
-            out.writeLn(line)
-            strs.free(a, line)
-        ..
+        out.write(contents)
+        out.writeLn("<EOF>")
     ..
 .. 
 

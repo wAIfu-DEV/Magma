@@ -61,7 +61,7 @@ func cloneType(in *t.NodeType) *t.NodeType {
 		return nil
 	}
 
-	out := &t.NodeType{Throws: in.Throws}
+	out := &t.NodeType{Throws: in.Throws, Owned: in.Owned, Destructor: in.Destructor}
 
 	switch n := in.KindNode.(type) {
 	case *t.NodeTypeNamed:
@@ -107,7 +107,11 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 	case *t.NodeExprLit:
 		return &t.NodeExprLit{Value: n.Value, LitType: n.LitType, InfType: cloneType(n.InfType)}
 	case *t.NodeExprName:
-		return &t.NodeExprName{Name: cloneName(n.Name), InfType: cloneType(n.InfType)}
+		genericArgs := make([]*t.NodeType, len(n.GenericArgs))
+		for i, g := range n.GenericArgs {
+			genericArgs[i] = cloneType(g)
+		}
+		return &t.NodeExprName{Name: cloneName(n.Name), GenericArgs: genericArgs, InfType: cloneType(n.InfType)}
 	case *t.NodeExprCall:
 		args := make([]t.NodeExpr, len(n.Args))
 		for i, a := range n.Args {
@@ -250,12 +254,14 @@ func cloneFuncDef(in *t.NodeFuncDef) *t.NodeFuncDef {
 			TypeParams:      append([]string{}, in.Class.TypeParams...),
 			OwnerTypeParams: append([]string{}, in.Class.OwnerTypeParams...),
 		},
-		ReturnType:  cloneType(in.ReturnType),
-		Body:        cloneBody(&in.Body),
-		AbsName:     in.AbsName,
-		NoAliasName: in.NoAliasName,
-		DeferCnt:    in.DeferCnt,
-		HasDefer:    in.HasDefer,
+		ReturnType:   cloneType(in.ReturnType),
+		Body:         cloneBody(&in.Body),
+		AbsName:      in.AbsName,
+		NoAliasName:  in.NoAliasName,
+		DeferCnt:     in.DeferCnt,
+		HasDefer:     in.HasDefer,
+		IsDestructor: in.IsDestructor,
+		IsExternal:   in.IsExternal,
 	}
 	for i, a := range in.Class.ArgsNode.Args {
 		out.Class.ArgsNode.Args[i] = t.NodeArg{
@@ -346,6 +352,8 @@ func substituteType(tp *t.NodeType, subst map[string]*t.NodeType) *t.NodeType {
 			if v, ok := subst[nn.Name]; ok {
 				out := cloneType(v)
 				out.Throws = tp.Throws
+				out.Owned = tp.Owned
+				out.Destructor = tp.Destructor
 				return out
 			}
 		}
@@ -357,21 +365,21 @@ func substituteType(tp *t.NodeType, subst map[string]*t.NodeType) *t.NodeType {
 		return out
 	case *t.NodeTypePointer:
 		return &t.NodeType{
-			Throws: tp.Throws,
+			Throws: tp.Throws, Owned: tp.Owned, Destructor: tp.Destructor,
 			KindNode: &t.NodeTypePointer{
 				Kind: substituteType(&t.NodeType{KindNode: n.Kind}, subst).KindNode,
 			},
 		}
 	case *t.NodeTypeRfc:
 		return &t.NodeType{
-			Throws: tp.Throws,
+			Throws: tp.Throws, Owned: tp.Owned, Destructor: tp.Destructor,
 			KindNode: &t.NodeTypeRfc{
 				Kind: substituteType(&t.NodeType{KindNode: n.Kind}, subst).KindNode,
 			},
 		}
 	case *t.NodeTypeSlice:
 		return &t.NodeType{
-			Throws: tp.Throws,
+			Throws: tp.Throws, Owned: tp.Owned, Destructor: tp.Destructor,
 			KindNode: &t.NodeTypeSlice{
 				HasSize:  n.HasSize,
 				Size:     n.Size,
@@ -386,7 +394,7 @@ func substituteType(tp *t.NodeType, subst map[string]*t.NodeType) *t.NodeType {
 		for i, a := range n.Args {
 			out.Args[i] = substituteType(a, subst)
 		}
-		return &t.NodeType{Throws: tp.Throws, KindNode: out}
+		return &t.NodeType{Throws: tp.Throws, Owned: tp.Owned, Destructor: tp.Destructor, KindNode: out}
 	default:
 		return cloneType(tp)
 	}
@@ -394,9 +402,12 @@ func substituteType(tp *t.NodeType, subst map[string]*t.NodeType) *t.NodeType {
 
 func substituteExpr(expr t.NodeExpr, subst map[string]*t.NodeType) {
 	switch n := expr.(type) {
+	case *t.NodeExprName:
+		for i := range n.GenericArgs {
+			n.GenericArgs[i] = substituteType(n.GenericArgs[i], subst)
+		}
 	case *t.NodeExprUnary:
 		substituteExpr(n.Operand, subst)
-	case *t.NodeExprName:
 	case *t.NodeExprCall:
 		substituteExpr(n.Callee, subst)
 		for _, a := range n.Args {
@@ -749,6 +760,12 @@ func (m *monoCtx) instantiateStruct(module string, baseName string, args []*t.No
 		gl.FuncDefs[key] = specFn
 		gl.Declarations = append(gl.Declarations, specFn)
 		stDef.Funcs[memberName] = specFn
+		if specFn.IsDestructor {
+			stDef.Destructors = append(stDef.Destructors, specFn)
+			if stDef.Destructor == nil {
+				stDef.Destructor = specFn
+			}
+		}
 		m.queueFunc(specFn)
 	}
 
@@ -943,6 +960,33 @@ func (m *monoCtx) rewriteType(module string, gl *t.NodeGlobal, tp *t.NodeType) e
 
 func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, env map[string]*t.NodeType) error {
 	switch n := expr.(type) {
+	case *t.NodeExprName:
+		for _, g := range n.GenericArgs {
+			if e := m.rewriteType(module, gl, g); e != nil {
+				return e
+			}
+		}
+		if len(n.GenericArgs) == 0 {
+			return nil
+		}
+		targetModule, baseName, e := resolveQualifiedName(module, gl, n.Name)
+		if e != nil {
+			return e
+		}
+		specName, e := m.instantiateFunc(targetModule, baseName, n.GenericArgs)
+		if e != nil {
+			return e
+		}
+		switch name := n.Name.(type) {
+		case *t.NodeNameSingle:
+			n.Name = &t.NodeNameSingle{Name: specName}
+		case *t.NodeNameComposite:
+			parts := append([]string{}, name.Parts...)
+			parts[len(parts)-1] = specName
+			n.Name = &t.NodeNameComposite{Parts: parts}
+		}
+		n.GenericArgs = nil
+		return nil
 	case *t.NodeExprUnary:
 		return m.rewriteExpr(module, gl, n.Operand, env)
 	case *t.NodeExprMemberAccess:

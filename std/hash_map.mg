@@ -5,6 +5,7 @@ use "hash.mg" hash
 use "strings.mg" strings
 use "errors.mg" errors
 use "memory.mg" memory
+use "cast.mg" cast
 
 HashMap[T](
     allocator alc.Allocator
@@ -13,15 +14,30 @@ HashMap[T](
     states ptr
     capacity u64
     length u64
+    cleanup ($T) void
 )
 
-pub new[T](a alc.Allocator, capacity u64) !$HashMap[T]:
+release[T](cleanup ($T) void, value $T) void:
+    if cast.ptou(cleanup) == 0:
+        abandoned T[1]
+        abandoned[0] = value
+        ret
+    ..
+    cleanup(value)
+..
+
+claim[T](claimed $T) $T:
+    ret claimed
+..
+
+pub new[T](a alc.Allocator, capacity u64, cleanup ($T) void) !$HashMap[T]:
     if capacity == 0:
         throw errors.invalidArgument("hash map capacity must be positive")
     ..
     m HashMap[T]
     m.allocator = a
     m.capacity = capacity
+    m.cleanup = cleanup
     m.keys = try a.alloc(capacity * sizeof str)
     m.values = try a.alloc(capacity * sizeof T)
     m.states = try a.alloc(capacity)
@@ -114,14 +130,24 @@ HashMap[T].resize(newCapacity u64) !void:
     this.capacity = newCapacity
 ..
 
-HashMap[T].set(key str, value T) !void:
+resizeForInsert[T](map HashMap[T]*, newCapacity u64) !bool:
+    try map.resize(newCapacity)
+    ret true
+..
+
+HashMap[T].set(key str, item $T) !void:
     # Keep the load factor below 75%. Besides maintaining probe performance,
     # rebuilding also discards tombstones left by delete().
     if (this.length + 1) * 4 >= this.capacity * 3:
         if this.capacity > 9223372036854775807:
+            release[T](this.cleanup, item)
             throw errors.wouldOverflow("hash map capacity overflow")
         ..
-        try this.resize(this.capacity * 2)
+        resized bool, resizeErr error = resizeForInsert[T](this, this.capacity * 2)
+        if errors.code(resizeErr) != 0:
+            release[T](this.cleanup, item)
+            throw resizeErr
+        ..
     ..
 
     keys str* = this.keys
@@ -133,7 +159,8 @@ HashMap[T].set(key str, value T) !void:
     while i < this.capacity:
         idx := (start + i) % this.capacity
         if states[idx] == 1 && strings.compare(keys[idx], key):
-            values[idx] = value
+            release[T](this.cleanup, claim[T](values[idx]))
+            values[idx] = item
             ret
         elif states[idx] == 2 && firstDeleted == this.capacity:
             firstDeleted = idx
@@ -141,8 +168,13 @@ HashMap[T].set(key str, value T) !void:
             if firstDeleted != this.capacity:
                 idx = firstDeleted
             ..
-            keys[idx] = try strings.copy(this.allocator, key)
-            values[idx] = value
+            ownedKey str, copyErr error = strings.copy(this.allocator, key)
+            if errors.code(copyErr) != 0:
+                release[T](this.cleanup, item)
+                throw copyErr
+            ..
+            keys[idx] = ownedKey
+            values[idx] = item
             states[idx] = 1
             this.length = this.length + 1
             ret
@@ -150,29 +182,43 @@ HashMap[T].set(key str, value T) !void:
         i = i + 1
     ..
     if firstDeleted != this.capacity:
-        keys[firstDeleted] = try strings.copy(this.allocator, key)
-        values[firstDeleted] = value
+        fallbackKey str, fallbackErr error = strings.copy(this.allocator, key)
+        if errors.code(fallbackErr) != 0:
+            release[T](this.cleanup, item)
+            throw fallbackErr
+        ..
+        keys[firstDeleted] = fallbackKey
+        values[firstDeleted] = item
         states[firstDeleted] = 1
         this.length = this.length + 1
         ret
     ..
+    release[T](this.cleanup, item)
     throw errors.wouldOverflow("hash map is full")
 ..
 
 HashMap[T].delete(key str) !void:
+    value := try this.take(key)
+    release[T](this.cleanup, value)
+..
+
+HashMap[T].take(key str) !$T:
     idx := try this.indexOf(key)
     keys str* = this.keys
+    values T* = this.values
     states u8* = this.states
+    taken := claim[T](values[idx])
     strings.free(this.allocator, keys[idx])
     states[idx] = 2
     this.length = this.length - 1
+    ret taken
 ..
 
 HashMap[T].count() u64:
     ret this.length
 ..
 
-HashMap[T].free() void:
+destr HashMap[T].free() void:
     keys str* = this.keys
     states u8* = this.states
     i u64 = 0
@@ -181,6 +227,16 @@ HashMap[T].free() void:
             strings.free(this.allocator, keys[i])
         ..
         i = i + 1
+    ..
+    if cast.ptou(this.cleanup) != 0:
+        values T* = this.values
+        i = 0
+        while i < this.capacity:
+            if states[i] == 1:
+                this.cleanup(values[i])
+            ..
+            i = i + 1
+        ..
     ..
     this.allocator.free(this.keys)
     this.allocator.free(this.values)

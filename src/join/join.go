@@ -1,6 +1,7 @@
 package join
 
 import (
+	"Magma/src/comp_err"
 	"Magma/src/types"
 	"errors"
 	"fmt"
@@ -15,7 +16,9 @@ func JoinCompilationUnits(shared *types.SharedState, e error) error {
 		err := <-v
 		if err != nil {
 			e2 = errors.Join(e2, err)
-			fmt.Printf("fatal error in file '%s': %s\n", k, err.Error())
+			if !comp_err.Print(err) {
+				fmt.Printf("fatal error in file '%s': %s\n", k, err.Error())
+			}
 		}
 	}
 	return e2

@@ -14,4 +14,4 @@ An allocator-backed generic FIFO queue.
 - `view() T[]` returns a borrowed FIFO-order slice, invalidated by structural mutation.
 - `count() u64` returns the number of items.
 - `clear() !void` empties the queue while retaining reusable capacity.
-- `free() void` releases backing storage.
+- `free() void` is the queue's `destr` method and releases backing storage.

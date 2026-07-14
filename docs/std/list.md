@@ -16,4 +16,4 @@ A generic double-ended dynamic list that retains its allocator. It delegates sto
 - `view() T[]` returns a borrowed element slice. Any structural mutation may invalidate it.
 - `pushRight(item T) !void`, `pushLeft(item T) !void`, `popRight() !T`, and `popLeft() !T` manipulate either end; popping an empty list fails.
 - `expandRight() !u64` and `expandLeft() !void` are low-level growth methods.
-- `free() void` releases storage.
+- `free() void` is the list's `destr` method and releases storage.

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"Magma/src/comp_err"
+	"Magma/src/debug"
 	lineidx "Magma/src/line_idx"
 	"Magma/src/makeabs"
 	pipelineasync "Magma/src/pipeline_async"
@@ -9,12 +10,23 @@ import (
 	"Magma/src/types"
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 )
+
+var errAlreadyScheduled = errors.New("compilation unit already scheduled")
+
+func registerImportResult(shared *types.SharedState, path string, c <-chan error) {
+	shared.ImportedFilesM.Lock()
+	if _, found := shared.ImportedFiles[path]; !found {
+		shared.ImportedFiles[path] = c
+	}
+	shared.ImportedFilesM.Unlock()
+}
 
 func extractModuleName(fCtx *types.FileCtx, firstLine string) (string, error) {
 	firstLine = strings.TrimSpace(firstLine)
@@ -69,60 +81,41 @@ func extractModuleName(fCtx *types.FileCtx, firstLine string) (string, error) {
 
 func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath string, alias string, fromAbs string, fromGl *types.NodeGlobal) (*types.FileCtx, error) {
 
-	fmt.Printf("sync pipeline prelude for: %s\n", filePath)
+	debug.Printf("sync pipeline prelude for: %s\n", filePath)
 
 	absPath, err := makeabs.MakeAbs(filePath, fromAbs)
 	if err != nil {
-		// TODO: this might cause issues
-		shared.ImportedFilesM.Lock()
-		shared.ImportedFiles[filePath] = c
-		shared.ImportedFilesM.Unlock()
+		registerImportResult(shared, filePath, c)
 		return nil, err
 	}
 
-	fmt.Printf("resolved to abs path: %s\n", absPath)
-
-	shared.FilesM.Lock()
-	foundFctx, found := shared.Files[absPath]
-	shared.FilesM.Unlock()
-
-	if found {
-		if fromGl != nil {
-			fromGl.ImportAlias[alias] = foundFctx.PackageName
-		}
-
-		return foundFctx, fmt.Errorf("done")
-	}
-
-	shared.ImportedFilesM.Lock()
-	shared.ImportedFiles[absPath] = c
-	shared.ImportedFilesM.Unlock()
+	debug.Printf("resolved to abs path: %s\n", absPath)
 
 	fileBytes, err := os.ReadFile(absPath)
 	if err != nil {
+		registerImportResult(shared, absPath, c)
 		return nil, fmt.Errorf("failed to open file")
 	}
 
 	fCtx := &types.FileCtx{
-		FilePath:    absPath,
-		Content:     fileBytes,
-		ImportAlias: map[string]string{},
-		Imports:     []string{},
-		LineIdx:     lineidx.GetLineIdx(fileBytes),
+		FilePath:        absPath,
+		Content:         fileBytes,
+		ImportAlias:     map[string]string{},
+		Imports:         []string{},
+		NativeLibraries: []string{},
+		LineIdx:         lineidx.GetLineIdx(fileBytes),
 	}
-
-	shared.FilesM.Lock()
-	shared.Files[absPath] = fCtx
-	shared.FilesM.Unlock()
 
 	scanner := bufio.NewScanner(bytes.NewReader(fileBytes))
 	if !scanner.Scan() {
+		registerImportResult(shared, absPath, c)
 		return nil, fmt.Errorf("failed to read any data from file")
 	}
 
 	firstLine := scanner.Text()
 	moduleName, err := extractModuleName(fCtx, firstLine)
 	if err != nil {
+		registerImportResult(shared, absPath, c)
 		return nil, err
 	}
 
@@ -131,13 +124,36 @@ func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath strin
 
 	fCtx.PackageName = moduleNameId
 
-	if fromGl != nil {
-		fromGl.ImportAlias[alias] = moduleNameId
-	} else {
+	if fromGl == nil {
 		shared.MainPckgName = moduleNameId
 	}
-
 	fCtx.MainPckgName = shared.MainPckgName
+
+	// Publish a compilation unit only after its immutable identity has been
+	// initialized. The lookup and insertion must be one atomic operation: two
+	// import goroutines can discover the same transitive dependency at once.
+	shared.FilesM.Lock()
+	foundFctx, found := shared.Files[absPath]
+	if !found {
+		shared.Files[absPath] = fCtx
+	}
+	shared.FilesM.Unlock()
+
+	if found {
+		if fromGl != nil {
+			fromGl.ImportAlias[alias] = foundFctx.PackageName
+		}
+		return foundFctx, errAlreadyScheduled
+	}
+
+	if fromGl != nil {
+		fromGl.ImportAlias[alias] = fCtx.PackageName
+	}
+
+	// Only the goroutine which inserted the unit owns and publishes its result
+	// channel. Duplicate importers must not overwrite that channel.
+	registerImportResult(shared, absPath, c)
+
 	return fCtx, nil
 }
 
@@ -146,7 +162,7 @@ func DoMain(shared *types.SharedState, filePath string) error {
 }
 
 func Do(shared *types.SharedState, filePath string, alias string, fromAbs string, fromGl *types.NodeGlobal) error {
-	fmt.Printf("running pipeline for: %s with alias: %s from file: %s\n", filePath, alias, fromAbs)
+	debug.Printf("running pipeline for: %s with alias: %s from file: %s\n", filePath, alias, fromAbs)
 
 	c := make(chan error, 1)
 
@@ -154,7 +170,7 @@ func Do(shared *types.SharedState, filePath string, alias string, fromAbs string
 
 	fCtx, err := pipelineSyncPrelude(shared, c, filePath, alias, fromAbs, fromGl)
 
-	if err != nil && err.Error() == "done" {
+	if errors.Is(err, errAlreadyScheduled) {
 		c <- nil
 		close(c)
 		shared.WaitGroup.Done()
@@ -174,7 +190,7 @@ func Do(shared *types.SharedState, filePath string, alias string, fromAbs string
 }
 
 func DoAsync(shared *types.SharedState, filePath string, alias string, fromAbs string, fromGl *types.NodeGlobal) <-chan error {
-	fmt.Printf("running pipelineasync for: %s with alias: %s from file: %s\n", filePath, alias, fromAbs)
+	debug.Printf("running async pipeline for: %s with alias: %s from file: %s\n", filePath, alias, fromAbs)
 
 	c := make(chan error, 1)
 
@@ -182,11 +198,11 @@ func DoAsync(shared *types.SharedState, filePath string, alias string, fromAbs s
 
 	fCtx, err := pipelineSyncPrelude(shared, c, filePath, alias, fromAbs, fromGl)
 
-	if err != nil && err.Error() == "done" {
+	if errors.Is(err, errAlreadyScheduled) {
 		c <- nil
 		close(c)
 		shared.WaitGroup.Done()
-		return nil
+		return c
 	}
 
 	if err != nil {

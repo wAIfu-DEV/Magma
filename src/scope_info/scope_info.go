@@ -135,7 +135,7 @@ func bldBody(ctx *lcx, bdy *t.NodeBody, makeScope bool) error {
 				for n2 != nil {
 					switch n3 := n2.(type) {
 					case *t.NodeStmtIf:
-						fmt.Printf("stmt: if\n")
+						//fmt.Printf("stmt: if\n")
 						e := bldBody(ctx, &n3.Body, false)
 						if e != nil {
 							return e
@@ -147,7 +147,7 @@ func bldBody(ctx *lcx, bdy *t.NodeBody, makeScope bool) error {
 						}
 						n2 = nil
 					case *t.NodeStmtElse:
-						fmt.Printf("stmt: else\n")
+						//fmt.Printf("stmt: else\n")
 						e := bldBody(ctx, &n3.Body, false)
 						if e != nil {
 							return e

@@ -6,6 +6,7 @@ import (
 	t "Magma/src/types"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -17,7 +18,8 @@ var errOutOfBounds error = errors.New("oob")
 type ModifierType string
 
 const (
-	MdPublic ModifierType = "pub"
+	MdPublic     ModifierType = "pub"
+	MdDestructor ModifierType = "destr"
 )
 
 type ParseCtx struct {
@@ -243,7 +245,7 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token, prune bool) error {
 	consume(ctx) // newln
 
 	if prune {
-		fmt.Printf("pruning use decl for: \"%s\" %s\n", path.Repr, alias.Repr)
+		//fmt.Printf("pruning use decl for: \"%s\" %s\n", path.Repr, alias.Repr)
 		return nil
 	}
 
@@ -251,12 +253,49 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token, prune bool) error {
 	ctx.Fctx.ImportAlias[alias.Repr] = absPath
 
 	// start pipeline for imported file
-	fmt.Printf("running compilation pipeline for file: %s\n", absPath)
+	//("running compilation pipeline for file: %s\n", absPath)
 	c := ctx.Shared.PipelineFunc(ctx.Shared, absPath, alias.Repr, ctx.Fctx.FilePath, ctx.GlobalNode)
 
 	ctx.Shared.PipeChansM.Lock()
 	ctx.Shared.PipeChans = append(ctx.Shared.PipeChans, c)
 	ctx.Shared.PipeChansM.Unlock()
+	return nil
+}
+
+func parseLinkDecl(ctx *ParseCtx, tk t.Token, prune bool) error {
+	if err := ensureNoModifiers(ctx, tk); err != nil {
+		return err
+	}
+	library, err := peekNth(ctx, 1)
+	if err != nil || library.Type != t.TokLitStr || library.Repr == "" {
+		return comp_err.CompilationErrorToken(ctx.Fctx, &tk,
+			"syntax error: expected native library name after 'link'",
+			"expected: `link \"<library>\"`")
+	}
+	newline, err := peekNth(ctx, 2)
+	if err == nil && newline.KeywType != t.KwNewline {
+		return comp_err.CompilationErrorToken(ctx.Fctx, &newline,
+			fmt.Sprintf("syntax error: expected end of line after library name but got '%s'", newline.Repr),
+			"expected: `link \"<library>\"(\\n)`")
+	}
+	consume(ctx)
+	consume(ctx)
+	consume(ctx)
+	if prune {
+		return nil
+	}
+	requirement := library.Repr
+	// Values that look like files are module-relative inputs passed directly to
+	// Clang. Bare logical names retain the portable -l<name> behavior.
+	if filepath.IsAbs(requirement) || strings.ContainsAny(requirement, `/\`) || filepath.Ext(requirement) != "" {
+		if !filepath.IsAbs(requirement) {
+			requirement = filepath.Join(filepath.Dir(ctx.Fctx.FilePath), requirement)
+		}
+		requirement = filepath.Clean(requirement)
+	}
+	if !slices.Contains(ctx.Fctx.NativeLibraries, requirement) {
+		ctx.Fctx.NativeLibraries = append(ctx.Fctx.NativeLibraries, requirement)
+	}
 	return nil
 }
 
@@ -423,6 +462,15 @@ func tryParseGenericCallTypeArgs(ctx *ParseCtx) ([]*t.NodeType, bool) {
 	return typeArgs, true
 }
 
+func isKnownGenericFunction(ctx *ParseCtx, expr *t.NodeExprName) bool {
+	name, ok := expr.Name.(*t.NodeNameSingle)
+	if !ok {
+		return false
+	}
+	fn, ok := ctx.GlobalNode.FuncDefs[name.Name]
+	return ok && len(fn.Class.TypeParams) > 0
+}
+
 func parsePostfixSubscriptExpr(ctx *ParseCtx, tk t.Token, targetExpr t.NodeExpr) (*t.NodeExprSubscript, error) {
 	consume(ctx)
 
@@ -511,7 +559,7 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 		}
 
 		if next.KeywType == t.KwBrackOp {
-			if _, ok := expr.(*t.NodeExprName); ok {
+			if nameExpr, ok := expr.(*t.NodeExprName); ok {
 				typeArgs, isGenericCall := tryParseGenericCallTypeArgs(ctx)
 				if isGenericCall {
 					expr, e = parsePostfixCallExpr(ctx, tk, expr, typeArgs)
@@ -519,6 +567,20 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 						return nil, e
 					}
 					continue
+				}
+
+				// Unlike a generic call, a specialized function value has no
+				// following `(` to distinguish it from an array subscript. Only
+				// select this form when the name is already known to be a generic
+				// function, preserving ordinary `array[index]` expressions.
+				if isKnownGenericFunction(ctx, nameExpr) {
+					startIdx := ctx.TokIdx
+					typeArgs, parseErr := parseTypeArgList(ctx)
+					if parseErr == nil {
+						nameExpr.GenericArgs = typeArgs
+						continue
+					}
+					ctx.TokIdx = startIdx
 				}
 			}
 
@@ -944,6 +1006,7 @@ func parseExpression(ctx *ParseCtx, tk t.Token, minPrecedence int) (t.NodeExpr, 
 
 func parseName(ctx *ParseCtx, tk t.Token, allowComposite bool) (t.NodeName, error) {
 	parts := []string{}
+	afterDot := false
 
 	for {
 		namePart, e := peek(ctx)
@@ -952,16 +1015,21 @@ func parseName(ctx *ParseCtx, tk t.Token, allowComposite bool) (t.NodeName, erro
 		}
 
 		if namePart.Type != t.TokName {
+			description := "syntax error: expected name"
+			if afterDot {
+				description = "syntax error: expected name after dot"
+			}
 			return nil, comp_err.CompilationErrorToken(
 				ctx.Fctx,
-				&tk,
-				"syntax error: expected name after dot",
+				&namePart,
+				description,
 				"",
 			)
 		}
 
 		parts = append(parts, namePart.Repr)
 		consume(ctx)
+		afterDot = false
 
 		maybeDot, e := peek(ctx)
 		if e != nil {
@@ -984,6 +1052,7 @@ func parseName(ctx *ParseCtx, tk t.Token, allowComposite bool) (t.NodeName, erro
 			)
 		}
 		consume(ctx)
+		afterDot = true
 	}
 
 	switch len(parts) {
@@ -1093,6 +1162,7 @@ func parseDeclNameWithGenerics(ctx *ParseCtx) (*parsedDeclName, error) {
 
 func parseNameTemplated(ctx *ParseCtx, tk t.Token, allowComposite bool) (t.NodeName, error) {
 	parts := []string{}
+	afterDot := false
 
 	for {
 		namePart, e := peek(ctx)
@@ -1101,15 +1171,20 @@ func parseNameTemplated(ctx *ParseCtx, tk t.Token, allowComposite bool) (t.NodeN
 		}
 
 		if namePart.Type != t.TokName {
+			description := "syntax error: expected name"
+			if afterDot {
+				description = "syntax error: expected name after dot"
+			}
 			return nil, comp_err.CompilationErrorToken(
 				ctx.Fctx,
-				&tk,
-				"syntax error: expected name after dot",
+				&namePart,
+				description,
 				"",
 			)
 		}
 
 		consume(ctx)
+		afterDot = false
 
 		maybeDot, e := peek(ctx)
 		if e != nil {
@@ -1138,6 +1213,7 @@ func parseNameTemplated(ctx *ParseCtx, tk t.Token, allowComposite bool) (t.NodeN
 			)
 		}
 		consume(ctx)
+		afterDot = true
 	}
 
 	switch len(parts) {
@@ -1519,6 +1595,7 @@ func parseTypePostfix(ctx *ParseCtx, inType *t.NodeType) (*t.NodeType, error) {
 
 				sliceT := &t.NodeType{
 					Throws:   outT.Throws,
+					Owned:    outT.Owned,
 					KindNode: sliceKind,
 				}
 
@@ -1541,6 +1618,7 @@ func parseTypePostfix(ctx *ParseCtx, inType *t.NodeType) (*t.NodeType, error) {
 
 			ptrT := &t.NodeType{
 				Throws:   outT.Throws,
+				Owned:    outT.Owned,
 				KindNode: sliceKind,
 			}
 
@@ -1557,6 +1635,7 @@ func parseTypePostfix(ctx *ParseCtx, inType *t.NodeType) (*t.NodeType, error) {
 
 			ptrT := &t.NodeType{
 				Throws:   outT.Throws,
+				Owned:    outT.Owned,
 				KindNode: sliceKind,
 			}
 
@@ -1591,7 +1670,9 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (*t.NodeType, error) 
 	}
 
 	// owned marker
+	isOwned := false
 	if tk.KeywType == t.KwDollar {
+		isOwned = true
 		consume(ctx)
 		tk, e = peek(ctx)
 		if e != nil {
@@ -1604,6 +1685,7 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (*t.NodeType, error) 
 		if e != nil {
 			return nil, e
 		}
+		n.Owned = isOwned
 		return n, nil
 	}
 
@@ -1614,6 +1696,7 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (*t.NodeType, error) 
 
 	outT := &t.NodeType{
 		Throws: isThrowing,
+		Owned:  isOwned,
 		KindNode: &t.NodeTypeNamed{
 			NameNode: named,
 		},
@@ -1730,12 +1813,6 @@ func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
 
 	expr, e := parseExpression(ctx, tk, 0)
 	if e != nil {
-		comp_err.CompilationErrorToken(
-			ctx.Fctx,
-			&tk,
-			fmt.Sprintf("syntax error: '%s' is not a valid start of statement", tk.Repr),
-			"valid statements include: `name: type = expr`, `name()`, `ret expr`, etc.",
-		)
 		return nil, e
 	}
 
@@ -1942,7 +2019,8 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 	}
 
 	fnDef := &t.NodeFuncDef{
-		Class: gncls,
+		Class:      gncls,
+		IsExternal: alias != "",
 	}
 
 	if alias != "" {
@@ -2013,7 +2091,7 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 			)
 		}
 
-		fmt.Printf("added implicit this to: %s.%s()\n", ownerName, memberName)
+		//fmt.Printf("added implicit this to: %s.%s()\n", ownerName, memberName)
 
 		thisOwnerNamed := &t.NodeTypeNamed{
 			NameNode: &t.NodeNameSingle{Name: ownerName},
@@ -2054,7 +2132,7 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 			}
 			// TODO: enforce 0 args and non-throwing void type
 			ctx.GlobalNode.StructDefs[ownerName].Destructor = fnDef
-			fmt.Printf("found destructor function for: %s\n", ownerName)
+			// Destructor discovery is intentionally silent; callers can inspect the AST in debug mode.
 		}*/
 	}
 
@@ -2127,6 +2205,7 @@ func parseExternalFunc(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
 }
 
 func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
+	modifiers := slices.Clone(ctx.NextModifiers)
 	declName, e := parseDeclNameWithGenerics(ctx)
 	if e != nil {
 		return nil, e
@@ -2139,7 +2218,6 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 
 	switch next.KeywType {
 	case t.KwParenOp:
-		// TODO: apply modifiers
 		ctx.NextModifiers = []ModifierType{}
 
 		gncls, e := parseGenericClass(ctx, declName.NameNode, declName.TypeParams, declName.OwnerTypeParams)
@@ -2153,10 +2231,29 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 		}
 
 		if errors.Is(e, errOutOfBounds) || after.KeywType == t.KwNewline {
+			if slices.Contains(modifiers, MdDestructor) {
+				return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, "syntax error: destructor modifier requires a member function", "expected: `destructor Type.method() void:`")
+			}
 			return parseStructDef(ctx, tk, gncls)
 		}
 
-		return parseFuncDef(ctx, tk, after, gncls, "")
+		fn, e := parseFuncDef(ctx, tk, after, gncls, "")
+		if e != nil {
+			return nil, e
+		}
+		if slices.Contains(modifiers, MdDestructor) {
+			name, ok := fn.Class.NameNode.(*t.NodeNameComposite)
+			if !ok || len(name.Parts) != 2 {
+				return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, "syntax error: destructor must be a struct member function", "expected: `destructor Type.method() void:`")
+			}
+			fn.IsDestructor = true
+			owner := ctx.GlobalNode.StructDefs[name.Parts[0]]
+			owner.Destructors = append(owner.Destructors, fn)
+			if owner.Destructor == nil {
+				owner.Destructor = fn
+			}
+		}
+		return fn, nil
 	default:
 		if len(declName.TypeParams) > 0 || len(declName.OwnerTypeParams) > 0 {
 			return nil, comp_err.CompilationErrorToken(
@@ -2371,7 +2468,7 @@ func parseCompilerDirective(ctx *ParseCtx, tk t.Token) error {
 				found = true
 
 				if found {
-					fmt.Printf("found platform: %s\n", runtime.GOOS)
+					//fmt.Printf("found platform: %s\n", runtime.GOOS)
 					break
 				}
 			}
@@ -2413,12 +2510,20 @@ outer:
 			return nil, nil
 		case t.KwPublic:
 			e = parseApplyModifier(ctx, tk, MdPublic)
+		case t.KwDestructor:
+			e = parseApplyModifier(ctx, tk, MdDestructor)
 		case t.KwAt:
 			e = parseCompilerDirective(ctx, tk)
 		case t.KwModule:
 			e = parseModuleDecl(ctx, tk)
 		case t.KwUse:
 			e = parseUseDecl(ctx, tk, ctx.PruneNext)
+			if ctx.PruneNext {
+				ctx.PruneNext = false
+				return nil, nil
+			}
+		case t.KwLink:
+			e = parseLinkDecl(ctx, tk, ctx.PruneNext)
 			if ctx.PruneNext {
 				ctx.PruneNext = false
 				return nil, nil

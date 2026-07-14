@@ -13,7 +13,8 @@ type StructDef struct {
 	Fields  map[string]*NodeType
 	Funcs   map[string]*NodeFuncDef
 
-	Destructor *NodeFuncDef
+	Destructor  *NodeFuncDef
+	Destructors []*NodeFuncDef
 }
 
 func (*StructDef) Print(int) {
@@ -28,16 +29,17 @@ type MemberAccess struct {
 }
 
 type FileCtx struct {
-	FilePath     string
-	PackageName  string
-	MainPckgName string
-	Imports      []string
-	ImportAlias  map[string]string
-	Content      []byte
-	LineIdx      []int
-	Tokens       []Token
-	GlNode       *NodeGlobal
-	ScopeTree    Scope
+	FilePath        string
+	PackageName     string
+	MainPckgName    string
+	Imports         []string
+	NativeLibraries []string
+	ImportAlias     map[string]string
+	Content         []byte
+	LineIdx         []int
+	Tokens          []Token
+	GlNode          *NodeGlobal
+	ScopeTree       Scope
 }
 
 type SharedState struct {

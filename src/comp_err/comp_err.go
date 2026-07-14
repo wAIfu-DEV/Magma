@@ -6,6 +6,17 @@ import (
 	"fmt"
 )
 
+type CompilationError struct {
+	Ctx        *types.FileCtx
+	Token      types.Token
+	ShortDesc  string
+	Additional string
+}
+
+func (e *CompilationError) Error() string {
+	return e.ShortDesc
+}
+
 func printLine(ctx *types.FileCtx, line int) {
 	lnStart := ctx.LineIdx[line] + 1
 	lnEnd := ctx.LineIdx[line+1] + 1
@@ -23,7 +34,23 @@ func printLineTok(ctx *types.FileCtx, line int) {
 }
 
 func CompilationErrorToken(ctx *types.FileCtx, tk *types.Token, shortDesc string, additional string) error {
-	fmt.Printf("%s:l%d:c%d %s\n", ctx.FilePath, tk.Pos.Line, tk.Pos.Col, shortDesc)
+	return &CompilationError{
+		Ctx:        ctx,
+		Token:      *tk,
+		ShortDesc:  shortDesc,
+		Additional: additional,
+	}
+}
+
+func Print(err error) bool {
+	var compilationErr *CompilationError
+	if !errors.As(err, &compilationErr) {
+		return false
+	}
+
+	ctx := compilationErr.Ctx
+	tk := compilationErr.Token
+	fmt.Printf("%s:l%d:c%d %s\n", ctx.FilePath, tk.Pos.Line, tk.Pos.Col, compilationErr.ShortDesc)
 
 	pos := tk.Pos
 
@@ -53,6 +80,6 @@ func CompilationErrorToken(ctx *types.FileCtx, tk *types.Token, shortDesc string
 		printLine(ctx, int(pos.Line))
 	}
 
-	fmt.Printf("%s\n\n", additional)
-	return errors.New(shortDesc)
+	fmt.Printf("%s\n\n", compilationErr.Additional)
+	return true
 }

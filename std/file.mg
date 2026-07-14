@@ -23,7 +23,7 @@ File(
 
 # Closes the file if open.
 # O(1).
-File.close() !void:
+destr File.close() !void:
     if this.open:
         try impl_file.closeFile(this.handle)
         this.open = false

@@ -16,6 +16,6 @@ Builds a string from borrowed or copied segments while avoiding repeated concate
 - `Builder.byteCount() u64` returns the combined byte count.
 - `Builder.isEmpty() bool` reports whether there are no segments.
 - `Builder.reset() !void` releases owned segment copies and returns to an empty initial state.
-- `Builder.free() void` releases owned copies and segment storage.
+- `Builder.free() void` is a `destr` method that releases owned copies and segment storage.
 
 `ensureCapacity() !void`, `add(s str, owned bool) !void`, and `releaseCopies() void` are internal storage and ownership helpers.

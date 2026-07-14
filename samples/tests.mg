@@ -27,6 +27,7 @@ main() !void:
     try testThrowDestructure()
     try testSizeof()
     try testUtf8()
+    try testDeferredLoopControl()
 
     try out.writeLn("Passed all tests successfully!")
 ..
@@ -341,6 +342,7 @@ testSizeof() !void:
 
 testUtf8() !void:
     try out.writeLn("Testing: utf8")
+    a := heap.allocator()
 
     s0 str = "This is é test"
     nc u64 = try utf8.countCodepoints(s0)
@@ -359,5 +361,61 @@ testUtf8() !void:
         try out.writeUint64(nb)
         try out.writeLn("")
         throw errors.failure("from `if nb != 15:` block") 
+    ..
+
+    wide := try utf8.utf8To16(a, "ASCII")
+    defer slices.free(a, wide)
+    roundTrip := try utf8.utf16to8(a, wide)
+    defer strings.free(a, roundTrip)
+    if strings.compare(roundTrip, "ASCII") == false:
+        throw errors.failure("UTF-16 to UTF-8 ASCII round trip failed")
+    ..
+..
+
+increment(value u64*) void:
+    value[0] = value[0] + 1
+..
+
+testDeferredLoopControl() !void:
+    try out.writeLn("Testing: deferred loop control")
+
+    sum u64 = 0
+    i u64 = 0
+    while i < 3:
+        i = i + 1
+        if i == 2:
+            continue
+        ..
+        sum = sum + i
+    ..
+    if sum != 4:
+        throw errors.failure("nested continue did not skip the loop body")
+    ..
+
+    count u64 = 0
+    while count < 3:
+        count = count + 1
+        if count == 2:
+            break
+        ..
+    ..
+    if count != 2:
+        throw errors.failure("nested break did not exit the loop")
+    ..
+
+    deferred u64 = 0
+    iteration u64 = 0
+    while iteration < 2:
+        defer increment(addrof deferred)
+        iteration = iteration + 1
+        if iteration == 1:
+            continue
+        ..
+        if iteration == 2:
+            break
+        ..
+    ..
+    if deferred != 2:
+        throw errors.failure("loop control did not run deferred statements")
     ..
 ..

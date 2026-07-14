@@ -419,4 +419,5 @@ func PrintTokens(toks []t.Token) {
 			tk.Pos.Col,
 		)
 	}
+	fmt.Println()
 }

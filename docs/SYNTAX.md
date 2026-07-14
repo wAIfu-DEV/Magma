@@ -184,11 +184,37 @@ Allocator.alloc(byteCount u64) !$u8*:
 ..
 ```
 
-When `$` appears before the base type, it is accepted as an ownership marker and
-does not change the backend type by itself. When `$` appears after an already
-parsed type, it is represented as a reference-like type and currently lowers as
-`ptr`. The current examples use `$` mostly as an ownership cue; ownership is not
-otherwise enforced by the checker.
+When `$` appears before the base type, it marks an ownership-transfer position
+and does not change the backend type. `$T` returns produce ownership, `$T`
+parameters consume it, and unmarked `T` positions borrow. The warning-only
+destroy checker applies these rules to direct locals whose struct type declares
+a destructor. When `$` appears after an already parsed type, it is the older
+reference-like form and currently lowers as `ptr`; do not confuse it with the
+prefix ownership annotation.
+
+### Destructors and the destroy checker
+
+`destr` is a modifier on a struct member function declared after its owner:
+
+```magma
+Resource(handle ptr)
+
+destr Resource.close() !void:
+    # release this.handle, or throw
+..
+```
+
+A destructor may take arguments and may return `void` or `!void`. A struct may
+have multiple destructor methods. Calling any marked destructor consumes its
+receiver. Destructors are explicit rather than automatically inserted; use a
+direct call or `defer value.close()` on every owning path.
+
+The checker warns about unconsumed owners, consuming borrows, repeated
+consumption, use after transfer, overwriting live owners, pending deferred
+destructors during transfer, and discarded owned destructible results. It does
+not reject compilation and only tracks direct locals. Fields, indexed values,
+pointers, aliases, aggregate contents, and partial moves are outside its model.
+See [OWNERSHIP.md](OWNERSHIP.md) for the complete behavior and examples.
 
 Throwing return types use prefix `!` on a return type:
 
@@ -793,6 +819,27 @@ fd i32 = ext_unix_open(path_cstr, flags, mode)
 
 External declarations have no body.
 
+## Native Libraries
+
+Native libraries required by external declarations are declared at top level:
+
+```magma
+link "./vendor/raylib/lib/raylib.lib"
+link "winhttp"
+```
+
+`link` records a logical library name for executable emission. The compiler
+deduplicates requirements across imported modules. Bare names are passed to
+Clang as `-l<name>`. Values containing a path separator or file extension are
+treated as library files, resolved relative to the declaring Magma file, and
+passed directly to Clang. `link` does not affect LLVM or object emission and may
+be selected with `@platform(...)`.
+
+On Windows, linking an import library such as `raylib.lib` keeps the dependency
+dynamic: `raylib.dll` must be beside the generated executable or otherwise on
+the DLL search path at runtime. Selecting a static `.lib` later uses the same
+declaration; the referenced library artifact determines the linkage kind.
+
 Declaration of external functions from within Magma is planned but currently WIP.
 
 ## Inline LLVM
@@ -1035,8 +1082,9 @@ implemented directive name is `platform`; other directive names are rejected.
 ### Low-Level and Runtime Caveats
 
 Pointers, slices, `str`, and inline LLVM are low-level facilities. Bounds checks,
-null checks, ownership checks, and read-only memory protection are not enforced
-by Magma syntax. Incorrect pointer arithmetic, indexing, writes through invalid
+null checks, pointer lifetime/alias checks, and read-only memory protection are
+not enforced. The destroy checker covers only direct destructible locals and is
+warning-only. Incorrect pointer arithmetic, indexing, writes through invalid
 pointers, or mutation of read-only string data can crash the generated program.
 
 Function-pointer fields can be called, and function-pointer types lower to

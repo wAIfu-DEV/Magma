@@ -60,8 +60,12 @@ Builder.add(s str, owned bool) !void:
     this.totalBytes = this.totalBytes + byteCount
 ..
 
-Builder.append(s str) !void:
+Builder.appendBorrowed(s str) !void:
     try this.add(s, false)
+..
+
+Builder.appendOwned(s str) !void:
+    try this.add(s, true)
 ..
 
 Builder.appendCopy(s str) !void:
@@ -130,7 +134,7 @@ Builder.reset() !void:
     this.totalBytes = 0
 ..
 
-Builder.free() void:
+destr Builder.free() void:
     this.releaseCopies()
     this.allocator.free(this.segments)
     this.count = 0

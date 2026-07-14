@@ -5,6 +5,7 @@ use "reader.mg" rd
 
 Duplex(
     impl ptr
+    
     fn_write (ptr, str) !u64,
     fn_read (ptr, u8[], u64) !u64,
 )

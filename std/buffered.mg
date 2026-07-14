@@ -122,7 +122,7 @@ Writer.writer() writer.Writer:
 
 # Closes the buffered writer, flushing any remaining data.
 # O(N) for remaining buffered bytes.
-Writer.close() !void:
+destr Writer.close() !void:
     try this.flush()
     this.allocator.free(this.buffer)
     this.buffer = cast.utop(0)
@@ -380,7 +380,7 @@ Reader.readLn(a alc.Allocator) !$str:
 
 # Closes the buffered reader and frees buffer.
 # O(1).
-Reader.close() void:
+destr Reader.close() void:
     this.allocator.free(this.buffer)
     this.buffer = cast.utop(0)
     this.bufferSize = 0

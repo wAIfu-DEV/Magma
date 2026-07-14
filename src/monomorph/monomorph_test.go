@@ -40,3 +40,21 @@ func TestPruneTemplatesRemovesGenericMemberFromStructDef(test *testing.T) {
 		test.Fatal("module declarations were not pruned consistently")
 	}
 }
+
+func TestSubstituteTypePreservesPositionOwnership(test *testing.T) {
+	typeParameter := &t.NodeType{
+		Owned: true,
+		KindNode: &t.NodeTypeNamed{
+			NameNode: &t.NodeNameSingle{Name: "T"},
+		},
+	}
+	concrete := &t.NodeType{
+		KindNode: &t.NodeTypeAbsolute{AbsoluteName: "test.Resource"},
+	}
+
+	result := substituteType(typeParameter, map[string]*t.NodeType{"T": concrete})
+
+	if !result.Owned {
+		test.Fatal("generic substitution discarded the $ ownership qualifier")
+	}
+}
