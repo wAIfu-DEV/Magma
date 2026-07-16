@@ -341,7 +341,9 @@ func parseSimplePrimaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
 		if e != nil {
 			return nil, e
 		}
-		expr, e := parseExpression(ctx, next, 0)
+		// Bind try more tightly than binary operators: `try call() == value`
+		// means `(try call()) == value`, not `try (call() == value)`.
+		expr, e := parseExpression(ctx, next, 60)
 		if e != nil {
 			return nil, e
 		}
@@ -358,6 +360,11 @@ func parseSimplePrimaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
 			boolVal = "1"
 		}
 		return &t.NodeExprLit{Value: boolVal, LitType: t.TokLitBool}, nil
+	}
+
+	if tk.KeywType == t.KwNoneLit {
+		consume(ctx)
+		return &t.NodeExprLit{Value: "null", LitType: t.TokLitNone}, nil
 	}
 
 	if tk.Type == t.TokLitNum || tk.Type == t.TokLitStr {
@@ -436,6 +443,100 @@ func parsePostfixCallExpr(ctx *ParseCtx, tk t.Token, calleeExpr t.NodeExpr, gene
 		Callee:      calleeExpr,
 		Args:        argExprs,
 		GenericArgs: genericArgs,
+	}, nil
+}
+
+func isStructInitList(ctx *ParseCtx) bool {
+	offset := 1
+	for {
+		tk, e := peekNth(ctx, offset)
+		if e != nil || tk.KeywType != t.KwNewline {
+			break
+		}
+		offset++
+	}
+	name, e1 := peekNth(ctx, offset)
+	eq, e2 := peekNth(ctx, offset+1)
+	return e1 == nil && e2 == nil && name.Type == t.TokName && eq.KeywType == t.KwEqual
+}
+
+func consumeNewlines(ctx *ParseCtx) {
+	for {
+		tk, e := peek(ctx)
+		if e != nil || tk.KeywType != t.KwNewline {
+			return
+		}
+		consume(ctx)
+	}
+}
+
+func parsePostfixStructInit(ctx *ParseCtx, tk t.Token, calleeExpr t.NodeExpr, genericArgs []*t.NodeType) (*t.NodeExprStructInit, error) {
+	nameExpr, ok := calleeExpr.(*t.NodeExprName)
+	if !ok {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, "struct constructor requires a type name", "")
+	}
+	consume(ctx) // '('
+	consumeNewlines(ctx)
+	fields := []t.NodeStructFieldInit{}
+	for {
+		fieldTk, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+		if fieldTk.KeywType == t.KwParenCl {
+			consume(ctx)
+			break
+		}
+		if fieldTk.Type != t.TokName {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &fieldTk, "struct constructor fields must be named", "expected: `field=expression`")
+		}
+		consume(ctx)
+		eq, e := peek(ctx)
+		if e != nil || eq.KeywType != t.KwEqual {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &fieldTk, "struct constructor field is missing '='", "expected: `field=expression`")
+		}
+		consume(ctx)
+		first, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+		value, e := parseExpression(ctx, first, 0)
+		if e != nil {
+			return nil, e
+		}
+		fields = append(fields, t.NodeStructFieldInit{Name: fieldTk.Repr, Expression: value, FieldIndex: -1})
+
+		after, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+		if after.KeywType == t.KwParenCl {
+			consume(ctx)
+			break
+		}
+		if after.KeywType == t.KwNewline {
+			consumeNewlines(ctx)
+			continue
+		}
+		if after.KeywType != t.KwComma {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &after, "unexpected token in struct constructor", "expected ',', newline, or ')'")
+		}
+		consume(ctx)
+		consumeNewlines(ctx)
+		after, e = peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+		if after.KeywType == t.KwParenCl {
+			consume(ctx)
+			break
+		}
+	}
+
+	return &t.NodeExprStructInit{
+		Tk:     tk,
+		Type:   &t.NodeType{KindNode: &t.NodeTypeNamed{NameNode: nameExpr.Name, GenericArgs: genericArgs}},
+		Fields: fields,
 	}, nil
 }
 
@@ -551,7 +652,11 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 		}
 
 		if next.KeywType == t.KwParenOp {
-			expr, e = parsePostfixCallExpr(ctx, tk, expr, nil)
+			if isStructInitList(ctx) {
+				expr, e = parsePostfixStructInit(ctx, tk, expr, nil)
+			} else {
+				expr, e = parsePostfixCallExpr(ctx, tk, expr, nil)
+			}
 			if e != nil {
 				return nil, e
 			}
@@ -562,7 +667,11 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 			if nameExpr, ok := expr.(*t.NodeExprName); ok {
 				typeArgs, isGenericCall := tryParseGenericCallTypeArgs(ctx)
 				if isGenericCall {
-					expr, e = parsePostfixCallExpr(ctx, tk, expr, typeArgs)
+					if isStructInitList(ctx) {
+						expr, e = parsePostfixStructInit(ctx, tk, expr, typeArgs)
+					} else {
+						expr, e = parsePostfixCallExpr(ctx, tk, expr, typeArgs)
+					}
 					if e != nil {
 						return nil, e
 					}
@@ -934,7 +1043,22 @@ func parseExpression(ctx *ParseCtx, tk t.Token, minPrecedence int) (t.NodeExpr, 
 				}
 				left = varDefAssign
 				continue
-			case *t.NodeExprName, *t.NodeExprSubscript:
+			case *t.NodeExprName, *t.NodeExprSubscript, *t.NodeExprMemberAccess:
+				left = &t.NodeExprAssign{
+					Tk:    tk,
+					Left:  left,
+					Right: right,
+				}
+				continue
+			case *t.NodeExprUnary:
+				if vd.Operator != t.KwAsterisk {
+					return nil, comp_err.CompilationErrorToken(
+						ctx.Fctx,
+						&opTk,
+						"syntax error: invalid assignment target",
+						"only pointer dereference (*) is assignable among unary expressions",
+					)
+				}
 				left = &t.NodeExprAssign{
 					Tk:    tk,
 					Left:  left,
@@ -1992,11 +2116,13 @@ func parseStructDef(ctx *ParseCtx, tk t.Token, gncls t.NodeGenericClass) (*t.Nod
 		Fields:     map[string]*t.NodeType{},
 		Funcs:      map[string]*t.NodeFuncDef{},
 		FieldNb:    map[string]int{},
+		FieldOrder: []string{},
 	}
 
 	for i, arg := range gncls.ArgsNode.Args {
 		structMap.Fields[arg.Name] = arg.TypeNode
 		structMap.FieldNb[arg.Name] = i
+		structMap.FieldOrder = append(structMap.FieldOrder, arg.Name)
 	}
 
 	ctx.GlobalNode.StructDefs[simpleName.Name] = structMap
@@ -2285,6 +2411,50 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 	}
 }
 
+func parseConstDecl(ctx *ParseCtx, constTk t.Token) (t.NodeGlobalDecl, error) {
+	consume(ctx)
+	nameTk, e := peek(ctx)
+	if e != nil || nameTk.Type != t.TokName {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &constTk, "expected a name after 'const'", "expected: `const name Type = expression` or `const name := expression`")
+	}
+	consume(ctx)
+
+	next, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+	var typeNode *t.NodeType
+	if next.KeywType == t.KwInfer {
+		consume(ctx)
+	} else {
+		typeNode, e = parseType(ctx, next, false)
+		if e != nil {
+			return nil, e
+		}
+		eq, e := peek(ctx)
+		if e != nil || eq.KeywType != t.KwEqual {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &nameTk, "constant declaration is missing '='", "expected: `const name Type = expression`")
+		}
+		consume(ctx)
+	}
+
+	first, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+	initializer, e := parseExpression(ctx, first, 0)
+	if e != nil {
+		return nil, e
+	}
+	vd := &t.NodeExprVarDef{
+		Name:     &t.NodeNameSingle{Name: nameTk.Repr},
+		Type:     typeNode,
+		AbsName:  ctx.Fctx.PackageName + "." + nameTk.Repr,
+		IsGlobal: true,
+	}
+	return &t.NodeConstDef{Tk: constTk, VarDef: vd, Initializer: initializer}, nil
+}
+
 func parseStmtElse(ctx *ParseCtx, tk t.Token) (*t.NodeStmtElse, error) {
 	consume(ctx)
 
@@ -2512,6 +2682,9 @@ outer:
 			e = parseApplyModifier(ctx, tk, MdPublic)
 		case t.KwDestructor:
 			e = parseApplyModifier(ctx, tk, MdDestructor)
+		case t.KwConst:
+			n, e = parseConstDecl(ctx, tk)
+			return n, e
 		case t.KwAt:
 			e = parseCompilerDirective(ctx, tk)
 		case t.KwModule:

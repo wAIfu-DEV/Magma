@@ -16,4 +16,8 @@ pub main() !void:
     if strings.compare(formatted, "42") == false:
         throw errors.failure("strconv format changed")
     ..
+    formattedPtr u8* = strings.toPtr(formatted)
+    if formattedPtr[strings.countBytes(formatted)] != 0:
+        throw errors.failure("formatted string is not null terminated")
+    ..
 ..

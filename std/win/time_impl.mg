@@ -6,6 +6,9 @@ use "../cast.mg" cast
 ext ext_win32_QueryPerformanceCounter        QueryPerformanceCounter(value i64*) i32
 ext ext_win32_QueryPerformanceFrequency      QueryPerformanceFrequency(value i64*) i32
 ext ext_win32_GetSystemTimePreciseAsFileTime GetSystemTimePreciseAsFileTime(value FileTime*) void
+ext ext_win32_Sleep                          Sleep(dwMilliseconds u32) void
+ext ext_win32_GetCurrentProcess              GetCurrentProcess() ptr
+ext ext_win32_GetProcessTimes                GetProcessTimes(process ptr, creation FileTime*, exit FileTime*, kernel FileTime*, user FileTime*) i32
 
 FileTime(
     lowDateTime u32,
@@ -13,6 +16,24 @@ FileTime(
 )
 
 gl_tickFreq u64
+
+fileTimeValue(value FileTime*) u64:
+    high u64 = cast.u32to64(value.highDateTime) << 32
+    ret high | cast.u32to64(value.lowDateTime)
+..
+
+pub processCpuTimeNs() u64:
+    creation FileTime
+    exit FileTime
+    kernel FileTime
+    user FileTime
+    ok i32 = ext_win32_GetProcessTimes(ext_win32_GetCurrentProcess(), addrof creation, addrof exit, addrof kernel, addrof user)
+    if ok == 0:
+        ret 0
+    ..
+    # FILETIME uses 100-nanosecond intervals.
+    ret (fileTimeValue(addrof kernel) + fileTimeValue(addrof user)) * 100
+..
 
 pub ticks() u64:
     t u64
@@ -29,7 +50,7 @@ pub tickFrequency() u64:
 ..
 
 unixEpochIntervals() u64:
-    value FileTime
+    value := FileTime(lowDateTime=0, highDateTime=0)
     ext_win32_GetSystemTimePreciseAsFileTime(addrof value)
 
     high u64 = cast.u32to64(value.highDateTime) << 32
@@ -55,4 +76,8 @@ pub unixTimestampUs() u128:
 pub unixTimestampNs() u128:
     intervals u128 = cast.u64to128(unixEpochIntervals())
     ret intervals * 100
+..
+
+pub sleep(ms u64) void:
+    ext_win32_Sleep(cast.u64to32(ms))
 ..

@@ -9,9 +9,10 @@ type StructDef struct {
 	Name       string
 	TypeParams []string
 
-	FieldNb map[string]int
-	Fields  map[string]*NodeType
-	Funcs   map[string]*NodeFuncDef
+	FieldNb    map[string]int
+	Fields     map[string]*NodeType
+	FieldOrder []string
+	Funcs      map[string]*NodeFuncDef
 
 	Destructor  *NodeFuncDef
 	Destructors []*NodeFuncDef

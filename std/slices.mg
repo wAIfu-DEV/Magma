@@ -37,6 +37,11 @@ pub toPtr(s slice) ptr:
     llvm "  ret ptr %l0\n"
 ..
 
+pub alloc[T](a alc.Allocator, elemCount u64) !$T[]:
+    p T* = try a.allocT[T](elemCount)
+    ret fromPtr(p, elemCount)
+..
+
 # Frees a allocated slice using the provided allocator.
 # Only use if the slice is a owned $T[] slice from a function taking an Allocator
 # as parameter.

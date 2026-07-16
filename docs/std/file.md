@@ -1,5 +1,13 @@
 # `std/file`
 
+## Example
+
+```magma
+output := try file.open(heap.allocator(), "report.txt", file.mode().write())
+try output.writer().writeAll("ready\n")
+try output.close()
+```
+
 Cross-platform file handles and adapters. Platform-specific system calls are selected internally.
 
 ## Type

@@ -1,5 +1,13 @@
 # `std/random`
 
+## Example
+
+```magma
+rng := random.new(123)
+die := rng.bounded(6) + 1 # 1 through 6
+coin := rng.boolean()
+```
+
 A small deterministic pseudorandom generator. It is not cryptographically secure.
 
 ## Type

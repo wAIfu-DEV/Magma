@@ -57,16 +57,16 @@ pub toStr(e error) str:
 
 # Creates an error value from a code and message.
 # O(1).
-makeErr(code u32, msg str) error:
-    llvm "  %e0 = insertvalue %type.error zeroinitializer, i32 %code, 0\n"
+makeErr(errorCode u32, msg str) error:
+    llvm "  %e0 = insertvalue %type.error zeroinitializer, i32 %errorCode, 0\n"
     llvm "  %e1 = insertvalue %type.error %e0, %type.str %msg, 1\n"
     llvm "  ret %type.error %e1\n"
 ..
 
 # Wraps a platform error code without allocating a formatted message. The high
 # bit distinguishes native codes from standard-library categories.
-pub native(code u32, message str) error:
-    ret makeErr(0x80000000 | code, message)
+pub native(errorCode u32, msg str) error:
+    ret makeErr(0x80000000 | errorCode, msg)
 ..
 
 pub isNative(e error) bool:
@@ -89,23 +89,23 @@ pub ok() error:
 # Returns an error with code 1 indicating an opaque error.
 # O(1).
 # @returns error
-pub failure(message str) error:
-    ret makeErr(1, message)
+pub failure(msg str) error:
+    ret makeErr(1, msg)
 ..
 
 # Returns an error with code 2 indicating that the client provided an invalid
 # argument to a function or protocol.
 # O(1).
 # @returns error
-pub invalidArgument(message str) error:
-    ret makeErr(2, message)
+pub invalidArgument(msg str) error:
+    ret makeErr(2, msg)
 ..
 
 # Returns an error with code 3 indicating that the system is out of memory.
 # O(1).
 # @returns error
-pub outOfMemory(message str) error:
-    ret makeErr(3, message)
+pub outOfMemory(msg str) error:
+    ret makeErr(3, msg)
 ..
 
 # Returns an error with code 4 indicating the operation hitting the end of a file.
@@ -113,20 +113,20 @@ pub outOfMemory(message str) error:
 # if this error is thrown and should be handled by the consumer.
 # O(1).
 # @returns error
-pub endOfFile(message str) error:
-    ret makeErr(4, message)
+pub endOfFile(msg str) error:
+    ret makeErr(4, msg)
 ..
 
 # Returns an error with code 5 indicating a would-overflow condition.
 # O(1).
 # @returns error
-pub wouldOverflow(message str) error:
-    ret makeErr(5, message)
+pub wouldOverflow(msg str) error:
+    ret makeErr(5, msg)
 ..
 
 # Returns an error with code 6 indicating an invalid type.
 # O(1).
 # @returns error
-pub invalidType(message str) error:
-    ret makeErr(6, message)
+pub invalidType(msg str) error:
+    ret makeErr(6, msg)
 ..

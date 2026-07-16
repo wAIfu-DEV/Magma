@@ -1,5 +1,15 @@
 # `std/strings`
 
+## Example
+
+```magma
+a := heap.allocator()
+owned := try strings.copy(a, "magma")
+defer strings.free(a, owned)
+bytes := strings.countBytes(owned) # 5
+same := strings.compare(owned, "magma")
+```
+
 Byte-level string, pointer, and C-string utilities. Magma `str` values are byte ranges and are not necessarily null-terminated.
 
 ## String access and ownership

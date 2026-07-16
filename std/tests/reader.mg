@@ -14,10 +14,14 @@ source(impl ptr, bytes u8[], count u64) !u64:
 ..
 pub main() !void:
     a allocator.Allocator = heap.allocator()
-    input := reader.new(cast.utop(0), source)
+    input := reader.new(none, source)
     result := try input.read(a, 1)
     defer strings.free(a, result)
     if strings.compare(result, "A") == false:
         throw errors.failure("reader behavior changed")
+    ..
+    resultPtr u8* = strings.toPtr(result)
+    if resultPtr[strings.countBytes(result)] != 0:
+        throw errors.failure("read string is not null terminated")
     ..
 ..

@@ -282,6 +282,33 @@ type NodeExprCall struct {
 	FuncPtrOwner  *NodeExprName
 }
 
+type NodeStructFieldInit struct {
+	Name       string
+	Expression NodeExpr
+	FieldIndex int
+	FieldType  *NodeType
+}
+
+// NodeExprStructInit is syntactically distinguished from a call by its
+// name=value argument list.
+type NodeExprStructInit struct {
+	Type   *NodeType
+	Fields []NodeStructFieldInit
+	Tk     Token
+}
+
+func (n *NodeExprStructInit) GetInferredType() *NodeType { return n.Type }
+func (n *NodeExprStructInit) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprStructInit\n")
+	n.Type.Print(indent + 1)
+	for _, field := range n.Fields {
+		PrintIndent(indent + 1)
+		fmt.Printf("Field(%s)\n", field.Name)
+		field.Expression.Print(indent + 2)
+	}
+}
+
 func (n *NodeExprCall) GetInferredType() *NodeType {
 	//fmt.Println("ExprCall")
 	return n.InfType
@@ -399,6 +426,7 @@ type NodeExprVarDef struct {
 	IsSsa      bool
 	IsReturned bool
 	IsGlobal   bool
+	IrName     string
 }
 
 func (n *NodeExprVarDef) GetInferredType() *NodeType {
@@ -424,6 +452,19 @@ type NodeExprVarDefAssign struct {
 
 	VarDef     *NodeExprVarDef
 	AssignExpr NodeExpr
+}
+
+type NodeConstDef struct {
+	Tk          Token
+	VarDef      *NodeExprVarDef
+	Initializer NodeExpr
+}
+
+func (n *NodeConstDef) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ConstDef\n")
+	n.VarDef.Print(indent + 1)
+	n.Initializer.Print(indent + 1)
 }
 
 func (n *NodeExprVarDefAssign) GetInferredType() *NodeType {
@@ -700,6 +741,7 @@ func (n *NodeArgList) Print(indent int) {
 
 type NodeBody struct {
 	Statements []NodeStatement
+	Scope      *Scope
 }
 
 func (n *NodeBody) Print(indent int) {
@@ -806,6 +848,7 @@ func (*NodeExprUnary) IsExpr()             {}
 func (*NodeExprLit) IsExpr()               {}
 func (*NodeExprName) IsExpr()              {}
 func (*NodeExprCall) IsExpr()              {}
+func (*NodeExprStructInit) IsExpr()        {}
 func (*NodeExprSubscript) IsExpr()         {}
 func (*NodeExprMemberAccess) IsExpr()      {}
 func (*NodeExprBinary) IsExpr()            {}
@@ -839,3 +882,4 @@ func (*NodeExprVarDef) IsGlobalDecl()      {}
 func (*NodeFuncDef) IsGlobalDecl()         {}
 func (*NodeStructDef) IsGlobalDecl()       {}
 func (*NodeLlvm) IsGlobalDecl()            {}
+func (*NodeConstDef) IsGlobalDecl()        {}

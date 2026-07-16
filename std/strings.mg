@@ -3,6 +3,9 @@ mod strings
 use "allocator.mg" alc
 use "memory.mg"    mem
 use "cast.mg"      cast
+use "errors.mg"    err
+
+const gl_nullTerm u8 = 0 
 
 # Returns size in bytes of string, for UTF8 strings codepoint (UTF8 character) count may be
 # different from byte size.
@@ -14,13 +17,38 @@ pub countBytes(s str) u64:
     llvm "  ret i64 %l0\n"
 ..
 
-# Returns the pointer to the underlying data of the string (u8 array)
-# Note that this array is not null-terminated, see toCstr for a null-terminated
-# version.
+# Returns the pointer to the underlying data of the string (u8 array).
+# Allocating string APIs provide a null byte at countBytes(s); borrowed views
+# are not necessarily terminated at their logical end.
 # @param s input string
 pub toPtr(s str) u8*:
     llvm "  %l0 = extractvalue %type.str %s, 0\n"
     llvm "  ret ptr %l0\n"
+..
+
+pub alloc(a alc.Allocator, size u64) !$str:
+    if size == 0 - 1:
+        throw err.wouldOverflow("string allocation size overflow")
+    ..
+    p u8* = try a.alloc(size + 1) # Zero terminated
+    p[size] = 0
+    ret fromPtrNoCopy(p, size)
+..
+
+pub allocFill(a alc.Allocator, size u64, fill u8) !$str:
+    if size == 0 - 1:
+        throw err.wouldOverflow("string allocation size overflow")
+    ..
+    p u8* = try a.alloc(size + 1) # Zero terminated
+
+    i u64 = 0
+    while i < size:
+        p[i] = fill
+        i = i + 1
+    ..
+
+    p[size] = 0
+    ret fromPtrNoCopy(p, size)
 ..
 
 # Frees a allocated string using the provided allocator.
@@ -31,6 +59,10 @@ pub toPtr(s str) u8*:
 # @param s allocated slice
 pub free(a alc.Allocator, s str) void:
     p ptr = toPtr(s)
+
+    if p == none:
+        ret
+    ..
     a.free(p)
 ..
 
@@ -54,32 +86,51 @@ pub fromPtrNoCopy(p ptr, bytesCount u64) str:
 # @param s input string
 pub fromPtr(a alc.Allocator, p ptr, byteCount u64) !$str:
     if byteCount == 0:
-        ret fromPtrNoCopy(cast.utop(0), 0)
+        nt u8* = try a.alloc(1)
+        *nt = 0
+        ret fromPtrNoCopy(nt, 0)
     ..
+
+    # cap size to 0 in case of impossibly large string size (9 exabytes in this case)
+    # this should prevent classes of attacks using size overflow as vector
+    max u64 = 0 - 1
+    if byteCount > (max / 2):
+        throw err.wouldOverflow("string too large")
+    ..
+
     inData u8* = p
-    strData u8* = try a.alloc(byteCount)
+    strData u8* = try a.alloc(byteCount + 1) # Zero terminated
 
     i u64 = 0
     while i < byteCount:
         strData[i] = inData[i]
         i = i + 1
     ..
+
+    strData[byteCount] = 0
     ret fromPtrNoCopy(strData, byteCount)
 ..
 
 pub copy(a alc.Allocator, s str) !$str:
     byteCount u64 = countBytes(s)
+    if byteCount == 0 - 1:
+        throw err.wouldOverflow("string allocation size overflow")
+    ..
     if byteCount == 0:
-        ret fromPtrNoCopy(cast.utop(0), 0)
+        nt u8* = try a.alloc(1)
+        *nt = 0
+        ret fromPtrNoCopy(nt, 0)
     ..
     inData u8* = toPtr(s)
-    strData u8* = try a.alloc(byteCount)
+    strData u8* = try a.alloc(byteCount + 1) # Zero terminated
 
     i u64 = 0
     while i < byteCount:
         strData[i] = inData[i]
         i = i + 1
     ..
+
+    strData[byteCount] = 0
     ret fromPtrNoCopy(strData, byteCount)
 ..
 
@@ -95,26 +146,56 @@ pub byteAt(s str, idx u64) u8:
     llvm "  ret i8 %byte\n"
 ..
 
-# Makes a C string (pointer to null-terminated char array) from a provided str.
-# This creates a allocated copy, do not use unless directly interfacing with APIs or
-# protocols expecting C-style strings.
-# Repeated use of this function may cause performance degradation, prefer using it
-# once rather than many times.
-# O(N) depending on string size.
-# @param a allocator to use
+# Copies the provided string into a null-terminated C string.
+# O(N) depending on string size
+# @param a allocator
 # @param s string to copy
 # @returns a null-terminated c-style string
 pub toCstr(a alc.Allocator, s str) !$u8*:
     size u64 = countBytes(s)
-    cStr u8* = try a.alloc(size + 1)
+    if size == 0 - 1:
+        throw err.wouldOverflow("C string allocation size overflow")
+    ..
+
+    if size == 0:
+        nt u8* = try a.alloc(1)
+        *nt = 0
+        ret nt
+    ..
+
+    p u8* = toPtr(s)
+    np u8* = try a.alloc(size + 1)
 
     i u64 = 0
     while i < size:
-        cStr[i] = byteAt(s, i)
+        np[i] = p[i]
         i = i + 1
     ..
-    cStr[size] = 0
-    ret cStr
+
+    np[size] = 0
+    ret np
+..
+
+# Returns the underlying string pointer after checking its trailing byte.
+# The caller must guarantee that one readable byte exists immediately after the
+# logical string data. Owned strings returned by allocating string APIs meet
+# this precondition; arbitrary borrowed strings and substring views may not.
+# O(1)
+# @param s string to copy
+# @returns a null-terminated c-style string
+pub toCstrNoCopy(s str) !u8*:
+    size u64 = countBytes(s)
+    p u8* = toPtr(s)
+
+    if p == none:
+        ret addrof gl_nullTerm
+    .. 
+
+    # WARNING: not sure if OOB of +1 automatically leads to crash, needs testing
+    if p[size] != 0:
+        throw err.wouldOverflow("string is not null terminated")
+    ..
+    ret p
 ..
 
 # Returns the length of a C-style string.
@@ -152,16 +233,23 @@ pub fromCstrNoCopy(cstr u8*) str:
 # @returns magma-style str
 pub fromCstr(a alc.Allocator, cstr u8*) !$str:
     size u64 = cStrLen(cstr)
-    if size == 0:
-        ret fromPtrNoCopy(cast.utop(0), 0)
+    if size == 0 - 1:
+        throw err.wouldOverflow("string allocation size overflow")
     ..
-    strData u8* = try a.alloc(size)
+    if size == 0:
+        nt u8* = try a.alloc(1)
+        *nt = 0
+        ret fromPtrNoCopy(nt, 0)
+    ..
+    strData u8* = try a.alloc(size + 1)
 
     i u64 = 0
     while i < size:
         strData[i] = cstr[i]
         i = i + 1
     ..
+
+    strData[size] = 0
     ret fromPtrNoCopy(strData, size)
 ..
 

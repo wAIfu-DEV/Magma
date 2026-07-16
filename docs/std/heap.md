@@ -1,5 +1,13 @@
 # `std/heap`
 
+## Example
+
+```magma
+block := try heap.allocZero(32)
+block = try heap.reallocZero(block, 64, 32)
+heap.free(block)
+```
+
 Portable access to the process heap.
 
 - `pub allocator() a.Allocator` returns an allocator adapter backed by this module.

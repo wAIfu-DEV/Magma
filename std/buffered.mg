@@ -9,13 +9,16 @@ use "strings.mg"   strings
 use "cast.mg"      cast
 use "memory.mg"    mem
 
+const DEFAULT_BUFFER_SIZE u64 = 8192
+const EOF_MASK u64 = 0x8000000000000000
+const FILLED_MASK u64 = 0x7FFFFFFFFFFFFFFF
+
 # Buffered writer that accumulates writes before flushing.
 # Reduces syscall overhead for many small writes.
 # O(1) for most operations until buffer fills.
 Writer(
     underlying writer.Writer
     buffer ptr
-    bufferSize u64
     position u64
     allocator alc.Allocator
 )
@@ -27,15 +30,12 @@ Writer(
 # @param w underlying writer
 # @returns buffered writer
 pub writerBuffered(a alc.Allocator, w writer.Writer) !$Writer:
-    DEFAULT_BUFFER_SIZE u64 = 8192
-
-    bw Writer
-    bw.underlying = w
-    bw.buffer = try a.alloc(DEFAULT_BUFFER_SIZE)
-    bw.bufferSize = DEFAULT_BUFFER_SIZE
-    bw.position = 0
-    bw.allocator = a
-    ret bw
+    ret Writer(
+        underlying=w,
+        buffer=try a.alloc(DEFAULT_BUFFER_SIZE),
+        position=0,
+        allocator=a,
+    )
 ..
 
 # Flushes buffered data to underlying writer.
@@ -93,13 +93,13 @@ bufferedWrite(bw Writer*, bytes str) !u64:
     ..
     
     # If write is larger than buffer, flush and write directly
-    if bytesLen >= bw.bufferSize:
+    if bytesLen >= DEFAULT_BUFFER_SIZE:
         try bw.flush()
         ret try bw.underlying.write(bytes)
     ..
     
     # If write doesn't fit in remaining buffer space, flush first
-    available u64 = bw.bufferSize - bw.position
+    available u64 = DEFAULT_BUFFER_SIZE - bw.position
     if bytesLen > available:
         try bw.flush()
     ..
@@ -125,9 +125,64 @@ Writer.writer() writer.Writer:
 destr Writer.close() !void:
     try this.flush()
     this.allocator.free(this.buffer)
-    this.buffer = cast.utop(0)
-    this.bufferSize = 0
+    this.buffer = none
     this.position = 0
+..
+
+# Writes the provided bytes and returns the count written.
+# O(N) for byte count.
+# @param bytes string to write
+# @returns number of bytes written
+Writer.write(bytes str) !u64:
+    ret try this.underlying.write(bytes)
+..
+
+# Writes the complete byte string or returns an error if the adapter makes no
+# progress or reports an invalid count.
+Writer.writeAll(bytes str) !u64:
+    ret try this.underlying.writeAll(bytes)
+..
+
+# Writes the provided bytes followed by a newline.
+# O(N) for byte count.
+# @param bytes string to write
+# @returns number of bytes written
+Writer.writeLn(bytes str) !u64:
+    ret try this.underlying.writeLn(bytes)
+..
+
+# Writes "true" or "false" based on the boolean value.
+# O(1).
+# @param b boolean value
+# @returns number of bytes written
+Writer.writeBool(b bool) !u64:
+    ret try this.underlying.writeBool(b)
+..
+
+# Writes a signed 64-bit integer in decimal form.
+# O(1) bounded by integer width.
+# @param num integer value
+# @returns number of bytes written
+Writer.writeInt64(num i64) !u64:
+    ret try this.underlying.writeInt64(num)
+..
+
+# Writes an unsigned 64-bit integer in decimal form.
+# O(1) bounded by integer width.
+# @param num integer value
+# @returns number of bytes written
+Writer.writeUint64(num u64) !u64:
+    ret try this.underlying.writeUint64(num)
+..
+
+
+# Writes a floating point value with the provided precision.
+# O(P) for precision digits.
+# @param flt floating point value
+# @param precision digits after decimal point
+# @returns number of bytes written
+Writer.writeFloat64(flt f64, precision u64) !u64:
+    ret try this.underlying.writeFloat64(flt, precision)
 ..
 
 # Buffered reader that reads in chunks and serves from buffer.
@@ -136,12 +191,26 @@ destr Writer.close() !void:
 Reader(
     underlying reader.Reader
     buffer u8*
-    bufferSize u64
     position u64   # Current read position in buffer
     filled u64     # How much of buffer contains valid data
     allocator alc.Allocator
-    eof bool       # Hit end of underlying stream
 )
+
+Reader.filledCount() u64:
+    ret this.filled & FILLED_MASK
+..
+
+Reader.isEof() bool:
+    ret (this.filled & EOF_MASK) != 0
+..
+
+Reader.setFilled(value u64) void:
+    this.filled = (this.filled & EOF_MASK) | value
+..
+
+Reader.markEof() void:
+    this.filled = this.filled | EOF_MASK
+..
 
 # Creates a buffered reader with default buffer size.
 # O(1) aside from allocation.
@@ -149,51 +218,49 @@ Reader(
 # @param r underlying reader
 # @returns buffered reader
 pub readerBuffered(a alc.Allocator, r reader.Reader) !$Reader:
-    DEFAULT_BUFFER_SIZE u64 = 8192
-
-    br Reader
-    br.underlying = r
-    br.buffer = try a.alloc(DEFAULT_BUFFER_SIZE)
-    br.bufferSize = DEFAULT_BUFFER_SIZE
-    br.position = 0
-    br.filled = 0
-    br.allocator = a
-    br.eof = false
-    ret br
+    ret Reader(
+        underlying=r,
+        buffer=try a.alloc(DEFAULT_BUFFER_SIZE),
+        position=0,
+        filled=0,
+        allocator=a,
+    )
 ..
 
 # Fills the internal buffer from underlying reader.
 # O(N) for buffer size.
 Reader.fillBuffer() !bool:
-    if this.eof:
+    if this.isEof():
         ret false
     ..
     
     # If there's unread data, move it to front of buffer
-    if this.position < this.filled:
-        unread u64 = this.filled - this.position
+    filled := this.filledCount()
+    if this.position < filled:
+        unread u64 = filled - this.position
         srcPtr ptr = cast.utop(cast.ptou(this.buffer) + this.position)
         mem.move(srcPtr, this.buffer, unread)
-        this.filled = unread
+        this.setFilled(unread)
         this.position = 0
     else:
-        this.filled = 0
+        this.setFilled(0)
         this.position = 0
     ..
     
     # Try to fill rest of buffer
-    toRead u64 = this.bufferSize - this.filled
-    readPtr ptr = cast.utop(cast.ptou(this.buffer) + this.filled)
+    filled = this.filledCount()
+    toRead u64 = DEFAULT_BUFFER_SIZE - filled
+    readPtr ptr = cast.utop(cast.ptou(this.buffer) + filled)
     buffSlice u8[] = slices.fromPtr(readPtr, toRead)
     
     readCount u64 = try this.underlying.readToBuff(buffSlice, toRead)
     if readCount > toRead:
         throw errors.failure("buffered reader returned too many bytes")
     ..
-    this.filled = this.filled + readCount
+    this.setFilled(filled + readCount)
     
     if readCount == 0:
-        this.eof = true
+        this.markEof()
     ..
     ret readCount > 0
 ..
@@ -206,11 +273,11 @@ bufferedRead(br Reader*, buff u8[], nBytes u64) !u64:
     ..
     
     totalRead u64 = 0
-    dstPtr ptr = cast.utop(0)
+    dstPtr ptr = none
 
     while totalRead < nBytes:
         # Serve from buffer if available
-        available u64 = br.filled - br.position
+        available u64 = br.filledCount() - br.position
         
         if available > 0:
             toCopy u64 = nBytes - totalRead
@@ -228,13 +295,13 @@ bufferedRead(br Reader*, buff u8[], nBytes u64) !u64:
         ..
         
         # Buffer exhausted, need to refill
-        if br.eof:
+        if br.isEof():
             break
         ..
         
         # For large reads, bypass buffer and read directly
         remaining u64 = nBytes - totalRead
-        if remaining >= br.bufferSize:
+        if remaining >= DEFAULT_BUFFER_SIZE:
             dstPtr = cast.utop(cast.ptou(slices.toPtr(buff)) + totalRead)
             directBuff u8[] = slices.fromPtr(dstPtr, remaining)
             directRead u64 = try br.underlying.readToBuff(directBuff, remaining)
@@ -244,7 +311,7 @@ bufferedRead(br Reader*, buff u8[], nBytes u64) !u64:
             totalRead = totalRead + directRead
             
             if directRead == 0:
-                br.eof = true
+                br.markEof()
             ..
             break
         ..
@@ -261,7 +328,11 @@ Reader.reader() reader.Reader:
 ..
 
 resizeLineBuffer(a alc.Allocator, old u8*, newCapacity u64) !$u8*:
-    resized u8*, resizeErr error = a.realloc(old, newCapacity)
+    if newCapacity == 0 - 1:
+        a.free(old)
+        throw errors.wouldOverflow("line buffer capacity overflow")
+    ..
+    resized u8*, resizeErr error = a.realloc(old, newCapacity + 1)
     if errors.code(resizeErr) != 0:
         a.free(old)
         throw resizeErr
@@ -277,21 +348,26 @@ resizeLineBuffer(a alc.Allocator, old u8*, newCapacity u64) !$u8*:
 Reader.readLn(a alc.Allocator) !$str:
     # Initial capacity for line buffer
     capacity u64 = 128
-    lineBuffer u8* = try a.alloc(capacity)
+    line str = try strings.alloc(a, capacity)
+    lineBuffer u8* = strings.toPtr(line)
     lineLen u64 = 0
-    dstPtr ptr = cast.utop(0)
+    dstPtr ptr = none
     newCapacity u64 = 0
     
     while true:
         # Check if we need more buffer space
         if lineLen >= capacity:
+            if capacity > (0 - 1) / 2:
+                a.free(lineBuffer)
+                throw errors.wouldOverflow("line buffer capacity overflow")
+            ..
             newCapacity = capacity * 2
             lineBuffer = try resizeLineBuffer(a, lineBuffer, newCapacity)
             capacity = newCapacity
         ..
         
         # Look for newline in current buffer
-        available u64 = this.filled - this.position
+        available u64 = this.filledCount() - this.position
         
         if available > 0:
             searchStart ptr = cast.utop(cast.ptou(this.buffer) + this.position)
@@ -340,6 +416,7 @@ Reader.readLn(a alc.Allocator) !$str:
                 
                 # Skip past newline
                 this.position = this.position + foundPos + nlLen
+                lineBuffer[lineLen] = 0
                 ret strings.fromPtrNoCopy(lineBuffer, lineLen)
             ..
             
@@ -357,9 +434,10 @@ Reader.readLn(a alc.Allocator) !$str:
         ..
         
         # Refill buffer
-        if this.eof:
+        if this.isEof():
             # Return what we have (even if no newline)
             if lineLen > 0:
+                lineBuffer[lineLen] = 0
                 ret strings.fromPtrNoCopy(lineBuffer, lineLen)
             ..
             a.free(lineBuffer)
@@ -382,8 +460,7 @@ Reader.readLn(a alc.Allocator) !$str:
 # O(1).
 destr Reader.close() void:
     this.allocator.free(this.buffer)
-    this.buffer = cast.utop(0)
-    this.bufferSize = 0
+    this.buffer = none
     this.position = 0
     this.filled = 0
 ..

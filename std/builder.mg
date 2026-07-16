@@ -20,11 +20,13 @@ Builder(
 )
 
 pub new(a alc.Allocator) !$Builder:
-    sb Builder
-    sb.allocator = a
-    sb.capacity = 8
-    sb.segments = try a.alloc(sb.capacity * sizeof Segment)
-    ret sb
+    ret Builder(
+        allocator=a,
+        segments=try a.allocT[Segment](8),
+        count=0,
+        capacity=8,
+        totalBytes=0,
+    )
 ..
 
 Builder.ensureCapacity() !void:
@@ -39,7 +41,8 @@ Builder.ensureCapacity() !void:
     if sizeof Segment != 0 && newCapacity > maxU64 / sizeof Segment:
         throw errors.wouldOverflow("builder allocation size overflow")
     ..
-    newSegments Segment* = try this.allocator.realloc(this.segments, newCapacity * sizeof Segment)
+    segmentPtr Segment* = cast.reinterpret[Segment](this.segments)
+    newSegments Segment* = try this.allocator.reallocT[Segment](segmentPtr, newCapacity)
     this.segments = newSegments
     this.capacity = newCapacity
 ..
@@ -52,9 +55,7 @@ Builder.add(s str, owned bool) !void:
     ..
     try this.ensureCapacity()
     segments Segment* = this.segments
-    segment Segment
-    segment.value = s
-    segment.owned = owned
+    segment := Segment(value=s, owned=owned)
     segments[this.count] = segment
     this.count = this.count + 1
     this.totalBytes = this.totalBytes + byteCount
@@ -80,12 +81,9 @@ Builder.appendCopy(s str) !void:
     # Reserve the segment first so allocation of the owned bytes is the final
     # fallible operation before committing the segment.
     try this.ensureCapacity()
-    owned u8* = try this.allocator.alloc(byteCount)
-    mem.copy(strings.toPtr(s), owned, byteCount)
+    owned str = try strings.copy(this.allocator, s)
     segments Segment* = this.segments
-    segment Segment
-    segment.value = strings.fromPtrNoCopy(owned, byteCount)
-    segment.owned = true
+    segment := Segment(value=owned, owned=true)
     segments[this.count] = segment
     this.count = this.count + 1
     this.totalBytes = this.totalBytes + byteCount
@@ -93,9 +91,10 @@ Builder.appendCopy(s str) !void:
 
 Builder.build() !$str:
     if this.totalBytes == 0:
-        ret strings.fromPtrNoCopy(cast.utop(0), 0)
+        ret try strings.alloc(this.allocator, 0)
     ..
-    out u8* = try this.allocator.alloc(this.totalBytes)
+    result str = try strings.alloc(this.allocator, this.totalBytes)
+    out u8* = strings.toPtr(result)
     segments Segment* = this.segments
     offset u64 = 0
     i u64 = 0
@@ -106,7 +105,7 @@ Builder.build() !$str:
         offset = offset + byteCount
         i = i + 1
     ..
-    ret strings.fromPtrNoCopy(out, this.totalBytes)
+    ret result
 ..
 
 Builder.byteCount() u64:

@@ -1,5 +1,13 @@
 # `std/file_op_mode`
 
+## Example
+
+```magma
+readOnly := file.mode().read()
+readWrite := file.mode().read().write()
+appendOnly := file.mode().write().append()
+```
+
 Defines composable file-open flags.
 
 ## Type

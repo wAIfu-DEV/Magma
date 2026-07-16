@@ -264,6 +264,20 @@ func sameType(a *t.NodeType, b *t.NodeType) bool {
 	return sameTypeKind(a.KindNode, b.KindNode)
 }
 
+func compatibleInitializer(expected *t.NodeType, expr t.NodeExpr) bool {
+	actual := expr.GetInferredType()
+	if sameType(expected, actual) {
+		return true
+	}
+	if isPointerType(expected) && isPointerType(actual) {
+		return true
+	}
+	if lit, ok := expr.(*t.NodeExprLit); ok && lit.LitType == t.TokLitNum && isNumberType(expected) {
+		return true
+	}
+	return false
+}
+
 func sameTypeKind(a t.NodeTypeKind, b t.NodeTypeKind) bool {
 	switch ta := a.(type) {
 	case *t.NodeTypeNamed:
@@ -328,6 +342,13 @@ func sameTypeKind(a t.NodeTypeKind, b t.NodeTypeKind) bool {
 
 func ctExprLvalue(c *ctx, expr t.NodeExpr) error {
 	switch n := expr.(type) {
+	case *t.NodeExprUnary:
+		if n.Operator != t.KwAsterisk {
+			return fmt.Errorf("unary expression is not assignable")
+		}
+		return ctExpr(c, n)
+	case *t.NodeExprMemberAccess:
+		return ctExpr(c, n)
 	case *t.NodeExprSubscript:
 		e := ctExpr(c, n.Expr)
 		if e != nil {
@@ -338,14 +359,7 @@ func ctExprLvalue(c *ctx, expr t.NodeExpr) error {
 			return e
 		}
 
-		switch n2 := n.AssociatedNode.(type) {
-		case *t.NodeExprVarDef:
-			n.BoxType = n2.GetInferredType()
-		case *t.NodeExprVarDefAssign:
-			n.BoxType = n2.GetInferredType()
-		default:
-			return fmt.Errorf("cannot subscript on type other than pointer or slice")
-		}
+		n.BoxType = n.Target.GetInferredType()
 
 		var elemType *t.NodeType = getBoxedType(n.BoxType)
 		if elemType == nil {
@@ -455,6 +469,20 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 			n.InfType = n.AssociatedFnDef.ReturnType
 		}
 		return nil
+	case *t.NodeExprStructInit:
+		for i := range n.Fields {
+			field := &n.Fields[i]
+			if field.FieldType == nil {
+				return fmt.Errorf("constructor field '%s' was not resolved", field.Name)
+			}
+			if e := ctExpr(c, field.Expression); e != nil {
+				return e
+			}
+			if !compatibleInitializer(field.FieldType, field.Expression) {
+				return fmt.Errorf("field '%s' expects %s but initializer has type %s", field.Name, flattenType(field.FieldType), flattenType(field.Expression.GetInferredType()))
+			}
+		}
+		return nil
 	case *t.NodeExprSubscript:
 		e := ctExpr(c, n.Expr)
 		if e != nil {
@@ -465,14 +493,7 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 			return e
 		}
 
-		switch n2 := n.AssociatedNode.(type) {
-		case *t.NodeExprVarDef:
-			n.BoxType = n2.GetInferredType()
-		case *t.NodeExprVarDefAssign:
-			n.BoxType = n2.GetInferredType()
-		default:
-			return fmt.Errorf("cannot subscript on type other than pointer or slice")
-		}
+		n.BoxType = n.Target.GetInferredType()
 
 		var elemType *t.NodeType = getBoxedType(n.BoxType)
 		if elemType == nil {
@@ -495,6 +516,9 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 			return nil
 		case t.TokLitBool:
 			n.InfType = makeNamedType("bool")
+			return nil
+		case t.TokLitNone:
+			n.InfType = makeNamedType("ptr")
 			return nil
 		}
 	case *t.NodeExprName:
@@ -854,6 +878,18 @@ func ctGlDecl(c *ctx, glDecl t.NodeGlobalDecl) error {
 		return ctExpr(c, n)
 	case *t.NodeStructDef:
 		return nil // TODO: check type names of arguments
+	case *t.NodeConstDef:
+		if e := ctExpr(c, n.Initializer); e != nil {
+			return e
+		}
+		if n.VarDef.Type == nil {
+			n.VarDef.Type = n.Initializer.GetInferredType()
+			return nil
+		}
+		if !compatibleInitializer(n.VarDef.Type, n.Initializer) {
+			return fmt.Errorf("constant %s expects %s but initializer has type %s", flattenName(n.VarDef.Name), flattenType(n.VarDef.Type), flattenType(n.Initializer.GetInferredType()))
+		}
+		return nil
 	}
 	return nil
 }

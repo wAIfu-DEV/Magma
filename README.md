@@ -208,6 +208,7 @@ The `std/` directory is already doing useful low-level work:
 
 - `allocator`, `heap`: allocation interfaces and platform heap implementations
 - `io`, `file`, `reader`, `writer`, `buffered`: file and stream IO
+- `thread`, `thread_pool`, `mutex`, `wake`: native threading and blocking worker pools
 - `errors`: error constructors, codes, messages, comparison helpers
 - `strings`, `slices`, `utf8`: string/slice utilities and UTF-8/UTF-16 helpers
 - `memory`, `cast`: memory operations and explicit casts
@@ -291,8 +292,8 @@ stability.
 Magma is still a compiler project, not a lifestyle brand. The useful caveats:
 
 1. `for` loops are planned; use `while` for now.
-2. Global variables are zero-initialized; top-level initializers are still WIP.
-3. Implicit struct constructors are planned, not something to rely on today.
+2. Mutable globals are zero-initialized; restricted global `const` initializers are supported.
+3. Struct constructors require a complete named-field list.
 4. Ownership checking is warning-only and limited to direct local variables;
    raw pointers, aliases, fields, indexed values, and partial moves remain unchecked.
 5. The checker is incomplete. Some invalid return values, casts, throwing calls,

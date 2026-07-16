@@ -16,6 +16,8 @@ ext ext_unix_write write(fd i32, buf ptr, count u64) i64
 ext ext_unix_read  read(fd i32, buf ptr, count u64) i64
 ext ext_unix_lseek lseek(fd i32, offset i64, whence i32) i64
 
+# Magma globals are thread-local by default. These syscall result slots avoid
+# repeated stack allocation without sharing state between threads.
 gl_writeOnce_written i64
 gl_readOnce_read i64
 
@@ -109,11 +111,11 @@ pub read(handle ptr, buff u8[], n u64) !u64:
       toRead u64 = bound - total
 
       next ptr = cast.utop(cast.ptou(p) + total)
-      read u64 = try readOnce(fd, next, toRead)
+      bytesRead u64 = try readOnce(fd, next, toRead)
 
-      total = total + read
+      total = total + bytesRead
 
-      if read == 0:
+      if bytesRead == 0:
          break
       ..
    ..
@@ -135,7 +137,7 @@ pub stderr() writer.Writer:
 # Returns a reader for standard input.
 # O(1).
 pub stdin() reader.Reader:
-    ret reader.new(cast.utop(0), read)
+    ret reader.new(none, read)
 ..
 
 # Closes a unix file handle.
@@ -184,9 +186,7 @@ pub openFile(a alc.Allocator, path str, openMode fopm.OpenMode) !$ptr:
         throw errors.invalidArgument("invalid open mode")
     ..
 
-    path_cstr u8* = try strings.toCstr(a, path)
-    defer a.free(path_cstr)
-
+    path_cstr u8* = strings.toCstrNoCopy(path)
     fd i32 = ext_unix_open(path_cstr, flags, mode)
 
     if fd < 0:

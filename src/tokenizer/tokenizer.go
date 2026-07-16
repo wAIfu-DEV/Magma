@@ -355,6 +355,7 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 			}
 
 			pushTokenBuff(ctx)
+			ctx.Mode = tkModeNormal
 
 			tk, size, err := handleNonAlphaKeyword(ctx, r)
 			if err != nil {

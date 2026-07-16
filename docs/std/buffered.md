@@ -1,5 +1,14 @@
 # `std/buffered`
 
+## Example
+
+```magma
+output := try buffered.writerBuffered(heap.allocator(), rawWriter)
+defer output.close()
+try output.writer().writeAll("buffered output")
+try output.flush()
+```
+
 Buffered adapters over `std/writer.Writer` and `std/reader.Reader`. Both allocate an internal buffer, so they must be closed.
 
 ## Types

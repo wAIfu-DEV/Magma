@@ -16,7 +16,7 @@ heapAlloc(impl ptr, nBytes u64) !$u8*:
     ..
     p ptr = ext_stdlib_malloc(nBytes)
 
-    if cast.ptou(p) == 0:
+    if p == none:
         throw e.outOfMemory("OOM")
     ..
     ret p
@@ -24,7 +24,7 @@ heapAlloc(impl ptr, nBytes u64) !$u8*:
 
 # Internals for realloc, used by both realloc() and HeapAllocator.realloc()
 heapRealloc(impl ptr, in u8*, nBytes u64) !$u8*:
-    if cast.ptou(in) == 0:
+    if in == none:
         throw e.invalidArgument("input pointer is null")
     ..
     if nBytes == 0:
@@ -32,7 +32,7 @@ heapRealloc(impl ptr, in u8*, nBytes u64) !$u8*:
     ..
     p ptr = ext_stdlib_realloc(in, nBytes)
 
-    if cast.ptou(p) == 0:
+    if p == none:
         throw e.outOfMemory("OOM")
     ..
     ret p
@@ -40,20 +40,21 @@ heapRealloc(impl ptr, in u8*, nBytes u64) !$u8*:
 
 # Internals for free, used by both free() and HeapAllocator.free()
 heapFree(impl ptr, in u8*) void:
-    if cast.ptou(in) == 0:
+    if in == none:
         ret
     ..
     ext_stdlib_free(in)
 ..
 
+const gl_heapVtable := a.Vtable(
+    fn_alloc =   heapAlloc,
+    fn_realloc = heapRealloc,
+    fn_free =    heapFree,
+)
+
 # Returns an allocator object that uses the OS's standard heap allocation methods.
 pub allocator() a.Allocator:
-    alloc a.Allocator
-    alloc.impl = cast.utop(0)
-    alloc.fn_alloc = heapAlloc
-    alloc.fn_realloc = heapRealloc
-    alloc.fn_free = heapFree
-    ret alloc
+    ret a.Allocator(impl=none, vtable=addrof gl_heapVtable)
 ..
 
 # Returns a heap-allocated region of memory of exactly nBytes bytes wide.
@@ -67,7 +68,7 @@ pub allocator() a.Allocator:
 # @param nBytes how many bytes to allocate
 # @returns owned region of memory
 pub alloc(nBytes u64) !$u8*:
-    ret try heapAlloc(cast.utop(0), nBytes)
+    ret try heapAlloc(none, nBytes)
 ..
 
 # Returns a heap-allocated region of memory of exactly nBytes bytes wide.
@@ -79,7 +80,7 @@ pub alloc(nBytes u64) !$u8*:
 # @param nBytes how many bytes to allocate
 # @returns owned region of memory
 pub allocZero(nBytes u64) !$u8*:
-    out ptr = try heapAlloc(cast.utop(0), nBytes)
+    out ptr = try heapAlloc(none, nBytes)
     mem.zero(out, nBytes)
     ret out
 ..
@@ -100,7 +101,7 @@ pub allocZero(nBytes u64) !$u8*:
 # @param nBytes how many bytes to allocate
 # @returns owned region of memory
 pub realloc(in u8*, nBytes u64) !$u8*:
-    ret try heapRealloc(cast.utop(0), in, nBytes)
+    ret try heapRealloc(none, in, nBytes)
 ..
 
 # Returns a heap-allocated region of memory of exactly nBytes bytes wide.
@@ -116,17 +117,17 @@ pub realloc(in u8*, nBytes u64) !$u8*:
 # @returns owned region of memory
 pub reallocZero(in u8*, nBytes u64, prevNbytes u64) !$u8*:
     if nBytes <= prevNbytes:
-        ret try heapRealloc(cast.utop(0), in, nBytes)
+        ret try heapRealloc(none, in, nBytes)
     ..
     # manual realloc
-    out ptr = try heapAlloc(cast.utop(0), nBytes)
+    out ptr = try heapAlloc(none, nBytes)
     mem.copy(in, out, prevNbytes)
 
     # zero end of region
     outEnd ptr = cast.utop(cast.ptou(out) + prevNbytes)
     mem.zero(outEnd, nBytes - prevNbytes)
 
-    heapFree(cast.utop(0), in)
+    heapFree(none, in)
     ret out
 ..
 
@@ -135,5 +136,5 @@ pub reallocZero(in u8*, nBytes u64, prevNbytes u64) !$u8*:
 # module's allocator or methods, do not mismatch allocators.
 # @param in pointer to already allocated memory region
 pub free(in u8*) void:
-    heapFree(cast.utop(0), in)
+    heapFree(none, in)
 ..

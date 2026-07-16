@@ -1,7 +1,26 @@
 # `std/http`
 
+## Example
+
+```magma
+client := try http.new(heap.allocator(), http.defaultOptions())
+defer client.close()
+response := try client.get("https://example.com/")
+defer response.close()
+status := response.statusCode()
+```
+
 A synchronous, streaming HTTP client backed by WinHTTP. The module currently
 supports Windows only.
+
+## Types
+
+- `Header(name str, value str)` is a borrowed request-header pair.
+- `Request(method str, url str, headers Header[])` describes a request; its strings and header slice are borrowed for the duration of `send`.
+- `Body(source reader.Reader, length u64)` describes an optional streaming request body. A null reader callback represents absence; `Body.isPresent()` queries it.
+- `Options(connectTimeoutMs u64, sendTimeoutMs u64, receiveTimeoutMs u64, decompress bool)` configures a client.
+- `Client(allocator alc.Allocator, impl ptr)` owns the platform session.
+- `Response(impl ptr)` owns response handles and headers.
 
 ## Request bodies
 
@@ -21,6 +40,7 @@ Unknown-length/chunked uploads are not implemented yet.
 - `Client.send(request Request, body Body) !$Response` streams the upload and
   returns after response headers arrive. It does not buffer the response body.
 - `Client.get(url str) !$Response` is a streaming GET convenience method.
+- `Client.post(url str, body Body) !$Response` is a streaming POST convenience method.
 - `destr Client.close()` closes the WinHTTP session.
 
 ## Response

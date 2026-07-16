@@ -7,9 +7,13 @@ use "builder.mg"   builder
 use "strings.mg"   strings
 use "slices.mg"    slices
 use "errors.mg"    errors
+use "memory.mg"    memory
 
 @platform("windows")
 use "win/http_impl.mg" impl_http
+
+# HTTP is intentionally Windows-only until the standard library has portable
+# TCP and TLS stream abstractions on which the non-Windows client can be built.
 
 drop[T](value $T) void:
     abandoned T[1]
@@ -36,21 +40,18 @@ Request(
 Body(
     source reader.Reader
     length u64
-    present bool
 )
 
 pub noBody() Body:
-    b Body
-    b.present = false
-    ret b
+    ret Body(source=memory.zeroValue[reader.Reader](), length=0)
 ..
 
 pub body(source reader.Reader, length u64) Body:
-    b Body
-    b.source = source
-    b.length = length
-    b.present = true
-    ret b
+    ret Body(source=source, length=length)
+..
+
+Body.isPresent() bool:
+    ret this.source.fn_read != none
 ..
 
 Options(
@@ -62,13 +63,13 @@ Options(
 )
 
 pub defaultOptions() Options:
-    o Options
-    o.userAgent = "Magma/0"
-    o.connectTimeoutMs = 30000
-    o.sendTimeoutMs = 30000
-    o.receiveTimeoutMs = 30000
-    o.automaticDecompression = true
-    ret o
+    ret Options(
+        userAgent="Magma/0",
+        connectTimeoutMs=30000,
+        sendTimeoutMs=30000,
+        receiveTimeoutMs=30000,
+        automaticDecompression=true,
+    )
 ..
 
 Client(
@@ -78,8 +79,9 @@ Client(
 
 # Opens a reusable WinHTTP session.
 pub new(a alc.Allocator, options Options) !$Client:
+    impl := try impl_http.openClient(a, options.userAgent, options.connectTimeoutMs, options.sendTimeoutMs, options.receiveTimeoutMs, options.automaticDecompression)
     c Client
-    c.impl = try impl_http.openClient(a, options.userAgent, options.connectTimeoutMs, options.sendTimeoutMs, options.receiveTimeoutMs, options.automaticDecompression)
+    c.impl = impl
     c.allocator = a
     ret c
 ..
@@ -114,9 +116,10 @@ destr Response.close() void:
 
 # Sends request headers and streams the request body before returning as soon
 # as response headers are available. The response body is not buffered.
-Client.send(request Request, body Body) !$Response:
+Client.send(request Request, requestBody Body) !$Response:
     headerBuilder := try builder.new(this.allocator)
     defer headerBuilder.free()
+
     headers Header[] = request.headers
     i u64 = 0
     while i < slices.count(headers):
@@ -126,10 +129,14 @@ Client.send(request Request, body Body) !$Response:
         try headerBuilder.appendBorrowed("\r\n")
         i = i + 1
     ..
+
     rawHeaders str = try headerBuilder.build()
+
     response Response
-    responseImpl impl_http.Response, sendErr error = impl_http.send(addrof this.impl, request.method, request.url, rawHeaders, body.source, body.length, body.present)
+    bodyPresent bool = requestBody.isPresent()
+    responseImpl impl_http.Response, sendErr error = impl_http.send(addrof this.impl, request.method, request.url, rawHeaders, requestBody.source, requestBody.length, bodyPresent)
     strings.free(this.allocator, rawHeaders)
+
     if errors.code(sendErr) != 0:
         drop[Response](response)
         drop[impl_http.Response](responseImpl)
@@ -141,10 +148,13 @@ Client.send(request Request, body Body) !$Response:
 
 # Convenience GET. It still returns a streaming Response.
 Client.get(url str) !$Response:
-    empty Header[] = slices.fromPtr(cast.utop(0), 0)
-    request Request
-    request.method = "GET"
-    request.url = url
-    request.headers = empty
+    headers Header[] = slices.fromPtr(none, 0)
+    request := Request(method="GET", url=url, headers=headers)
     ret try this.send(request, noBody())
+..
+
+Client.post(url str, requestBody Body) !$Response:
+    headers Header[] = slices.fromPtr(none, 0)
+    request := Request(method="POST", url=url, headers=headers)
+    ret try this.send(request, requestBody)
 ..

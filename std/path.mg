@@ -39,6 +39,8 @@ pub base(path str) str:
     ret strings.fromPtrNoCopy(p, end - start)
 ..
 
+# Returns the suffix beginning at the final dot in the base name. The base
+# before that suffix may be empty, so ".gitignore" has extension ".gitignore".
 pub extension(path str) str:
     b := base(path)
     n := strings.countBytes(b)
@@ -50,5 +52,5 @@ pub extension(path str) str:
             ret strings.fromPtrNoCopy(p, n - i)
         ..
     ..
-    ret strings.fromPtrNoCopy(cast.utop(0), 0)
+    ret strings.fromPtrNoCopy(none, 0)
 ..

@@ -98,15 +98,9 @@ File.count() !u64:
 # @returns open file handle
 pub open(a alc.Allocator, path str, openMode fopm.OpenMode) !$File:
     handle ptr = try impl_file.openFile(a, path, openMode)
-
-    f File
-    f.handle = handle
-    f.openMode = openMode
-    f.open = true
-    ret f
+    ret File(handle=handle, openMode=openMode, open=true)
 ..
 
 pub mode() fopm.OpenMode:
-    om fopm.OpenMode
-    ret om
+    ret fopm.OpenMode(r=false, w=false, a=false)
 ..

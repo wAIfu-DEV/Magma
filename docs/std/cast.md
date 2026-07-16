@@ -1,5 +1,13 @@
 # `std/cast`
 
+## Example
+
+```magma
+small u8 = cast.u64to8(258) # 2
+address u64 = cast.ptou(pointer)
+pointer = cast.utop(address)
+```
+
 Explicit primitive and pointer conversions. These operations do not allocate or validate that a value is representable in the destination type.
 
 ## Pointer casts

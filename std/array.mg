@@ -13,7 +13,6 @@ use "iterator.mg"  iter
 
 Array[T](
     data T*,
-    cleanup ($T) void,
     capacity u16,
     padRight u16,
     padLeft u16,
@@ -27,16 +26,15 @@ byteSize[T](count u64) !u64:
     ret count * sizeof T
 ..
 
-pub new[T](a alc.Allocator, cleanup ($T) void) !$Array[T]:
-    l Array[T]
-    l.cleanup = cleanup
-
-    l.capacity = 8 # 4*2 buffers front and end
-    l.padLeft = 4
-    l.padRight = 4
-
+pub new[T](a alc.Allocator) !$Array[T]:
     initialSize u64 = try byteSize[T](8)
-    l.data = try a.alloc(initialSize)
+
+    l := Array[T](
+        data = try a.alloc(initialSize)
+        capacity = 8
+        padLeft = 4
+        padRight = 4
+    )
     ret l
 ..
 
@@ -44,14 +42,14 @@ Array[T].count() u64:
     ret cast.u16to64(this.capacity - this.padLeft - this.padRight)
 ..
 
-Array[T].clearShrink(a alc.Allocator) !void:
+Array[T].clearShrink(a alc.Allocator, cleanup ($T) void) !void:
     initialSize u64 = try byteSize[T](8)
     newData ptr = try a.alloc(initialSize)
-    if cast.ptou(this.cleanup) != 0:
+    if cleanup != none:
         items := this.view()
         i u64 = 0
         while i < this.count():
-            this.cleanup(items[i])
+            cleanup(items[i])
             i = i + 1
         ..
     ..
@@ -63,15 +61,15 @@ Array[T].clearShrink(a alc.Allocator) !void:
     this.padRight = 4
 ..
 
-Array[T].clearKeep(a alc.Allocator) !void:
+Array[T].clearKeep(a alc.Allocator, cleanup ($T) void) !void:
     if this.capacity < 8:
         initialSize u64 = try byteSize[T](8)
         newData ptr = try a.alloc(initialSize)
-        if cast.ptou(this.cleanup) != 0:
+        if cleanup != none:
             earlyItems := this.view()
             earlyIndex u64 = 0
             while earlyIndex < this.count():
-                this.cleanup(earlyItems[earlyIndex])
+                cleanup(earlyItems[earlyIndex])
                 earlyIndex = earlyIndex + 1
             ..
         ..
@@ -83,11 +81,11 @@ Array[T].clearKeep(a alc.Allocator) !void:
         ret
     ..
 
-    if cast.ptou(this.cleanup) != 0:
+    if cleanup != none:
         items := this.view()
         i u64 = 0
         while i < this.count():
-            this.cleanup(items[i])
+            cleanup(items[i])
             i = i + 1
         ..
     ..
@@ -124,7 +122,7 @@ resizeStorage[T](array Array[T]*, a alc.Allocator, usable u16, padLeft u16, padR
     array.padRight = padRight
 ..
 
-Array[T].resize(a alc.Allocator, usable u16, padLeft u16, padRight u16) !void:
+Array[T].resize(a alc.Allocator, usable u16, padLeft u16, padRight u16, cleanup ($T) void) !void:
     newCont u64 = cast.u16to64(usable) + cast.u16to64(padLeft) + cast.u16to64(padRight)
     if newCont > 65535:
         throw err.wouldOverflow("Array cannot contain more than 65535 elements.")
@@ -134,11 +132,11 @@ Array[T].resize(a alc.Allocator, usable u16, padLeft u16, padRight u16) !void:
 
     count := this.count()
     if count > cast.u16to64(usable):
-        if cast.ptou(this.cleanup) != 0:
+        if cleanup != none:
             oldItems := this.view()
             i u64 = cast.u16to64(usable)
             while i < count:
-                this.cleanup(oldItems[i])
+                cleanup(oldItems[i])
                 i = i + 1
             ..
         ..
@@ -271,12 +269,12 @@ Array[T].pushLeft(a alc.Allocator, item $T) !void:
     items[0] = item
 ..
 
-destr Array[T].free(a alc.Allocator) void:
-    if cast.ptou(this.cleanup) != 0:
+destr Array[T].free(a alc.Allocator, cleanup ($T) void) void:
+    if cleanup != none:
         items := this.view()
         i u64 = 0
         while i < this.count():
-            this.cleanup(items[i])
+            cleanup(items[i])
             i = i + 1
         ..
     ..
@@ -299,7 +297,7 @@ iterNext[T](impl ptr, index u64*) !T:
     idx := *index
     view := arrPtr.view()
     item := view[idx]
-    index[0] = idx + 1
+    *index = idx + 1
     ret item
 ..
 

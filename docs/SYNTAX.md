@@ -180,7 +180,7 @@ Magma also accepts an ownership/reference marker `$` before or after types:
 ```magma
 heap_ptr $MyStruct* = try heap.alloc(sizeof MyStruct)
 Allocator.alloc(byteCount u64) !$u8*:
-    ret try this.fn_alloc(this.impl, byteCount)
+    ret try this.vtable.fn_alloc(this.impl, byteCount)
 ..
 ```
 
@@ -243,12 +243,13 @@ fn_free    (ptr, u8*) void
 They are commonly used inside interface-like structs:
 
 ```magma
-Allocator(
-    impl ptr,
+AllocatorVTable(
     fn_alloc   (ptr, u64) !u8*,
     fn_realloc (ptr, u8*, u64) !u8*,
     fn_free    (ptr, u8*) void,
 )
+
+Allocator(impl ptr, vtable AllocatorVTable*)
 ```
 
 Function type argument lists contain types only, not argument names:
@@ -312,10 +313,16 @@ out writer.Writer
 gl_heap ptr
 ```
 
-The current parser accepts top-level declarations but does not parse top-level
-initializers in the same way as local declarations. Global scope initialization is currently WIP.
+Mutable globals remain zero-initialized. Immutable globals support explicit or
+inferred types:
 
-The language currently has no `const` equivalent, all data is mutable, and trying to modify read-only data may result in SEGFAULT.
+```magma
+const count u64 = 4
+const table := VTable(fn_call=callback)
+```
+
+Constant initializers currently support literals, function/global addresses,
+and nested struct constructors. Mutation checks are not implemented yet.
 
 ## Functions
 
@@ -443,11 +450,14 @@ f.open = true
 p.left = left
 ```
 
-Implicit constructor definition and calling is planned but currently WIP:
+Struct values can be constructed with a complete named-field list:
 
 ```magma
 my_struct MyStruct = MyStruct(first_field=0, second_field=5.0)
 ```
+
+Every field must be present exactly once. Field order is unrestricted. An empty
+parenthesized list remains an ordinary function call.
 
 ## Methods
 
@@ -946,6 +956,7 @@ Only a few expression forms are valid assignment targets:
 name = value
 name.field = value
 items[i] = value
+*pointer = value
 ```
 
 The `:=` form declares a new inferred local and only accepts a simple name on
@@ -986,14 +997,12 @@ grouped expression is not expected to work reliably.
 
 ### Scope and Name Resolution
 
-Local scope construction is currently function-level rather than block-level.
-Variables declared inside an `if`, `elif`, `else`, or `while` body are visible to
-later statements in the same function. Avoid relying on block-local shadowing or
-block-private lifetimes.
-
-Duplicate local declarations are not consistently rejected during scope
-construction. Reusing a name in the same function may overwrite earlier scope
-entries and can produce confusing link or codegen behavior.
+Functions and nested `if`, `elif`, `else`, and `while` bodies have lexical local
+scopes. Magma deliberately forbids shadowing: a variable, parameter, global, or
+function declaration cannot reuse a visible variable or function name.
+Duplicate declarations in the same scope are also rejected. Separate sibling
+scopes may reuse a local name because neither declaration is visible from the
+other.
 
 Imported members are accessed through the local alias from `use`. A file cannot
 reuse the same alias for two active imports, and it cannot actively import the
@@ -1059,12 +1068,14 @@ loop body.
 
 ### Globals and Initialization
 
-Global variables are emitted as zero-initialized storage. Top-level initializer
-syntax is not currently supported in the same way as local initializers:
+Mutable global variables are emitted as zero-initialized storage. General
+top-level initializer syntax is not supported; use restricted `const`
+initializers for LLVM constants:
 
 ```magma
 counter u64        # valid global, zero-initialized
 counter u64 = 1    # not the supported global form
+const counter_value u64 = 1
 ```
 
 Mutable global state is used in parts of `std/` for low-level platform calls.

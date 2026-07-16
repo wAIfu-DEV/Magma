@@ -18,6 +18,8 @@ ext ext_win32_GetStdHandle     GetStdHandle(handleNum i32) ptr
 ext ext_win32_SetFilePointerEx SetFilePointerEx(handle ptr, distance i64, newPosition i64*, moveMethod u32) i32
 ext ext_win32_GetLastError     GetLastError() u32
 
+# Magma globals are thread-local by default. These syscall output slots avoid
+# repeated stack allocation without sharing state between threads.
 gl_writeOnce_written u32
 gl_readOnce_read u32
 
@@ -29,7 +31,7 @@ writeOnce(handle ptr, next ptr, amount u32) !u64:
    # using a stack allocated var forces LLVM to generate it at call site too since
    # call to external function requires valid state without assumptions,
    # leading to guaranteed alloca instruction for each write call.
-   ok u32 = ext_win32_WriteFile(handle, next, amount, addrof gl_writeOnce_written, cast.utop(0))
+   ok u32 = ext_win32_WriteFile(handle, next, amount, addrof gl_writeOnce_written, none)
    
    if ok == 0:
       throw errors.native(ext_win32_GetLastError(), "WriteFile failed")
@@ -89,7 +91,7 @@ pub write(handle ptr, bytes str) !u64:
 readOnce(handle ptr, next ptr, amount u32) !u64:
 
    # HACK: see writeOnce
-   ok u32 = ext_win32_ReadFile(handle, next, amount, addrof gl_readOnce_read, cast.utop(0))
+   ok u32 = ext_win32_ReadFile(handle, next, amount, addrof gl_readOnce_read, none)
 
    if ok == 0:
       throw errors.native(ext_win32_GetLastError(), "ReadFile failed")
@@ -137,11 +139,11 @@ pub read(handle ptr, buff u8[], n u64) !u64:
       ..
 
       next ptr = cast.utop(cast.ptou(p) + total)
-      read u64 = try readOnce(handle, next, toRead)
+      bytesRead u64 = try readOnce(handle, next, toRead)
 
-      total = total + read
+      total = total + bytesRead
 
-      if read < cast.u32to64(toRead):
+      if bytesRead < cast.u32to64(toRead):
          break
       ..
    ..
@@ -216,13 +218,13 @@ pub openFile(a alc.Allocator, path str, openMode fopm.OpenMode) !$ptr:
 
    defer a.free(path_ptr) # frees created utf16 string
 
-   handle ptr = ext_win32_CreateFileW(path_ptr, access_mode, 0, cast.utop(0), open_mode, 0, cast.utop(0))
+   handle ptr = ext_win32_CreateFileW(path_ptr, access_mode, 0, none, open_mode, 0, none)
 
    # invalid handle
    if cast.ptou(handle) == cast.itou(-1):
       if openMode.a:
          # create file if append mode
-         handle = ext_win32_CreateFileW(path_ptr, access_mode, 0, cast.utop(0), 2, 0, cast.utop(0))
+         handle = ext_win32_CreateFileW(path_ptr, access_mode, 0, none, 2, 0, none)
       ..
 
       if cast.ptou(handle) == cast.itou(-1):

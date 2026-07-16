@@ -12,20 +12,20 @@ use "iterator.mg"  iter
 List[T](
     allocator alc.Allocator
     array     arr.Array[T]
+    cleanup   ($T) void
 )
 
 pub new[T](a alc.Allocator, cleanup ($T) void) !$List[T]:
-    l List[T]
-    l.allocator = a
-    l.array = try arr.new[T](a, cleanup)
-    ret l
-..
-
-pub fromArray[T](a alc.Allocator, array $arr.Array[T]) $List[T]:
+    array := try arr.new[T](a)
     l List[T]
     l.allocator = a
     l.array = array
+    l.cleanup = cleanup
     ret l
+..
+
+pub fromArray[T](a alc.Allocator, array $arr.Array[T], cleanup ($T) void) $List[T]:
+    ret List[T](allocator=a, array=array, cleanup=cleanup)
 ..
 
 List[T].count() u64:
@@ -33,15 +33,15 @@ List[T].count() u64:
 ..
 
 List[T].clearShrink() !void:
-    try this.array.clearShrink(this.allocator)
+    try this.array.clearShrink(this.allocator, this.cleanup)
 ..
 
 List[T].clearKeep() !void:
-    try this.array.clearKeep(this.allocator)
+    try this.array.clearKeep(this.allocator, this.cleanup)
 ..
 
 List[T].resize(usable u16, padLeft u16, padRight u16) !void:
-    try this.array.resize(this.allocator, usable, padLeft, padRight)
+    try this.array.resize(this.allocator, usable, padLeft, padRight, this.cleanup)
 ..
 
 # Returns a slice of the list's managed items.

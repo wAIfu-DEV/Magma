@@ -10,12 +10,9 @@ pub main() void:
         ret
     ..
     body := http.noBody()
-    if body.present:
+    if body.isPresent():
         ret
     ..
-    headers http.Header[] = slices.fromPtr(cast.utop(0), 0)
-    request http.Request
-    request.method = "GET"
-    request.url = "https://example.com/"
-    request.headers = headers
+    headers http.Header[] = slices.fromPtr(none, 0)
+    request := http.Request(method="GET", url="https://example.com/", headers=headers)
 ..

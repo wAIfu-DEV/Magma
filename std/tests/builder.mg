@@ -17,4 +17,8 @@ pub main() !void:
     if strings.compare(result, "checked builder") == false:
         throw errors.failure("builder behavior changed")
     ..
+    resultPtr u8* = strings.toPtr(result)
+    if resultPtr[strings.countBytes(result)] != 0:
+        throw errors.failure("built string is not null terminated")
+    ..
 ..

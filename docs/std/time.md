@@ -1,5 +1,14 @@
 # `std/time`
 
+## Example
+
+```magma
+start := time.ticks()
+# work
+elapsedMs := time.elapsedMs(start)
+fiveMsInTicks := time.msToTicks(5)
+```
+
 Monotonic timing, Unix wall-clock timestamps, and tick conversions. Tick frequency is platform-defined and handled internally.
 
 ## Clocks

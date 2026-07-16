@@ -372,8 +372,86 @@ func irGlVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) error {
 	return nil
 }
 
+func irConstValue(ctx *IrCtx, expected *t.NodeType, expr t.NodeExpr) error {
+	switch n := expr.(type) {
+	case *t.NodeExprLit:
+		switch n.LitType {
+		case t.TokLitNum, t.TokLitBool:
+			irWrite(ctx, n.Value)
+			return nil
+		case t.TokLitNone:
+			irWrite(ctx, "null")
+			return nil
+		default:
+			return fmt.Errorf("string literals are not supported in global constants")
+		}
+	case *t.NodeExprName:
+		fn, ok := n.AssociatedNode.(*t.NodeFuncDef)
+		if !ok {
+			return fmt.Errorf("constant name '%s' is not a function symbol", flattenName(n.Name))
+		}
+		name := fn.AbsName
+		if fn.NoAliasName != "" {
+			name = fn.NoAliasName
+		}
+		irWritef(ctx, "@%s", name)
+		return nil
+	case *t.NodeExprAddrof:
+		name, ok := n.Expr.(*t.NodeExprName)
+		if !ok {
+			return fmt.Errorf("constant addrof requires a global name")
+		}
+		varDef, ok := name.AssociatedNode.(*t.NodeExprVarDef)
+		if !ok || !varDef.IsGlobal {
+			return fmt.Errorf("constant addrof requires a global name")
+		}
+		irWritef(ctx, "@%s", varDef.AbsName)
+		return nil
+	case *t.NodeExprStructInit:
+		fields := slices.Clone(n.Fields)
+		slices.SortFunc(fields, func(a, b t.NodeStructFieldInit) int { return a.FieldIndex - b.FieldIndex })
+		irWrite(ctx, "{ ")
+		for i, field := range fields {
+			if e := irType(ctx, field.FieldType); e != nil {
+				return e
+			}
+			irWrite(ctx, " ")
+			if e := irConstValue(ctx, field.FieldType, field.Expression); e != nil {
+				return e
+			}
+			if i+1 < len(fields) {
+				irWrite(ctx, ", ")
+			}
+		}
+		irWrite(ctx, " }")
+		return nil
+	default:
+		return fmt.Errorf("expression %T is not supported in a global constant", expr)
+	}
+}
+
+func irConstDef(ctx *IrCtx, def *t.NodeConstDef) error {
+	irWriteGlf(ctx, "@%s = private constant ", def.VarDef.AbsName)
+	cpy := *ctx
+	cpy.bld.Body = ctx.bld.Global
+	cpy.bld.Head = ctx.bld.Global
+	cpy.bld.Tail = ctx.bld.Global
+	if e := irType(&cpy, def.VarDef.Type); e != nil {
+		return e
+	}
+	irWriteGl(ctx, " ")
+	if e := irConstValue(&cpy, def.VarDef.Type, def.Initializer); e != nil {
+		return e
+	}
+	irWriteGl(ctx, "\n")
+	return nil
+}
+
 func irVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) (SsaName, error) {
-	allocSsa := irNameSsa(ctx, vd.Name, false)
+	if vd.IrName == "" {
+		vd.IrName = irSsaLocal(ctx).Repr
+	}
+	allocSsa := SsaName{Repr: vd.IrName}
 
 	/* DEPRECATED
 	if vd.Type.Destructor != nil {
@@ -494,6 +572,32 @@ func irVarDefAssign(ctx *IrCtx, vda *t.NodeExprVarDefAssign) (SsaName, error) {
 
 	irWritef(ctx, ", ptr %s\n", allocSsa.Repr)
 	return allocSsa, nil
+}
+
+func irExprStructInit(ctx *IrCtx, init *t.NodeExprStructInit) (SsaName, error) {
+	current := SsaName{Repr: "zeroinitializer", IsLiteral: true}
+	for _, field := range init.Fields {
+		value, e := irExpression(ctx, field.FieldType, field.Expression, false)
+		if e != nil {
+			return SsaName{}, e
+		}
+		next := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = insertvalue ", next.Repr)
+		if e := irType(ctx, init.Type); e != nil {
+			return SsaName{}, e
+		}
+		irWrite(ctx, " ")
+		irPossibleLitSsa(ctx, current)
+		irWrite(ctx, ", ")
+		if e := irType(ctx, field.FieldType); e != nil {
+			return SsaName{}, e
+		}
+		irWrite(ctx, " ")
+		irPossibleLitSsa(ctx, value)
+		irWritef(ctx, ", %d\n", field.FieldIndex)
+		current = next
+	}
+	return current, nil
 }
 
 func irFuncPtrType(ctx *IrCtx, fnType *t.NodeTypeFunc) error {
@@ -753,7 +857,19 @@ func irExprCallFuncMember(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (Ss
 			return SsaName{}, e
 		}
 
-		if isSsaOwner && !fnCall.MemberOwnerIsPtr {
+		if !isSsaOwner && isPointerType(fnCall.MemberOwnerType) {
+			// Non-SSA pointer locals and arguments live in an alloca. A member
+			// call needs the stored pointer value as `this`, not the address of
+			// that pointer slot (which would incorrectly pass T** as T*).
+			loadedOwner := irSsaLocal(ctx)
+			irWritef(ctx, "  %s = load ", loadedOwner.Repr)
+			e = irType(ctx, fnCall.MemberOwnerType)
+			if e != nil {
+				return SsaName{}, e
+			}
+			irWritef(ctx, ", ptr %s\n", ownerSsa.Repr)
+			ownerSsa = loadedOwner
+		} else if isSsaOwner && !fnCall.MemberOwnerIsPtr {
 			allocSsa := irSsaLocal(ctx)
 			irWritef(ctx, "  %s = alloca ", allocSsa.Repr)
 			e := irType(ctx, fnCall.MemberOwnerType)
@@ -849,7 +965,11 @@ func irExprDestructor(ctx *IrCtx, destructor *t.NodeExprDestructor) (SsaName, er
 	irWrite(ctx, destructor.Destructor.AbsName)
 
 	// TODO: use AbsName instead
-	irWritef(ctx, "(ptr %%%s)\n", destructor.VarDef.Name.(*t.NodeNameSingle).Name)
+	varPtr := destructor.VarDef.IrName
+	if varPtr == "" {
+		varPtr = "%" + destructor.VarDef.Name.(*t.NodeNameSingle).Name
+	}
+	irWritef(ctx, "(ptr %s)\n", varPtr)
 
 	if destructor.VarDef.IsReturned {
 		irWritef(ctx, "  br label %%%s\n", preventLbl.Repr)
@@ -908,9 +1028,17 @@ func irExprLitStr(ctx *IrCtx, litStr *t.NodeExprLit) (SsaName, error) {
 
 	constLen := len(litStr.Value) + 1
 
-	cleanStr := strings.ReplaceAll(litStr.Value, "\n", "\\0A")
+	var escaped strings.Builder
+	for i := 0; i < len(litStr.Value); i++ {
+		b := litStr.Value[i]
+		if b == '"' || b == '\\' || b < 0x20 || b > 0x7e {
+			fmt.Fprintf(&escaped, "\\%02X", b)
+		} else {
+			escaped.WriteByte(b)
+		}
+	}
 
-	irWriteGlf(ctx, "%s = private constant [%d x i8] c\"%s\\00\"\n", constSsa.Repr, constLen, cleanStr)
+	irWriteGlf(ctx, "%s = private constant [%d x i8] c\"%s\\00\"\n", constSsa.Repr, constLen, escaped.String())
 
 	//irWritef(ctx, "  %%%s = insertvalue %%type.str undef, ptr @%s, 0\n", strFieldSsa.Repr, constSsa.Repr)
 	//irWritef(ctx, "  %%%s = insertvalue %%type.str %%%s, i64 %d, 1\n", sizeFieldSsa.Repr, strFieldSsa.Repr, constLen-1)
@@ -935,6 +1063,10 @@ func irExprLitBool(ctx *IrCtx, litBool *t.NodeExprLit) (SsaName, error) {
 	return ssa, nil
 }
 
+func irExprLitNone(ctx *IrCtx, litNone *t.NodeExprLit) (SsaName, error) {
+	return SsaName{Repr: "null", IsLiteral: true}, nil
+}
+
 func irExprLit(ctx *IrCtx, lit *t.NodeExprLit, expectedType *t.NodeType) (SsaName, error) {
 	switch lit.LitType {
 	case t.TokLitStr:
@@ -943,6 +1075,8 @@ func irExprLit(ctx *IrCtx, lit *t.NodeExprLit, expectedType *t.NodeType) (SsaNam
 		return irExprLitNum(ctx, lit)
 	case t.TokLitBool:
 		return irExprLitBool(ctx, lit)
+	case t.TokLitNone:
+		return irExprLitNone(ctx, lit)
 	}
 	return ssaName(""), nil
 }
@@ -1003,7 +1137,24 @@ func irExprSizeof(ctx *IrCtx, sz *t.NodeExprSizeof) (SsaName, error) {
 }
 
 func irExprAddrof(ctx *IrCtx, ao *t.NodeExprAddrof) (SsaName, error) {
-	exprSsa, e := irExpressionLvalue(ctx, ao.Expr) // handles alloca'd values and GEP
+	forceMaterialize := false
+	addressedType := ao.Expr.GetInferredType()
+	if name, ok := ao.Expr.(*t.NodeExprName); ok {
+		forceMaterialize = name.IsSsa && len(name.MemberAccesses) == 0
+		switch definition := name.AssociatedNode.(type) {
+		case *t.NodeExprVarDef:
+			addressedType = definition.Type
+		case *t.NodeExprVarDefAssign:
+			addressedType = definition.VarDef.Type
+		}
+	}
+	var exprSsa SsaName
+	var e error
+	if forceMaterialize {
+		e = fmt.Errorf("expr not lvalue")
+	} else {
+		exprSsa, e = irExpressionLvalue(ctx, ao.Expr) // handles alloca'd values and GEP
+	}
 	if e != nil && e.Error() != "expr not lvalue" {
 		return SsaName{}, e
 	} else if e != nil {
@@ -1016,13 +1167,13 @@ func irExprAddrof(ctx *IrCtx, ao *t.NodeExprAddrof) (SsaName, error) {
 
 		allocSsa := irSsaLocal(ctx)
 		irWritef(&cpy, "  %s = alloca ", allocSsa.Repr)
-		e := irType(&cpy, ao.Expr.GetInferredType())
+		e := irType(&cpy, addressedType)
 		if e != nil {
 			return SsaName{}, e
 		}
 		irWrite(&cpy, "\n")
 		irWrite(ctx, "  store ")
-		e = irType(ctx, ao.Expr.GetInferredType())
+		e = irType(ctx, addressedType)
 		if e != nil {
 			return SsaName{}, e
 		}
@@ -1114,12 +1265,16 @@ func irExprName(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 
 		if n.IsGlobal {
 			ptrSsa = SsaName{Repr: "@" + n.AbsName}
+		} else if n.IrName != "" {
+			ptrSsa = SsaName{Repr: n.IrName}
 		}
 	case *t.NodeExprVarDefAssign:
 		typeNd = n.VarDef.Type
 
 		if n.VarDef.IsGlobal {
 			ptrSsa = SsaName{Repr: "@" + n.VarDef.AbsName}
+		} else if n.VarDef.IrName != "" {
+			ptrSsa = SsaName{Repr: n.VarDef.IrName}
 		}
 	case *t.NodeFuncDef:
 		fnDef = n
@@ -1210,6 +1365,41 @@ func irExprMemberAccess(ctx *IrCtx, member *t.NodeExprMemberAccess) (SsaName, er
 	)
 }
 
+func irExprMemberAccessLvalue(ctx *IrCtx, member *t.NodeExprMemberAccess) (SsaName, error) {
+	if member.Access == nil {
+		return SsaName{}, fmt.Errorf("member access '%s' has no resolved access info", member.Member)
+	}
+
+	var basePtr SsaName
+	var e error
+	if name, ok := member.Target.(*t.NodeExprName); ok && name.IsSsa {
+		value, valueErr := irExpression(ctx, member.Target.GetInferredType(), member.Target, false)
+		if valueErr != nil {
+			return SsaName{}, valueErr
+		}
+		basePtr = irSsaLocal(ctx)
+		cpy := *ctx
+		cpy.bld.Body = cpy.bld.Head
+		irWritef(&cpy, "  %s = alloca ", basePtr.Repr)
+		if e = irType(&cpy, member.Target.GetInferredType()); e != nil {
+			return SsaName{}, e
+		}
+		irWrite(&cpy, "\n")
+		irWrite(ctx, "  store ")
+		if e = irType(ctx, member.Target.GetInferredType()); e != nil {
+			return SsaName{}, e
+		}
+		irWritef(ctx, " %s, ptr %s\n", value.Repr, basePtr.Repr)
+	} else {
+		basePtr, e = irExpressionLvalue(ctx, member.Target)
+		if e != nil {
+			return SsaName{}, e
+		}
+	}
+
+	return irMemberAddress(ctx, basePtr, member.Target.GetInferredType(), member.Access.FieldNb)
+}
+
 func irExprNameLvalue(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 	basePtr := irNameSsa(ctx, nameExpr.Name, false)
 
@@ -1225,10 +1415,40 @@ func irExprNameLvalue(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 	case *t.NodeExprVarDef:
 		if n.IsGlobal {
 			basePtr = SsaName{Repr: "@" + n.AbsName}
+		} else if n.IrName != "" {
+			basePtr = SsaName{Repr: n.IrName}
 		}
 	case *t.NodeExprVarDefAssign:
 		if n.VarDef.IsGlobal {
 			basePtr = SsaName{Repr: "@" + n.VarDef.AbsName}
+		} else if n.VarDef.IrName != "" {
+			basePtr = SsaName{Repr: n.VarDef.IrName}
+		}
+	}
+
+	if nameExpr.IsSsa && len(nameExpr.MemberAccesses) > 0 {
+		var rootType *t.NodeType
+		switch definition := nameExpr.AssociatedNode.(type) {
+		case *t.NodeExprVarDef:
+			rootType = definition.Type
+		case *t.NodeExprVarDefAssign:
+			rootType = definition.VarDef.Type
+		}
+		if !isPointerType(rootType) {
+			rootValue := basePtr
+			basePtr = irSsaLocal(ctx)
+			cpy := *ctx
+			cpy.bld.Body = cpy.bld.Head
+			irWritef(&cpy, "  %s = alloca ", basePtr.Repr)
+			if e := irType(&cpy, rootType); e != nil {
+				return SsaName{}, e
+			}
+			irWrite(&cpy, "\n")
+			irWrite(ctx, "  store ")
+			if e := irType(ctx, rootType); e != nil {
+				return SsaName{}, e
+			}
+			irWritef(ctx, " %s, ptr %s\n", rootValue.Repr, basePtr.Repr)
 		}
 	}
 
@@ -1244,6 +1464,15 @@ func irExprNameLvalue(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 		curType = n.Type
 	case *t.NodeExprVarDefAssign:
 		curType = n.VarDef.Type
+	}
+
+	// A non-SSA pointer local is an alloca containing the pointer value. Load
+	// that value before taking the address of one of the pointee's fields.
+	if isPointerType(curType) && !nameExpr.IsSsa {
+		loaded := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = load ptr, ptr %s\n", loaded.Repr, basePtr.Repr)
+		basePtr = loaded
+		curPtr = loaded
 	}
 
 	for _, m := range nameExpr.MemberAccesses {
@@ -2372,9 +2601,17 @@ func irExprBinCmp(ctx *IrCtx, binaryExpr *t.NodeExprBinary) (SsaName, error) {
 
 	switch binaryExpr.Operator {
 	case t.KwCmpEq:
-		irWrite(ctx, "eq ")
+		if isFloat {
+			irWrite(ctx, "oeq ")
+		} else {
+			irWrite(ctx, "eq ")
+		}
 	case t.KwCmpNeq:
-		irWrite(ctx, "ne ")
+		if isFloat {
+			irWrite(ctx, "une ")
+		} else {
+			irWrite(ctx, "ne ")
+		}
 	case t.KwCmpGt:
 		if isSigned {
 			irWrite(ctx, "sgt ")
@@ -2490,6 +2727,8 @@ func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr, topLeve
 		return irExprAssign(ctx, ne, ne.Left, ne.Right)
 	case *t.NodeExprCall:
 		return irExprFuncCall(ctx, ne, false, topLevel)
+	case *t.NodeExprStructInit:
+		return irExprStructInit(ctx, ne)
 	// DEPRECATED
 	/*case *t.NodeExprDestructor:
 	return irExprDestructor(ctx, ne)*/
@@ -2527,6 +2766,8 @@ func irExpressionLvalue(ctx *IrCtx, expr t.NodeExpr) (SsaName, error) {
 		return irExprNameLvalue(ctx, ne)
 	case *t.NodeExprSubscript:
 		return irExprSubscriptLvalue(ctx, ne)
+	case *t.NodeExprMemberAccess:
+		return irExprMemberAccessLvalue(ctx, ne)
 	case *t.NodeExprUnary:
 		if ne.Operator == t.KwAsterisk {
 			return irExpression(ctx, ne.Operand.GetInferredType(), ne.Operand, false)
@@ -3106,6 +3347,22 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 	}
 	cpy.parentBld = cpy.bld
 
+	_, isMemberFunc := fnDef.Class.NameNode.(*t.NodeNameComposite)
+	for i, arg := range fnDef.Class.ArgsNode.Args {
+		if isMemberFunc && i == 0 {
+			continue
+		}
+		irWritef(&cpy, "  %%%s.addr = alloca ", arg.Name)
+		if e := irType(&cpy, arg.TypeNode); e != nil {
+			return e
+		}
+		irWrite(&cpy, "\n  store ")
+		if e := irType(&cpy, arg.TypeNode); e != nil {
+			return e
+		}
+		irWritef(&cpy, " %%%s, ptr %%%s.addr\n", arg.Name, arg.Name)
+	}
+
 	if !(isVoidType(fnDef.ReturnType) && !fnDef.ReturnType.Throws) {
 		irWrite(&cpy, "  %.defer.rv = alloca ")
 		e := irThrowingType(&cpy, fnDef.ReturnType)
@@ -3406,6 +3663,7 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 	}
 
 	ctx.CurrFunc = fnDefNode
+	assignLocalIrNames(ctx, &fnDefNode.Body)
 
 	if len(fnDefNode.Body.Statements) > 5 {
 		irWrite(ctx, " inlinehint ")
@@ -3419,6 +3677,51 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 	}
 	ctx.CurrFunc = nil
 	return nil
+}
+
+func assignExprIrNames(ctx *IrCtx, expr t.NodeExpr) {
+	switch n := expr.(type) {
+	case *t.NodeExprVarDef:
+		if n.IrName == "" {
+			n.IrName = irSsaLocal(ctx).Repr
+		}
+	case *t.NodeExprVarDefAssign:
+		assignExprIrNames(ctx, n.VarDef)
+	case *t.NodeExprDestructureAssign:
+		assignExprIrNames(ctx, &n.ValueDef)
+		assignExprIrNames(ctx, &n.ErrDef)
+	}
+}
+
+func assignLocalIrNames(ctx *IrCtx, body *t.NodeBody) {
+	for _, statement := range body.Statements {
+		switch n := statement.(type) {
+		case *t.NodeStmtExpr:
+			assignExprIrNames(ctx, n.Expression)
+		case *t.NodeStmtIf:
+			assignLocalIrNames(ctx, &n.Body)
+			for next := n.NextCondStmt; next != nil; {
+				switch branch := next.(type) {
+				case *t.NodeStmtIf:
+					assignLocalIrNames(ctx, &branch.Body)
+					next = branch.NextCondStmt
+				case *t.NodeStmtElse:
+					assignLocalIrNames(ctx, &branch.Body)
+					next = nil
+				default:
+					next = nil
+				}
+			}
+		case *t.NodeStmtElse:
+			assignLocalIrNames(ctx, &n.Body)
+		case *t.NodeStmtWhile:
+			assignLocalIrNames(ctx, &n.Body)
+		case *t.NodeStmtDefer:
+			if n.IsBody {
+				assignLocalIrNames(ctx, &n.Body)
+			}
+		}
+	}
 }
 
 func irArg(ctx *IrCtx, argNode *t.NodeArg) error {
@@ -3474,6 +3777,8 @@ func irGlobalDecl(ctx *IrCtx, glDeclNode t.NodeGlobalDecl) error {
 		return nil
 	case *t.NodeExprVarDef:
 		return irGlVarDef(ctx, g)
+	case *t.NodeConstDef:
+		return irConstDef(ctx, g)
 	}
 	return nil
 }

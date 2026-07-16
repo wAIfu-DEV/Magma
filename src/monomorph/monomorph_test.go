@@ -58,3 +58,24 @@ func TestSubstituteTypePreservesPositionOwnership(test *testing.T) {
 		test.Fatal("generic substitution discarded the $ ownership qualifier")
 	}
 }
+
+func TestRegisterGenericMemberTemplate(test *testing.T) {
+	member := &t.NodeFuncDef{Class: t.NodeGenericClass{
+		NameNode:   &t.NodeNameComposite{Parts: []string{"Allocator", "allocT"}},
+		TypeParams: []string{"T"},
+	}}
+	ctx := &monoCtx{
+		funcTemplates:   map[string]*t.NodeFuncDef{},
+		memberTemplates: map[string]*t.NodeFuncDef{},
+	}
+
+	ctx.registerFuncTemplate("allocator", "Allocator.allocT", member)
+
+	key := makeMemberTemplateKey("allocator", "Allocator", "allocT")
+	if ctx.memberTemplates[key] != member {
+		test.Fatalf("generic member template was not registered as %q", key)
+	}
+	if len(ctx.funcTemplates) != 0 {
+		test.Fatal("generic member template was incorrectly registered as a free function")
+	}
+}

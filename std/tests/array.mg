@@ -8,7 +8,7 @@ use "../heap.mg" heap
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()
-    values := try array.new[u64](a, cast.utop(0))
+    values := try array.new[u64](a, none)
     defer values.free(a)
 
     try values.pushRight(a, 10)

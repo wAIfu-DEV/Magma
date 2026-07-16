@@ -1,5 +1,15 @@
 # `std/builder`
 
+## Example
+
+```magma
+b := try builder.new(heap.allocator())
+defer b.free()
+try b.appendBorrowed("hello ")
+try b.appendCopy("world")
+text := try b.build() # owned "hello world"
+```
+
 Builds a string from borrowed or copied segments while avoiding repeated concatenation.
 
 ## Types
@@ -10,7 +20,8 @@ Builds a string from borrowed or copied segments while avoiding repeated concate
 ## API
 
 - `pub new(a alc.Allocator) !$Builder` creates an empty builder.
-- `Builder.append(s str) !void` appends a borrowed string. It must remain valid until the builder is built, reset, or freed.
+- `Builder.appendBorrowed(s str) !void` appends a borrowed string. It must remain valid until the builder is built, reset, or freed.
+- `Builder.appendOwned(s str) !void` transfers an owned string allocated by the builder's allocator into the builder.
 - `Builder.appendCopy(s str) !void` copies and owns the appended string.
 - `Builder.build() !$str` allocates and returns the concatenated string. The caller owns the result.
 - `Builder.byteCount() u64` returns the combined byte count.

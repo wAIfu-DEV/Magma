@@ -8,12 +8,15 @@ use "linear_map.mg" linear_map
 use "slices.mg"     slices
 use "strings.mg"    strings
 use "writer.mg"     writer
+use "memory.mg"     memory
 
 # JSON value. Payloads are stored in raw u128 storage and reinterpreted based
 # on the kind tag. This keeps Value independent of its recursive payload types.
 Value(
     value u128
     kind u8
+    owned bool
+    allocator alc.Allocator
 )
 
 # JSON object backed by a linear map. Cleanup policy for stored values is
@@ -32,7 +35,7 @@ Value.asNull() !ptr:
     if this.kind != 0:
         throw errors.invalidType("json value is not null")
     ..
-    ret cast.utop(0)
+    ret none
 ..
 
 Value.asBool() !bool:
@@ -89,69 +92,142 @@ Value.asArray() !Array*:
     ret *r
 ..
 
-pub newObject(a alc.Allocator, cleanup ($Value) void) !$Object:
+# Returns a non-owning view of a Value. This is used by lookup operations;
+# ownership is transferred out of a container only by take().
+Value.borrowed() Value:
+    out Value = *this
+    out.owned = false
+    ret out
+..
+
+valueCleanup(val $Value) void:
+    if val.owned == false:
+        ret
+    ..
+    if val.kind == 3:
+        value str* = cast.reinterpret[str](addrof val.value)
+        strings.free(val.allocator, *value)
+    elif val.kind == 4:
+        value Object** = cast.reinterpret[Object*](addrof val.value)
+        if *value != none:
+            object Object* = *value
+            object.free()
+        ..
+    elif val.kind == 5:
+        value Array** = cast.reinterpret[Array*](addrof val.value)
+        if *value != none:
+            array Array* = *value
+            array.free()
+        ..
+    ..
+..
+
+pub newObject(a alc.Allocator) !$Object:
+    entries := try linear_map.new[Value](a, valueCleanup)
     object Object
-    object.entries = try linear_map.new[Value](a, cleanup)
+    object.entries = entries
     ret object
 ..
 
-pub newArray(a alc.Allocator, cleanup ($Value) void) !$Array:
+pub newArray(a alc.Allocator) !$Array:
+    values := try arr.new[Value](a)
     array Array
     array.allocator = a
-    array.values = try arr.new[Value](a, cleanup)
+    array.values = values
     ret array
 ..
 
 pub null() Value:
-    value Value
-    ret value
+    ret memory.zeroValue[Value]()
 ..
 
 pub boolean(value bool) Value:
-    out Value
+    out Value = memory.zeroValue[Value]()
     out.kind = 1
     r bool* = cast.reinterpret[bool](addrof out.value)
-    r[0] = value
+    *r = value
     ret out
 ..
 
 pub numberFloat(value f64) Value:
-    out Value
+    out Value = memory.zeroValue[Value]()
     out.kind = 2
     r f64* = cast.reinterpret[f64](addrof out.value)
-    r[0] = value
+    *r = value
     ret out
 ..
 
 pub numberInt(value i64) Value:
-    out Value
+    out Value = memory.zeroValue[Value]()
     out.kind = 6
     r i64* = cast.reinterpret[i64](addrof out.value)
-    r[0] = value
+    *r = value
     ret out
 ..
 
-pub string(value str) Value:
-    out Value
+# Wraps a borrowed string. The caller must keep it alive while the Value is in use.
+pub stringBorrowed(value str) Value:
+    out Value = memory.zeroValue[Value]()
     out.kind = 3
     r str* = cast.reinterpret[str](addrof out.value)
-    r[0] = value
+    *r = value
     ret out
 ..
 
-pub object(value Object*) Value:
-    out Value
+# Transfers ownership of an allocated string to the returned Value.
+pub stringOwned(a alc.Allocator, value $str) Value:
+    out Value = memory.zeroValue[Value]()
+    out.kind = 3
+    out.owned = true
+    out.allocator = a
+    r str* = cast.reinterpret[str](addrof out.value)
+    *r = value
+    ret out
+..
+
+# Copies a borrowed string and returns a Value owning the copy.
+pub stringCopy(a alc.Allocator, value str) !$Value:
+    owned str = try strings.copy(a, value)
+    ret stringOwned(a, owned)
+..
+
+# Wraps a borrowed object. The caller remains responsible for freeing it.
+pub objectBorrowed(value Object*) Value:
+    out Value = memory.zeroValue[Value]()
     out.kind = 4
     r Object** = cast.reinterpret[Object*](addrof out.value)
-    r[0] = value
+    *r = value
     ret out
 ..
 
-pub array(value Array*) Value:
-    out Value
+# Transfers responsibility for freeing the object's contents to the Value.
+# The pointer storage itself remains borrowed and must outlive the Value.
+pub objectOwned(value Object*) Value:
+    out Value = memory.zeroValue[Value]()
+    out.kind = 4
+    out.owned = true
+    r Object** = cast.reinterpret[Object*](addrof out.value)
+    *r = value
+    ret out
+..
+
+# Wraps a borrowed array. The caller remains responsible for freeing it.
+pub arrayBorrowed(value Array*) Value:
+    out Value = memory.zeroValue[Value]()
     out.kind = 5
     r Array** = cast.reinterpret[Array*](addrof out.value)
-    r[0] = value
+    *r = value
+    ret out
+..
+
+# Transfers responsibility for freeing the array's contents to the Value.
+# The pointer storage itself remains borrowed and must outlive the Value.
+pub arrayOwned(value Array*) Value:
+    out Value = memory.zeroValue[Value]()
+    out.kind = 5
+    out.owned = true
+    r Array** = cast.reinterpret[Array*](addrof out.value)
+    *r = value
     ret out
 ..
 
@@ -160,7 +236,8 @@ Object.set(key str, value $Value) !void:
 ..
 
 Object.get(key str) !Value:
-    ret try this.entries.get(key)
+    value := try this.entries.get(key)
+    ret value.borrowed()
 ..
 
 Object.delete(key str) !void:
@@ -187,8 +264,17 @@ Array.count() u64:
     ret this.values.count()
 ..
 
+Array.get(index u64) !Value:
+    if index >= this.count():
+        throw errors.invalidArgument("JSON array index out of bounds")
+    ..
+    values := this.values.view()
+    value := values[index]
+    ret value.borrowed()
+..
+
 destr Array.free() void:
-    this.values.free(this.allocator)
+    this.values.free(this.allocator, valueCleanup)
 ..
 
 writeEscaped(w writer.Writer, value str) !void:
@@ -245,7 +331,7 @@ writeEscaped(w writer.Writer, value str) !void:
 finite(value f64) bool:
     valueCopy f64 = value
     bits u64* = addrof valueCopy
-    ret (bits[0] & 0x7FF0000000000000) != 0x7FF0000000000000
+    ret (*bits & 0x7FF0000000000000) != 0x7FF0000000000000
 ..
 
 writeObject(w writer.Writer, value Object*, precision u64) !void:
@@ -261,8 +347,8 @@ writeValue(w writer.Writer, value Value, precision u64) !void:
     if valueCopy.kind == 0:
         try w.writeAll("null")
     elif valueCopy.kind == 1:
-        boolean bool* = cast.reinterpret[bool](addrof valueCopy.value)
-        try w.writeBool(*boolean)
+        booleanPtr bool* = cast.reinterpret[bool](addrof valueCopy.value)
+        try w.writeBool(*booleanPtr)
     elif valueCopy.kind == 2:
         floatNumber f64* = cast.reinterpret[f64](addrof valueCopy.value)
         if finite(*floatNumber) == false:
@@ -274,13 +360,13 @@ writeValue(w writer.Writer, value Value, precision u64) !void:
         try writeEscaped(w, *string)
     elif valueCopy.kind == 4:
         object Object** = cast.reinterpret[Object*](addrof valueCopy.value)
-        if cast.ptou(*object) == 0:
+        if *object == none:
             throw errors.invalidArgument("JSON object pointer is null")
         ..
         try writeObject(w, *object, precision)
     elif valueCopy.kind == 5:
         array Array** = cast.reinterpret[Array*](addrof valueCopy.value)
-        if cast.ptou(*array) == 0:
+        if *array == none:
             throw errors.invalidArgument("JSON array pointer is null")
         ..
         try writeArray(w, *array, precision)

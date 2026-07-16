@@ -1,5 +1,14 @@
 # `std/allocator`
 
+## Example
+
+```magma
+a := heap.allocator()
+block := try a.alloc(16)
+block = try a.realloc(block, 32)
+a.free(block)
+```
+
 Defines the allocator interface used by allocating standard-library APIs.
 
 ## Type
@@ -7,15 +16,22 @@ Defines the allocator interface used by allocating standard-library APIs.
 ### `Allocator`
 
 ```magma
-Allocator(
-    impl ptr,
+AllocatorVTable(
     fn_alloc (ptr, u64) !u8*,
     fn_realloc (ptr, u8*, u64) !u8*,
     fn_free (ptr, u8*) void,
 )
+
+Allocator(
+    impl ptr,
+    vtable AllocatorVTable*,
+)
 ```
 
-`impl` is adapter-specific state. The three function pointers allocate, resize, and free memory. Blocks must be released or resized with the same allocator that created them.
+`impl` is adapter-specific state. `vtable` points to a shared immutable table
+whose three function pointers allocate, resize, and free memory. The allocator
+handle is 16 bytes on 64-bit targets. Blocks must be released or resized with
+the same allocator that created them.
 
 ## Methods
 

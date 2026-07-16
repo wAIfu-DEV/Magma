@@ -114,3 +114,11 @@ pub set(in ptr, n u64, with u8) void:
 pub zero(in ptr, n u64) void:
     set(in, n, 0)
 ..
+
+# Returns a zero initialized value of type T 
+# O(1)
+pub zeroValue[T]() T:
+    x T
+    ret x
+..
+

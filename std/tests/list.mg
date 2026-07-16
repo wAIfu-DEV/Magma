@@ -8,7 +8,7 @@ use "../cast.mg" cast
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()
-    values := try list.new[u64](a, cast.utop(0))
+    values := try list.new[u64](a, none)
     defer values.free()
     try values.pushRight(4)
     try values.pushLeft(2)

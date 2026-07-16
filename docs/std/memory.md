@@ -1,5 +1,13 @@
 # `std/memory`
 
+## Example
+
+```magma
+memory.copy(slices.toPtr(source), slices.toPtr(target), 4)
+same := memory.compare(slices.toPtr(source), slices.toPtr(target), 4)
+memory.zero(slices.toPtr(target), 4)
+```
+
 Low-level operations on raw byte regions. Callers must provide valid pointers and sizes.
 
 - `pub copy(from ptr, to ptr, n u64) void` copies `n` bytes between non-overlapping regions. Use `move` if overlap is possible.

@@ -81,16 +81,16 @@ iterHasData(impl ptr, index u64*) bool:
     bytesPtr u8[]* = impl
     bytes u8[] = *bytesPtr
     count := slc.count(bytes)
-    ret index[0] < count
+    ret *index < count
 ..
 
 iterNext(impl ptr, index u64*) u8:
     bytesPtr u8[]* = impl
     bytes u8[] = *bytesPtr
     count := slc.count(bytes)
-    idx := index[0]
+    idx := *index
     item := bytes[idx]
-    index[0] = idx + 1
+    *index = idx + 1
     ret item
 ..
 

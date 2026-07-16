@@ -17,9 +17,7 @@ destr Resource.free() void:
 ..
 
 make(value u64) $Resource:
-    resource Resource
-    resource.value = value
-    ret resource
+    ret Resource(value=value)
 ..
 
 cleanup(value $Resource) void:

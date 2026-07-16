@@ -8,7 +8,7 @@ use "../cast.mg" cast
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()
-    values := try hash_map.new[u64](a, 8, cast.utop(0))
+    values := try hash_map.new[u64](a, 8, none)
     defer values.free()
     try values.set("answer", 42)
     try values.set("answer", 43)

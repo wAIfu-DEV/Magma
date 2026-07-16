@@ -44,12 +44,13 @@ pub formatUint(a alc.Allocator, value u64) !$str:
         tmp = tmp / 10
         digits = digits + 1
     ..
-    out u8* = try a.alloc(digits)
+    result str = try strings.alloc(a, digits)
+    out u8* = strings.toPtr(result)
     i := digits
     while i > 0:
         i = i - 1
         out[i] = cast.u64to8((remaining % 10) + 48)
         remaining = remaining / 10
     ..
-    ret strings.fromPtrNoCopy(out, digits)
+    ret result
 ..

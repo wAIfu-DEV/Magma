@@ -1,20 +1,23 @@
 mod linear_map
 
-use "array.mg" arr
 use "allocator.mg" alc
 use "strings.mg" stg
 use "errors.mg" err
 use "cast.mg" cast
+use "memory.mg" mem
+use "slices.mg" slices
 
 LinearMap[T](
     allocator alc.Allocator
-    keys arr.Array[str]
-    values arr.Array[T]
+    keys str*
+    values T*
     cleanup ($T) void
+    countValue u16
+    capacity u16
 )
 
 release[T](cleanup ($T) void, value $T) void:
-    if cast.ptou(cleanup) == 0:
+    if cleanup == none:
         abandoned T[1]
         abandoned[0] = value
         ret
@@ -27,33 +30,60 @@ claim[T](claimed $T) $T:
 ..
 
 pub new[T](a alc.Allocator, cleanup ($T) void) !$LinearMap[T]:
-    keys := try arr.new[str](a, cast.utop(0))
-    values arr.Array[T], valuesErr error = arr.new[T](a, cleanup)
+    keys str* = try a.allocT[str](8)
+    valuesRaw T*, valuesErr error = a.allocT[T](8)
     if err.code(valuesErr) != 0:
-        keys.free(a)
+        a.free(keys)
         throw valuesErr
     ..
-
-    lm LinearMap[T]
-    lm.allocator = a
-    lm.cleanup = cleanup
-    lm.keys = keys
-    lm.values = values
-    ret lm
+    values T* = valuesRaw
+    ret LinearMap[T](
+        allocator=a,
+        keys=keys,
+        values=values,
+        cleanup=cleanup,
+        countValue=0,
+        capacity=8,
+    )
 ..
 
 LinearMap[T].indexOf(key str) !u64:
-    view str[] = this.keys.view()
-    bound := this.keys.count()
-
+    bound := cast.u16to64(this.countValue)
+    keys str* = this.keys
     i u64 = 0
     while i < bound:
-        if stg.compare(key, view[i]):
+        if stg.compare(key, keys[i]):
             ret i
         ..
         i = i + 1
     ..
     throw err.failure("key not found in linear map")
+..
+
+LinearMap[T].grow() !void:
+    oldCapacity := cast.u16to64(this.capacity)
+    if oldCapacity >= 65535:
+        throw err.wouldOverflow("linear map cannot contain more than 65535 entries")
+    ..
+    newCapacity := oldCapacity * 2
+    if newCapacity > 65535:
+        newCapacity = 65535
+    ..
+    newKeys str* = try this.allocator.allocT[str](newCapacity)
+    newValuesRaw T*, valuesErr error = this.allocator.allocT[T](newCapacity)
+    if err.code(valuesErr) != 0:
+        this.allocator.free(newKeys)
+        throw valuesErr
+    ..
+    newValues T* = newValuesRaw
+    count := cast.u16to64(this.countValue)
+    mem.copy(this.keys, newKeys, count * sizeof str)
+    mem.copy(this.values, newValues, count * sizeof T)
+    this.allocator.free(this.keys)
+    this.allocator.free(this.values)
+    this.keys = newKeys
+    this.values = newValues
+    this.capacity = cast.u64to16(newCapacity)
 ..
 
 LinearMap[T].delete(key str) !void:
@@ -63,109 +93,101 @@ LinearMap[T].delete(key str) !void:
 
 LinearMap[T].take(key str) !$T:
     idx := try this.indexOf(key)
-    lastIdx := this.keys.count() - 1
-
-    keyView str[] = this.keys.view()
-    valView T[] = this.values.view()
-    taken := claim[T](valView[idx])
-
-    stg.free(this.allocator, keyView[lastIdx])
-
+    lastIdx := cast.u16to64(this.countValue) - 1
+    keys str* = this.keys
+    values T* = this.values
+    taken := claim[T](values[idx])
+    stg.free(this.allocator, keys[idx])
     if idx != lastIdx:
-        keyView[idx] = keyView[lastIdx]
-        valView[idx] = valView[lastIdx]
+        keys[idx] = keys[lastIdx]
+        values[idx] = values[lastIdx]
     ..
-    # Remove both entries together without an allocation that could fail between
-    # the two state changes.
-    this.keys.padRight = this.keys.padRight + 1
-    this.values.padRight = this.values.padRight + 1
+    this.countValue = this.countValue - 1
     ret taken
 ..
 
 LinearMap[T].get(key str) !T:
     idx := try this.indexOf(key)
-    view T[] = this.values.view()
-    ret view[idx]
+    values T* = this.values
+    ret values[idx]
 ..
 
 LinearMap[T].count() u64:
-    ret this.keys.count()
+    ret cast.u16to64(this.countValue)
 ..
 
 LinearMap[T].keysView() str[]:
-    ret this.keys.view()
+    ret slices.fromPtr(this.keys, cast.u16to64(this.countValue))
 ..
 
 LinearMap[T].valuesView() T[]:
-    ret this.values.view()
+    ret slices.fromPtr(this.values, cast.u16to64(this.countValue))
 ..
 
 LinearMap[T].set(key str, item $T) !void:
     idx u64, e error = this.indexOf(key)
-    if err.code(e) != 0:
-        keyIdx u64, keyErr error = this.keys.expandRight(this.allocator)
-        if err.code(keyErr) != 0:
-            release[T](this.cleanup, item)
-            throw keyErr
-        ..
-        valueIdx u64, valueErr error = this.values.expandRight(this.allocator)
-        if err.code(valueErr) != 0:
-            this.keys.padRight = this.keys.padRight + 1
-            release[T](this.cleanup, item)
-            throw valueErr
-        ..
-        keyView str[] = this.keys.view()
-        valueView T[] = this.values.view()
-        ownedKey str, copyErr error = stg.copy(this.allocator, key)
-        if err.code(copyErr) != 0:
-            this.keys.padRight = this.keys.padRight + 1
-            this.values.padRight = this.values.padRight + 1
-            release[T](this.cleanup, item)
-            throw copyErr
-        ..
-        keyView[keyIdx] = ownedKey
-        valueView[valueIdx] = item
-    else:
-        view T[] = this.values.view()
-        release[T](this.cleanup, claim[T](view[idx]))
-        view[idx] = item
+    if err.code(e) == 0:
+        existingValues T* = this.values
+        release[T](this.cleanup, claim[T](existingValues[idx]))
+        existingValues[idx] = item
+        ret
     ..
+    if this.countValue == this.capacity:
+        grown bool, growErr error = growForInsert[T](this)
+        if err.code(growErr) != 0:
+            release[T](this.cleanup, item)
+            throw growErr
+        ..
+    ..
+    ownedKey str, copyErr error = stg.copy(this.allocator, key)
+    if err.code(copyErr) != 0:
+        release[T](this.cleanup, item)
+        throw copyErr
+    ..
+    insertAt := cast.u16to64(this.countValue)
+    keys str* = this.keys
+    values T* = this.values
+    keys[insertAt] = ownedKey
+    values[insertAt] = item
+    this.countValue = this.countValue + 1
+..
+
+growForInsert[T](map LinearMap[T]*) !bool:
+    try map.grow()
+    ret true
 ..
 
 destr LinearMap[T].free() void:
     i u64 = 0
-    bound u64 = this.keys.count()
-    view str[] = this.keys.view()
-
+    bound := cast.u16to64(this.countValue)
+    keys str* = this.keys
+    values T* = this.values
     while i < bound:
-        stg.free(this.allocator, view[i])
+        stg.free(this.allocator, keys[i])
         i = i + 1
     ..
-
-    if cast.ptou(this.cleanup) != 0:
-        values := this.values.view()
+    if this.cleanup != none:
         i = 0
         while i < bound:
             this.cleanup(values[i])
             i = i + 1
         ..
     ..
-
-    this.allocator.free(this.keys.data)
-    this.allocator.free(this.values.data)
+    this.allocator.free(this.keys)
+    this.allocator.free(this.values)
+    this.keys = none
+    this.values = none
+    this.countValue = 0
+    this.capacity = 0
 ..
 
-
 LinearMap[T].clear() !void:
-    newKeys arr.Array[str] = try arr.new[str](this.allocator, cast.utop(0))
-    newValues arr.Array[T], valuesErr error = arr.new[T](this.allocator, this.cleanup)
-    if err.code(valuesErr) != 0:
-        newKeys.free(this.allocator)
-        newValues.free(this.allocator)
-        throw valuesErr
-    ..
-
+    replacement := try new[T](this.allocator, this.cleanup)
     this.free()
-    this.keys = newKeys
-    this.values = newValues
+    this.keys = replacement.keys
+    this.values = replacement.values
+    this.countValue = replacement.countValue
+    this.capacity = replacement.capacity
+    abandoned LinearMap[T][1]
+    abandoned[0] = replacement
 ..

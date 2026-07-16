@@ -46,7 +46,7 @@ u32to16(v u32) u16:
 # Decodes the next codepoint without advancing the iterator.
 # O(1) for a single codepoint.
 decodeOnce(it Utf8Iterator*) !Codepoint:
-    if cast.ptou(it.start) == 0 || cast.ptou(it.end) == 0:
+    if it.start == none || it.end == none:
         throw errors.invalidArgument("Utf8Iterator was not correctly initialized, use utf8.iterator")
     ..
     cp Codepoint = decodeFirst(it.start, it.end)
@@ -61,14 +61,9 @@ decodeOnce(it Utf8Iterator*) !Codepoint:
 # @param s input string
 # @returns iterator over UTF-8 bytes in s
 pub iterator(s str) Utf8Iterator:
-    i Utf8Iterator
-
     p u8* = strings.toPtr(s)
     sLen u64 = strings.countBytes(s)
-
-    i.start = p
-    i.end = cast.utop(cast.ptou(p) + sLen)
-    ret i
+    ret Utf8Iterator(start=p, end=cast.utop(cast.ptou(p) + sLen))
 ..
 
 # Returns the next codepoint without advancing.
@@ -88,7 +83,7 @@ Utf8Iterator.next() !Codepoint:
 # Returns true if there are more bytes to decode.
 # O(1).
 Utf8Iterator.hasData() bool:
-    if cast.ptou(this.start) == 0 || cast.ptou(this.end) == 0:
+    if this.start == none || this.end == none:
         ret false
     ..
     ret cast.ptou(this.start) < cast.ptou(this.end)
@@ -100,13 +95,13 @@ Utf8Iterator.hasData() bool:
 # Keep bloat out of it, no defers or error return as those will increase
 # complexity and obfuscate the happy path.
 decodeFirst(start u8*, end u8*) Codepoint:
-    outCp Codepoint
+    outCp := Codepoint(value=0, width=0)
 
     if cast.ptou(start) >= cast.ptou(end):
         ret outCp
     ..
 
-    first u8 = start[0]
+    first u8 = *start
     width u8 = 0
     codepoint u32 = 0
 
@@ -193,9 +188,7 @@ decodeFirst(start u8*, end u8*) Codepoint:
     ..
 
     # If we get here, validation passed
-    outCp.value = codepoint
-    outCp.width = width
-    ret outCp
+    ret Codepoint(value=codepoint, width=width)
 ..
 
 # Returns the number of UTF-16 code units needed to encode a UTF-8 string.
@@ -227,7 +220,7 @@ pub utf8To16(a alc.Allocator, s str) !$u16[]:
 
     elemCount u64 = try utf8to16size(s)
     if elemCount == 0:
-        ret slices.fromPtr(cast.utop(0), 0)
+        ret slices.fromPtr(none, 0)
     ..
     maxU64 u64 = 0 - 1
     if elemCount > maxU64 / sizeof u16:
@@ -304,22 +297,22 @@ pub utf8To16NT(a alc.Allocator, s str) !$u16[]:
 # O(1).
 encodeUtf8(cp u32, out u8*) !u64:
     if cp <= 127:
-        out[0] = u32to8(cp)
+        *out = u32to8(cp)
         ret 1
     elif cp <= 2047:
-        out[0] = u32to8(192 | (cp >> 6))
+        *out = u32to8(192 | (cp >> 6))
         out[1] = u32to8(128 | (cp & 63))
         ret 2
     elif cp <= 65535:
         if cp >= 55296 && cp <= 57343:
             throw errors.failure("invalid unicode scalar value")
         ..
-        out[0] = u32to8(224 | (cp >> 12))
+        *out = u32to8(224 | (cp >> 12))
         out[1] = u32to8(128 | ((cp >> 6) & 63))
         out[2] = u32to8(128 | (cp & 63))
         ret 3
     elif cp <= 1114111:
-        out[0] = u32to8(240 | (cp >> 18))
+        *out = u32to8(240 | (cp >> 18))
         out[1] = u32to8(128 | ((cp >> 12) & 63))
         out[2] = u32to8(128 | ((cp >> 6) & 63))
         out[3] = u32to8(128 | (cp & 63))
@@ -404,20 +397,20 @@ codepointUtf8Size(cp u32) u64:
 # Encodes one UTF-16 codepoint (or surrogate pair) to UTF-8.
 # O(1) for a single codepoint or surrogate pair.
 utf16to8iter(in u16[], out u8*, i u64*, n u64) !u64:
-    w1 u16 = in[i[0]]
-    i[0] = i[0] + 1
+    w1 u16 = in[*i]
+    *i = *i + 1
 
     if w1 < 55296 || w1 > 57343:
         ret try encodeUtf8(u16to32(w1), out)
     ..
 
     if w1 <= 56319:
-        if i[0] >= n:
+        if *i >= n:
             throw errors.failure("unterminated utf16 surrogate pair")
         ..
 
-        w2 u16 = in[i[0]]
-        i[0] = i[0] + 1
+        w2 u16 = in[*i]
+        *i = *i + 1
 
         if w2 < 56320 || w2 > 57343:
             throw errors.failure("invalid utf16 surrogate pair")
@@ -441,15 +434,16 @@ utf16to8iter(in u16[], out u8*, i u64*, n u64) !u64:
 pub utf16to8(a alc.Allocator, in u16[]) !$str:
     n u64 = slices.count(in)
     if n == 0:
-        ret strings.fromPtrNoCopy(cast.utop(0), 0)
+        ret try strings.alloc(a, 0)
     ..
 
     outSize u64 = try utf16to8size(in)
     if outSize == 0:
-        ret strings.fromPtrNoCopy(cast.utop(0), 0)
+        ret try strings.alloc(a, 0)
     ..
 
-    outPtr u8* = try a.alloc(outSize)
+    result str = try strings.alloc(a, outSize)
+    outPtr u8* = strings.toPtr(result)
     writePtr u8* = outPtr
     i u64 = 0
 
@@ -458,7 +452,7 @@ pub utf16to8(a alc.Allocator, in u16[]) !$str:
         writePtr = cast.utop(cast.ptou(writePtr) + writeSize)
     ..
 
-    ret strings.fromPtrNoCopy(outPtr, outSize)
+    ret result
 ..
 
 # Returns size in bytes of string, for UTF8 strings codepoint (UTF8 character) count may be

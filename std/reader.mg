@@ -14,10 +14,7 @@ Reader(
 )
 
 pub new(impl ptr, readFunc (ptr, u8[], u64) !u64) Reader:
-    r Reader
-    r.impl = impl
-    r.fn_read = readFunc
-    ret r
+    ret Reader(impl=impl, fn_read=readFunc)
 ..
 
 # Reads up to nBytes and returns a string containing the bytes read.
@@ -28,15 +25,17 @@ pub new(impl ptr, readFunc (ptr, u8[], u64) !u64) Reader:
 # @returns string with read bytes
 Reader.read(a alc.Allocator, nBytes u64) !$str:
     if nBytes == 0:
-        ret strings.fromPtrNoCopy(cast.utop(0), 0)
+        ret try strings.alloc(a, 0)
     ..
-    buffPtr u8* = try a.alloc(nBytes)
+    result str = try strings.alloc(a, nBytes)
+    buffPtr u8* = strings.toPtr(result)
     buff u8[] = slices.fromPtr(buffPtr, nBytes)
     readCnt u64, readErr error = this.readToBuff(buff, nBytes)
     if errors.code(readErr) != 0:
-        a.free(buffPtr)
+        strings.free(a, result)
         throw readErr
     ..
+    buffPtr[readCnt] = 0
     ret strings.fromPtrNoCopy(buffPtr, readCnt)
 ..
 

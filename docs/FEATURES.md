@@ -208,8 +208,8 @@ Capture(
 ```
 
 Commas between fields are optional when newlines separate them; standard library
-code uses both styles. There is no constructor syntax in active use. Code
-declares a zero value and assigns fields explicitly.
+code uses both styles. Struct values may be constructed with a complete
+`Type(field=value, ...)` named-field list.
 
 Structs are value types in ordinary declarations and returns. A pointer suffix
 is used when identity or mutation through a shared object is required.
@@ -316,18 +316,19 @@ by a return type:
 They appear as struct fields:
 
 ```magma
-Allocator(
-    impl ptr,
+AllocatorVTable(
     fn_alloc (ptr, u64) !u8*,
     fn_free  (ptr, u8*) void,
 )
+
+Allocator(impl ptr, vtable AllocatorVTable*)
 ```
 
-Together, an opaque `impl ptr` and function-pointer fields form a manually built
-interface or vtable. `Allocator`, `Reader`, `Writer`, and `Duplex` use this
-pattern. Calls through fields look exactly like direct calls:
-`this.fn_write(this.impl, bytes)`. This gives Magma dynamic dispatch and
-dependency inversion without language-level interfaces.
+Together, an opaque implementation pointer and function-pointer fields form a
+manually built interface or vtable. `Allocator` points to a shared immutable
+`AllocatorVTable` and `DuplexVTable`; `Reader` and `Writer` embed their single function pointer.
+This gives Magma dynamic dispatch and dependency inversion without
+language-level interfaces.
 
 ### 4.5 Generics
 
@@ -394,7 +395,7 @@ mix shifts, masks, and comparisons.
 allocation:
 
 ```magma
-ret try this.fn_alloc(this.impl, count * sizeof T)
+ret try this.vtable.fn_alloc(this.impl, count * sizeof T)
 ```
 
 There is no general cast operator. Numeric conversions and pointer/integer
@@ -603,19 +604,17 @@ Several restrictions matter when reading or writing present-day Magma:
 2. **Incomplete static checking.** Some invalid assignments, returns, casts, or
    throwing-call uses can survive farther into lowering than a mature language
    would permit.
-3. **Function-wide local visibility.** Current scope construction is not fully
-   block-local, so a name declared in an `if` or `while` may remain visible later
-   in the function. Shadowing should be avoided.
-4. **No initialized globals.** Module storage is useful, but initialization must
-   be performed by executable code.
-5. **Restricted destructuring.** Only the two-result throwing-call form is
+3. **Restricted initialized globals.** Mutable module storage is zeroed; `const`
+   supports LLVM-compatible literals, addresses, and struct aggregates rather
+   than general compile-time evaluation.
+4. **Restricted destructuring.** Only the two-result throwing-call form is
    supported.
-6. **Restricted subscripting.** Named pointer-, slice-, and array-like targets
+5. **Restricted subscripting.** Named pointer-, slice-, and array-like targets
    are reliable; indexing arbitrary call or grouped expressions is not a safe
    assumption.
-7. **No high-level sum types or interfaces.** Libraries manually encode tags,
+6. **No high-level sum types or interfaces.** Libraries manually encode tags,
    payload storage, and vtables.
-8. **No `for`, `switch`, closures, or inference-heavy generic constraints.**
+7. **No `for`, `switch`, closures, or inference-heavy generic constraints.**
    The language favors a small set of explicit constructs.
 9. **Inline LLVM crosses the type boundary.** It is essential to current library
    implementation but outside the normal safety and portability guarantees.

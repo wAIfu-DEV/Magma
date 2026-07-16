@@ -23,7 +23,8 @@ consume(x $Destructible) void: # $ before arg type marks ownership transfer (non
 ..
 
 assign(x $Destructible) void:
-    someSlice[idx] = x # ownership is transferred, checker is satisfied
+    someSlice Destructible[1]
+    someSlice[0] = x # ownership is transferred, checker is satisfied
 
     # WRONG
     x.free() # ownership was already transferred, checker warning!
@@ -38,6 +39,7 @@ borrow(x Destructible) void:
 
 pub main() !void:
     myVal := new() # ownership transferred to myVal
+    condition bool = false
 
     if condition:
         consume(myVal) # functions takes ownership of value, checker is satisfied with this branch

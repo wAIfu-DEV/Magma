@@ -1,9 +1,14 @@
 mod raylib
 
-# raylib 5.5 Windows shared-library bindings. Place the official import
-# library here; raylib.dll remains a runtime dependency beside the executable.
+# Requires raylib.dll beside executable
 @platform("windows")
-link "../vendor/raylib/raylib.lib"
+link "../vendor/raylib/win/raylibdll.lib"
+
+@platform("linux", "freebsd", "netbsd", "openbsd")
+link "../vendor/raylib/linux/raylib.so" 
+
+@platform("darwin")
+link "../vendor/raylib/mac/raylib.dylib" 
 
 use "allocator.mg" alc
 use "strings.mg"   strings
@@ -47,20 +52,20 @@ ext ext_GetScreenHeight GetScreenHeight() i32
 ext ext_GetRenderWidth GetRenderWidth() i32
 ext ext_GetRenderHeight GetRenderHeight() i32
 
-ext ext_SetTargetFPS SetTargetFPS(fps i32) void
+ext ext_SetTargetFPS SetTargetFPS(targetFps i32) void
 ext ext_GetFrameTime GetFrameTime() f32
 ext ext_GetTime GetTime() f64
 ext ext_GetFPS GetFPS() i32
 
 ext ext_BeginDrawing BeginDrawing() void
 ext ext_EndDrawing EndDrawing() void
-ext ext_ClearBackground ClearBackground(color u32) void
-ext ext_DrawPixel DrawPixel(x i32, y i32, color u32) void
-ext ext_DrawLine DrawLine(startX i32, startY i32, endX i32, endY i32, color u32) void
-ext ext_DrawCircle DrawCircle(centerX i32, centerY i32, radius f32, color u32) void
-ext ext_DrawRectangle DrawRectangle(x i32, y i32, width i32, height i32, color u32) void
-ext ext_DrawRectangleLines DrawRectangleLines(x i32, y i32, width i32, height i32, color u32) void
-ext ext_DrawText DrawText(text u8*, x i32, y i32, fontSize i32, color u32) void
+ext ext_ClearBackground ClearBackground(packedColor u32) void
+ext ext_DrawPixel DrawPixel(x i32, y i32, packedColor u32) void
+ext ext_DrawLine DrawLine(startX i32, startY i32, endX i32, endY i32, packedColor u32) void
+ext ext_DrawCircle DrawCircle(centerX i32, centerY i32, radius f32, packedColor u32) void
+ext ext_DrawRectangle DrawRectangle(x i32, y i32, width i32, height i32, packedColor u32) void
+ext ext_DrawRectangleLines DrawRectangleLines(x i32, y i32, width i32, height i32, packedColor u32) void
+ext ext_DrawText DrawText(text u8*, x i32, y i32, fontSize i32, packedColor u32) void
 ext ext_DrawFPS DrawFPS(x i32, y i32) void
 ext ext_MeasureText MeasureText(text u8*, fontSize i32) i32
 
@@ -89,12 +94,7 @@ ext ext_DisableCursor DisableCursor() void
 ext ext_IsCursorOnScreen IsCursorOnScreen() bool
 
 pub color(r u8, g u8, b u8, a u8) Color:
-    c Color
-    c.r = r
-    c.g = g
-    c.b = b
-    c.a = a
-    ret c
+    ret Color(r=r, g=g, b=b, a=a)
 ..
 
 packColor(c Color) u32:
@@ -134,10 +134,9 @@ pub rayWhite() Color: ret color(245, 245, 245, 255) ..
 
 # Allocating UTF-8 wrapper intended for setup code. Hot drawing loops should
 # convert stable text once with strings.toCstr and call drawTextC.
-pub initWindow(a alc.Allocator, width i32, height i32, title str) !void:
-    titleC u8* = try strings.toCstr(a, title)
+pub initWindow(width i32, height i32, title str) !void:
+    titleC u8* = strings.toCstrNoCopy(title)
     ext_InitWindow(width, height, titleC)
-    a.free(titleC)
 ..
 
 pub closeWindow() void: ext_CloseWindow() ..
@@ -161,7 +160,7 @@ pub screenHeight() i32: ret ext_GetScreenHeight() ..
 pub renderWidth() i32: ret ext_GetRenderWidth() ..
 pub renderHeight() i32: ret ext_GetRenderHeight() ..
 
-pub setTargetFPS(fps i32) void: ext_SetTargetFPS(fps) ..
+pub setTargetFPS(targetFps i32) void: ext_SetTargetFPS(targetFps) ..
 pub frameTime() f32: ret ext_GetFrameTime() ..
 pub time() f64: ret ext_GetTime() ..
 pub fps() i32: ret ext_GetFPS() ..
@@ -178,16 +177,14 @@ pub drawTextC(text u8*, x i32, y i32, fontSize i32, c Color) void: ext_DrawText(
 pub drawFPS(x i32, y i32) void: ext_DrawFPS(x, y) ..
 pub measureTextC(text u8*, fontSize i32) i32: ret ext_MeasureText(text, fontSize) ..
 
-pub drawText(a alc.Allocator, text str, x i32, y i32, fontSize i32, c Color) !void:
-    textC u8* = try strings.toCstr(a, text)
+pub drawText(text str, x i32, y i32, fontSize i32, c Color) !void:
+    textC u8* = strings.toCstrNoCopy(text)
     ext_DrawText(textC, x, y, fontSize, packColor(c))
-    a.free(textC)
 ..
 
-pub measureText(a alc.Allocator, text str, fontSize i32) !i32:
-    textC u8* = try strings.toCstr(a, text)
+pub measureText(text str, fontSize i32) !i32:
+    textC u8* = strings.toCstrNoCopy(text)
     width i32 = ext_MeasureText(textC, fontSize)
-    a.free(textC)
     ret width
 ..
 

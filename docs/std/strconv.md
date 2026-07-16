@@ -1,5 +1,15 @@
 # `std/strconv`
 
+## Example
+
+```magma
+a := heap.allocator()
+answer := try strconv.parseUint("42")
+enabled := try strconv.parseBool("true")
+text := try strconv.formatUint(a, answer)
+defer strings.free(a, text)
+```
+
 Basic string conversions.
 
 - `pub parseUint(s str) !u64` parses a nonempty ASCII decimal unsigned integer. Non-digits and overflow produce an error.

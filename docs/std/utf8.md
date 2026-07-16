@@ -1,5 +1,14 @@
 # `std/utf8`
 
+## Example
+
+```magma
+count := try utf8.countCodepoints("hé") # 2
+cursor := utf8.iterator("🔥")
+codepoint := try cursor.next()
+wide := try utf8.utf8To16(heap.allocator(), "hé")
+```
+
 Validated UTF-8 iteration plus UTF-8/UTF-16 conversion.
 
 ## Types

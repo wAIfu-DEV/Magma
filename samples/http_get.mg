@@ -2,25 +2,21 @@ mod main
 
 use "../std/heap.mg"      heap
 use "../std/io.mg"        io
-use "../std/file.mg"      file
-use "../std/buffered.mg"  buff
-use "../std/errors.mg"    err
 use "../std/strings.mg"   strs
 use "../std/http.mg"      http
 use "../std/builder.mg"   builder
 
-main(args str[]) !void:
+pub main(args str[]) !void:
     a := heap.allocator()
 
-    stdout := try io.stdout(a)
-    stdin :=  try io.stdin(a)
+    out := try io.stdout(a)
+    in :=  try io.stdin(a)
 
     defer:
-        stdout.close()
-        stdin.close()
+        out.close()
+        in.close()
     ..
 
-    out := stdout.writer()
     out.writeLn("Started program. URL to query.")
 
     client := try http.new(a, http.defaultOptions())
@@ -28,9 +24,9 @@ main(args str[]) !void:
 
     while true:
         out.write("URL: ")
-        stdout.flush()
+        out.flush()
 
-        input := stdin.readLn(a)
+        input := in.readLn(a)
         defer strs.free(a, input)
 
         resp := try client.get(input)

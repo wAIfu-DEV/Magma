@@ -12,20 +12,24 @@ type lcx struct {
 	CurrScope *t.Scope
 }
 
-func declVarInStack(ctx *lcx, v *t.NodeExprVarDef) {
-	// TODO: check existance
-	s := ctx.CurrScope
-
-	switch n := v.Name.(type) {
-	case *t.NodeNameSingle:
-		s.DeclVars[n.Name] = v
-	case *t.NodeNameComposite:
-		// TODO: Error
+func declVarInStack(ctx *lcx, v *t.NodeExprVarDef) error {
+	n, ok := v.Name.(*t.NodeNameSingle)
+	if !ok {
+		return fmt.Errorf("variable declarations require a simple name")
 	}
+	for scope := ctx.CurrScope; scope != nil; scope = scope.Parent {
+		if _, exists := scope.DeclVars[n.Name]; exists {
+			return fmt.Errorf("variable '%s' is already declared in this or an enclosing scope; shadowing is not allowed", n.Name)
+		}
+		if _, exists := scope.DeclFuncs[n.Name]; exists {
+			return fmt.Errorf("variable '%s' conflicts with a function declared in this or an enclosing scope; shadowing is not allowed", n.Name)
+		}
+	}
+	ctx.CurrScope.DeclVars[n.Name] = v
+	return nil
 }
 
-func declFuncInStack(ctx *lcx, f *t.NodeFuncDef) *t.Scope {
-	// TODO: check existance
+func declFuncInStack(ctx *lcx, f *t.NodeFuncDef) (*t.Scope, error) {
 	s := ctx.CurrScope
 
 	newScope := &t.Scope{
@@ -46,6 +50,12 @@ func declFuncInStack(ctx *lcx, f *t.NodeFuncDef) *t.Scope {
 
 	switch n := f.Class.NameNode.(type) {
 	case *t.NodeNameSingle:
+		if _, exists := s.DeclVars[n.Name]; exists {
+			return nil, fmt.Errorf("function '%s' conflicts with a variable declared in this scope; shadowing is not allowed", n.Name)
+		}
+		if _, exists := s.DeclFuncs[n.Name]; exists {
+			return nil, fmt.Errorf("function '%s' is already declared in this scope", n.Name)
+		}
 		s.DeclFuncs[n.Name] = fnScope
 	case *t.NodeNameComposite:
 		name := ""
@@ -56,13 +66,16 @@ func declFuncInStack(ctx *lcx, f *t.NodeFuncDef) *t.Scope {
 			name += x
 		}
 
-		if len(name) > 2 {
-			// TODO: Error
+		if _, exists := s.DeclVars[name]; exists {
+			return nil, fmt.Errorf("function '%s' conflicts with a variable declared in this scope; shadowing is not allowed", name)
+		}
+		if _, exists := s.DeclFuncs[name]; exists {
+			return nil, fmt.Errorf("function '%s' is already declared in this scope", name)
 		}
 		s.DeclFuncs[name] = fnScope
 	}
 
-	return newScope
+	return newScope, nil
 }
 
 func declStructInStack(ctx *lcx, st *t.NodeStructDef) {
@@ -84,16 +97,24 @@ func bldExpr(ctx *lcx, expr t.NodeExpr) error {
 		if e != nil {
 			return e
 		}
-		declVarInStack(ctx, n.VarDef)
+		return declVarInStack(ctx, n.VarDef)
 	case *t.NodeExprVarDef:
-		declVarInStack(ctx, n)
+		return declVarInStack(ctx, n)
 	case *t.NodeExprDestructureAssign:
 		e := bldExpr(ctx, n.Call)
 		if e != nil {
 			return e
 		}
-		declVarInStack(ctx, &n.ValueDef)
-		declVarInStack(ctx, &n.ErrDef)
+		if e := declVarInStack(ctx, &n.ValueDef); e != nil {
+			return e
+		}
+		return declVarInStack(ctx, &n.ErrDef)
+	case *t.NodeExprStructInit:
+		for _, field := range n.Fields {
+			if e := bldExpr(ctx, field.Expression); e != nil {
+				return e
+			}
+		}
 	}
 	return nil
 }
@@ -107,8 +128,17 @@ func bldReturn(ctx *lcx, ret *t.NodeStmtRet) error {
 }
 
 func bldBody(ctx *lcx, bdy *t.NodeBody, makeScope bool) error {
-
-	// TODO: for nested scopes, set makeScope to true
+	if makeScope {
+		scope := &t.Scope{
+			Parent:      ctx.CurrScope,
+			DeclVars:    map[string]*t.NodeExprVarDef{},
+			DeclFuncs:   map[string]t.FnScope{},
+			DeclStructs: map[string]*t.NodeStructDef{},
+		}
+		bdy.Scope = scope
+		ctx.CurrScope = scope
+		defer func() { ctx.CurrScope = scope.Parent }()
+	}
 
 	for _, stmt := range bdy.Statements {
 		//fmt.Printf("iter bldBody\n")
@@ -125,7 +155,7 @@ func bldBody(ctx *lcx, bdy *t.NodeBody, makeScope bool) error {
 				return e
 			}
 		case *t.NodeStmtIf:
-			e := bldBody(ctx, &n.Body, false)
+			e := bldBody(ctx, &n.Body, true)
 			if e != nil {
 				return e
 			}
@@ -136,7 +166,7 @@ func bldBody(ctx *lcx, bdy *t.NodeBody, makeScope bool) error {
 					switch n3 := n2.(type) {
 					case *t.NodeStmtIf:
 						//fmt.Printf("stmt: if\n")
-						e := bldBody(ctx, &n3.Body, false)
+						e := bldBody(ctx, &n3.Body, true)
 						if e != nil {
 							return e
 						}
@@ -148,7 +178,7 @@ func bldBody(ctx *lcx, bdy *t.NodeBody, makeScope bool) error {
 						n2 = nil
 					case *t.NodeStmtElse:
 						//fmt.Printf("stmt: else\n")
-						e := bldBody(ctx, &n3.Body, false)
+						e := bldBody(ctx, &n3.Body, true)
 						if e != nil {
 							return e
 						}
@@ -160,7 +190,7 @@ func bldBody(ctx *lcx, bdy *t.NodeBody, makeScope bool) error {
 			}
 
 		case *t.NodeStmtWhile:
-			e := bldBody(ctx, &n.Body, false)
+			e := bldBody(ctx, &n.Body, true)
 			if e != nil {
 				return e
 			}
@@ -170,13 +200,21 @@ func bldBody(ctx *lcx, bdy *t.NodeBody, makeScope bool) error {
 }
 
 func bldFuncDef(ctx *lcx, fnDef *t.NodeFuncDef) error {
-	for _, arg := range fnDef.Class.ArgsNode.Args {
-		declVarInStack(ctx, &t.NodeExprVarDef{
-			Name: &t.NodeNameSingle{Name: arg.Name},
-			Type: arg.TypeNode,
-
-			IsSsa: true,
-		})
+	_, isMemberFunc := fnDef.Class.NameNode.(*t.NodeNameComposite)
+	for i, arg := range fnDef.Class.ArgsNode.Args {
+		definition := &t.NodeExprVarDef{
+			Name:   &t.NodeNameSingle{Name: arg.Name},
+			Type:   arg.TypeNode,
+			IrName: "%" + arg.Name + ".addr",
+		}
+		if isMemberFunc && i == 0 {
+			definition.IsSsa = true
+			definition.IrName = ""
+		}
+		e := declVarInStack(ctx, definition)
+		if e != nil {
+			return e
+		}
 	}
 
 	e := bldBody(ctx, &fnDef.Body, false)
@@ -189,7 +227,10 @@ func bldFuncDef(ctx *lcx, fnDef *t.NodeFuncDef) error {
 func bldGlDecl(ctx *lcx, glDecl t.NodeGlobalDecl) error {
 	switch n := glDecl.(type) {
 	case *t.NodeFuncDef:
-		s := declFuncInStack(ctx, n)
+		s, e := declFuncInStack(ctx, n)
+		if e != nil {
+			return e
+		}
 		ctx.CurrScope = s
 		defer func() {
 			ctx.CurrScope = s.Parent
@@ -198,7 +239,12 @@ func bldGlDecl(ctx *lcx, glDecl t.NodeGlobalDecl) error {
 	case *t.NodeStructDef:
 		declStructInStack(ctx, n)
 	case *t.NodeExprVarDef:
-		declVarInStack(ctx, n)
+		return declVarInStack(ctx, n)
+	case *t.NodeConstDef:
+		if e := declVarInStack(ctx, n.VarDef); e != nil {
+			return e
+		}
+		return bldExpr(ctx, n.Initializer)
 	}
 	return nil
 }
@@ -217,10 +263,52 @@ func bldGlobal(ctx *lcx, gl *t.NodeGlobal) error {
 	ctx.GlScope = glScope
 	ctx.CurrScope = glScope
 
+	// Reserve the complete module namespace before building function bodies so
+	// no-shadowing checks are independent of declaration order.
 	for _, dcl := range gl.Declarations {
-		e := bldGlDecl(ctx, dcl)
-		if e != nil {
-			return e
+		switch n := dcl.(type) {
+		case *t.NodeFuncDef:
+			if _, e := declFuncInStack(ctx, n); e != nil {
+				return e
+			}
+		case *t.NodeStructDef:
+			declStructInStack(ctx, n)
+		case *t.NodeExprVarDef:
+			if e := declVarInStack(ctx, n); e != nil {
+				return e
+			}
+		case *t.NodeConstDef:
+			if e := declVarInStack(ctx, n.VarDef); e != nil {
+				return e
+			}
+		}
+	}
+
+	for _, dcl := range gl.Declarations {
+		switch n := dcl.(type) {
+		case *t.NodeFuncDef:
+			var name string
+			switch fnName := n.Class.NameNode.(type) {
+			case *t.NodeNameSingle:
+				name = fnName.Name
+			case *t.NodeNameComposite:
+				for i, part := range fnName.Parts {
+					if i != 0 {
+						name += "."
+					}
+					name += part
+				}
+			}
+			fnScope := glScope.DeclFuncs[name]
+			ctx.CurrScope = fnScope.Scope
+			if e := bldFuncDef(ctx, n); e != nil {
+				return e
+			}
+			ctx.CurrScope = glScope
+		case *t.NodeConstDef:
+			if e := bldExpr(ctx, n.Initializer); e != nil {
+				return e
+			}
 		}
 	}
 	return nil

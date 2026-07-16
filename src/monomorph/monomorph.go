@@ -127,6 +127,12 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 			GenericArgs: typeArgs,
 			InfType:     cloneType(n.InfType),
 		}
+	case *t.NodeExprStructInit:
+		fields := make([]t.NodeStructFieldInit, len(n.Fields))
+		for i, field := range n.Fields {
+			fields[i] = t.NodeStructFieldInit{Name: field.Name, Expression: cloneExpr(field.Expression), FieldIndex: field.FieldIndex, FieldType: cloneType(field.FieldType)}
+		}
+		return &t.NodeExprStructInit{Tk: n.Tk, Type: cloneType(n.Type), Fields: fields}
 	case *t.NodeExprMemberAccess:
 		return &t.NodeExprMemberAccess{
 			Target:  cloneExpr(n.Target),
@@ -157,6 +163,7 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 			IsSsa:      n.IsSsa,
 			IsReturned: n.IsReturned,
 			IsGlobal:   n.IsGlobal,
+			IrName:     n.IrName,
 		}
 	case *t.NodeExprVarDefAssign:
 		return &t.NodeExprVarDefAssign{
@@ -415,6 +422,12 @@ func substituteExpr(expr t.NodeExpr, subst map[string]*t.NodeType) {
 		}
 		for i := range n.GenericArgs {
 			n.GenericArgs[i] = substituteType(n.GenericArgs[i], subst)
+		}
+	case *t.NodeExprStructInit:
+		n.Type = substituteType(n.Type, subst)
+		for i := range n.Fields {
+			n.Fields[i].FieldType = substituteType(n.Fields[i].FieldType, subst)
+			substituteExpr(n.Fields[i].Expression, subst)
 		}
 	case *t.NodeExprSubscript:
 		substituteExpr(n.Target, subst)
@@ -715,11 +728,13 @@ func (m *monoCtx) instantiateStruct(module string, baseName string, args []*t.No
 		TypeParams: nil,
 		FieldNb:    map[string]int{},
 		Fields:     map[string]*t.NodeType{},
+		FieldOrder: []string{},
 		Funcs:      map[string]*t.NodeFuncDef{},
 	}
 	for i, fld := range specStruct.Class.ArgsNode.Args {
 		stDef.FieldNb[fld.Name] = i
 		stDef.Fields[fld.Name] = cloneType(fld.TypeNode)
+		stDef.FieldOrder = append(stDef.FieldOrder, fld.Name)
 	}
 
 	origDef := gl.StructDefs[baseName]
@@ -1062,6 +1077,17 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 		n.GenericArgs = nil
 		return nil
 
+	case *t.NodeExprStructInit:
+		if e := m.rewriteType(module, gl, n.Type); e != nil {
+			return e
+		}
+		for i := range n.Fields {
+			if e := m.rewriteExpr(module, gl, n.Fields[i].Expression, env); e != nil {
+				return e
+			}
+		}
+		return nil
+
 	case *t.NodeExprSubscript:
 		if e := m.rewriteExpr(module, gl, n.Target, env); e != nil {
 			return e
@@ -1190,10 +1216,27 @@ func syncStructDefFields(gl *t.NodeGlobal, st *t.NodeStructDef) {
 	if sd.Fields == nil {
 		sd.Fields = map[string]*t.NodeType{}
 	}
+	sd.FieldOrder = sd.FieldOrder[:0]
 
 	for _, fld := range st.Class.ArgsNode.Args {
 		sd.Fields[fld.Name] = cloneType(fld.TypeNode)
+		sd.FieldOrder = append(sd.FieldOrder, fld.Name)
 	}
+}
+
+func (m *monoCtx) registerFuncTemplate(module string, mapName string, fn *t.NodeFuncDef) {
+	if fn == nil || len(fn.Class.TypeParams) == 0 {
+		return
+	}
+
+	if name, ok := fn.Class.NameNode.(*t.NodeNameComposite); ok && len(name.Parts) >= 2 {
+		ownerName := strings.Join(name.Parts[:len(name.Parts)-1], ".")
+		memberName := name.Parts[len(name.Parts)-1]
+		m.memberTemplates[makeMemberTemplateKey(module, ownerName, memberName)] = fn
+		return
+	}
+
+	m.funcTemplates[makeTemplateKey(module, mapName)] = fn
 }
 
 func (m *monoCtx) pruneTemplates() {
@@ -1278,9 +1321,7 @@ func Run(shared *t.SharedState) error {
 		}
 
 		for name, fn := range gl.FuncDefs {
-			if len(fn.Class.TypeParams) > 0 {
-				ctx.funcTemplates[makeTemplateKey(module, name)] = fn
-			}
+			ctx.registerFuncTemplate(module, name, fn)
 		}
 	}
 
@@ -1297,6 +1338,11 @@ func Run(shared *t.SharedState) error {
 				}
 			case *t.NodeExprVarDef:
 				ctx.queueVar(n)
+			case *t.NodeConstDef:
+				ctx.queueVar(n.VarDef)
+				if e := ctx.rewriteExpr(module, gl, n.Initializer, map[string]*t.NodeType{}); e != nil {
+					return e
+				}
 			}
 		}
 		_ = module

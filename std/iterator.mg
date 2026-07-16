@@ -9,11 +9,7 @@ Iterator[T](
 )
 
 pub new[T](impl ptr, hasDataFunc (ptr, u64*) bool, nextFunc (ptr, u64*) !T) Iterator[T]:
-    it Iterator[T]
-    it.impl = impl
-    it.fn_hasData = hasDataFunc
-    it.fn_next = nextFunc
-    ret it
+    ret Iterator[T](impl=impl, index=0, fn_hasData=hasDataFunc, fn_next=nextFunc)
 ..
 
 Iterator[T].hasData() bool:
@@ -23,4 +19,3 @@ Iterator[T].hasData() bool:
 Iterator[T].next() !T:
     ret this.fn_next(this.impl, addrof this.index)
 ..
-

@@ -1,5 +1,13 @@
 # `std/io`
 
+## Example
+
+```magma
+output := try io.stdout(heap.allocator())
+defer output.close()
+try output.writer().writeLn("hello")
+```
+
 Standard process-stream adapters.
 
 - `pub stdout(a alc.Allocator) !$buffered.Writer` creates an owned buffered standard-output writer; close or flush it.

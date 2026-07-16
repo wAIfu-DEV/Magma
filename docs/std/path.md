@@ -1,5 +1,13 @@
 # `std/path`
 
+## Example
+
+```magma
+name := path.base("one/two.txt")  # "two.txt"
+extension := path.extension(name) # ".txt"
+absolute := path.isAbsolute("/tmp")
+```
+
 Platform-aware lexical path utilities. These functions do not access the filesystem or allocate.
 
 - `pub separator() u8` returns the platform's preferred path separator.

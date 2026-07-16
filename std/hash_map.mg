@@ -9,16 +9,50 @@ use "cast.mg" cast
 
 HashMap[T](
     allocator alc.Allocator
-    keys ptr
-    values ptr
-    states ptr
+    storage ptr
     capacity u64
     length u64
     cleanup ($T) void
 )
 
+keysPtr[T](map HashMap[T]*) str*:
+    ret map.storage
+..
+
+valuesPtr[T](map HashMap[T]*) T*:
+    ret cast.utop(cast.ptou(map.storage) + map.capacity * sizeof str)
+..
+
+statesPtr[T](map HashMap[T]*) u8*:
+    ret cast.utop(cast.ptou(map.storage) + map.capacity * sizeof str + map.capacity * sizeof T)
+..
+
+valuesAt[T](storage ptr, capacity u64) T*:
+    ret cast.utop(cast.ptou(storage) + capacity * sizeof str)
+..
+
+statesAt[T](storage ptr, capacity u64) u8*:
+    ret cast.utop(cast.ptou(storage) + capacity * sizeof str + capacity * sizeof T)
+..
+
+storageSize[T](capacity u64) !u64:
+    maxU64 u64 = 0 - 1
+    if sizeof str != 0 && capacity > maxU64 / sizeof str:
+        throw errors.wouldOverflow("hash map storage size overflow")
+    ..
+    keysBytes := capacity * sizeof str
+    if sizeof T != 0 && capacity > (maxU64 - keysBytes) / sizeof T:
+        throw errors.wouldOverflow("hash map storage size overflow")
+    ..
+    valuesBytes := capacity * sizeof T
+    if capacity > maxU64 - keysBytes - valuesBytes:
+        throw errors.wouldOverflow("hash map storage size overflow")
+    ..
+    ret keysBytes + valuesBytes + capacity
+..
+
 release[T](cleanup ($T) void, value $T) void:
-    if cast.ptou(cleanup) == 0:
+    if cleanup == none:
         abandoned T[1]
         abandoned[0] = value
         ret
@@ -34,20 +68,20 @@ pub new[T](a alc.Allocator, capacity u64, cleanup ($T) void) !$HashMap[T]:
     if capacity == 0:
         throw errors.invalidArgument("hash map capacity must be positive")
     ..
-    m HashMap[T]
-    m.allocator = a
-    m.capacity = capacity
-    m.cleanup = cleanup
-    m.keys = try a.alloc(capacity * sizeof str)
-    m.values = try a.alloc(capacity * sizeof T)
-    m.states = try a.alloc(capacity)
-    memory.zero(m.states, capacity)
+    m := HashMap[T](
+        allocator=a,
+        storage=try a.alloc(try storageSize[T](capacity)),
+        capacity=capacity,
+        length=0,
+        cleanup=cleanup,
+    )
+    memory.zero(statesPtr[T](addrof m), capacity)
     ret m
 ..
 
 HashMap[T].indexOf(key str) !u64:
-    keys str* = this.keys
-    states u8* = this.states
+    keys str* = keysPtr[T](this)
+    states u8* = statesPtr[T](this)
     start := hash.string(key) % this.capacity
     i u64 = 0
     while i < this.capacity:
@@ -65,7 +99,7 @@ HashMap[T].indexOf(key str) !u64:
 
 HashMap[T].get(key str) !T:
     idx := try this.indexOf(key)
-    values T* = this.values
+    values T* = valuesPtr[T](this)
     ret values[idx]
 ..
 
@@ -76,31 +110,15 @@ HashMap[T].resize(newCapacity u64) !void:
         throw errors.invalidArgument("hash map capacity is too small")
     ..
 
-    newKeys u8*, keysErr error = this.allocator.alloc(newCapacity * sizeof str)
-    if errors.code(keysErr) != 0:
-        throw keysErr
-    ..
+    newStorage ptr = try this.allocator.alloc(try storageSize[T](newCapacity))
+    keys str* = newStorage
+    values T* = valuesAt[T](newStorage, newCapacity)
+    states u8* = statesAt[T](newStorage, newCapacity)
+    memory.zero(states, newCapacity)
 
-    newValues u8*, valuesErr error = this.allocator.alloc(newCapacity * sizeof T)
-    if errors.code(valuesErr) != 0:
-        this.allocator.free(newKeys)
-        throw valuesErr
-    ..
-
-    newStates u8*, statesErr error = this.allocator.alloc(newCapacity)
-    if errors.code(statesErr) != 0:
-        this.allocator.free(newKeys)
-        this.allocator.free(newValues)
-        throw statesErr
-    ..
-    memory.zero(newStates, newCapacity)
-
-    oldKeys str* = this.keys
-    oldValues T* = this.values
-    oldStates u8* = this.states
-    keys str* = newKeys
-    values T* = newValues
-    states u8* = newStates
+    oldKeys str* = keysPtr[T](this)
+    oldValues T* = valuesPtr[T](this)
+    oldStates u8* = statesPtr[T](this)
 
     i u64 = 0
     while i < this.capacity:
@@ -121,12 +139,8 @@ HashMap[T].resize(newCapacity u64) !void:
         i = i + 1
     ..
 
-    this.allocator.free(this.keys)
-    this.allocator.free(this.values)
-    this.allocator.free(this.states)
-    this.keys = newKeys
-    this.values = newValues
-    this.states = newStates
+    this.allocator.free(this.storage)
+    this.storage = newStorage
     this.capacity = newCapacity
 ..
 
@@ -150,9 +164,9 @@ HashMap[T].set(key str, item $T) !void:
         ..
     ..
 
-    keys str* = this.keys
-    values T* = this.values
-    states u8* = this.states
+    keys str* = keysPtr[T](this)
+    values T* = valuesPtr[T](this)
+    states u8* = statesPtr[T](this)
     start := hash.string(key) % this.capacity
     firstDeleted := this.capacity
     i u64 = 0
@@ -204,9 +218,9 @@ HashMap[T].delete(key str) !void:
 
 HashMap[T].take(key str) !$T:
     idx := try this.indexOf(key)
-    keys str* = this.keys
-    values T* = this.values
-    states u8* = this.states
+    keys str* = keysPtr[T](this)
+    values T* = valuesPtr[T](this)
+    states u8* = statesPtr[T](this)
     taken := claim[T](values[idx])
     strings.free(this.allocator, keys[idx])
     states[idx] = 2
@@ -219,8 +233,8 @@ HashMap[T].count() u64:
 ..
 
 destr HashMap[T].free() void:
-    keys str* = this.keys
-    states u8* = this.states
+    keys str* = keysPtr[T](this)
+    states u8* = statesPtr[T](this)
     i u64 = 0
     while i < this.capacity:
         if states[i] == 1:
@@ -228,8 +242,8 @@ destr HashMap[T].free() void:
         ..
         i = i + 1
     ..
-    if cast.ptou(this.cleanup) != 0:
-        values T* = this.values
+    if this.cleanup != none:
+        values T* = valuesPtr[T](this)
         i = 0
         while i < this.capacity:
             if states[i] == 1:
@@ -238,9 +252,8 @@ destr HashMap[T].free() void:
             i = i + 1
         ..
     ..
-    this.allocator.free(this.keys)
-    this.allocator.free(this.values)
-    this.allocator.free(this.states)
+    this.allocator.free(this.storage)
+    this.storage = none
     this.capacity = 0
     this.length = 0
 ..

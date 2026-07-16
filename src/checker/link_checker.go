@@ -227,15 +227,8 @@ func clResolveFieldAccess(c *ctx, ownerType *t.NodeType, member string, lvalue b
 		return nil, e
 	}
 
-	accessType := fieldType
-	if !lvalue {
-		if derefFieldType, isPtr := clDerefOne(fieldType); isPtr {
-			accessType = derefFieldType
-		}
-	}
-
 	return &t.MemberAccess{
-		Type:     accessType,
+		Type:     fieldType,
 		FieldNb:  structDef.FieldNb[member],
 		PtrDeref: ptrDeref,
 	}, nil
@@ -398,12 +391,8 @@ func clVarNameChainValid(c *ctx, scope *t.Scope, name *parsedName, varName strin
 			}
 
 			if i == last {
-				if lvalue {
-					derefFieldType = fieldType
-				}
-
 				accesses = append(accesses, &t.MemberAccess{
-					Type:     derefFieldType,
+					Type:     fieldType,
 					FieldNb:  fieldNb,
 					PtrDeref: isFromPtrType,
 				})
@@ -825,18 +814,14 @@ func clExprMemberAccess(c *ctx, member *t.NodeExprMemberAccess, lvalue bool) err
 }
 
 func clExprSubscript(c *ctx, subs *t.NodeExprSubscript) error {
-	//fmt.Printf("check expr subscript\n")
-
-	switch n := subs.Target.(type) {
-	case *t.NodeExprName:
-		e := clName(c, n, enumEntVar, true)
-		if e != nil {
-			return e
-		}
+	if e := clExpr(c, subs.Target, true); e != nil {
+		return e
+	}
+	if n, ok := subs.Target.(*t.NodeExprName); ok {
 		subs.AssociatedNode = n.AssociatedNode
 		subs.IsTargetSsa = n.IsSsa
-	default:
-		return fmt.Errorf("cannot subscript expression that is not a name")
+	} else {
+		subs.IsTargetSsa = true
 	}
 
 	e := clExpr(c, subs.Expr, false)
@@ -856,8 +841,43 @@ func clExpr(c *ctx, expr t.NodeExpr, lvalue bool) error {
 		return clExpr(c, n.Expr, lvalue)
 	case *t.NodeExprCall:
 		return clExprCall(c, n)
+	case *t.NodeExprStructInit:
+		if e := clType(c, n.Type); e != nil {
+			return e
+		}
+		def, e := clGetStructDefFromType(c, n.Type)
+		if e != nil {
+			return fmt.Errorf("constructor target %s is not a struct: %w", flattenType(n.Type), e)
+		}
+		seen := map[string]bool{}
+		for i := range n.Fields {
+			field := &n.Fields[i]
+			if seen[field.Name] {
+				return fmt.Errorf("duplicate field '%s' in %s constructor", field.Name, flattenType(n.Type))
+			}
+			seen[field.Name] = true
+			fieldType, ok := def.Fields[field.Name]
+			if !ok {
+				return fmt.Errorf("type %s has no field '%s'", flattenType(n.Type), field.Name)
+			}
+			field.FieldIndex = def.FieldNb[field.Name]
+			field.FieldType = fieldType
+			if e := clExpr(c, field.Expression, false); e != nil {
+				return e
+			}
+		}
+		for _, name := range def.FieldOrder {
+			if !seen[name] {
+				return fmt.Errorf("missing field '%s' in %s constructor", name, flattenType(n.Type))
+			}
+		}
+		return nil
 	case *t.NodeExprTry:
-		return clExprCall(c, n.Call.(*t.NodeExprCall))
+		call, ok := n.Call.(*t.NodeExprCall)
+		if !ok {
+			return fmt.Errorf("try requires a throwing function call")
+		}
+		return clExprCall(c, call)
 	case *t.NodeExprSubscript:
 		return clExprSubscript(c, n)
 	case *t.NodeExprMemberAccess:
@@ -992,6 +1012,10 @@ func clWhile(c *ctx, whileStmt *t.NodeStmtWhile) error {
 }
 
 func clBody(c *ctx, bdy *t.NodeBody) error {
+	if bdy.Scope != nil {
+		enterScope(c, bdy.Scope)
+		defer leaveScope(c)
+	}
 	for _, stmt := range bdy.Statements {
 		switch n := stmt.(type) {
 		case *t.NodeStmtRet:
@@ -1190,6 +1214,11 @@ func clGlDecl(c *ctx, glDecl t.NodeGlobalDecl) error {
 		return clStructDef(c, n)
 	case *t.NodeExprVarDef:
 		return clExpr(c, n, false)
+	case *t.NodeConstDef:
+		if e := clType(c, n.VarDef.Type); e != nil {
+			return e
+		}
+		return clExpr(c, n.Initializer, false)
 	}
 	return nil
 }

@@ -1,11 +1,11 @@
 mod main
 
-use "../std_checked/heap.mg"      heap
-use "../std_checked/io.mg"        io
-use "../std_checked/file.mg"      file
-use "../std_checked/buffered.mg"  buff
-use "../std_checked/errors.mg"    err
-use "../std_checked/strings.mg"   strs
+use "../std/heap.mg"      heap
+use "../std/io.mg"        io
+use "../std/file.mg"      file
+use "../std/buffered.mg"  buff
+use "../std/errors.mg"    err
+use "../std/strings.mg"   strs
 
 main(args str[]) !void:
     a := heap.allocator()
@@ -38,10 +38,10 @@ main(args str[]) !void:
         while true:
             line str, e error = reader.readLn(a)
 
-            if err.is(e, err.endOfFile("")):
+            if err.code(e) == 4:
                 out.writeLn("<EOF>")
                 break
-            else:
+            elif err.code(e) != 0:
                 throw e
             ..
             

@@ -12,9 +12,15 @@ pub ticks() u64:
     ret impl_time.ticks()
 ..
 
-pub ticksToSecFloat(ticks u64) f64:
+# Returns CPU time consumed by the current process in nanoseconds. Unlike
+# runtime(), time spent blocked or sleeping is not included.
+pub processCpuTimeNs() u64:
+    ret impl_time.processCpuTimeNs()
+..
+
+pub ticksToSecFloat(tickCount u64) f64:
     freq u64 = impl_time.tickFrequency()
-    ret cast.utof(ticks) / cast.utof(freq)
+    ret cast.utof(tickCount) / cast.utof(freq)
 ..
 
 # Returns the runtime in seconds as a float.
@@ -43,24 +49,24 @@ pub unixTimestampNs() u128:
     ret impl_time.unixTimestampNs()
 ..
 
-pub ticksToSec(ticks u64) u64:
+pub ticksToSec(tickCount u64) u64:
     freq u64 = impl_time.tickFrequency()
-    ret ticks / freq
+    ret tickCount / freq
 ..
 
-pub ticksToMs(ticks u64) u64:
+pub ticksToMs(tickCount u64) u64:
     freq u64 = impl_time.tickFrequency()
-    ret (ticks * 1000) / freq
+    ret (tickCount * 1000) / freq
 ..
 
-pub ticksToUs(ticks u64) u64:
+pub ticksToUs(tickCount u64) u64:
     freq u64 = impl_time.tickFrequency()
-    ret (ticks * 1000000) / freq
+    ret (tickCount * 1000000) / freq
 ..
 
-pub ticksToNs(ticks u64) u64:
+pub ticksToNs(tickCount u64) u64:
     freq u64 = impl_time.tickFrequency()
-    ret (ticks * 1000000000) / freq
+    ret (tickCount * 1000000000) / freq
 ..
 
 pub secToTicks(sec u64) u64:
@@ -112,3 +118,8 @@ pub elapsedSecFloat(startTicks u64) f64:
     e u64 = elapsedTicks(startTicks)
     ret ticksToSecFloat(e)
 ..
+
+pub sleep(milliSecs u64) void:
+    impl_time.sleep(milliSecs)
+..
+ 

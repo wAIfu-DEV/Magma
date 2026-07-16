@@ -5,13 +5,11 @@ Random(
 )
 
 pub new(seed u64) Random:
-    r Random
     actualSeed := seed
     if actualSeed == 0:
         actualSeed = 11400714819323198485
     ..
-    r.state = actualSeed
-    ret r
+    ret Random(state=actualSeed)
 ..
 
 Random.next() u64:

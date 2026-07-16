@@ -6,12 +6,15 @@ use "allocator.mg" alc
 Queue[T](
     allocator alc.Allocator
     array     arr.Array[T]
+    cleanup   ($T) void
 )
 
 pub new[T](a alc.Allocator, cleanup ($T) void) !$Queue[T]:
+    array := try arr.new[T](a)
     q Queue[T]
-    q.array = try arr.new[T](a, cleanup)
     q.allocator = a
+    q.array = array
+    q.cleanup = cleanup
     ret q
 ..
 
@@ -32,9 +35,9 @@ Queue[T].count() u64:
 ..
 
 Queue[T].clear() !void:
-    try this.array.clearShrink(this.allocator)
+    try this.array.clearShrink(this.allocator, this.cleanup)
 ..
 
 destr Queue[T].free() void:
-    this.array.free(this.allocator)
+    this.array.free(this.allocator, this.cleanup)
 ..

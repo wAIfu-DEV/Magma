@@ -8,6 +8,7 @@ const (
 	TokLitStr
 	TokLitNum
 	TokLitBool
+	TokLitNone
 	TokKeyword
 )
 
@@ -17,6 +18,7 @@ var TokTypeToRepr []string = []string{
 	TokLitStr:  "LitStr",
 	TokLitNum:  "LitNum",
 	TokLitBool: "LitBool",
+	TokLitNone: "LitNone",
 	TokKeyword: "Keyword",
 }
 
@@ -52,6 +54,7 @@ const (
 	KwElse
 	KwTrue
 	KwFalse
+	KwNoneLit
 	KwWhile
 	KwCmpEq
 	KwCmpNeq
@@ -78,6 +81,7 @@ const (
 	KwSlash
 	KwInfer
 	KwDestructor
+	KwConst
 )
 
 var KwTypeToRepr []string = []string{
@@ -110,6 +114,7 @@ var KwTypeToRepr []string = []string{
 	KwElse:       "else",
 	KwTrue:       "true",
 	KwFalse:      "false",
+	KwNoneLit:    "none",
 	KwWhile:      "while",
 	KwCmpEq:      "==",
 	KwCmpNeq:     "!=",
@@ -136,6 +141,7 @@ var KwTypeToRepr []string = []string{
 	KwSlash:      "/",
 	KwInfer:      ":=",
 	KwDestructor: "destr",
+	KwConst:      "const",
 }
 
 var KwReprToType map[string]KwType = map[string]KwType{
@@ -168,6 +174,7 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"else":     KwElse,
 	"true":     KwTrue,
 	"false":    KwFalse,
+	"none":     KwNoneLit,
 	"while":    KwWhile,
 	"==":       KwCmpEq,
 	"!=":       KwCmpNeq,
@@ -194,6 +201,7 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"/":        KwSlash,
 	":=":       KwInfer,
 	"destr":    KwDestructor,
+	"const":    KwConst,
 }
 
 type Token struct {

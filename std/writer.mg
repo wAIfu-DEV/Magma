@@ -13,10 +13,7 @@ Writer(
 )
 
 pub new(impl ptr, writeFunc (ptr, str) !u64) Writer:
-    w Writer
-    w.impl = impl
-    w.fn_write = writeFunc
-    ret w
+    ret Writer(impl=impl, fn_write=writeFunc)
 ..
 
 # Writes the provided bytes and returns the count written.
@@ -165,14 +162,9 @@ Writer.writeUint64(num u64) !u64:
 Writer.writeFloat64(flt f64, precision u64) !u64:
     # bitcast and read bits as u64
 
-    # TODO: fix not being able to assign to arg
-    prec u64 = precision
-
-    # TODO: fix issue where addrof arg returns ssa of arg instead of ptr
-    fltCpy f64 = flt
-    fltAddr ptr = addrof fltCpy
+    fltAddr ptr = addrof flt
     addrAsU64 u64* = fltAddr
-    bits u64 = addrAsU64[0]
+    bits u64 = *addrAsU64
 
     EXP_MASK  u64 = 0x7FF0000000000000
     FRAC_MASK u64 = 0x000FFFFFFFFFFFFF
@@ -197,13 +189,14 @@ Writer.writeFloat64(flt f64, precision u64) !u64:
     ..
 
     # cap precision to keep buffer bounded
-    if prec > 42:
-        prec = 42
+    if precision > 42:
+        precision = 42
     ..
 
     buf u8[64]
     idx u64 = 64
     isNeg bool = false
+    fltCpy f64 = flt
 
     if fltCpy < 0.0:
         isNeg = true
@@ -215,30 +208,26 @@ Writer.writeFloat64(flt f64, precision u64) !u64:
 
     scale f64 = 1.0
     i u64 = 0
-    while i < prec:
+    while i < precision:
         scale = scale * 10.0
         i = i + 1
     ..
 
     fracInt u64 = 0
-    if prec > 0:
+    if precision > 0:
         fracInt = cast.ftou(fracPart * scale + 0.5)
     ..
 
-    if (prec > 0) && (cast.utof(fracInt) >= scale):
+    if (precision > 0) && (cast.utof(fracInt) >= scale):
         fracInt = fracInt - cast.ftou(scale)
         intPart = intPart + 1
     ..
 
-    # TODO: fix multiple defs not allowed from different scope
-    # (we could just reuse it?)
-    d u64 = 0
-
-    if prec > 0:
+    if precision > 0:
         i = 0
-        while i < prec:
+        while i < precision:
             idx = idx - 1
-            d = fracInt % 10
+            d u64 = fracInt % 10
             buf[idx] = digitToChar(cast.u64to16(d))
             fracInt = fracInt / 10
             i = i + 1
@@ -255,7 +244,7 @@ Writer.writeFloat64(flt f64, precision u64) !u64:
         n u64 = intPart
         while n != 0:
             idx = idx - 1
-            d = n % 10
+            d u64 = n % 10
             buf[idx] = digitToChar(cast.u64to16(d))
             n = n / 10
         ..

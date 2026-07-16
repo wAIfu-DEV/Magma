@@ -1,5 +1,15 @@
 # `std/json`
 
+## Example
+
+```magma
+object := try json.newObject(heap.allocator(), cleanupValue)
+defer object.free()
+try object.set("answer", json.numberInt(42))
+value := try object.get("answer")
+answer := try value.asInt()
+```
+
 In-memory JSON values and serialization. This module constructs and writes JSON; it does not parse JSON text.
 
 ## Types
@@ -17,10 +27,10 @@ In-memory JSON values and serialization. This module constructs and writes JSON;
 
 ## Containers
 
-- `pub newObject(a alc.Allocator) !$Object` and `pub newArray(a alc.Allocator) !$Array` allocate empty containers.
-- `Object.set(key str, value Value) !void`, `get(key str) !Value`, `delete(key str) !void`, and `count() u64` manage object entries. `set` copies a new key.
+- `pub newObject(a alc.Allocator, cleanup ($Value) void) !$Object` and `pub newArray(a alc.Allocator, cleanup ($Value) void) !$Array` allocate empty containers and configure value cleanup.
+- `Object.set(key str, value $Value) !void`, `get(key str) !Value`, `delete(key str) !void`, `take(key str) !$Value`, and `count() u64` manage entries. `set` takes the value; `take` transfers a removed value without cleanup.
 - `Object.free() void` is a `destr` method that frees copied keys and map storage, not nested values.
-- `Array.append(value Value) !void` appends a shallow value; `count() u64` returns its count.
+- `Array.append(value $Value) !void` takes and appends a value; `count() u64` returns its count.
 - `Array.free() void` is a `destr` method that frees array storage, not nested values.
 
 ## Serialization

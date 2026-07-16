@@ -1,5 +1,14 @@
 # `std/writer`
 
+## Example
+
+```magma
+output := writer.new(state, writeCallback)
+try output.writeLn("ready")
+try output.writeInt64(-42)
+try output.writeFloat64(3.5, 2) # writes 3.50
+```
+
 A type-erased byte-output interface with formatting helpers.
 
 ## Type

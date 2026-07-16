@@ -1,5 +1,14 @@
 # `std/errors`
 
+## Example
+
+```magma
+problem := errors.invalidArgument("expected a positive count")
+if errors.hasCode(problem, 2):
+    message := errors.message(problem)
+..
+```
+
 Creates and inspects Magma `error` values. Standard-library errors use category codes; native platform errors set a distinguishing high bit.
 
 ## Inspection
