@@ -17,11 +17,11 @@ List[T](
 
 pub new[T](a alc.Allocator, cleanup ($T) void) !$List[T]:
     array := try arr.new[T](a)
-    l List[T]
-    l.allocator = a
-    l.array = array
-    l.cleanup = cleanup
-    ret l
+    ret List[T](
+        allocator=a,
+        array=array,
+        cleanup=cleanup,
+    )
 ..
 
 pub fromArray[T](a alc.Allocator, array $arr.Array[T], cleanup ($T) void) $List[T]:
@@ -50,6 +50,18 @@ List[T].resize(usable u16, padLeft u16, padRight u16) !void:
 # .view() multiple times rather than caching its result.
 List[T].view() T[]:
     ret this.array.view()
+..
+
+List[T].get(index u64) !T:
+    ret try this.array.get(index)
+..
+
+List[T].take(index u64) !$T:
+    ret try this.array.take(index)
+..
+
+List[T].set(index u64, value $T) !void:
+    ret try this.array.set(index, value, this.cleanup)
 ..
 
 List[T].expandRight() !u64:

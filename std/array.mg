@@ -11,6 +11,11 @@ use "errors.mg"    err
 use "memory.mg"    mem
 use "iterator.mg"  iter
 
+# 
+const DEFAULT_PAD_LEFT u16 = 2
+const DEFAULT_PAD_RIGHT u64 = 6
+const DEFAULT_CAPACITY u64 = 8
+
 Array[T](
     data T*,
     capacity u16,
@@ -31,11 +36,31 @@ pub new[T](a alc.Allocator) !$Array[T]:
 
     l := Array[T](
         data = try a.alloc(initialSize)
-        capacity = 8
-        padLeft = 4
-        padRight = 4
+        capacity = DEFAULT_CAPACITY
+        padLeft = DEFAULT_PAD_LEFT
+        padRight = DEFAULT_PAD_RIGHT
     )
     ret l
+..
+
+pub newWithSize[T](a alc.Allocator, usable u16, padLeft u16, padRight u16) !$Array[T]:
+    size u16 = usable + padLeft + padRight
+    initialSize u64 = try byteSize[T](cast.u16to64(size))
+
+    if padLeft < DEFAULT_PAD_LEFT:
+        padLeft = DEFAULT_PAD_LEFT
+    ..
+
+    if padRight < DEFAULT_PAD_RIGHT:
+        padRight = DEFAULT_PAD_RIGHT
+    ..
+
+    l := Array[T](
+        data = try a.alloc(initialSize)
+        capacity = size
+        padLeft = padLeft
+        padRight = padRight
+    )
 ..
 
 Array[T].count() u64:
@@ -45,6 +70,7 @@ Array[T].count() u64:
 Array[T].clearShrink(a alc.Allocator, cleanup ($T) void) !void:
     initialSize u64 = try byteSize[T](8)
     newData ptr = try a.alloc(initialSize)
+
     if cleanup != none:
         items := this.view()
         i u64 = 0
@@ -54,11 +80,11 @@ Array[T].clearShrink(a alc.Allocator, cleanup ($T) void) !void:
         ..
     ..
     a.free(this.data)
-    this.data = newData
 
-    this.capacity = 8
-    this.padLeft = 4
-    this.padRight = 4
+    this.data = newData
+    this.capacity = DEFAULT_CAPACITY
+    this.padLeft = DEFAULT_PAD_LEFT
+    this.padRight = DEFAULT_PAD_RIGHT
 ..
 
 Array[T].clearKeep(a alc.Allocator, cleanup ($T) void) !void:
@@ -74,10 +100,11 @@ Array[T].clearKeep(a alc.Allocator, cleanup ($T) void) !void:
             ..
         ..
         a.free(this.data)
+
         this.data = newData
-        this.capacity = 8
-        this.padLeft = 4
-        this.padRight = 4
+        this.capacity = DEFAULT_CAPACITY
+        this.padLeft = DEFAULT_PAD_LEFT
+        this.padRight = DEFAULT_PAD_RIGHT
         ret
     ..
 
@@ -89,8 +116,8 @@ Array[T].clearKeep(a alc.Allocator, cleanup ($T) void) !void:
             i = i + 1
         ..
     ..
-    this.padLeft = 4
-    this.padRight = this.capacity - 4
+    this.padLeft = DEFAULT_PAD_LEFT
+    this.padRight = this.capacity - DEFAULT_PAD_LEFT
 ..
 
 resizeStorage[T](array Array[T]*, a alc.Allocator, usable u16, padLeft u16, padRight u16) !void:
@@ -115,8 +142,8 @@ resizeStorage[T](array Array[T]*, a alc.Allocator, usable u16, padLeft u16, padR
     mem.copy(cast.utop(reg0), cast.utop(reg1), nBytes)
 
     a.free(array.data)
-    array.data = newData
 
+    array.data = newData
     array.capacity = cast.u64to16(newCont)
     array.padLeft = padLeft
     array.padRight = padRight
@@ -145,9 +172,11 @@ Array[T].resize(a alc.Allocator, usable u16, padLeft u16, padRight u16, cleanup 
 
     reg0 u64 = cast.ptou(this.data) + (cast.u16to64(this.padLeft) * sizeof T)
     reg1 u64 = cast.ptou(newData) + (cast.u16to64(padLeft) * sizeof T)
+
     mem.copy(cast.utop(reg0), cast.utop(reg1), count * sizeof T)
 
     a.free(this.data)
+
     this.data = newData
     this.capacity = cast.u64to16(newCont)
     this.padLeft = padLeft
@@ -164,6 +193,46 @@ Array[T].view() T[]:
     ret slc.fromPtr(viewPtr, this.count())
 ..
 
+Array[T].get(index u64) !T:
+    padding u64 = cast.u16to64(this.padLeft)
+    idx u64 = padding + index
+    lastIdx u64 = padding + this.count() - 1
+
+    if idx < padding || idx > lastIdx:
+        throw err.outOfBounds("index is out of bounds")
+    ..
+    typedPtr T* = cast.reinterpret[T](this.data)
+    ret typedPtr[idx]
+..
+
+Array[T].take(index u64) !$T:
+    padding u64 = cast.u16to64(this.padLeft)
+    idx u64 = padding + index
+    lastIdx u64 = padding + this.count() - 1
+
+    if idx < padding || idx > lastIdx:
+        throw err.outOfBounds("index is out of bounds")
+    ..
+    typedPtr T* = cast.reinterpret[T](this.data)
+    val T = typedPtr[idx]
+    typedPtr[idx] = mem.zeroValue[T]()
+    ret val
+..
+
+Array[T].set(index u64, value $T, cleanup ($T) void) !void:
+    padding u64 = cast.u16to64(this.padLeft)
+    idx u64 = padding + index
+    lastIdx u64 = padding + this.count() - 1
+
+    if idx < padding || idx > lastIdx:
+        throw err.outOfBounds("index is out of bounds")
+    ..
+    typedPtr T* = cast.reinterpret[T](this.data)
+    cleanup(typedPtr[idx])
+    typedPtr[idx] = value
+    ret
+..
+
 Array[T].expandRight(a alc.Allocator) !u64:
     if this.padRight > 0:
         this.padRight = this.padRight - 1
@@ -175,7 +244,7 @@ Array[T].expandRight(a alc.Allocator) !u64:
     newPad u64 = expanded - oldCont
 
     if expanded > 65535:
-        throw err.wouldOverflow("Array cannot contain more than 65535 elements.")
+        throw err.wouldOverflow("Array cannot contain more than 65535 elements")
     ..
 
     expandedSize u64 = try byteSize[T](expanded)
@@ -217,8 +286,8 @@ Array[T].expandLeft(a alc.Allocator) !void:
     mem.copy(cast.utop(reg0), cast.utop(reg1), nBytes)
 
     a.free(this.data)
-    this.data = newData
 
+    this.data = newData
     this.capacity = cast.u64to16(expanded)
     this.padLeft = cast.u64to16(newPad)
 ..
@@ -279,6 +348,7 @@ destr Array[T].free(a alc.Allocator, cleanup ($T) void) void:
         ..
     ..
     a.free(this.data)
+
     this.capacity = 0
     this.padLeft = 0
     this.padRight = 0

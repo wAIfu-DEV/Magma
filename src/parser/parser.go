@@ -878,9 +878,27 @@ func parseDestructureAssignAfterComma(ctx *ParseCtx, commaTk t.Token, left t.Nod
 		return nil, false, nil
 	}
 
-	// Only valid for `<name> <type>, <name> <type> = <call>`
-	vd, ok := left.(*t.NodeExprVarDef)
-	if !ok {
+	// Valid forms are `<name> <type>, <name> <type> = <call>` and
+	// `<name>, <name> := <call>`.
+	var valueDef *t.NodeExprVarDef
+	valueIsInferred := false
+	switch n := left.(type) {
+	case *t.NodeExprVarDef:
+		valueDef = n
+	case *t.NodeExprName:
+		if _, ok := n.Name.(*t.NodeNameSingle); !ok {
+			return nil, false, nil
+		}
+		secondName, nameErr := peekNth(ctx, 1)
+		inferOp, inferErr := peekNth(ctx, 2)
+		if nameErr != nil || inferErr != nil || secondName.Type != t.TokName || inferOp.KeywType != t.KwInfer {
+			// A plain `name, name` is commonly an argument list. Only claim it as
+			// destructuring when the distinctive `:=` follows the second name.
+			return nil, false, nil
+		}
+		valueDef = &t.NodeExprVarDef{Name: n.Name}
+		valueIsInferred = true
+	default:
 		return nil, false, nil
 	}
 
@@ -903,29 +921,64 @@ func parseDestructureAssignAfterComma(ctx *ParseCtx, commaTk t.Token, left t.Nod
 	if e != nil {
 		return nil, true, e
 	}
-
-	typeTk2, e := peek(ctx)
-	if e != nil {
-		return nil, true, e
-	}
-	type2, e := parseType(ctx, typeTk2, false)
-	if e != nil {
-		return nil, true, e
-	}
-
-	eqTk, e := peek(ctx)
-	if e != nil {
-		return nil, true, e
-	}
-	if eqTk.KeywType != t.KwEqual {
+	if _, ok := name2.(*t.NodeNameSingle); !ok {
 		return nil, true, comp_err.CompilationErrorToken(
 			ctx.Fctx,
-			&eqTk,
-			fmt.Sprintf("syntax error: expected '=' in destructuring assignment but got '%s'", eqTk.Repr),
-			"expected: `value T, err error = call()`",
+			&nameTk2,
+			"syntax error: destructuring bindings must be simple names",
+			"expected: `value, err := call()`",
 		)
 	}
-	consume(ctx) // '='
+
+	afterName, e := peek(ctx)
+	if e != nil {
+		return nil, true, e
+	}
+
+	var type2 *t.NodeType
+	var assignKeyword t.KwType
+	if afterName.KeywType == t.KwInfer {
+		if !valueIsInferred {
+			return nil, true, comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&afterName,
+				"syntax error: cannot mix typed and inferred destructuring bindings",
+				"use either `value T, err error = call()` or `value, err := call()`",
+			)
+		}
+		assignKeyword = t.KwInfer
+		consume(ctx)
+	} else {
+		if valueIsInferred {
+			return nil, true, comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&afterName,
+				fmt.Sprintf("syntax error: inferred destructuring requires ':=' but got '%s'", afterName.Repr),
+				"expected: `value, err := call()`",
+			)
+		}
+		type2, e = parseType(ctx, afterName, false)
+		if e != nil {
+			return nil, true, e
+		}
+		assignKeyword = t.KwEqual
+	}
+
+	if assignKeyword == t.KwEqual {
+		eqTk, e := peek(ctx)
+		if e != nil {
+			return nil, true, e
+		}
+		if eqTk.KeywType != t.KwEqual {
+			return nil, true, comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&eqTk,
+				fmt.Sprintf("syntax error: expected '=' in destructuring assignment but got '%s'", eqTk.Repr),
+				"expected: `value T, err error = call()`",
+			)
+		}
+		consume(ctx) // '='
+	}
 
 	rhsTk, e := peek(ctx)
 	if e != nil {
@@ -948,7 +1001,7 @@ func parseDestructureAssignAfterComma(ctx *ParseCtx, commaTk t.Token, left t.Nod
 	}
 
 	return &t.NodeExprDestructureAssign{
-		ValueDef: *vd,
+		ValueDef: *valueDef,
 		ErrDef:   t.NodeExprVarDef{Name: name2, Type: type2},
 		Call:     callExpr,
 	}, true, nil

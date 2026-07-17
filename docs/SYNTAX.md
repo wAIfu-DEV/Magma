@@ -753,6 +753,12 @@ Destructuring currently supports a function call on the right-hand side:
 value T, err error = someThrowingCall()
 ```
 
+The value and error types can be inferred together:
+
+```magma
+value, err := someThrowingCall()
+```
+
 The value is valid when the error is OK. On error, the value is zero initialized, never rely on the value without checking for error status first.
 
 ## Defer
@@ -975,6 +981,12 @@ Destructuring has one supported shape:
 
 ```magma
 value T, err error = throwingCall()
+```
+
+or with both binding types inferred:
+
+```magma
+value, err := throwingCall()
 ```
 
 Both bindings are declarations. The right-hand side must parse as a function

@@ -700,13 +700,19 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 			return fmt.Errorf("destructuring assignment does not support !void calls (no value to bind)")
 		}
 
-		if n.ErrDef.Type == nil || !isErrType(n.ErrDef.Type) || n.ErrDef.Type.Throws {
+		if n.ErrDef.Type == nil {
+			n.ErrDef.Type = makeNamedType("error")
+		}
+		if !isErrType(n.ErrDef.Type) || n.ErrDef.Type.Throws {
 			return fmt.Errorf("destructuring assignment: error binding must be of type 'error'")
 		}
 
-		unwrapped := &t.NodeType{
-			Throws:   false,
-			KindNode: n.Call.InfType.KindNode,
+		unwrappedValue := *n.Call.InfType
+		unwrappedValue.Throws = false
+		unwrapped := &unwrappedValue
+
+		if n.ValueDef.Type == nil {
+			n.ValueDef.Type = unwrapped
 		}
 
 		if !sameType(unwrapped, n.ValueDef.Type) {

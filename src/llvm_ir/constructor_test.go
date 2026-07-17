@@ -57,6 +57,63 @@ write(p u64*, value u64) void:
 	}
 }
 
+func TestInferredThrowingCallDestructuringLowers(t *testing.T) {
+	source := `mod test
+
+produce() !u64:
+    ret 7
+..
+
+consume(value u64, problem error) void:
+..
+
+main() void:
+    value, problem := produce()
+    consume(value, problem)
+..
+`
+	ir, err := compileSource(t, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ir, "extractvalue") {
+		t.Fatal("inferred destructuring did not lower the throwing result")
+	}
+}
+
+func TestInferredDestructuringRejectsNonThrowingCall(t *testing.T) {
+	source := `mod test
+
+produce() u64:
+    ret 7
+..
+
+main() void:
+    value, problem := produce()
+..
+`
+	_, err := compileSource(t, source)
+	if err == nil || !strings.Contains(err.Error(), "requires a throwing call") {
+		t.Fatalf("error = %v, want throwing-call diagnostic", err)
+	}
+}
+
+func TestInferredDestructuringRejectsThrowingVoidCall(t *testing.T) {
+	source := `mod test
+
+produce() !void:
+..
+
+main() void:
+    value, problem := produce()
+..
+`
+	_, err := compileSource(t, source)
+	if err == nil || !strings.Contains(err.Error(), "does not support !void") {
+		t.Fatalf("error = %v, want !void diagnostic", err)
+	}
+}
+
 func TestStructConstructorsAndConstantsLower(t *testing.T) {
 	source := `mod test
 

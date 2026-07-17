@@ -924,7 +924,12 @@ func clExpr(c *ctx, expr t.NodeExpr, lvalue bool) error {
 			return e
 		}
 	case *t.NodeExprDestructureAssign:
-		return clExprCall(c, n.Call)
+		if e := clExprCall(c, n.Call); e != nil {
+			return e
+		}
+		// Inferred destructuring bindings must have concrete types before later
+		// statements are linked against their scope entries.
+		return ctExpr(c, n)
 	case *t.NodeExprName:
 		e := clName(c, n, enumEntFuncAndVar, lvalue)
 		if e != nil {

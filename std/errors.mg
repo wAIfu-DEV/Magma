@@ -23,6 +23,14 @@ pub is(a error, b error) bool:
     ret code(a) == code(b)
 ..
 
+pub isOk(e error) bool:
+    ret code(e) == 0
+..
+
+pub isError(e error) bool:
+    ret code(e) != 0
+..
+
 # Returns whether an error belongs to a numeric category. Error equality is
 # category-based; messages and platform details are not compared.
 pub hasCode(e error, expected u32) bool:
@@ -51,6 +59,8 @@ pub toStr(e error) str:
         ret "would overflow"
     elif c == 6:
         ret "invalid type"
+    elif c == 7:
+        ret "out of bounds"
     ..
     ret "unknown error"
 ..
@@ -130,3 +140,11 @@ pub wouldOverflow(msg str) error:
 pub invalidType(msg str) error:
     ret makeErr(6, msg)
 ..
+
+# Returns an error with code 7 indicating an index being out of bounds of a container.
+# O(1).
+# @returns error
+pub outOfBounds(msg str) error:
+    ret makeErr(7, msg)
+..
+

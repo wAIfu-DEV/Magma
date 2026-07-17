@@ -498,6 +498,12 @@ if errors.code(countErr) != 0:
 ..
 ```
 
+Both binding types can instead be inferred from the throwing call:
+
+```magma
+count, countErr := file.count()
+```
+
 This gives callers a choice between concise propagation and explicit recovery.
 The destructuring form is narrow: it declares exactly a value and an `error`,
 and the right side must be a throwing function call. A failed value result is

@@ -271,7 +271,7 @@ testFuncs() !void:
 testThrowDestructure() !void:
     try out.writeLn("Testing: err retval destructure")
 
-    v bool, e error = retOkBool()
+    v, e := retOkBool()
 
     if v == true:
     else:
