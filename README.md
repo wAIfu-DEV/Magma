@@ -123,6 +123,49 @@ The language includes typed pointers, raw `ptr`, slices, fixed-size arrays,
 When a primitive cannot yet be expressed in Magma itself, inline LLVM provides a
 deliberate escape hatch.
 
+### Asynchronous work with futures
+
+Magma provides asynchronous work through the standard library rather than
+language-level `async` and `await` keywords. Library operations submit work to a
+reusable `thread_pool.ThreadPool` and return a typed `future.Future[T]` that
+publishes either a value or an error. For example, readers provide `readAsync`:
+
+```magma
+use "../std/file.mg" file
+use "../std/heap.mg" heap
+use "../std/strings.mg" strings
+use "../std/thread_pool.mg" thread_pool
+
+a := heap.allocator()
+pool := try thread_pool.newDefault(a)
+defer pool.close()
+
+f := try file.open(a, "data.txt", file.mode().read())
+defer f.close()
+
+reader := f.reader()
+pending := try reader.readAsync(pool, a, f.count())
+
+if try pending.isDone():
+    # The non-blocking poll is optional.
+..
+
+contents := try pending.await()
+defer strings.free(a, contents)
+```
+
+`isDone()` polls without consuming the future. `await()` waits efficiently,
+returns the result or propagates the worker's error, and consumes the future, so
+each future may be awaited only once. The allocator, pool, and resources
+referenced by the copied context must remain valid until the work completes.
+Avoid awaiting work from the same fully occupied pool, which can deadlock through
+worker starvation.
+
+The lower-level `future.new` constructor is primarily intended for implementing
+asynchronous library APIs. See [Asynchronous work with futures](docs/FEATURES.md#8-asynchronous-work-with-futures)
+and the [`std/future` reference](docs/std/future.md) for its API and the complete
+lifetime model.
+
 ## Standard Library
 
 The standard library in [`std/`](std/) demonstrates that Magma's small core can
@@ -133,7 +176,8 @@ support practical, reusable components:
 - arrays, lists, queues, maps, builders, sorting, and searching;
 - strings, byte utilities, UTF-8 helpers, and numeric conversion;
 - JSON values and serialization;
-- CPU core discovery, native threads, mutexes, wake primitives, and worker pools;
+- CPU core discovery, native threads, mutexes, wake primitives, worker pools,
+  and typed futures;
 - Windows streaming HTTP through WinHTTP;
 - Windows raylib 5.5 bindings for windows, drawing, and input.
 
