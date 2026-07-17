@@ -5,8 +5,10 @@ import (
 	magmatypes "Magma/src/magma_types"
 	t "Magma/src/types"
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -33,13 +35,14 @@ func ssaName(name string) SsaName {
 }
 
 type IrCtx struct {
-	Shared    *t.SharedState
-	fCtx      *t.FileCtx
-	bld       ScopeBuilder
-	parentBld ScopeBuilder
-	nextSsa   *int
-	moduleIdx int
-	CurrFunc  *t.NodeFuncDef
+	Shared       *t.SharedState
+	fCtx         *t.FileCtx
+	bld          ScopeBuilder
+	parentBld    ScopeBuilder
+	nextSsa      *int
+	moduleIdx    int
+	CurrFunc     *t.NodeFuncDef
+	traceStrings *traceStringPool
 
 	CurrNestedScopeIdx int
 	SeenNestedScopes   *int
@@ -50,6 +53,56 @@ type IrCtx struct {
 	LoopExitLbl SsaName
 
 	IsTopLevel bool
+}
+
+// traceStringPool gives trace metadata one constant per distinct byte string.
+// Names are derived from the complete contents, so parallel module generation
+// cannot affect either references or final IR ordering.
+type traceStringPool struct {
+	mu     sync.Mutex
+	values map[string]struct{}
+}
+
+func newTraceStringPool() *traceStringPool {
+	return &traceStringPool{values: make(map[string]struct{})}
+}
+
+func traceStringName(value string) string {
+	return "@.magma.trace.str." + hex.EncodeToString([]byte(value))
+}
+
+func (p *traceStringPool) intern(value string) SsaName {
+	p.mu.Lock()
+	p.values[value] = struct{}{}
+	p.mu.Unlock()
+	return ssaName(traceStringName(value))
+}
+
+func escapeCString(value string) string {
+	var escaped strings.Builder
+	for i := 0; i < len(value); i++ {
+		b := value[i]
+		if b == '"' || b == '\\' || b < 0x20 || b > 0x7e {
+			fmt.Fprintf(&escaped, "\\%02X", b)
+		} else {
+			escaped.WriteByte(b)
+		}
+	}
+	return escaped.String()
+}
+
+func (p *traceStringPool) writeTo(b *bytes.Buffer) {
+	p.mu.Lock()
+	values := make([]string, 0, len(p.values))
+	for value := range p.values {
+		values = append(values, value)
+	}
+	p.mu.Unlock()
+	slices.Sort(values)
+	for _, value := range values {
+		fmt.Fprintf(b, "%s = private unnamed_addr constant [%d x i8] c\"%s\\00\"\n",
+			traceStringName(value), len(value)+1, escapeCString(value))
+	}
 }
 
 func flattenName(name t.NodeName) string {
@@ -64,6 +117,21 @@ func flattenName(name t.NodeName) string {
 		}
 	}
 	return s
+}
+
+// traceDisplayName returns the source-level spelling of a function name.
+// Generic specializations must retain their mangled names as LLVM symbols,
+// but exposing the encoded type arguments in diagnostics makes traces hard to
+// read. Each qualified name component is mangled independently, so remove the
+// specialization suffix from every component.
+func traceDisplayName(name t.NodeName) string {
+	parts := strings.Split(flattenName(name), ".")
+	for i, part := range parts {
+		if generic := strings.Index(part, "__g__"); generic >= 0 {
+			parts[i] = part[:generic]
+		}
+	}
+	return strings.Join(parts, ".")
 }
 
 type parsedName struct {
@@ -320,7 +388,9 @@ func irSsaGlobal(ctx *IrCtx) SsaName {
 	mdIdx := strconv.Itoa(ctx.moduleIdx)
 	name := strconv.Itoa(*ctx.nextSsa)
 	(*ctx.nextSsa)++
-	return ssaName("@." + mdIdx + name)
+	// Keep the module and per-module counter separated. Concatenating them is
+	// ambiguous: module 3/global 211 and module 32/global 11 both become 3211.
+	return ssaName("@." + mdIdx + "." + name)
 }
 
 func irWrite(ctx *IrCtx, text string) {
@@ -1020,25 +1090,17 @@ func irExprFuncCall(ctx *IrCtx, fnCall *t.NodeExprCall, keepError bool, topLevel
 	return ssa, nil
 }
 
-func irExprLitStr(ctx *IrCtx, litStr *t.NodeExprLit) (SsaName, error) {
+func irCStringGlobal(ctx *IrCtx, value string) SsaName {
 	constSsa := irSsaGlobal(ctx)
+	constLen := len(value) + 1
 
-	//strFieldSsa := irSsaName(ctx)
-	//sizeFieldSsa := irSsaName(ctx)
+	irWriteGlf(ctx, "%s = private constant [%d x i8] c\"%s\\00\"\n", constSsa.Repr, constLen, escapeCString(value))
+	return constSsa
+}
 
+func irExprLitStr(ctx *IrCtx, litStr *t.NodeExprLit) (SsaName, error) {
+	constSsa := irCStringGlobal(ctx, litStr.Value)
 	constLen := len(litStr.Value) + 1
-
-	var escaped strings.Builder
-	for i := 0; i < len(litStr.Value); i++ {
-		b := litStr.Value[i]
-		if b == '"' || b == '\\' || b < 0x20 || b > 0x7e {
-			fmt.Fprintf(&escaped, "\\%02X", b)
-		} else {
-			escaped.WriteByte(b)
-		}
-	}
-
-	irWriteGlf(ctx, "%s = private constant [%d x i8] c\"%s\\00\"\n", constSsa.Repr, constLen, escaped.String())
 
 	//irWritef(ctx, "  %%%s = insertvalue %%type.str undef, ptr @%s, 0\n", strFieldSsa.Repr, constSsa.Repr)
 	//irWritef(ctx, "  %%%s = insertvalue %%type.str %%%s, i64 %d, 1\n", sizeFieldSsa.Repr, strFieldSsa.Repr, constLen-1)
@@ -2683,7 +2745,7 @@ func irExprBinary(ctx *IrCtx, expectedType *t.NodeType, binaryExpr *t.NodeExprBi
 	return SsaName{}, fmt.Errorf("unsupported binary expression")
 }
 
-func irTryCall(ctx *IrCtx, callRetSsa SsaName, fnCall *t.NodeExprCall) (SsaName, error) {
+func irTryCall(ctx *IrCtx, callRetSsa SsaName, fnCall *t.NodeExprCall, pos t.FilePos) (SsaName, error) {
 	errSsa := irSsaLocal(ctx)
 
 	irWritef(ctx, "  %s = extractvalue ", errSsa.Repr)
@@ -2695,7 +2757,7 @@ func irTryCall(ctx *IrCtx, callRetSsa SsaName, fnCall *t.NodeExprCall) (SsaName,
 
 	irWritef(ctx, " %s, 0\n", callRetSsa.Repr)
 
-	e = irThrowSsa(ctx, errSsa, ctx.CurrFunc)
+	e = irThrowSsa(ctx, errSsa, ctx.CurrFunc, pos)
 	if e != nil {
 		return SsaName{}, e
 	}
@@ -2739,7 +2801,7 @@ func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr, topLeve
 		if e != nil {
 			return SsaName{}, e
 		}
-		return irTryCall(ctx, callSsa, ne.Call.(*t.NodeExprCall))
+		return irTryCall(ctx, callSsa, ne.Call.(*t.NodeExprCall), ne.Pos)
 	case *t.NodeExprDestructureAssign:
 		return irExprDestructureAssign(ctx, ne)
 	case *t.NodeExprSubscript:
@@ -2976,7 +3038,25 @@ func irMakeThrowingRetVal(ctx *IrCtx, retType *t.NodeType, errSsa SsaName, valSs
 	}
 }
 
-func irThrowSsa(ctx *IrCtx, errSsa SsaName, fnDef *t.NodeFuncDef) error {
+func irErrorSite(ctx *IrCtx, pos t.FilePos) SsaName {
+	functionName := "<global>"
+	if ctx.CurrFunc != nil {
+		functionName = ctx.CurrFunc.DisplayName
+		if functionName == "" {
+			functionName = traceDisplayName(ctx.CurrFunc.Class.NameNode)
+		}
+	}
+	functionStr := ctx.traceStrings.intern(functionName)
+	// Runtime diagnostics should identify the source without embedding the
+	// build machine's absolute directory in the executable.
+	fileStr := ctx.traceStrings.intern(filepath.Base(ctx.fCtx.FilePath))
+	site := irSsaGlobal(ctx)
+	irWriteGlf(ctx, "%s = private constant %%type.error.site { ptr %s, ptr %s, i32 %d, i32 %d }\n",
+		site.Repr, functionStr.Repr, fileStr.Repr, pos.Line, pos.Col)
+	return site
+}
+
+func irThrowSsa(ctx *IrCtx, errSsa SsaName, fnDef *t.NodeFuncDef, pos t.FilePos) error {
 	fieldSsa := irSsaLocal(ctx)
 	compSsa := irSsaLocal(ctx)
 
@@ -2984,14 +3064,22 @@ func irThrowSsa(ctx *IrCtx, errSsa SsaName, fnDef *t.NodeFuncDef) error {
 	neqLabel := irSsaName(ctx)
 
 	// get error code field
-	irWritef(ctx, "  %s = extractvalue %%type.error %s, 0\n", fieldSsa.Repr, errSsa.Repr)
+	irWritef(ctx, "  %s = extractvalue %%type.error %s, 2\n", fieldSsa.Repr, errSsa.Repr)
 
 	// if errcode != 0
 	irWritef(ctx, "  %s = icmp ne i32 %s, 0\n", compSsa.Repr, fieldSsa.Repr)
-	irWritef(ctx, "  br i1 %s, label %%%s, label %%%s\n", compSsa.Repr, neqLabel.Repr, eqLabel.Repr)
+	irWritef(ctx, "  br i1 %s, label %%%s, label %%%s, !prof !9000\n", compSsa.Repr, neqLabel.Repr, eqLabel.Repr)
 
 	// throw = err; return 0
 	irWritef(ctx, "%s:\n", neqLabel.Repr)
+
+	// Add source metadata only on the failing edge. The runtime uses bounded
+	// static storage, so this cannot allocate or invalidate an older trace.
+	site := irErrorSite(ctx, pos)
+	tracedErrSsa := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = call %%type.error @magma.error.push(%%type.error %s, ptr %s)\n",
+		tracedErrSsa.Repr, errSsa.Repr, site.Repr)
+	errSsa = tracedErrSsa
 
 	retValSsa := errSsa
 	if fnDef.ReturnType.Throws {
@@ -3039,7 +3127,7 @@ func irStmtThrow(ctx *IrCtx, stmtThrow *t.NodeStmtThrow, fnDef *t.NodeFuncDef) e
 		return e
 	}
 
-	return irThrowSsa(ctx, exprSsa, fnDef)
+	return irThrowSsa(ctx, exprSsa, fnDef, stmtThrow.Pos)
 }
 
 func irExprDestructureAssign(ctx *IrCtx, expr *t.NodeExprDestructureAssign) (SsaName, error) {
@@ -3530,23 +3618,6 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 }
 
 func irMainWrapper(ctx *IrCtx, mainFnDef *t.NodeFuncDef) error {
-
-	if mainFnDef.ReturnType.Throws {
-		errFmt := "Uncaught Error: %d '%s'\\0A"
-		irWritef(ctx, "@.main.fmt.err = private constant [%d x i8] c\"%s\\00\"\n\n", len(errFmt)-1, errFmt)
-
-		// check if printf was already declared in another module
-		printfDecl := "declare i32 @printf(ptr, ...)\n"
-
-		ctx.Shared.LlvmDeclM.Lock()
-		_, ok := ctx.Shared.LlvmDecl[printfDecl]
-		ctx.Shared.LlvmDeclM.Unlock()
-
-		if !ok {
-			irWrite(ctx, printfDecl)
-		}
-	}
-
 	irWrite(ctx, "; Entry point\n")
 	irWrite(ctx, "define i32 @main(i32 %argc, ptr %argv) {\n") // alwaysinline
 	irWrite(ctx, "entry:\n")
@@ -3572,13 +3643,11 @@ func irMainWrapper(ctx *IrCtx, mainFnDef *t.NodeFuncDef) error {
 			irWritef(ctx, "  %%r = call { %%type.error } @%s.main()\n", ctx.fCtx.MainPckgName)
 		}
 		irWrite(ctx, "  %e = extractvalue { %type.error } %r, 0\n")
-		irWrite(ctx, "  %ecd = extractvalue %type.error %e, 0\n")
+		irWrite(ctx, "  %ecd = extractvalue %type.error %e, 2\n")
 		irWrite(ctx, "  %isnz = icmp ne i32 %ecd, 0\n")
-		irWrite(ctx, "  br i1 %isnz, label %enz, label %ez\n")
+		irWrite(ctx, "  br i1 %isnz, label %enz, label %ez, !prof !9000\n")
 		irWrite(ctx, "enz:\n")
-		irWrite(ctx, "  %ems = extractvalue %type.error %e, 1\n")
-		irWrite(ctx, "  %emss = extractvalue %type.str %ems, 0\n")
-		irWrite(ctx, "  call i32 (ptr, ...) @printf(ptr @.main.fmt.err, i32 %ecd, ptr %emss)\n")
+		irWrite(ctx, "  call void @magma.error.print(%type.error %e)\n")
 		irWrite(ctx, "  ret i32 %ecd\n")
 		irWrite(ctx, "ez:\n")
 	} else {
@@ -4042,6 +4111,7 @@ func irWriteModule(
 	glBld *bytes.Buffer,
 	structBld *bytes.Buffer,
 	strctBldM *sync.Mutex,
+	traceStrings *traceStringPool,
 	i int,
 ) error {
 	nextSsa := 0
@@ -4069,6 +4139,7 @@ func irWriteModule(
 		},
 		nextSsa:          &nextSsa,
 		moduleIdx:        i,
+		traceStrings:     traceStrings,
 		SeenNestedScopes: &seenScopes,
 		NestedLoopCnt:    &nestedLoop,
 	}
@@ -4119,10 +4190,18 @@ func IrWrite(shared *t.SharedState) ([]byte, error) {
 
 	header := headBld.Bytes()
 
+	traceSlots := shared.ErrorTraceSlots
+	if traceSlots == 0 {
+		traceSlots = 1024
+	}
+	utilsFragment, err := llvmfragments.RenderUtils(traceSlots)
+	if err != nil {
+		return nil, err
+	}
 	llvmFragments := [][]byte{
 		header,
 		{},
-		llvmfragments.Utils,
+		utilsFragment,
 	}
 	fragLen := len(llvmFragments)
 
@@ -4145,6 +4224,7 @@ func IrWrite(shared *t.SharedState) ([]byte, error) {
 
 	structDefBld := &bytes.Buffer{}
 	structDefBldM := sync.Mutex{}
+	traceStrings := newTraceStringPool()
 
 	i := fragLen
 	for _, v := range filesMap {
@@ -4156,7 +4236,7 @@ func IrWrite(shared *t.SharedState) ([]byte, error) {
 			// module local builder
 			moduleBld := &bytes.Buffer{}
 			glBld := &bytes.Buffer{}
-			e := irWriteModule(shared, v, moduleBld, glBld, structDefBld, &structDefBldM, idx)
+			e := irWriteModule(shared, v, moduleBld, glBld, structDefBld, &structDefBldM, traceStrings, idx)
 			if e != nil {
 				results[idx] = resStr{E: e}
 				return
@@ -4173,6 +4253,9 @@ func IrWrite(shared *t.SharedState) ([]byte, error) {
 	wg.Wait()
 
 	results[1].S = structDefBld.Bytes()
+	traceStringBld := &bytes.Buffer{}
+	traceStrings.writeTo(traceStringBld)
+	results[1].S = append(results[1].S, traceStringBld.Bytes()...)
 
 	// process results
 	irStrings := [][]byte{}

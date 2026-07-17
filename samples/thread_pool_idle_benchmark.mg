@@ -40,7 +40,7 @@ measurePool() !u64:
     # Ensure every worker has reached its blocking wait before sampling.
     time.sleep(100)
     load u64 = measureSleep()
-    try pool.shutdown()
+    try pool.close()
     ret load
 ..
 

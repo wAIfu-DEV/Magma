@@ -508,6 +508,7 @@ func (n *NodeExprAssign) Print(indent int) {
 
 type NodeExprTry struct {
 	Call NodeExpr
+	Pos  FilePos
 }
 
 func (n *NodeExprTry) GetInferredType() *NodeType {
@@ -663,6 +664,7 @@ func (n *NodeStmtExpr) Print(indent int) {
 
 type NodeStmtThrow struct {
 	Expression NodeExpr
+	Pos        FilePos
 }
 
 func (n *NodeStmtThrow) Print(indent int) {
@@ -789,6 +791,7 @@ type NodeFuncDef struct {
 	Body        NodeBody
 	AbsName     string
 	NoAliasName string
+	DisplayName string
 
 	Deferred []*NodeStmtDefer
 	DeferCnt int

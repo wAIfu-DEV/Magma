@@ -201,6 +201,22 @@ func TestThrowingDestructorIsAllowed(t *testing.T) {
 	}
 }
 
+func TestValueReturningDestructorIsAllowed(t *testing.T) {
+	destructor := &types.NodeFuncDef{
+		AbsName:      "test.Resource.take",
+		IsDestructor: true,
+		ReturnType:   &types.NodeType{KindNode: &types.NodeTypeNamed{NameNode: &types.NodeNameSingle{Name: "u64"}}},
+	}
+	global := &types.NodeGlobal{StructDefs: map[string]*types.StructDef{
+		"Resource": {Module: "test", Name: "Resource", Destructors: []*types.NodeFuncDef{destructor}},
+	}}
+	a := &analyzer{}
+	validateDestructors(a, global)
+	if len(a.diagnostics) != 0 {
+		t.Fatalf("value-returning destructor produced diagnostics: %+v", a.diagnostics)
+	}
+}
+
 func TestFunctionPointerCanConsumeOwnedArgument(t *testing.T) {
 	a, resourceType := fixture()
 	ownedType := *resourceType

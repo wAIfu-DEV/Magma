@@ -6,9 +6,11 @@ ECHO Building...
 CALL go build
 
 ECHO Building executable...
-CALL Magma.exe --emit exe --out out.exe samples/raylib_test.mg
 
+CALL Magma.exe --emit exe --out out.exe samples/async_test.mg
 if %ERRORLEVEL% GEQ 1 GOTO :End
+
+CALL Magma.exe -O3 --emit llvm --out out.ll samples/async_test.mg
 
 CALL out.exe
 

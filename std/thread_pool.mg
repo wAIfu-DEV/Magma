@@ -3,10 +3,17 @@ mod thread_pool
 use "allocator.mg" alc
 use "cast.mg" cast
 use "errors.mg" errors
+use "memory.mg" mem
 use "mutex.mg" mutex
 use "thread.mg" thread
 use "wake.mg" wake
-use "memory.mg" mem
+use "cpu.mg" cpu
+
+@platform("windows")
+use "win/generation_wait.mg" generation_wait
+
+@platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
+use "unix/generation_wait.mg" generation_wait
 
 Task(
     entry (ptr) u64
@@ -24,223 +31,239 @@ State(
     count u64
     pending u64
     idleWaiters u64
+    sleepingWorkers u64
+    wakeReservations u64
+    workGeneration u32
+    spinCount u64
     stopping bool
     fatalError error
     lock mutex.Mutex
-    work wake.Wake
+    work generation_wait.Wait
     idle wake.Wake
 )
+
+cpuPause() void:
+    llvm "  call void asm sideeffect \"pause\", \"~{memory}\"()\n"
+    llvm "  ret void\n"
+..
 
 ThreadPool(
     state State*
 )
 
+# Makes ownership transfers into the heap-backed State explicit to the
+# destructor checker. It cannot infer a move through a raw-pointer assignment.
+claim[T](claimed $T) $T:
+    ret claimed
+..
+
+abandon[T](value $T) void:
+    abandoned T[1]
+    abandoned[0] = value
+..
+
+releaseLock(value $mutex.Mutex) void:
+    value.free()
+..
+
+releaseIdle(value $wake.Wake) void:
+    value.free()
+..
+
+spawnWorkerInto(state State*, destination thread.Thread*) !bool:
+    worker := try thread.new[State](workerMain, state)
+    *destination = claim[thread.Thread](worker)
+    ret true
+..
+
 taskAt(state State*, index u64) Task*:
     ret cast.utop(cast.ptou(state.tasks) + (index * sizeof Task))
+..
+
+# Doubles and linearizes a full queue. The caller holds state.lock. Allocation
+# happens before any state is changed, so a failure leaves the queue intact.
+growQueue(state State*) !bool:
+    maxU64 u64 = 0 - 1
+    if state.capacity > maxU64 / 2:
+        throw errors.wouldOverflow("thread pool queue capacity overflow")
+    ..
+    newCapacity u64 = state.capacity * 2
+    newTasks Task* = try state.allocator.allocT[Task](newCapacity)
+    i u64 = 0
+    while i < state.count:
+        source u64 = (state.head + i) % state.capacity
+        destination Task* = cast.utop(cast.ptou(newTasks) + (i * sizeof Task))
+        *destination = *taskAt(state, source)
+        i = i + 1
+    ..
+    state.allocator.free(state.tasks)
+    state.tasks = newTasks
+    state.capacity = newCapacity
+    state.head = 0
+    state.tail = state.count
+    ret true
 ..
 
 workerAt(state State*, index u64) thread.Thread*:
     ret cast.utop(cast.ptou(state.workers) + (index * sizeof thread.Thread))
 ..
 
-lockState(state State*) !void:
+lockResult(state State*) !bool:
     try state.lock.lock()
+    ret true
 ..
 
-unlockState(state State*) !void:
+unlockResult(state State*) !bool:
     try state.lock.unlock()
+    ret true
 ..
 
-waitForWork(state State*) !void:
-    try state.work.wait()
-..
-
-notifyWork(state State*) !void:
-    try state.work.notify()
-..
-
-waitForIdle(state State*) !void:
+waitIdleResult(state State*) !bool:
     try state.idle.wait()
-..
-
-notifyIdle(state State*) !void:
-    try state.idle.notify()
-..
-
-# Result adapters make fallible void operations inspectable by worker entry
-# functions, whose native signature cannot return a Magma error.
-waitForWorkResult(state State*) !bool:
-    try waitForWork(state)
     ret true
 ..
 
-lockStateResult(state State*) !bool:
-    try lockState(state)
-    ret true
-..
-
-unlockStateResult(state State*) !bool:
-    try unlockState(state)
-    ret true
-..
-
-notifyIdleResult(state State*) !bool:
-    try notifyIdle(state)
-    ret true
-..
-
-notifyWorkResult(state State*) !bool:
-    try notifyWork(state)
-    ret true
-..
-
-joinWorkerResult(state State*, index u64) !bool:
+joinResult(state State*, index u64) !bool:
     try workerAt(state, index).join()
     ret true
 ..
 
-freeIdleResult(state State*) !bool:
-    try state.idle.free()
-    ret true
-..
-
-freeWorkResult(state State*) !bool:
-    try state.work.free()
-    ret true
-..
-
-freeLockResult(state State*) !bool:
-    try state.lock.free()
-    ret true
-..
-
-waitStateResult(state State*) !bool:
-    try waitState(state)
-    ret true
-..
-
-# Records the first infrastructure failure. If taking the state lock itself
-# fails, storing the error is best-effort because useful synchronization is no
-# longer possible. Waking idle waiters ensures wait() can observe the failure.
 recordFatal(state State*, failure error) void:
-    waiterCount u64 = 1
-    locked bool, lockErr error = lockStateResult(state)
+    locked bool, lockErr error = lockResult(state)
     if errors.code(lockErr) == 0:
         if errors.code(state.fatalError) == 0:
             state.fatalError = failure
         ..
         state.stopping = true
-        if state.idleWaiters > waiterCount:
-            waiterCount = state.idleWaiters
-        ..
-        unlockState(state)
-    elif errors.code(state.fatalError) == 0:
+        sleepers u64 = state.sleepingWorkers
+        state.sleepingWorkers = 0
+        state.wakeReservations = 0
+        state.lock.unlock()
+        generation_wait.wakeAll(addrof state.work, addrof state.workGeneration, sleepers)
+    else:
         state.fatalError = failure
         state.stopping = true
+        generation_wait.wakeAll(addrof state.work, addrof state.workGeneration, state.workerCount)
     ..
-    i u64 = 0
-    while i < waiterCount:
-        notifyIdle(state)
-        i = i + 1
-    ..
-..
-
-# Used only after the state mutex itself fails. At that point synchronized
-# recovery is impossible, so publish the failure directly and wake waiters.
-recordFatalUnsafe(state State*, failure error) void:
-    if errors.code(state.fatalError) == 0:
-        state.fatalError = failure
-    ..
-    state.stopping = true
-    notifyIdle(state)
-..
-
-initializeState(state State*, a alc.Allocator, workers thread.Thread*, workerCount u64, tasks Task*, capacity u64, lock $mutex.Mutex, work $wake.Wake, idle $wake.Wake) void:
-    state.allocator = a
-    state.workers = workers
-    state.workerCount = workerCount
-    state.tasks = tasks
-    state.capacity = capacity
-    state.lock = lock
-    state.work = work
-    state.idle = idle
+    state.idle.notify()
 ..
 
 workerMain(state State*) u64:
     running bool = true
     while running:
-        waited bool, waitErr error = waitForWorkResult(state)
-        if errors.code(waitErr) != 0:
-            recordFatal(state, waitErr)
-            ret 1
-        ..
-        locked bool, lockErr error = lockStateResult(state)
+        locked bool, lockErr error = lockResult(state)
         if errors.code(lockErr) != 0:
-            recordFatalUnsafe(state, lockErr)
+            recordFatal(state, lockErr)
             ret 1
         ..
 
-        hasTask bool = state.count != 0
-        stopping bool = state.stopping
-        task Task
-        if hasTask:
-            task = *taskAt(state, state.head)
+        if state.count != 0:
+            task Task = *taskAt(state, state.head)
             state.head = (state.head + 1) % state.capacity
             state.count = state.count - 1
-        ..
-        unlocked bool, unlockErr error = unlockStateResult(state)
-        if errors.code(unlockErr) != 0:
-            recordFatalUnsafe(state, unlockErr)
-            ret 1
-        ..
+            unlocked bool, unlockErr error = unlockResult(state)
+            if errors.code(unlockErr) != 0:
+                recordFatal(state, unlockErr)
+                ret 1
+            ..
 
-        if hasTask:
             task.entry(task.context)
-            completionLocked bool, completionLockErr error = lockStateResult(state)
+            completionLocked bool, completionLockErr error = lockResult(state)
             if errors.code(completionLockErr) != 0:
-                recordFatalUnsafe(state, completionLockErr)
+                recordFatal(state, completionLockErr)
                 ret 1
             ..
             state.pending = state.pending - 1
             becameIdle bool = state.pending == 0
             idleWaiters u64 = state.idleWaiters
-            completionUnlocked bool, completionUnlockErr error = unlockStateResult(state)
+            completionUnlocked bool, completionUnlockErr error = unlockResult(state)
             if errors.code(completionUnlockErr) != 0:
-                recordFatalUnsafe(state, completionUnlockErr)
+                recordFatal(state, completionUnlockErr)
                 ret 1
             ..
             if becameIdle:
-                waiterIndex u64 = 0
-                while waiterIndex < idleWaiters:
-                    notified bool, notifyErr error = notifyIdleResult(state)
-                    if errors.code(notifyErr) != 0:
-                        recordFatal(state, notifyErr)
-                        ret 1
-                    ..
-                    waiterIndex = waiterIndex + 1
+                i u64 = 0
+                while i < idleWaiters:
+                    state.idle.notify()
+                    i = i + 1
                 ..
             ..
-        elif stopping:
+        elif state.stopping:
+            state.lock.unlock()
             running = false
+        else:
+            observed u32 = generation_wait.observe(addrof state.workGeneration)
+            if state.spinCount != 0:
+                unlocked bool, unlockErr error = unlockResult(state)
+                if errors.code(unlockErr) != 0:
+                    recordFatal(state, unlockErr)
+                    ret 1
+                ..
+                spins u64 = 0
+                while spins < state.spinCount && generation_wait.observe(addrof state.workGeneration) == observed:
+                    cpuPause()
+                    spins = spins + 1
+                ..
+                if generation_wait.observe(addrof state.workGeneration) != observed:
+                    continue
+                ..
+                spinLocked bool, spinLockErr error = lockResult(state)
+                if errors.code(spinLockErr) != 0:
+                    recordFatal(state, spinLockErr)
+                    ret 1
+                ..
+                if state.count != 0 || state.stopping || generation_wait.observe(addrof state.workGeneration) != observed:
+                    spinUnlocked bool, spinUnlockErr error = unlockResult(state)
+                    if errors.code(spinUnlockErr) != 0:
+                        recordFatal(state, spinUnlockErr)
+                        ret 1
+                    ..
+                    continue
+                ..
+            ..
+            state.sleepingWorkers = state.sleepingWorkers + 1
+            unlocked bool, unlockErr error = unlockResult(state)
+            if errors.code(unlockErr) != 0:
+                recordFatal(state, unlockErr)
+                ret 1
+            ..
+            waited bool, waitErr error = waitWorkResult(state, observed)
+            if errors.code(waitErr) != 0:
+                recordFatal(state, waitErr)
+                ret 1
+            ..
+            wakeLocked bool, wakeLockErr error = lockResult(state)
+            if errors.code(wakeLockErr) != 0:
+                recordFatal(state, wakeLockErr)
+                ret 1
+            ..
+            if state.sleepingWorkers != 0:
+                state.sleepingWorkers = state.sleepingWorkers - 1
+            ..
+            if state.wakeReservations != 0:
+                state.wakeReservations = state.wakeReservations - 1
+            ..
+            wakeUnlocked bool, wakeUnlockErr error = unlockResult(state)
+            if errors.code(wakeUnlockErr) != 0:
+                recordFatal(state, wakeUnlockErr)
+                ret 1
+            ..
         ..
     ..
     ret 0
 ..
 
-# Creates a fixed-size pool. queueCapacity bounds outstanding queued tasks.
-pub new(a alc.Allocator, workerCount u64, queueCapacity u64) !$ThreadPool:
+waitWorkResult(state State*, observed u32) !bool:
+    try generation_wait.wait(addrof state.work, addrof state.workGeneration, observed)
+    ret true
+..
+
+newConfigured(a alc.Allocator, workerCount u64, queueCapacity u64, spinCount u64) !$ThreadPool:
     if workerCount == 0 || queueCapacity == 0:
         throw errors.invalidArgument("thread pool sizes must be greater than zero")
     ..
-
-    maxU64 u64 = 0 - 1
-    if queueCapacity > maxU64 / sizeof Task || workerCount > maxU64 / sizeof thread.Thread:
-        throw errors.wouldOverflow("thread pool allocation size overflow")
-    ..
-
     state State* = try a.allocT[State](1)
     mem.zero(state, sizeof State)
-
     tasks Task*, tasksErr error = a.allocT[Task](queueCapacity)
     if errors.code(tasksErr) != 0:
         a.free(state)
@@ -252,17 +275,19 @@ pub new(a alc.Allocator, workerCount u64, queueCapacity u64) !$ThreadPool:
         a.free(state)
         throw workersErr
     ..
-
     lock mutex.Mutex, lockErr error = mutex.new()
     if errors.code(lockErr) != 0:
+        # A failed constructor does not produce an owned lock. Make that
+        # conditional ownership explicit to the destructor checker.
+        abandon[mutex.Mutex](lock)
         a.free(workers)
         a.free(tasks)
         a.free(state)
         throw lockErr
     ..
-    work wake.Wake, workErr error = wake.new(wake.condition())
+    work generation_wait.Wait, workErr error = generation_wait.new()
     if errors.code(workErr) != 0:
-        lock.free()
+        releaseLock(lock)
         a.free(workers)
         a.free(tasks)
         a.free(state)
@@ -270,195 +295,151 @@ pub new(a alc.Allocator, workerCount u64, queueCapacity u64) !$ThreadPool:
     ..
     idle wake.Wake, idleErr error = wake.new(wake.condition())
     if errors.code(idleErr) != 0:
-        work.free()
-        lock.free()
+        # As above, the error result means idle contains no live resource.
+        abandon[wake.Wake](idle)
+        generation_wait.free(addrof work)
+        releaseLock(lock)
         a.free(workers)
         a.free(tasks)
         a.free(state)
         throw idleErr
     ..
-
-    initializeState(state, a, workers, workerCount, tasks, queueCapacity, lock, work, idle)
+    state.allocator = a
+    state.workers = workers
+    state.workerCount = workerCount
+    state.tasks = tasks
+    state.capacity = queueCapacity
+    state.spinCount = spinCount
+    state.lock = claim[mutex.Mutex](lock)
+    state.work = work
+    state.idle = claim[wake.Wake](idle)
 
     i u64 = 0
     while i < workerCount:
-        worker thread.Thread, spawnErr error = thread.new[State](workerMain, state)
+        spawned bool, spawnErr error = spawnWorkerInto(state, workerAt(state, i))
         if errors.code(spawnErr) != 0:
-            locked bool, stopLockErr error = lockStateResult(state)
-            if errors.code(stopLockErr) == 0:
-                state.stopping = true
-                unlockState(state)
-            else:
-                state.stopping = true
+            state.stopping = true
+            generation_wait.wakeAll(addrof state.work, addrof state.workGeneration, i)
+            j u64 = 0
+            while j < i:
+                workerAt(state, j).join()
+                j = j + 1
             ..
-            wakeIndex u64 = 0
-            while wakeIndex < i:
-                notifyWork(state)
-                wakeIndex = wakeIndex + 1
-            ..
-            joinIndex u64 = 0
-            while joinIndex < i:
-                workerAt(state, joinIndex).join()
-                joinIndex = joinIndex + 1
-            ..
-            idle.free()
-            work.free()
-            lock.free()
+            state.idle.free()
+            generation_wait.free(addrof state.work)
+            state.lock.free()
             a.free(workers)
             a.free(tasks)
             a.free(state)
             throw spawnErr
         ..
-        workerSlot thread.Thread* = workerAt(state, i)
-        *workerSlot = worker
         i = i + 1
     ..
     ret ThreadPool(state=state)
 ..
 
-submitState(state State*, task Task) !void:
-    try lockState(state)
-    if errors.code(state.fatalError) != 0:
-        failure error = state.fatalError
-        try unlockState(state)
-        throw failure
-    ..
-    if state.stopping:
-        try unlockState(state)
-        throw errors.failure("thread pool is stopping")
-    ..
-    if state.count == state.capacity:
-        try unlockState(state)
-        throw errors.wouldOverflow("thread pool queue is full")
-    ..
-    slot Task* = taskAt(state, state.tail)
-    *slot = task
-    state.tail = (state.tail + 1) % state.capacity
-    state.count = state.count + 1
-    state.pending = state.pending + 1
-    try unlockState(state)
-    notified bool, notifyErr error = notifyWorkResult(state)
-    if errors.code(notifyErr) != 0:
-        recordFatal(state, notifyErr)
-        throw notifyErr
-    ..
+pub new(a alc.Allocator, workerCount u64, queueCapacity u64, spinCount u64) !$ThreadPool:
+    ret try newConfigured(a, workerCount, queueCapacity, spinCount)
 ..
 
-# Submits borrowed context. It must remain valid until wait() or shutdown().
-# This bounded first implementation reports a full queue instead of blocking.
+pub newDefault(a alc.Allocator) !$ThreadPool:
+    threadCount := cpu.coreCount()
+    spinCount := threadCount / 3
+
+    if spinCount < 1:
+        spinCount = 1
+    ..
+    ret try newConfigured(a, threadCount, 256, spinCount)
+..
+
 ThreadPool.submit(entry (ptr) u64, context ptr) !void:
     if this.state == none || entry == none:
         throw errors.invalidArgument("invalid thread pool submission")
     ..
-    task := Task(entry=entry, context=context)
-    try submitState(this.state, task)
+    state State* = this.state
+    try state.lock.lock()
+    if errors.code(state.fatalError) != 0:
+        failure error = state.fatalError
+        try state.lock.unlock()
+        throw failure
+    ..
+    if state.stopping:
+        try state.lock.unlock()
+        throw errors.failure("thread pool is stopping")
+    ..
+    if state.count == state.capacity:
+        grown bool, growErr error = growQueue(state)
+        if errors.code(growErr) != 0:
+            try state.lock.unlock()
+            throw growErr
+        ..
+    ..
+    *taskAt(state, state.tail) = Task(entry=entry, context=context)
+    state.tail = (state.tail + 1) % state.capacity
+    state.count = state.count + 1
+    state.pending = state.pending + 1
+    shouldWake bool = state.sleepingWorkers > state.wakeReservations
+    if shouldWake:
+        state.wakeReservations = state.wakeReservations + 1
+    ..
+    try state.lock.unlock()
+    if shouldWake:
+        generation_wait.wakeOne(addrof state.work, addrof state.workGeneration)
+    elif state.spinCount != 0:
+        generation_wait.signal(addrof state.workGeneration)
+    ..
 ..
 
-waitState(state State*) !void:
+ThreadPool.wait() !void:
+    state State* = this.state
     waiting bool = true
     while waiting:
-        try lockState(state)
+        try state.lock.lock()
         if errors.code(state.fatalError) != 0:
             failure error = state.fatalError
-            try unlockState(state)
+            try state.lock.unlock()
             throw failure
         ..
         waiting = state.pending != 0
         if waiting:
             state.idleWaiters = state.idleWaiters + 1
         ..
-        try unlockState(state)
+        try state.lock.unlock()
         if waiting:
-            waited bool, waitErr error = waitForIdleResult(state)
-            try lockState(state)
+            waited bool, waitErr error = waitIdleResult(state)
+            try state.lock.lock()
             state.idleWaiters = state.idleWaiters - 1
-            try unlockState(state)
+            try state.lock.unlock()
             if errors.code(waitErr) != 0:
-                recordFatal(state, waitErr)
                 throw waitErr
             ..
         ..
     ..
 ..
 
-# Waits until all tasks submitted before the observed idle point are complete.
-ThreadPool.wait() !void:
-    try waitState(this.state)
-..
-
-shutdownState(state State*) !void:
-    firstError error = errors.ok()
-    waited bool, waitErr error = waitStateResult(state)
-    if errors.code(waitErr) != 0:
-        firstError = waitErr
-    ..
-    locked bool, lockErr error = lockStateResult(state)
-    if errors.code(lockErr) == 0:
-        state.stopping = true
-        unlocked bool, unlockErr error = unlockStateResult(state)
-        if errors.code(unlockErr) != 0 && errors.code(firstError) == 0:
-            firstError = unlockErr
-        ..
-    elif errors.code(firstError) == 0:
-        firstError = lockErr
-    ..
-
-    i u64 = 0
-    while i < state.workerCount:
-        notified bool, notifyErr error = notifyWorkResult(state)
-        if errors.code(notifyErr) != 0 && errors.code(firstError) == 0:
-            firstError = notifyErr
-        ..
-        i = i + 1
-    ..
-    i = 0
-    while i < state.workerCount:
-        joined bool, joinErr error = joinWorkerResult(state, i)
-        if errors.code(joinErr) != 0 && errors.code(firstError) == 0:
-            firstError = joinErr
-        ..
-        i = i + 1
-    ..
-
-    freed bool, freeErr error = freeIdleResult(state)
-    if errors.code(freeErr) != 0 && errors.code(firstError) == 0:
-        firstError = freeErr
-    ..
-    workFreed bool, workFreeErr error = freeWorkResult(state)
-    if errors.code(workFreeErr) != 0 && errors.code(firstError) == 0:
-        firstError = workFreeErr
-    ..
-    lockFreed bool, lockFreeErr error = freeLockResult(state)
-    if errors.code(lockFreeErr) != 0 && errors.code(firstError) == 0:
-        firstError = lockFreeErr
-    ..
-    state.allocator.free(state.workers)
-    state.allocator.free(state.tasks)
-    if errors.code(firstError) != 0:
-        throw firstError
-    ..
-..
-
-# Completes queued work, stops every worker, joins them, and releases the pool.
-destr ThreadPool.shutdown() !void:
+destr ThreadPool.close() !void:
     if this.state == none:
         throw errors.invalidArgument("thread pool is not active")
     ..
     state State* = this.state
-    completed bool, shutdownErr error = shutdownStateResult(state)
+    try this.wait()
+    try state.lock.lock()
+    state.stopping = true
+    sleepers u64 = state.sleepingWorkers
+    state.sleepingWorkers = 0
+    state.wakeReservations = 0
+    try state.lock.unlock()
+    generation_wait.wakeAll(addrof state.work, addrof state.workGeneration, sleepers)
+    i u64 = 0
+    while i < state.workerCount:
+        try workerAt(state, i).join()
+        i = i + 1
+    ..
+    try state.idle.free()
+    generation_wait.free(addrof state.work)
+    try state.lock.free()
+    state.allocator.free(state.workers)
+    state.allocator.free(state.tasks)
     state.allocator.free(state)
     this.state = none
-    if errors.code(shutdownErr) != 0:
-        throw shutdownErr
-    ..
-..
-
-shutdownStateResult(state State*) !bool:
-    try shutdownState(state)
-    ret true
-..
-
-waitForIdleResult(state State*) !bool:
-    try waitForIdle(state)
-    ret true
 ..

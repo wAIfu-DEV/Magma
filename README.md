@@ -133,7 +133,7 @@ support practical, reusable components:
 - arrays, lists, queues, maps, builders, sorting, and searching;
 - strings, byte utilities, UTF-8 helpers, and numeric conversion;
 - JSON values and serialization;
-- native threads, mutexes, wake primitives, and worker pools;
+- CPU core discovery, native threads, mutexes, wake primitives, and worker pools;
 - Windows streaming HTTP through WinHTTP;
 - Windows raylib 5.5 bindings for windows, drawing, and input.
 
@@ -176,12 +176,17 @@ usage: magma [options] <input-file>
   --out, -o <path>        choose the output path
   --emit, -e <kind>       emit llvm, object, or exe
   --opt, -O <0-3>         select the LLVM optimization level
+  --error-trace-slots <n> trace slots per runtime shard (default 1024)
   --clang-version, -cv    print the resolved Clang version and path
 ```
 
 Executable output and optimization level 3 are the current defaults. Magma
 searches `MAGMA_CLANG`, `PATH`, common LLVM installations, and Visual Studio LLVM
 directories when resolving Clang.
+
+Error traces use 64 fixed runtime shards. `--error-trace-slots` accepts a power
+of two from 1 through 65536 and controls the slots in each shard. Increasing it
+retains diagnostics longer at the cost of proportional static storage.
 
 ## Explore the Project
 

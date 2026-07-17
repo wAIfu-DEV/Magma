@@ -204,10 +204,10 @@ destr Resource.close() !void:
 ..
 ```
 
-A destructor may take arguments and may return `void` or `!void`. A struct may
-have multiple destructor methods. Calling any marked destructor consumes its
-receiver. Destructors are explicit rather than automatically inserted; use a
-direct call or `defer value.close()` on every owning path.
+A destructor may take arguments and return any ordinary or throwing type. A
+struct may have multiple destructor methods. Calling any marked destructor
+consumes its receiver. Destructors are explicit rather than automatically
+inserted; use a direct call or `defer value.close()` on every owning path.
 
 The checker warns about unconsumed owners, consuming borrows, repeated
 consumption, use after transfer, overwriting live owners, pending deferred
@@ -728,6 +728,14 @@ line str = try stdin.readLn(a)
 ```
 
 `try` can only be used inside a throwing function.
+
+Every failing `throw` and `try` records its function and source position in the
+error's bounded propagation trace. `errors.trace(err)` returns a cursor whose
+`function`, `file`, `line`, `column`, `next`, and `isEmpty` methods inspect the
+recorded frames. If bounded diagnostic storage is reused, iteration ends safely
+and the terminal cursor's `isTruncated()` method returns true.
+`errors.printTrace(err)` prints the same truncation warning without allocating.
+An uncaught error returned by `main` prints the same trace automatically.
 
 Throwing functions can return a value by `ret`:
 

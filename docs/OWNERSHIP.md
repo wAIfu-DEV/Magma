@@ -39,9 +39,9 @@ destr Buffer.free(a alc.Allocator) void:
 ```
 
 A struct may declare multiple destructor methods. Calling any of them consumes
-the receiver for checker purposes. A destructor must be a member and must
-return `void`; throwing `!void` destructors are also valid. Arguments are
-allowed. The declaration must appear after its owner struct, like other methods.
+the receiver for checker purposes. A destructor must be a member, but may take
+arguments and return any ordinary or throwing type. The declaration must appear
+after its owner struct, like other methods.
 
 Destructors are not inserted automatically. Call the appropriate destructor on
 every exit path, commonly with `defer`:

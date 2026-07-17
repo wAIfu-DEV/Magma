@@ -42,7 +42,7 @@ benchmarkPool() !u64:
         i = i + 1
     ..
     elapsed u64 = time.ticksToNs(total) / wakeIterations
-    try pool.shutdown()
+    try pool.close()
     ret elapsed
 ..
 
@@ -61,7 +61,7 @@ pub main() !void:
     warmup := try thread_pool.new(allocator, 1, 1)
     try warmup.submit(noop, none)
     try warmup.wait()
-    try warmup.shutdown()
+    try warmup.close()
 
     threadNs u64 = try benchmarkThreads()
     poolNs u64 = try benchmarkPool()

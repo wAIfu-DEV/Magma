@@ -47,6 +47,9 @@ type SharedState struct {
 	Cwd          string
 	ExecPath     string
 	MainPckgName string
+	// ErrorTraceSlots is the number of reusable trace nodes in each runtime
+	// shard. It is a power of two so generated code can mask instead of divide.
+	ErrorTraceSlots uint64
 
 	ImportedFiles  map[string]<-chan error
 	ImportedFilesM sync.Mutex

@@ -30,10 +30,6 @@ Allocator.alloc(byteCount u64) !$u8*:
 # @param count number of T elements to allocate
 # @returns owned memory block
 Allocator.allocT[T](count u64) !$T*:
-    maxU64 u64 = 0 - 1
-    if sizeof T != 0 && count > maxU64 / sizeof T:
-        throw errors.wouldOverflow("typed allocation size overflow")
-    ..
     ret try this.vtable.fn_alloc(this.impl, count * sizeof T)
 ..
 
@@ -52,10 +48,6 @@ Allocator.realloc(block u8*, byteCount u64) !$u8*:
 # @param count new number of T elements
 # @returns owned memory block
 Allocator.reallocT[T](block T*, count u64) !$T*:
-    maxU64 u64 = 0 - 1
-    if sizeof T != 0 && count > maxU64 / sizeof T:
-        throw errors.wouldOverflow("typed reallocation size overflow")
-    ..
     ret try this.vtable.fn_realloc(this.impl, block, count * sizeof T)
 ..
 

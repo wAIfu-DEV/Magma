@@ -63,7 +63,14 @@ var BasicTypes = map[string]string{
 }
 
 func WriteIrBasicTypes(b io.StringWriter) {
-	b.WriteString("%type.error = type { i32, %type.str }\n")
+	// Error remains three machine words on 64-bit targets. The i64 field is an
+	// opaque, generation-checked handle into bounded diagnostic storage.
+	b.WriteString("%type.error = type { ptr, i64, i32, i32 }\n")
+	b.WriteString("%type.error.site = type { ptr, ptr, i32, i32 }\n")
+	b.WriteString("%type.error.trace.node = type { i64, i64, ptr }\n")
+	b.WriteString("%type.error.trace.shard = type { i64, i8, [55 x i8] }\n")
+	b.WriteString("%type.error.trace.snapshot = type { i64, ptr, i1 }\n")
 	b.WriteString("%type.str = type { ptr, i64 }\n")
 	b.WriteString("%type.slice = type { ptr, i64 }\n")
+	b.WriteString("!9000 = !{!\"branch_weights\", i32 1, i32 2000}\n")
 }

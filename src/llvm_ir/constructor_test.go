@@ -81,6 +81,66 @@ main() void:
 	}
 }
 
+func TestErrorTraceSitesLowerOnColdPropagationEdges(t *testing.T) {
+	source := `mod test
+
+fail() !u8:
+    throw errorValue()
+..
+
+errorValue() error:
+    llvm "  ret %type.error zeroinitializer\n"
+..
+
+main() !void:
+    value := try fail()
+    other := try fail()
+..
+`
+	ir, err := compileSource(t, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ir, "%type.error = type { ptr, i64, i32, i32 }") {
+		t.Fatal("error ABI is not the compact three-word representation")
+	}
+	if !strings.Contains(ir, "%type.error.trace.arena = type { [1024 x %type.error.trace.node], [0 x i8] }") ||
+		!strings.Contains(ir, "@magma.error.trace.thread.shard") ||
+		!strings.Contains(ir, "%type.error.trace.shard = type { i64, i8, [55 x i8] }") ||
+		strings.Contains(ir, "@magma.error.trace.cursor =") {
+		t.Fatal("error traces do not use the configured sharded ring")
+	}
+	if got := strings.Count(ir, "call %type.error @magma.error.push"); got != 3 {
+		t.Fatalf("got %d trace pushes, want throw and two try sites", got)
+	}
+	if got := strings.Count(ir, "!prof !9000"); got != 4 {
+		t.Fatalf("got %d unlikely error branches, want throw, two tries, and main checks", got)
+	}
+	if !strings.Contains(ir, "@magma.error.push(%type.error %error, ptr %site) cold noinline") {
+		t.Fatal("trace recording helper is not kept out of hot callers")
+	}
+	if !strings.Contains(ir, "private constant %type.error.site") ||
+		!strings.Contains(ir, "i32 4, i32 5") ||
+		!strings.Contains(ir, "i32 12, i32 13") {
+		t.Fatalf("generated trace sites do not retain throw/try source positions:\n%s", ir)
+	}
+	if !strings.Contains(ir, "private unnamed_addr constant [8 x i8] c\"test.mg\\00\"") {
+		t.Fatal("trace metadata does not use the source basename")
+	}
+	if got := strings.Count(ir, "c\"test.mg\\00\""); got != 1 {
+		t.Fatalf("trace filename emitted %d times, want one interned constant", got)
+	}
+	if got := strings.Count(ir, "c\"fail\\00\""); got != 1 {
+		t.Fatalf("trace function name emitted %d times, want one interned constant", got)
+	}
+	if got := strings.Count(ir, "c\"main\\00\""); got != 1 {
+		t.Fatalf("repeated trace function name emitted %d times, want one interned constant", got)
+	}
+	if !strings.Contains(ir, "call void @magma.error.print(%type.error %e)") {
+		t.Fatal("throwing main does not print its uncaught error trace")
+	}
+}
+
 func TestInferredDestructuringRejectsNonThrowingCall(t *testing.T) {
 	source := `mod test
 

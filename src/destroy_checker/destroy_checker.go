@@ -606,27 +606,7 @@ func (a *analyzer) function(function *types.NodeFuncDef) {
 }
 
 func validateDestructors(a *analyzer, global *types.NodeGlobal) {
-	for _, definition := range global.StructDefs {
-		for _, destructor := range definition.Destructors {
-			if !isVoid(destructor.ReturnType) {
-				a.warn(fmt.Sprintf("destructor '%s' must return void", destructor.AbsName))
-			}
-		}
-	}
-}
-
-func isVoid(nodeType *types.NodeType) bool {
-	if nodeType == nil {
-		return false
-	}
-	switch kind := nodeType.KindNode.(type) {
-	case *types.NodeTypeNamed:
-		name, ok := kind.NameNode.(*types.NodeNameSingle)
-		return ok && name.Name == "void"
-	case *types.NodeTypeAbsolute:
-		return strings.HasSuffix(kind.AbsoluteName, ".void")
-	}
-	return false
+	// A destructor marks a consuming operation; its result type is unrestricted.
 }
 
 // Check runs the analysis and returns all warnings without changing the AST.

@@ -16,9 +16,10 @@ type monoCtx struct {
 	funcTemplates   map[string]*t.NodeFuncDef
 	memberTemplates map[string]*t.NodeFuncDef
 
-	structInstances map[string]string
-	funcInstances   map[string]string
-	memberInstances map[string]string
+	structInstances    map[string]string
+	funcInstances      map[string]string
+	memberInstances    map[string]string
+	structDisplayNames map[string]string
 
 	queuedStruct map[*t.NodeStructDef]bool
 	queuedFunc   map[*t.NodeFuncDef]bool
@@ -179,7 +180,7 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 			InfType: cloneType(n.InfType),
 		}
 	case *t.NodeExprTry:
-		return &t.NodeExprTry{Call: cloneExpr(n.Call)}
+		return &t.NodeExprTry{Call: cloneExpr(n.Call), Pos: n.Pos}
 	case *t.NodeExprSizeof:
 		return &t.NodeExprSizeof{Type: cloneType(n.Type), InfType: cloneType(n.InfType)}
 	case *t.NodeExprAddrof:
@@ -210,7 +211,7 @@ func cloneStmt(in t.NodeStatement) t.NodeStatement {
 	case *t.NodeStmtExpr:
 		return &t.NodeStmtExpr{Expression: cloneExpr(n.Expression)}
 	case *t.NodeStmtThrow:
-		return &t.NodeStmtThrow{Expression: cloneExpr(n.Expression)}
+		return &t.NodeStmtThrow{Expression: cloneExpr(n.Expression), Pos: n.Pos}
 	case *t.NodeStmtIf:
 		out := &t.NodeStmtIf{
 			CondExpr: cloneExpr(n.CondExpr),
@@ -265,6 +266,7 @@ func cloneFuncDef(in *t.NodeFuncDef) *t.NodeFuncDef {
 		Body:         cloneBody(&in.Body),
 		AbsName:      in.AbsName,
 		NoAliasName:  in.NoAliasName,
+		DisplayName:  in.DisplayName,
 		DeferCnt:     in.DeferCnt,
 		HasDefer:     in.HasDefer,
 		IsDestructor: in.IsDestructor,
@@ -347,6 +349,77 @@ func MangleSpecializedName(base string, args []*t.NodeType) string {
 		parts[i] = CanonicalTypeSignature(a)
 	}
 	return base + "__g__" + strings.Join(parts, "__")
+}
+
+func sourceModuleName(name string) string {
+	if i := strings.LastIndex(name, "_"); i >= 0 && len(name)-i-1 == 10 {
+		return name[:i]
+	}
+	return name
+}
+
+func (m *monoCtx) displayType(tp *t.NodeType) string {
+	if tp == nil {
+		return "nil"
+	}
+	switch n := tp.KindNode.(type) {
+	case *t.NodeTypeAbsolute:
+		if display, ok := m.structDisplayNames[n.AbsoluteName]; ok {
+			return display
+		}
+		parts := strings.Split(n.AbsoluteName, ".")
+		for i := range parts {
+			if generic := strings.Index(parts[i], "__g__"); generic >= 0 {
+				parts[i] = parts[i][:generic]
+			}
+		}
+		if len(parts) > 1 {
+			parts[0] = sourceModuleName(parts[0])
+		}
+		return strings.Join(parts, ".")
+	case *t.NodeTypeNamed:
+		name := flattenName(n.NameNode)
+		if len(n.GenericArgs) == 0 {
+			return name
+		}
+		args := make([]string, len(n.GenericArgs))
+		for i, arg := range n.GenericArgs {
+			args[i] = m.displayType(arg)
+		}
+		return name + "[" + strings.Join(args, ", ") + "]"
+	case *t.NodeTypePointer:
+		return m.displayType(&t.NodeType{KindNode: n.Kind}) + "*"
+	case *t.NodeTypeRfc:
+		return m.displayType(&t.NodeType{KindNode: n.Kind}) + "&"
+	case *t.NodeTypeSlice:
+		if n.HasSize {
+			return fmt.Sprintf("%s[%d]", m.displayType(&t.NodeType{KindNode: n.ElemKind}), n.Size)
+		}
+		return m.displayType(&t.NodeType{KindNode: n.ElemKind}) + "[]"
+	case *t.NodeTypeFunc:
+		args := make([]string, len(n.Args))
+		for i, arg := range n.Args {
+			args[i] = m.displayType(arg)
+		}
+		return "(" + strings.Join(args, ", ") + ") " + m.displayType(n.RetType)
+	default:
+		return "undef"
+	}
+}
+
+func (m *monoCtx) genericDisplayName(base string, args []*t.NodeType) string {
+	displayArgs := make([]string, len(args))
+	for i, arg := range args {
+		displayArgs[i] = m.displayType(arg)
+	}
+	return base + "[" + strings.Join(displayArgs, ", ") + "]"
+}
+
+func unqualifiedDisplayName(name string) string {
+	if i := strings.Index(name, "."); i >= 0 {
+		return name[i+1:]
+	}
+	return name
 }
 
 func substituteType(tp *t.NodeType, subst map[string]*t.NodeType) *t.NodeType {
@@ -706,6 +779,8 @@ func (m *monoCtx) instantiateStruct(module string, baseName string, args []*t.No
 
 	specName := MangleSpecializedName(baseName, args)
 	m.structInstances[instanceKey] = specName
+	structDisplayName := m.genericDisplayName(sourceModuleName(module)+"."+baseName, args)
+	m.structDisplayNames[module+"."+specName] = structDisplayName
 
 	gl := m.modules[module]
 
@@ -770,6 +845,7 @@ func (m *monoCtx) instantiateStruct(module string, baseName string, args []*t.No
 			substituteStmt(s, subst)
 		}
 		specFn.AbsName = module + "." + flattenName(specFn.Class.NameNode)
+		specFn.DisplayName = unqualifiedDisplayName(structDisplayName) + "." + memberName
 
 		key := specName + "." + memberName
 		gl.FuncDefs[key] = specFn
@@ -814,6 +890,7 @@ func (m *monoCtx) instantiateFunc(module string, baseName string, args []*t.Node
 	specFn := cloneFuncDef(template)
 	specFn.Class.TypeParams = nil
 	specFn.Class.NameNode = &t.NodeNameSingle{Name: specName}
+	specFn.DisplayName = m.genericDisplayName(baseName, args)
 
 	subst := map[string]*t.NodeType{}
 	for i, p := range template.Class.TypeParams {
@@ -871,6 +948,11 @@ func (m *monoCtx) instantiateMemberFunc(module string, ownerName string, memberN
 	specFn.Class.NameNode = &t.NodeNameComposite{
 		Parts: []string{ownerName, specMemberName},
 	}
+	ownerDisplayName := ownerName
+	if display, ok := m.structDisplayNames[module+"."+ownerName]; ok {
+		ownerDisplayName = unqualifiedDisplayName(display)
+	}
+	specFn.DisplayName = ownerDisplayName + "." + m.genericDisplayName(memberName, args)
 
 	subst := map[string]*t.NodeType{}
 	for i, p := range template.Class.TypeParams {
@@ -1288,16 +1370,17 @@ func Run(shared *t.SharedState) error {
 	ctx := &monoCtx{
 		shared: shared,
 
-		modules:         map[string]*t.NodeGlobal{},
-		structTemplates: map[string]*t.NodeStructDef{},
-		funcTemplates:   map[string]*t.NodeFuncDef{},
-		memberTemplates: map[string]*t.NodeFuncDef{},
-		structInstances: map[string]string{},
-		funcInstances:   map[string]string{},
-		memberInstances: map[string]string{},
-		queuedStruct:    map[*t.NodeStructDef]bool{},
-		queuedFunc:      map[*t.NodeFuncDef]bool{},
-		queuedVar:       map[*t.NodeExprVarDef]bool{},
+		modules:            map[string]*t.NodeGlobal{},
+		structTemplates:    map[string]*t.NodeStructDef{},
+		funcTemplates:      map[string]*t.NodeFuncDef{},
+		memberTemplates:    map[string]*t.NodeFuncDef{},
+		structInstances:    map[string]string{},
+		funcInstances:      map[string]string{},
+		memberInstances:    map[string]string{},
+		structDisplayNames: map[string]string{},
+		queuedStruct:       map[*t.NodeStructDef]bool{},
+		queuedFunc:         map[*t.NodeFuncDef]bool{},
+		queuedVar:          map[*t.NodeExprVarDef]bool{},
 	}
 
 	for _, f := range shared.Files {

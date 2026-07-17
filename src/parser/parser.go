@@ -349,6 +349,7 @@ func parseSimplePrimaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
 		}
 		n := &t.NodeExprTry{
 			Call: expr,
+			Pos:  tk.Pos,
 		}
 		return n, nil
 	}
@@ -1946,6 +1947,10 @@ func parseStmtBreak(ctx *ParseCtx) (t.NodeStatement, error) {
 }
 
 func parseStmtThrow(ctx *ParseCtx) (t.NodeStatement, error) {
+	keyword, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
 	consume(ctx) // consume ret kw
 
 	next, e := peek(ctx)
@@ -1958,7 +1963,7 @@ func parseStmtThrow(ctx *ParseCtx) (t.NodeStatement, error) {
 		return nil, e
 	}
 
-	return &t.NodeStmtThrow{Expression: expr}, nil
+	return &t.NodeStmtThrow{Expression: expr, Pos: keyword.Pos}, nil
 }
 
 func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {

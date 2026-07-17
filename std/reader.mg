@@ -5,12 +5,20 @@ use "slices.mg"    slices
 use "strings.mg"   strings
 use "errors.mg"    errors
 use "cast.mg"      cast
+use "future.mg"    future
+use "thread_pool.mg" thread_pool
 
 # Reader interface for pulling bytes into strings or buffers.
 # O(1) wrapper calls; underlying reader decides cost.
 Reader(
     impl ptr,
     fn_read (ptr, u8[], u64) !u64,
+)
+
+ReaderReadTask(
+    source Reader
+    allocator alc.Allocator
+    count u64
 )
 
 pub new(impl ptr, readFunc (ptr, u8[], u64) !u64) Reader:
@@ -37,6 +45,17 @@ Reader.read(a alc.Allocator, nBytes u64) !$str:
     ..
     buffPtr[readCnt] = 0
     ret strings.fromPtrNoCopy(buffPtr, readCnt)
+..
+
+runReadTask(task ReaderReadTask*) !$str:
+    ret try task.source.read(task.allocator, task.count)
+..
+
+# Runs read on the supplied pool. The receiver is copied into private task
+# storage, while its underlying implementation must remain valid until await.
+Reader.readAsync(pool thread_pool.ThreadPool, a alc.Allocator, nBytes u64) !$future.Future[str]:
+    task := ReaderReadTask(source=*this, allocator=a, count=nBytes)
+    ret try future.new[str, ReaderReadTask](a, pool, runReadTask, task)
 ..
 
 # Reads into the provided buffer up to nBytes bytes.

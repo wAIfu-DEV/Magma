@@ -14,17 +14,18 @@ func MakeShared(cwd string) (*types.SharedState, error) {
 	}
 
 	return &types.SharedState{
-		Cwd:            cwd,
-		ExecPath:       ex,
-		MainPckgName:   "",
-		ImportedFiles:  map[string]<-chan error{},
-		ImportedFilesM: sync.Mutex{},
-		Files:          map[string]*types.FileCtx{},
-		FilesM:         sync.Mutex{},
-		PipeChans:      []<-chan error{},
-		PipeChansM:     sync.Mutex{},
-		LlvmDecl:       map[string]bool{},
-		LlvmDeclM:      sync.Mutex{},
+		Cwd:             cwd,
+		ExecPath:        ex,
+		MainPckgName:    "",
+		ErrorTraceSlots: 1024,
+		ImportedFiles:   map[string]<-chan error{},
+		ImportedFilesM:  sync.Mutex{},
+		Files:           map[string]*types.FileCtx{},
+		FilesM:          sync.Mutex{},
+		PipeChans:       []<-chan error{},
+		PipeChansM:      sync.Mutex{},
+		LlvmDecl:        map[string]bool{},
+		LlvmDeclM:       sync.Mutex{},
 
 		// needed because Go sucks and can't figure out cyclical imports
 		PipelineFunc: pipeline.DoAsync,

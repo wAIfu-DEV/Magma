@@ -240,9 +240,9 @@ destr File.close() !void:
 ..
 ```
 
-Destructors may take arguments, may be throwing, and must return `void` or
-`!void`. A struct may expose multiple destructors. Calls are explicit; the
-compiler does not automatically insert them.
+Destructors may take arguments and return any ordinary or throwing type. A
+struct may expose multiple destructors. Calls are explicit; the compiler does
+not automatically insert them.
 
 ## 4. Type system
 
@@ -509,14 +509,155 @@ The destructuring form is narrow: it declares exactly a value and an `error`,
 and the right side must be a throwing function call. A failed value result is
 zero-initialized and must not be used before checking the error.
 
-The standard error representation has a category code and message. Platform
-errors are encoded by the standard library with the high bit of the code. The
-language supplies the mechanism, while error categories and constructors live in
-`std/errors.mg`.
+The standard error representation has a category code, message, and an
+allocation-free propagation trace. Failed `throw` and `try` edges append static
+source metadata to a bounded, sharded ring; successful paths do not touch the
+ring. `errors.trace` returns a cursor and
+`errors.printTrace` formats it without allocating. Platform errors are encoded
+by the standard library with the high bit of the code. The language supplies
+the mechanism, while error categories and constructors live in `std/errors.mg`.
 
-## 8. Platform and low-level facilities
+### 7.4 Propagation stack traces
 
-### 8.1 Conditional declarations
+Every failed `throw` and `try` edge records the current function, source-file
+basename, line, and column. If an error escapes `main`, the runtime prints the
+error followed by its propagation sites, newest first:
+
+```text
+Uncaught Error: 1 'fake alloc'
+  at main (async_test.mg:21:14)
+  at Reader.readAsync (reader.mg:58:9)
+  at new[str, reader.ReaderReadTask] (future.mg:126:30)
+  at Allocator.allocT[future.Work[str, reader.ReaderReadTask]] (allocator.mg:37:9)
+  at fakeAlloc (fake_alloc.mg:9:5)
+```
+
+Trace names use source-level names rather than LLVM linker symbols. Generic
+frames retain their readable type arguments, including nested generic and
+qualified types. The trace describes error propagation rather than every
+native call frame: functions which neither throw nor propagate the error do not
+appear.
+
+Handled errors expose the same information through `std/errors.mg`:
+
+```magma
+value, failure := mayFail()
+if errors.isError(failure):
+    errors.printTrace(failure)
+
+    cursor := errors.trace(failure)
+    while cursor.isEmpty() == false:
+        # cursor.function(), cursor.file(), cursor.line(), cursor.column()
+        cursor = cursor.next()
+    ..
+    if cursor.isTruncated():
+        # Some older frames were overwritten by later errors.
+    ..
+..
+```
+
+A `Trace` requires no cleanup, and its accessors are valid only while it is
+non-empty. Trace nodes live in a thread-safe ring with 64 shards and 1,024 slots
+per shard by default. A reused node ends iteration safely and makes
+`isTruncated()` true; formatted traces print the configured capacity and suggest
+increasing `--error-trace-slots`. The flag accepts powers of two from 1 through
+65,536 and changes the slots per shard without changing the `error` ABI.
+
+## 8. Asynchronous work with futures
+
+Magma's asynchronous API is a standard-library composition of
+`thread_pool.ThreadPool` and `future.Future[T]`; `async` and `await` are not
+language keywords. A future submits a throwing function and a copied context to
+a pool, publishes either its value or error, and lets the caller wait for that
+result.
+
+### 8.1 Creating a pool
+
+Pools require an allocator and own their worker, queue, and synchronization
+storage. `newDefault` selects a worker count from the available CPU cores and a
+default queue capacity. `new` exposes the worker count, initial queue capacity,
+and worker spin count:
+
+```magma
+pool := try thread_pool.newDefault(a)
+defer pool.close()
+
+# Or configure it explicitly:
+pool := try thread_pool.new(a, 4, 256, 1)
+defer pool.close()
+```
+
+`ThreadPool.submit(entry, context)` is the low-level `(ptr) u64` task API. The
+queue grows through the pool allocator when full. `pool.wait()` blocks until all
+submitted work completes. `pool.close()` first waits for pending work, stops and
+joins every worker, and releases the pool; it must not race with new submissions.
+
+### 8.2 Creating and awaiting a future
+
+`future.new[T, Context]` takes an allocator, pool, throwing task function, and
+context value. The context is copied into private work storage, so it is useful
+for packaging several task inputs in one struct:
+
+```magma
+ReadTask(source reader.Reader, allocator allocator.Allocator, count u64)
+
+runRead(task ReadTask*) !$str:
+    ret try task.source.read(task.allocator, task.count)
+..
+
+task := ReadTask(source=r, allocator=a, count=n)
+pending := try future.new[str, ReadTask](a, pool, runRead, task)
+
+if try pending.isDone():
+    # Polling is optional; await also works before completion.
+..
+
+contents := try pending.await()
+```
+
+`isDone()` is a non-blocking status check. `await()` blocks using the platform
+address-wait primitive rather than busy-waiting, then returns the task value or
+rethrows its error. It is a destructor and consumes the future: a future can be
+awaited only once, and calling either method after consumption is an error.
+Future state is reference-counted so it remains alive if the future is awaited
+before or after the worker finishes.
+
+The allocator and every resource referenced by the copied context must remain
+valid until the task completes. Copying an interface-like value such as
+`Reader` copies its pointers, not the storage to which they refer. Always await
+or otherwise finish outstanding work before closing the pool or destroying
+those resources. Tasks which block awaiting other tasks on the same fully
+occupied pool can deadlock through worker starvation.
+
+### 8.3 Async reader convenience
+
+`Reader.readAsync(pool, allocator, nBytes)` packages `Reader.read` as a future:
+
+```magma
+pool := try thread_pool.newDefault(a)
+defer pool.close()
+
+f := try file.open(a, "main.go", file.mode().read())
+defer f.close()
+
+r := f.reader()
+pending := try r.readAsync(pool, a, f.count())
+contents := try pending.await()
+```
+
+The returned string is allocator-owned, just as with synchronous `Reader.read`.
+If work fails on a worker, its existing propagation trace is stored with the
+error. `await()` rethrows that same error and adds the awaiting path, so an
+uncaught trace connects the caller to the asynchronous task's failure origin.
+
+`future.resetCreationTiming()` and `future.creationTiming()` provide cumulative
+diagnostic counters for allocation, initialization, waiter creation, and pool
+submission phases. Durations are reported in platform tick units; these global
+atomic counters are intended for measurement rather than application logic.
+
+## 9. Platform and low-level facilities
+
+### 9.1 Conditional declarations
 
 `@platform(...)` applies to the next top-level item:
 
@@ -532,7 +673,7 @@ This permits both branches to use the same alias and present one portable module
 API. It is item-level conditional compilation, not a general compile-time
 expression system.
 
-### 8.2 Foreign functions
+### 9.2 Foreign functions
 
 `ext` binds a Magma alias to a native symbol:
 
@@ -544,7 +685,7 @@ The first name is used by Magma code; the second is the linked external symbol.
 Arguments and the return type remain explicit, and declarations have no body.
 Windows and Unix implementations use this directly for OS and C-runtime APIs.
 
-### 8.3 Inline LLVM
+### 9.3 Inline LLVM
 
 `llvm "..."` injects textual LLVM IR, most often inside a function:
 
@@ -560,7 +701,7 @@ intrinsics that are absent from the core syntax. It is a powerful escape hatch,
 but its strings are not type-checked against surrounding Magma code. Invalid or
 mismatched IR is deferred to LLVM and can compromise optimizer assumptions.
 
-### 8.4 Memory model in practice
+### 9.4 Memory model in practice
 
 Allocation is explicit and allocator-driven. Resource-owning structs expose
 explicit `destr` methods such as `free` or `close`; callers invoke or defer them.
@@ -578,7 +719,7 @@ warning-only ownership analysis is intentionally local and incomplete. Fixed
 arrays are zeroed, but pointer validity remains the programmer's responsibility.
 Magma should therefore be classified as memory-unsafe in its current form.
 
-## 9. Standard-library feature picture
+## 10. Standard-library feature picture
 
 The language is small, but the corpus demonstrates that it can support a useful
 systems library:
@@ -588,6 +729,7 @@ systems library:
 - owned and borrowed strings and slices;
 - UTF-8 decoding and UTF-8/UTF-16 conversion;
 - files, readers, writers, buffered streams, and duplex streams;
+- worker thread pools, typed futures, and asynchronous reader operations;
 - growable arrays, lists, queues, builders, linear maps, and hash maps;
 - generic sorting and searching through comparison callbacks;
 - numeric formatting and parsing;
@@ -600,7 +742,7 @@ consistency, integer edge cases, and Unicode conversion. This is meaningful
 evidence that function pointers, generics, explicit errors, and low-level memory
 operations compose beyond toy programs.
 
-## 10. Important implementation limitations
+## 11. Important implementation limitations
 
 Several restrictions matter when reading or writing present-day Magma:
 
@@ -622,9 +764,9 @@ Several restrictions matter when reading or writing present-day Magma:
    payload storage, and vtables.
 7. **No `for`, `switch`, closures, or inference-heavy generic constraints.**
    The language favors a small set of explicit constructs.
-9. **Inline LLVM crosses the type boundary.** It is essential to current library
+8. **Inline LLVM crosses the type boundary.** It is essential to current library
    implementation but outside the normal safety and portability guarantees.
-10. **Implicit fallthrough returns exist.** The backend can synthesize a zero
+9. **Implicit fallthrough returns exist.** The backend can synthesize a zero
     result (and OK error for throwing functions) when execution reaches a
     function end. Explicit `ret` is clearer for value-returning functions.
 
@@ -632,7 +774,7 @@ These are not merely theoretical concerns: the standard library contains
 workarounds such as local copies before `addrof`, explicit integer casts, manual
 null tests via pointer-to-integer conversion, and careful error cleanup.
 
-## 11. Design assessment
+## 12. Design assessment
 
 Magma's syntax is internally coherent. Name-before-type declarations work
 uniformly for fields, parameters, locals, globals, and destructured results.

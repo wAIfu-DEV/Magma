@@ -1,12 +1,19 @@
 mod errors
 
+# A cursor over an error's bounded propagation trace. The newest propagation
+# site is returned first. Ring reuse can truncate an old cursor; accessors stay
+# safe and isTruncated reports that condition.
+Trace(
+    handle u64
+)
+
 # Returns the error code of an error.
 # A code of 0 indicates a successful operation.
 # O(1).
 # @param e input error
 # @returns error code
 pub code(e error) u32:
-    llvm "  %e0 = extractvalue %type.error %e, 0\n"
+	llvm "  %e0 = extractvalue %type.error %e, 2\n"
     llvm "  ret i32 %e0\n"
 ..
 
@@ -15,8 +22,91 @@ pub code(e error) u32:
 # @param e input error
 # @returns error message
 pub message(e error) str:
-    llvm "  %e0 = extractvalue %type.error %e, 1\n"
-    llvm "  ret %type.str %e0\n"
+	llvm "  %ep = extractvalue %type.error %e, 0\n"
+	llvm "  %el = extractvalue %type.error %e, 3\n"
+	llvm "  %el64 = zext i32 %el to i64\n"
+	llvm "  %s0 = insertvalue %type.str zeroinitializer, ptr %ep, 0\n"
+	llvm "  %s1 = insertvalue %type.str %s0, i64 %el64, 1\n"
+	llvm "  ret %type.str %s1\n"
+..
+
+# Internal bridge from the built-in error representation.
+traceHandle(e error) u64:
+    llvm "  %t = call i64 @magma.error.trace(%type.error %e)\n"
+    llvm "  ret i64 %t\n"
+..
+
+# Returns an allocation-free cursor over the propagation trace.
+pub trace(e error) Trace:
+    ret Trace(handle=traceHandle(e))
+..
+
+traceStatus(handle u64) u32:
+    llvm "  %status = call i32 @magma.error.trace.status(i64 %handle)\n"
+    llvm "  ret i32 %status\n"
+..
+
+pub Trace.isEmpty() bool:
+    ret traceStatus(this.handle) != 0
+..
+
+# Returns true when part of the trace was overwritten in bounded diagnostic
+# storage. Check the terminal cursor after iteration.
+pub Trace.isTruncated() bool:
+    ret traceStatus(this.handle) == 2
+..
+
+traceNext(handle u64) u64:
+    llvm "  %next = call i64 @magma.error.trace.next(i64 %handle)\n"
+    llvm "  ret i64 %next\n"
+..
+
+# Advances toward the error's origin. Calling this on an empty cursor is invalid.
+pub Trace.next() Trace:
+    ret Trace(handle=traceNext(this.handle))
+..
+
+# The following accessors are valid only for a non-empty cursor.
+traceFunction(handle u64) str:
+    llvm "  %value = call %type.str @magma.error.trace.function(i64 %handle)\n"
+    llvm "  ret %type.str %value\n"
+..
+
+pub Trace.function() str:
+    ret traceFunction(this.handle)
+..
+
+traceFile(handle u64) str:
+    llvm "  %value = call %type.str @magma.error.trace.file(i64 %handle)\n"
+    llvm "  ret %type.str %value\n"
+..
+
+pub Trace.file() str:
+    ret traceFile(this.handle)
+..
+
+traceLine(handle u64) u32:
+    llvm "  %value = call i32 @magma.error.trace.line(i64 %handle)\n"
+    llvm "  ret i32 %value\n"
+..
+
+pub Trace.line() u32:
+    ret traceLine(this.handle)
+..
+
+traceColumn(handle u64) u32:
+    llvm "  %value = call i32 @magma.error.trace.column(i64 %handle)\n"
+    llvm "  ret i32 %value\n"
+..
+
+pub Trace.column() u32:
+    ret traceColumn(this.handle)
+..
+
+# Prints all recorded propagation sites without allocating.
+pub printTrace(e error) void:
+    llvm "  call void @magma.error.printTrace(%type.error %e)\n"
+    llvm "  ret void\n"
 ..
 
 pub is(a error, b error) bool:
@@ -68,9 +158,13 @@ pub toStr(e error) str:
 # Creates an error value from a code and message.
 # O(1).
 makeErr(errorCode u32, msg str) error:
-    llvm "  %e0 = insertvalue %type.error zeroinitializer, i32 %errorCode, 0\n"
-    llvm "  %e1 = insertvalue %type.error %e0, %type.str %msg, 1\n"
-    llvm "  ret %type.error %e1\n"
+	llvm "  %mp = extractvalue %type.str %msg, 0\n"
+	llvm "  %ml64 = extractvalue %type.str %msg, 1\n"
+	llvm "  %ml = trunc i64 %ml64 to i32\n"
+	llvm "  %e0 = insertvalue %type.error zeroinitializer, ptr %mp, 0\n"
+	llvm "  %e1 = insertvalue %type.error %e0, i32 %errorCode, 2\n"
+	llvm "  %e2 = insertvalue %type.error %e1, i32 %ml, 3\n"
+	llvm "  ret %type.error %e2\n"
 ..
 
 # Wraps a platform error code without allocating a formatted message. The high
@@ -147,4 +241,3 @@ pub invalidType(msg str) error:
 pub outOfBounds(msg str) error:
     ret makeErr(7, msg)
 ..
-

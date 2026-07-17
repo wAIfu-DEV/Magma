@@ -35,16 +35,18 @@ options:
   --out, -o <path>        output path (default depends on --emit)
   --emit, -e <kind>       llvm, object, or exe (default llvm)
   --opt, -O <0-3>         LLVM optimization level (default 3)
+  --error-trace-slots <n> trace slots per runtime shard (default 1024)
   --clang-version, -cv    print the resolved Clang version and path`
 
 type options struct {
-	inputFile    string
-	debug        bool
-	version      bool
-	out          string
-	emit         string
-	opt          int
-	clangVersion bool
+	inputFile       string
+	debug           bool
+	version         bool
+	out             string
+	emit            string
+	opt             int
+	errorTraceSlots uint64
+	clangVersion    bool
 }
 
 func parseArgs(args []string) (options, error) {
@@ -61,6 +63,7 @@ func parseArgs(args []string) (options, error) {
 	flags.StringVar(&opts.emit, "e", "exe", "output kind")
 	flags.IntVar(&opts.opt, "opt", 3, "optimization level")
 	flags.IntVar(&opts.opt, "O", 3, "optimization level")
+	flags.Uint64Var(&opts.errorTraceSlots, "error-trace-slots", 1024, "error trace slots per runtime shard")
 	flags.BoolVar(&opts.clangVersion, "clang-version", false, "print the resolved Clang version")
 	flags.BoolVar(&opts.clangVersion, "cv", false, "print the resolved Clang version")
 	if err := flags.Parse(args); err != nil {
@@ -88,6 +91,9 @@ func parseArgs(args []string) (options, error) {
 	}
 	if opts.opt < 0 || opts.opt > 3 {
 		return options{}, fmt.Errorf("invalid --opt value %d (expected 0 through 3)", opts.opt)
+	}
+	if opts.errorTraceSlots == 0 || opts.errorTraceSlots > 65536 || opts.errorTraceSlots&(opts.errorTraceSlots-1) != 0 {
+		return options{}, fmt.Errorf("invalid --error-trace-slots value %d (expected a power of two from 1 through 65536)", opts.errorTraceSlots)
 	}
 	opts.inputFile = flags.Arg(0)
 	if opts.out == "" {
@@ -146,6 +152,7 @@ func wrappedMain() error {
 	if e != nil {
 		return e
 	}
+	s.ErrorTraceSlots = opts.errorTraceSlots
 
 	// actual meat of the program, multithreaded per file
 	// 1. lexing/tokenization
