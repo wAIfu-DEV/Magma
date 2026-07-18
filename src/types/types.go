@@ -31,6 +31,7 @@ type MemberAccess struct {
 
 type FileCtx struct {
 	FilePath        string
+	ModuleName      string
 	PackageName     string
 	MainPckgName    string
 	Imports         []string

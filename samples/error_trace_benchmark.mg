@@ -125,7 +125,7 @@ printResult(out buffered.Writer*, workers u64, elapsedNs u64, failures u64, trun
 
 benchmark(out buffered.Writer*, workers u64) !void:
     backing allocator.Allocator = heap.allocator()
-    pool := try thread_pool.new(backing, workers, workers, 100)
+    pool := try thread_pool.newSpinning(backing, 1, workers, workers, 100)
     base Context* = try backing.allocT[Context](workers)
     iterations u64 = totalOperations / workers
     sampleCount u64 = traceSlotCount()

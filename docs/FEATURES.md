@@ -574,16 +574,18 @@ result.
 ### 8.1 Creating a pool
 
 Pools require an allocator and own their worker, queue, and synchronization
-storage. `newDefault` selects a worker count from the available CPU cores and a
-default queue capacity. `new` exposes the worker count, initial queue capacity,
-and worker spin count:
+storage. `newDefault` selects a maximum worker count from the available CPU
+cores and a default queue capacity. Explicitly configured pools start at their
+minimum, grow toward their maximum when every available worker is occupied, and
+shrink to the minimum after bursts drain. `new` exposes both worker limits and
+the initial queue capacity; `newSpinning` additionally exposes the worker spin count:
 
 ```magma
 pool := try thread_pool.newDefault(a)
 defer pool.close()
 
 # Or configure it explicitly:
-pool := try thread_pool.new(a, 4, 256, 1)
+pool := try thread_pool.new(a, 2, 8, 256)
 defer pool.close()
 ```
 

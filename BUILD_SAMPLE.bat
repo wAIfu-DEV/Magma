@@ -7,7 +7,7 @@ CALL go build
 
 ECHO Building executable...
 
-CALL Magma.exe --emit exe --out out.exe samples/async_test.mg
+CALL Magma.exe --emit exe --out out.exe samples/http_get.mg
 if %ERRORLEVEL% GEQ 1 GOTO :End
 
 CALL Magma.exe -O3 --emit llvm --out out.ll samples/async_test.mg

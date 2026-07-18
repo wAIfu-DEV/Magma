@@ -48,11 +48,13 @@ func flattenName(name t.NodeName) string {
 func cloneName(name t.NodeName) t.NodeName {
 	switch n := name.(type) {
 	case *t.NodeNameSingle:
-		return &t.NodeNameSingle{Name: n.Name}
+		return &t.NodeNameSingle{Tk: n.Tk, Name: n.Name}
 	case *t.NodeNameComposite:
 		parts := make([]string, len(n.Parts))
 		copy(parts, n.Parts)
-		return &t.NodeNameComposite{Parts: parts}
+		tokens := make([]t.Token, len(n.Tokens))
+		copy(tokens, n.Tokens)
+		return &t.NodeNameComposite{Tokens: tokens, Parts: parts}
 	}
 	return nil
 }
@@ -104,15 +106,15 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 	case *t.NodeExprVoid:
 		return &t.NodeExprVoid{VoidType: cloneType(n.VoidType)}
 	case *t.NodeExprUnary:
-		return &t.NodeExprUnary{Operator: n.Operator, Operand: cloneExpr(n.Operand), InfType: cloneType(n.InfType)}
+		return &t.NodeExprUnary{Tk: n.Tk, Operator: n.Operator, Operand: cloneExpr(n.Operand), InfType: cloneType(n.InfType)}
 	case *t.NodeExprLit:
-		return &t.NodeExprLit{Value: n.Value, LitType: n.LitType, InfType: cloneType(n.InfType)}
+		return &t.NodeExprLit{Tk: n.Tk, Value: n.Value, LitType: n.LitType, InfType: cloneType(n.InfType)}
 	case *t.NodeExprName:
 		genericArgs := make([]*t.NodeType, len(n.GenericArgs))
 		for i, g := range n.GenericArgs {
 			genericArgs[i] = cloneType(g)
 		}
-		return &t.NodeExprName{Name: cloneName(n.Name), GenericArgs: genericArgs, InfType: cloneType(n.InfType)}
+		return &t.NodeExprName{Tk: n.Tk, Name: cloneName(n.Name), GenericArgs: genericArgs, InfType: cloneType(n.InfType)}
 	case *t.NodeExprCall:
 		args := make([]t.NodeExpr, len(n.Args))
 		for i, a := range n.Args {
@@ -123,6 +125,7 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 			typeArgs[i] = cloneType(g)
 		}
 		return &t.NodeExprCall{
+			Tk:          n.Tk,
 			Callee:      cloneExpr(n.Callee),
 			Args:        args,
 			GenericArgs: typeArgs,
@@ -131,11 +134,12 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 	case *t.NodeExprStructInit:
 		fields := make([]t.NodeStructFieldInit, len(n.Fields))
 		for i, field := range n.Fields {
-			fields[i] = t.NodeStructFieldInit{Name: field.Name, Expression: cloneExpr(field.Expression), FieldIndex: field.FieldIndex, FieldType: cloneType(field.FieldType)}
+			fields[i] = t.NodeStructFieldInit{Tk: field.Tk, Name: field.Name, Expression: cloneExpr(field.Expression), FieldIndex: field.FieldIndex, FieldType: cloneType(field.FieldType)}
 		}
 		return &t.NodeExprStructInit{Tk: n.Tk, Type: cloneType(n.Type), Fields: fields}
 	case *t.NodeExprMemberAccess:
 		return &t.NodeExprMemberAccess{
+			Tk:      n.Tk,
 			Target:  cloneExpr(n.Target),
 			Member:  n.Member,
 			Access:  n.Access,
@@ -143,6 +147,7 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 		}
 	case *t.NodeExprSubscript:
 		return &t.NodeExprSubscript{
+			Tk:       n.Tk,
 			Target:   cloneExpr(n.Target),
 			Expr:     cloneExpr(n.Expr),
 			BoxType:  cloneType(n.BoxType),
@@ -150,6 +155,7 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 		}
 	case *t.NodeExprBinary:
 		return &t.NodeExprBinary{
+			Tk:       n.Tk,
 			Operator: n.Operator,
 			Left:     cloneExpr(n.Left),
 			Right:    cloneExpr(n.Right),
@@ -157,14 +163,16 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 		}
 	case *t.NodeExprVarDef:
 		return &t.NodeExprVarDef{
-			Name:       cloneName(n.Name),
-			Type:       cloneType(n.Type),
-			AbsName:    n.AbsName,
-			RetFlagId:  n.RetFlagId,
-			IsSsa:      n.IsSsa,
-			IsReturned: n.IsReturned,
-			IsGlobal:   n.IsGlobal,
-			IrName:     n.IrName,
+			Name:        cloneName(n.Name),
+			Type:        cloneType(n.Type),
+			Initializer: cloneExpr(n.Initializer),
+			IsConst:     n.IsConst,
+			AbsName:     n.AbsName,
+			RetFlagId:   n.RetFlagId,
+			IsSsa:       n.IsSsa,
+			IsReturned:  n.IsReturned,
+			IsGlobal:    n.IsGlobal,
+			IrName:      n.IrName,
 		}
 	case *t.NodeExprVarDefAssign:
 		return &t.NodeExprVarDefAssign{
@@ -180,11 +188,11 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 			InfType: cloneType(n.InfType),
 		}
 	case *t.NodeExprTry:
-		return &t.NodeExprTry{Call: cloneExpr(n.Call), Pos: n.Pos}
+		return &t.NodeExprTry{Call: cloneExpr(n.Call), Tk: n.Tk, Pos: n.Pos, InfType: cloneType(n.InfType)}
 	case *t.NodeExprSizeof:
-		return &t.NodeExprSizeof{Type: cloneType(n.Type), InfType: cloneType(n.InfType)}
+		return &t.NodeExprSizeof{Tk: n.Tk, Type: cloneType(n.Type), InfType: cloneType(n.InfType)}
 	case *t.NodeExprAddrof:
-		return &t.NodeExprAddrof{Expr: cloneExpr(n.Expr), InfType: cloneType(n.InfType)}
+		return &t.NodeExprAddrof{Tk: n.Tk, Expr: cloneExpr(n.Expr), InfType: cloneType(n.InfType)}
 	case *t.NodeExprDestructureAssign:
 		return &t.NodeExprDestructureAssign{
 			ValueDef: *cloneExpr(&n.ValueDef).(*t.NodeExprVarDef),
@@ -203,7 +211,7 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 func cloneStmt(in t.NodeStatement) t.NodeStatement {
 	switch n := in.(type) {
 	case *t.NodeStmtRet:
-		return &t.NodeStmtRet{Expression: cloneExpr(n.Expression), OwnerFuncType: cloneType(n.OwnerFuncType)}
+		return &t.NodeStmtRet{Tk: n.Tk, Expression: cloneExpr(n.Expression), OwnerFuncType: cloneType(n.OwnerFuncType)}
 	case *t.NodeStmtContinue:
 		return &t.NodeStmtContinue{}
 	case *t.NodeStmtBreak:
@@ -211,9 +219,10 @@ func cloneStmt(in t.NodeStatement) t.NodeStatement {
 	case *t.NodeStmtExpr:
 		return &t.NodeStmtExpr{Expression: cloneExpr(n.Expression)}
 	case *t.NodeStmtThrow:
-		return &t.NodeStmtThrow{Expression: cloneExpr(n.Expression), Pos: n.Pos}
+		return &t.NodeStmtThrow{Tk: n.Tk, Expression: cloneExpr(n.Expression), Pos: n.Pos}
 	case *t.NodeStmtIf:
 		out := &t.NodeStmtIf{
+			Tk:       n.Tk,
 			CondExpr: cloneExpr(n.CondExpr),
 			Body:     cloneBody(&n.Body),
 		}
@@ -225,6 +234,7 @@ func cloneStmt(in t.NodeStatement) t.NodeStatement {
 		return &t.NodeStmtElse{Body: cloneBody(&n.Body)}
 	case *t.NodeStmtWhile:
 		return &t.NodeStmtWhile{
+			Tk:       n.Tk,
 			CondExpr: cloneExpr(n.CondExpr),
 			Body:     cloneBody(&n.Body),
 		}
@@ -274,6 +284,7 @@ func cloneFuncDef(in *t.NodeFuncDef) *t.NodeFuncDef {
 	}
 	for i, a := range in.Class.ArgsNode.Args {
 		out.Class.ArgsNode.Args[i] = t.NodeArg{
+			Tk:       a.Tk,
 			Name:     a.Name,
 			TypeNode: cloneType(a.TypeNode),
 		}
@@ -295,6 +306,7 @@ func cloneStructDef(in *t.NodeStructDef) *t.NodeStructDef {
 	}
 	for i, a := range in.Class.ArgsNode.Args {
 		out.Class.ArgsNode.Args[i] = t.NodeArg{
+			Tk:       a.Tk,
 			Name:     a.Name,
 			TypeNode: cloneType(a.TypeNode),
 		}
@@ -1076,11 +1088,12 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 		}
 		switch name := n.Name.(type) {
 		case *t.NodeNameSingle:
-			n.Name = &t.NodeNameSingle{Name: specName}
+			n.Name = &t.NodeNameSingle{Tk: name.Tk, Name: specName}
 		case *t.NodeNameComposite:
 			parts := append([]string{}, name.Parts...)
 			parts[len(parts)-1] = specName
-			n.Name = &t.NodeNameComposite{Parts: parts}
+			tokens := append([]t.Token{}, name.Tokens...)
+			n.Name = &t.NodeNameComposite{Tokens: tokens, Parts: parts}
 		}
 		n.GenericArgs = nil
 		return nil
@@ -1129,7 +1142,7 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 					nextParts := make([]string, len(nm.Parts))
 					copy(nextParts, nm.Parts)
 					nextParts[len(nextParts)-1] = specMemberName
-					nameExpr.Name = &t.NodeNameComposite{Parts: nextParts}
+					nameExpr.Name = &t.NodeNameComposite{Tokens: append([]t.Token{}, nm.Tokens...), Parts: nextParts}
 					n.GenericArgs = nil
 					return nil
 				}
@@ -1142,7 +1155,11 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 			if e != nil {
 				return e
 			}
-			nameExpr.Name = &t.NodeNameComposite{Parts: []string{nm.Parts[0], specName}}
+			tokens := append([]t.Token{}, nm.Tokens...)
+			if len(tokens) > 2 {
+				tokens = []t.Token{tokens[0], tokens[len(tokens)-1]}
+			}
+			nameExpr.Name = &t.NodeNameComposite{Tokens: tokens, Parts: []string{nm.Parts[0], specName}}
 		case *t.NodeNameSingle:
 			targetModule, baseName, e := resolveQualifiedName(module, gl, nameExpr.Name)
 			if e != nil {
@@ -1152,7 +1169,7 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 			if e != nil {
 				return e
 			}
-			nameExpr.Name = &t.NodeNameSingle{Name: specName}
+			nameExpr.Name = &t.NodeNameSingle{Tk: nm.Tk, Name: specName}
 		default:
 			return fmt.Errorf("unsupported callee name shape in generic call")
 		}
@@ -1494,7 +1511,7 @@ func Run(shared *t.SharedState) error {
 	ctx.pruneTemplates()
 
 	for _, f := range shared.Files {
-		scope, e := scopeinfo.BuildScopeTree(f.GlNode)
+		scope, e := scopeinfo.BuildScopeTree(f, f.GlNode)
 		if e != nil {
 			return e
 		}

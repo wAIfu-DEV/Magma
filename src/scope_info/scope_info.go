@@ -1,6 +1,7 @@
 package scopeinfo
 
 import (
+	"Magma/src/comp_err"
 	t "Magma/src/types"
 	"fmt"
 )
@@ -10,6 +11,23 @@ type sh *t.SharedState
 type lcx struct {
 	GlScope   *t.Scope
 	CurrScope *t.Scope
+	FileCtx   *t.FileCtx
+}
+
+func declarationToken(name t.NodeName) *t.Token {
+	switch n := name.(type) {
+	case *t.NodeNameSingle:
+		return &n.Tk
+	case *t.NodeNameComposite:
+		if len(n.Tokens) > 0 {
+			return &n.Tokens[0]
+		}
+	}
+	return &t.Token{}
+}
+
+func declarationError(ctx *lcx, name t.NodeName, description string) error {
+	return comp_err.CompilationErrorToken(ctx.FileCtx, declarationToken(name), description, "declarations in the same or an enclosing scope must have unique names")
 }
 
 func declVarInStack(ctx *lcx, v *t.NodeExprVarDef) error {
@@ -19,10 +37,10 @@ func declVarInStack(ctx *lcx, v *t.NodeExprVarDef) error {
 	}
 	for scope := ctx.CurrScope; scope != nil; scope = scope.Parent {
 		if _, exists := scope.DeclVars[n.Name]; exists {
-			return fmt.Errorf("variable '%s' is already declared in this or an enclosing scope; shadowing is not allowed", n.Name)
+			return declarationError(ctx, v.Name, fmt.Sprintf("variable '%s' is already declared in this or an enclosing scope; shadowing is not allowed", n.Name))
 		}
 		if _, exists := scope.DeclFuncs[n.Name]; exists {
-			return fmt.Errorf("variable '%s' conflicts with a function declared in this or an enclosing scope; shadowing is not allowed", n.Name)
+			return declarationError(ctx, v.Name, fmt.Sprintf("variable '%s' conflicts with a function declared in this or an enclosing scope; shadowing is not allowed", n.Name))
 		}
 	}
 	ctx.CurrScope.DeclVars[n.Name] = v
@@ -51,10 +69,10 @@ func declFuncInStack(ctx *lcx, f *t.NodeFuncDef) (*t.Scope, error) {
 	switch n := f.Class.NameNode.(type) {
 	case *t.NodeNameSingle:
 		if _, exists := s.DeclVars[n.Name]; exists {
-			return nil, fmt.Errorf("function '%s' conflicts with a variable declared in this scope; shadowing is not allowed", n.Name)
+			return nil, declarationError(ctx, f.Class.NameNode, fmt.Sprintf("function '%s' conflicts with a variable declared in this scope; shadowing is not allowed", n.Name))
 		}
 		if _, exists := s.DeclFuncs[n.Name]; exists {
-			return nil, fmt.Errorf("function '%s' is already declared in this scope", n.Name)
+			return nil, declarationError(ctx, f.Class.NameNode, fmt.Sprintf("function '%s' is already declared in this scope", n.Name))
 		}
 		s.DeclFuncs[n.Name] = fnScope
 	case *t.NodeNameComposite:
@@ -67,10 +85,10 @@ func declFuncInStack(ctx *lcx, f *t.NodeFuncDef) (*t.Scope, error) {
 		}
 
 		if _, exists := s.DeclVars[name]; exists {
-			return nil, fmt.Errorf("function '%s' conflicts with a variable declared in this scope; shadowing is not allowed", name)
+			return nil, declarationError(ctx, f.Class.NameNode, fmt.Sprintf("function '%s' conflicts with a variable declared in this scope; shadowing is not allowed", name))
 		}
 		if _, exists := s.DeclFuncs[name]; exists {
-			return nil, fmt.Errorf("function '%s' is already declared in this scope", name)
+			return nil, declarationError(ctx, f.Class.NameNode, fmt.Sprintf("function '%s' is already declared in this scope", name))
 		}
 		s.DeclFuncs[name] = fnScope
 	}
@@ -203,7 +221,7 @@ func bldFuncDef(ctx *lcx, fnDef *t.NodeFuncDef) error {
 	_, isMemberFunc := fnDef.Class.NameNode.(*t.NodeNameComposite)
 	for i, arg := range fnDef.Class.ArgsNode.Args {
 		definition := &t.NodeExprVarDef{
-			Name:   &t.NodeNameSingle{Name: arg.Name},
+			Name:   &t.NodeNameSingle{Tk: arg.Tk, Name: arg.Name},
 			Type:   arg.TypeNode,
 			IrName: "%" + arg.Name + ".addr",
 		}
@@ -305,6 +323,12 @@ func bldGlobal(ctx *lcx, gl *t.NodeGlobal) error {
 				return e
 			}
 			ctx.CurrScope = glScope
+		case *t.NodeExprVarDef:
+			if n.Initializer != nil {
+				if e := bldExpr(ctx, n.Initializer); e != nil {
+					return e
+				}
+			}
 		case *t.NodeConstDef:
 			if e := bldExpr(ctx, n.Initializer); e != nil {
 				return e
@@ -314,8 +338,8 @@ func bldGlobal(ctx *lcx, gl *t.NodeGlobal) error {
 	return nil
 }
 
-func BuildScopeTree(gl *t.NodeGlobal) (t.Scope, error) {
-	ctx := &lcx{}
+func BuildScopeTree(fileCtx *t.FileCtx, gl *t.NodeGlobal) (t.Scope, error) {
+	ctx := &lcx{FileCtx: fileCtx}
 
 	e := bldGlobal(ctx, gl)
 	return *ctx.GlScope, e

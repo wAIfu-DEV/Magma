@@ -96,7 +96,7 @@ pub main() !void:
     out := try io.stdout(a)
     defer out.close()
 
-    pool := try thread_pool.new(a, 1, 8)
+    pool := try thread_pool.new(a, 1, 1, 8, 1)
     warmup Context
     warmup.start = time.ticks()
     try pool.submit(poolEntry, addrof warmup)

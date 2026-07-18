@@ -22,7 +22,7 @@ failingSource(impl ptr, bytes u8[], count u64) !u64:
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()
-    pool := try thread_pool.new(a, 1, 8)
+    pool := try thread_pool.new(a, 1, 1, 8, 1)
 
     input := reader.new(none, source)
     pending := try input.readAsync(pool, a, 1)

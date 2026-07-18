@@ -29,12 +29,16 @@ func registerImportResult(shared *types.SharedState, path string, c <-chan error
 }
 
 func extractModuleName(fCtx *types.FileCtx, firstLine string) (string, error) {
+	if beforeComment, _, found := strings.Cut(firstLine, "#"); found {
+		firstLine = beforeComment
+	}
 	firstLine = strings.TrimSpace(firstLine)
 
 	if !strings.HasPrefix(firstLine, "mod ") {
+		start := types.Token{Pos: types.FilePos{Line: 1, Col: 1}}
 		return "", comp_err.CompilationErrorToken(
 			fCtx,
-			&types.Token{},
+			&start,
 			"syntax error: expected module name declaration as very first line of file",
 			"magma files should start with: `mod <modulename>`",
 		)
@@ -44,9 +48,10 @@ func extractModuleName(fCtx *types.FileCtx, firstLine string) (string, error) {
 	moduleName = strings.TrimSpace(moduleName)
 
 	if moduleName == "" {
+		nameToken := types.Token{Pos: types.FilePos{Line: 1, Col: 5}}
 		return "", comp_err.CompilationErrorToken(
 			fCtx,
-			&types.Token{},
+			&nameToken,
 			"syntax error: expected module name after 'mod' keyword",
 			"magma files should start with: `mod <modulename>`",
 		)
@@ -58,19 +63,21 @@ func extractModuleName(fCtx *types.FileCtx, firstLine string) (string, error) {
 	}
 
 	if !(unicode.IsLetter(r)) {
+		nameToken := types.Token{Repr: string(r), Pos: types.FilePos{Line: 1, Col: 5}}
 		return "", comp_err.CompilationErrorToken(
 			fCtx,
-			&types.Token{},
+			&nameToken,
 			"syntax error: module name should start with a character in the range [a-zA-Z]",
 			"",
 		)
 	}
 
-	for _, r := range moduleName {
+	for i, r := range moduleName {
 		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_') {
+			nameToken := types.Token{Repr: string(r), Pos: types.FilePos{Line: 1, Col: uint32(i + 5)}}
 			return "", comp_err.CompilationErrorToken(
 				fCtx,
-				&types.Token{},
+				&nameToken,
 				"syntax error: characters in module name should all be within the range [a-zA-Z_]",
 				"",
 			)
@@ -118,10 +125,10 @@ func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath strin
 		registerImportResult(shared, absPath, c)
 		return nil, err
 	}
-
 	moduleId := randid.RandId(10)
 	moduleNameId := moduleName + "_" + moduleId
 
+	fCtx.ModuleName = moduleName
 	fCtx.PackageName = moduleNameId
 
 	if fromGl == nil {

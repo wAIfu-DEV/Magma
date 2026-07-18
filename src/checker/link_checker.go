@@ -1,6 +1,7 @@
 package checker
 
 import (
+	"Magma/src/comp_err"
 	magmatypes "Magma/src/magma_types"
 	t "Magma/src/types"
 	"fmt"
@@ -14,6 +15,8 @@ type ctx struct {
 	GlobalNode   *t.NodeGlobal
 	ModuleBundle *t.ModuleBundle
 	LastFuncDef  *t.NodeFuncDef
+	FileCtx      *t.FileCtx
+	LoopDepth    int
 
 	CurrScope *t.Scope
 }
@@ -73,6 +76,18 @@ func parseName(name t.NodeName) parsedName {
 		}
 	}
 	return parsedName{}
+}
+
+func lastNameToken(name t.NodeName) *t.Token {
+	switch n := name.(type) {
+	case *t.NodeNameSingle:
+		return &n.Tk
+	case *t.NodeNameComposite:
+		if len(n.Tokens) > 0 {
+			return &n.Tokens[len(n.Tokens)-1]
+		}
+	}
+	return &t.Token{}
 }
 
 func ptrTypeFromStructDef(c *ctx, strct *t.StructDef) *t.NodeType {
@@ -330,7 +345,14 @@ func clGetFuncDefFromName(c *ctx, nameNode t.NodeName) (*t.NodeFuncDef, error) {
 	return nil, fmt.Errorf("failed to get struct def from name")
 }
 
-func clVarNameChainValid(c *ctx, scope *t.Scope, name *parsedName, varName string, varType *t.NodeType, lvalue bool) (lastIsFunc bool, accesses []*t.MemberAccess, e error) {
+func memberNameToken(name *t.NodeExprName, partIndex int) *t.Token {
+	if composite, ok := name.Name.(*t.NodeNameComposite); ok && partIndex+1 < len(composite.Tokens) {
+		return &composite.Tokens[partIndex+1]
+	}
+	return &name.Tk
+}
+
+func clVarNameChainValid(c *ctx, scope *t.Scope, source *t.NodeExprName, name *parsedName, varName string, varType *t.NodeType, lvalue bool) (lastIsFunc bool, accesses []*t.MemberAccess, e error) {
 	e = clType(c, varType)
 	if e != nil {
 		return false, nil, e
@@ -355,7 +377,12 @@ func clVarNameChainValid(c *ctx, scope *t.Scope, name *parsedName, varName strin
 	// get struct def for type
 	structDef, e := clGetStructDefFromType(c, lastDerefType)
 	if e != nil {
-		return false, nil, e
+		return false, nil, comp_err.CompilationErrorToken(
+			c.FileCtx,
+			memberNameToken(source, 0),
+			fmt.Sprintf("type '%s' has no members", flattenType(lastDerefType)),
+			"member access requires a struct value or pointer to a struct value",
+		)
 	}
 
 	foundMemberFunc := false
@@ -366,8 +393,12 @@ func clVarNameChainValid(c *ctx, scope *t.Scope, name *parsedName, varName strin
 	last := len(name.Parts) - 1
 	for i, part := range name.Parts {
 		if foundMemberFunc {
-			// TODO: compiler error
-			return false, nil, fmt.Errorf("tried to access inexistent field '%s' from member function '%s' of '%s'", part, memberName, structDef.Name)
+			return false, nil, comp_err.CompilationErrorToken(
+				c.FileCtx,
+				memberNameToken(source, i),
+				fmt.Sprintf("cannot access member '%s' after method '%s' on type '%s'", part, memberName, structDef.Name),
+				"a method must be called before accessing a value from its result",
+			)
 		}
 
 		// check if member name exists in struct def
@@ -426,8 +457,16 @@ func clVarNameChainValid(c *ctx, scope *t.Scope, name *parsedName, varName strin
 
 		if ok {
 			foundMemberFunc = true
+			memberName = part
 			continue
 		}
+
+		return false, nil, comp_err.CompilationErrorToken(
+			c.FileCtx,
+			memberNameToken(source, i),
+			fmt.Sprintf("type '%s' has no member named '%s'", structDef.Name, part),
+			"",
+		)
 	}
 
 	return foundMemberFunc, accesses, nil
@@ -456,7 +495,7 @@ func clExistsInScope(c *ctx, scope *t.Scope, name *t.NodeExprName, ent entryType
 			}
 
 			// TODO: this won't work for access to vars declared in other modules
-			lastFunc, accesses, e := clVarNameChainValid(c, scope, &parsed, vName.First, v.Type, lvalue)
+			lastFunc, accesses, e := clVarNameChainValid(c, scope, name, &parsed, vName.First, v.Type, lvalue)
 
 			if e != nil {
 				return false, false, nil, false, e
@@ -563,7 +602,11 @@ func clName(c *ctx, name *t.NodeExprName, expected entryType, lvalue bool) error
 	}
 
 	if !found {
-		return fmt.Errorf("name expression: %s does not refer to any defined vars", flattenName(name.Name))
+		description := fmt.Sprintf("unknown name '%s'", flattenName(name.Name))
+		if lvalue {
+			description = fmt.Sprintf("unknown variable '%s'", flattenName(name.Name))
+		}
+		return comp_err.CompilationErrorToken(c.FileCtx, lastNameToken(name.Name), description, "")
 	}
 
 	name.IsSsa = isSsa
@@ -598,7 +641,12 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 		}
 
 		if !found {
-			return fmt.Errorf("name expression in call: %s does not refer to any defined vars", flattenName(n.Name))
+			return comp_err.CompilationErrorToken(
+				c.FileCtx,
+				lastNameToken(n.Name),
+				fmt.Sprintf("unknown function '%s'", flattenName(n.Name)),
+				"",
+			)
 		}
 
 		n.IsSsa = isSsa
@@ -847,18 +895,23 @@ func clExpr(c *ctx, expr t.NodeExpr, lvalue bool) error {
 		}
 		def, e := clGetStructDefFromType(c, n.Type)
 		if e != nil {
-			return fmt.Errorf("constructor target %s is not a struct: %w", flattenType(n.Type), e)
+			return comp_err.CompilationErrorToken(
+				c.FileCtx,
+				&n.Tk,
+				fmt.Sprintf("cannot construct value of non-struct type '%s'", flattenType(n.Type)),
+				"struct construction requires a declared struct type",
+			)
 		}
 		seen := map[string]bool{}
 		for i := range n.Fields {
 			field := &n.Fields[i]
 			if seen[field.Name] {
-				return fmt.Errorf("duplicate field '%s' in %s constructor", field.Name, flattenType(n.Type))
+				return comp_err.CompilationErrorToken(c.FileCtx, &field.Tk, fmt.Sprintf("duplicate field '%s' in '%s' constructor", field.Name, def.Name), "constructor fields must be unique")
 			}
 			seen[field.Name] = true
 			fieldType, ok := def.Fields[field.Name]
 			if !ok {
-				return fmt.Errorf("type %s has no field '%s'", flattenType(n.Type), field.Name)
+				return comp_err.CompilationErrorToken(c.FileCtx, &field.Tk, fmt.Sprintf("type '%s' has no field named '%s'", def.Name, field.Name), "")
 			}
 			field.FieldIndex = def.FieldNb[field.Name]
 			field.FieldType = fieldType
@@ -868,7 +921,7 @@ func clExpr(c *ctx, expr t.NodeExpr, lvalue bool) error {
 		}
 		for _, name := range def.FieldOrder {
 			if !seen[name] {
-				return fmt.Errorf("missing field '%s' in %s constructor", name, flattenType(n.Type))
+				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("missing field '%s' in '%s' constructor", name, def.Name), "all struct fields must be initialized")
 			}
 		}
 		return nil
@@ -1083,7 +1136,12 @@ func clTypeKind(c *ctx, parentType *t.NodeType, kind t.NodeTypeKind, topLevel bo
 					AbsoluteName: sd.Module + "." + sd.Name,
 				}, nil
 			}
-			return nil, e
+			return nil, comp_err.CompilationErrorToken(
+				c.FileCtx,
+				lastNameToken(n.NameNode),
+				fmt.Sprintf("unknown type '%s'", flattenName(n.NameNode)),
+				"",
+			)
 		case *t.NodeNameComposite:
 			sd, e := clGetStructDefFromModule(c, parseName(nn))
 
@@ -1096,7 +1154,12 @@ func clTypeKind(c *ctx, parentType *t.NodeType, kind t.NodeTypeKind, topLevel bo
 					AbsoluteName: sd.Module + "." + sd.Name,
 				}, nil
 			}
-			return nil, e
+			return nil, comp_err.CompilationErrorToken(
+				c.FileCtx,
+				lastNameToken(n.NameNode),
+				fmt.Sprintf("unknown type '%s'", flattenName(n.NameNode)),
+				"",
+			)
 		}
 	case *t.NodeTypeSlice:
 		newT, e := clTypeKind(c, parentType, n.ElemKind, false)
@@ -1218,12 +1281,34 @@ func clGlDecl(c *ctx, glDecl t.NodeGlobalDecl) error {
 	case *t.NodeStructDef:
 		return clStructDef(c, n)
 	case *t.NodeExprVarDef:
+		if n.Initializer != nil {
+			if e := clExpr(c, n.Initializer, false); e != nil {
+				return e
+			}
+			if n.Type == nil {
+				if e := ctExpr(c, n.Initializer); e != nil {
+					return e
+				}
+				n.Type = n.Initializer.GetInferredType()
+			}
+		}
 		return clExpr(c, n, false)
 	case *t.NodeConstDef:
-		if e := clType(c, n.VarDef.Type); e != nil {
+		if n.VarDef.Type != nil {
+			if e := clType(c, n.VarDef.Type); e != nil {
+				return e
+			}
+		}
+		if e := clExpr(c, n.Initializer, false); e != nil {
 			return e
 		}
-		return clExpr(c, n.Initializer, false)
+		if n.VarDef.Type == nil {
+			if e := ctExpr(c, n.Initializer); e != nil {
+				return e
+			}
+			n.VarDef.Type = n.Initializer.GetInferredType()
+		}
+		return nil
 	}
 	return nil
 }
@@ -1360,6 +1445,7 @@ func CheckLinks(s *t.SharedState) error {
 		n := fCtx.GlNode
 		ctx.GlobalNode = n
 		ctx.ScopeTree = &fCtx.ScopeTree
+		ctx.FileCtx = fCtx
 
 		//fmt.Printf("check links of: %s\n", fCtx.PackageName)
 		e := clGlobal(ctx, n)

@@ -5,9 +5,13 @@ use "../std/io.mg"        io
 use "../std/strings.mg"   strs
 use "../std/http.mg"      http
 use "../std/builder.mg"   builder
+use "../std/thread_pool.mg" thread_pool
 
 pub main(args str[]) !void:
     a := heap.allocator()
+
+    tp := try thread_pool.newDefault(a)
+    defer tp.close()
 
     out := try io.stdout(a)
     in :=  try io.stdin(a)
@@ -26,7 +30,7 @@ pub main(args str[]) !void:
         out.write("URL: ")
         out.flush()
 
-        input := in.readLn(a)
+        input := try in.readLn(a)
         defer strs.free(a, input)
 
         resp := try client.get(input)
@@ -45,7 +49,8 @@ pub main(args str[]) !void:
         defer bld.free()
 
         while true:
-            chunk := try body.read(a, 512)
+            readFuture := try body.readAsync(tp, a, 512)
+            chunk := try readFuture.await()
 
             if strs.countBytes(chunk) == 0:
                 res := try bld.build()
@@ -60,4 +65,3 @@ pub main(args str[]) !void:
         ..
     ..
 .. 
-

@@ -1,6 +1,7 @@
 package checker
 
 import (
+	"Magma/src/comp_err"
 	magmatypes "Magma/src/magma_types"
 	t "Magma/src/types"
 	"fmt"
@@ -78,6 +79,18 @@ func isErrType(node *t.NodeType) bool {
 		}
 	}
 	return false
+}
+
+func isStrType(node *t.NodeType) bool {
+	if node == nil {
+		return false
+	}
+	named, ok := node.KindNode.(*t.NodeTypeNamed)
+	if !ok {
+		return false
+	}
+	single, ok := named.NameNode.(*t.NodeNameSingle)
+	return ok && single.Name == "str"
 }
 
 func isBoolType(node *t.NodeType) bool {
@@ -177,6 +190,26 @@ func isArrayType(node *t.NodeType) bool {
 	return false
 }
 
+func isUntypedSlice(node *t.NodeType) bool {
+	if node == nil {
+		return false
+	}
+	named, ok := node.KindNode.(*t.NodeTypeNamed)
+	if !ok {
+		return false
+	}
+	single, ok := named.NameNode.(*t.NodeNameSingle)
+	return ok && single.Name == "slice"
+}
+
+func isTypedSlice(node *t.NodeType) bool {
+	if node == nil {
+		return false
+	}
+	_, ok := node.KindNode.(*t.NodeTypeSlice)
+	return ok
+}
+
 func getBoxedType(node *t.NodeType) *t.NodeType {
 	if node == nil {
 		return nil
@@ -254,6 +287,36 @@ func flattenCallee(expr t.NodeExpr) string {
 	}
 }
 
+func expressionSourceToken(expr t.NodeExpr) *t.Token {
+	switch n := expr.(type) {
+	case *t.NodeExprName:
+		return &n.Tk
+	case *t.NodeExprLit:
+		return &n.Tk
+	case *t.NodeExprUnary:
+		return &n.Tk
+	case *t.NodeExprBinary:
+		return &n.Tk
+	case *t.NodeExprCall:
+		return &n.Tk
+	case *t.NodeExprMemberAccess:
+		return &n.Tk
+	case *t.NodeExprSubscript:
+		return &n.Tk
+	case *t.NodeExprTry:
+		return &n.Tk
+	case *t.NodeExprSizeof:
+		return &n.Tk
+	case *t.NodeExprAddrof:
+		return &n.Tk
+	case *t.NodeExprAssign:
+		return &n.Tk
+	case *t.NodeExprVarDefAssign:
+		return &n.Tk
+	}
+	return &t.Token{}
+}
+
 func sameType(a *t.NodeType, b *t.NodeType) bool {
 	if a == nil || b == nil {
 		return a == b
@@ -266,13 +329,53 @@ func sameType(a *t.NodeType, b *t.NodeType) bool {
 
 func compatibleInitializer(expected *t.NodeType, expr t.NodeExpr) bool {
 	actual := expr.GetInferredType()
+	if compatibleTypes(expected, actual) {
+		return true
+	}
+	if lit, ok := expr.(*t.NodeExprLit); ok && lit.LitType == t.TokLitNum && isNumberType(expected) {
+		return true
+	}
+	return false
+}
+
+func compatibleTypes(expected *t.NodeType, actual *t.NodeType) bool {
+	if expected == nil || actual == nil || expected.Throws != actual.Throws {
+		return false
+	}
 	if sameType(expected, actual) {
 		return true
+	}
+	expectedFunc, expectedIsFunc := expected.KindNode.(*t.NodeTypeFunc)
+	actualFunc, actualIsFunc := actual.KindNode.(*t.NodeTypeFunc)
+	if expectedIsFunc || actualIsFunc {
+		if (expectedIsFunc && isPointerType(actual)) || (actualIsFunc && isPointerType(expected)) {
+			return true
+		}
+		if !expectedIsFunc || !actualIsFunc || len(expectedFunc.Args) != len(actualFunc.Args) {
+			return false
+		}
+		for i := range expectedFunc.Args {
+			if !compatibleTypes(expectedFunc.Args[i], actualFunc.Args[i]) {
+				return false
+			}
+		}
+		return compatibleTypes(expectedFunc.RetType, actualFunc.RetType)
 	}
 	if isPointerType(expected) && isPointerType(actual) {
 		return true
 	}
-	if lit, ok := expr.(*t.NodeExprLit); ok && lit.LitType == t.TokLitNum && isNumberType(expected) {
+	if isNumberType(expected) && isNumberType(actual) {
+		return true
+	}
+	expectedSlice, expectedIsSlice := expected.KindNode.(*t.NodeTypeSlice)
+	actualSlice, actualIsSlice := actual.KindNode.(*t.NodeTypeSlice)
+	if expectedIsSlice && actualIsSlice {
+		if expectedSlice.HasSize && actualSlice.HasSize && expectedSlice.Size != actualSlice.Size {
+			return false
+		}
+		return compatibleTypes(&t.NodeType{KindNode: expectedSlice.ElemKind}, &t.NodeType{KindNode: actualSlice.ElemKind})
+	}
+	if (isUntypedSlice(expected) && isTypedSlice(actual)) || (isTypedSlice(expected) && isUntypedSlice(actual)) {
 		return true
 	}
 	return false
@@ -341,6 +444,9 @@ func sameTypeKind(a t.NodeTypeKind, b t.NodeTypeKind) bool {
 }
 
 func ctExprLvalue(c *ctx, expr t.NodeExpr) error {
+	if name, variable := assignedConstant(expr); variable != nil {
+		return comp_err.CompilationErrorToken(c.FileCtx, lastNameToken(name.Name), fmt.Sprintf("cannot assign to constant '%s'", flattenName(name.Name)), "constants are immutable")
+	}
 	switch n := expr.(type) {
 	case *t.NodeExprUnary:
 		if n.Operator != t.KwAsterisk {
@@ -363,7 +469,12 @@ func ctExprLvalue(c *ctx, expr t.NodeExpr) error {
 
 		var elemType *t.NodeType = getBoxedType(n.BoxType)
 		if elemType == nil {
-			return fmt.Errorf("failed to infer array element type")
+			return comp_err.CompilationErrorToken(
+				c.FileCtx,
+				&n.Tk,
+				fmt.Sprintf("cannot index value of type '%s'", flattenType(n.BoxType)),
+				"only arrays, slices, and pointers can be indexed",
+			)
 		}
 
 		n.ElemType = elemType
@@ -404,6 +515,20 @@ func ctExprLvalue(c *ctx, expr t.NodeExpr) error {
 	return fmt.Errorf("unexpected expression type")
 }
 
+func assignedConstant(expr t.NodeExpr) (*t.NodeExprName, *t.NodeExprVarDef) {
+	switch n := expr.(type) {
+	case *t.NodeExprName:
+		if variable, ok := n.AssociatedNode.(*t.NodeExprVarDef); ok && variable.IsConst {
+			return n, variable
+		}
+	case *t.NodeExprMemberAccess:
+		return assignedConstant(n.Target)
+	case *t.NodeExprSubscript:
+		return assignedConstant(n.Target)
+	}
+	return nil, nil
+}
+
 func ctExpr(c *ctx, expr t.NodeExpr) error {
 	switch n := expr.(type) {
 	case *t.NodeExprVoid:
@@ -422,32 +547,60 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 
 		callArgCount := len(n.Args)
 		defArgCount := 0
+		expectedArgs := []*t.NodeType{}
 
 		if n.IsFuncPointer {
+			if n.FuncPtrType == nil {
+				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("cannot call '%s': its type could not be resolved", flattenCallee(n.Callee)), "")
+			}
 			funcType, ok := n.FuncPtrType.KindNode.(*t.NodeTypeFunc)
 			if !ok {
-				return fmt.Errorf("call to %s was resolved as a function pointer with non-function type %T", flattenCallee(n.Callee), n.FuncPtrType.KindNode)
+				return comp_err.CompilationErrorToken(
+					c.FileCtx,
+					&n.Tk,
+					fmt.Sprintf("cannot call '%s': value has non-function type '%s'", flattenCallee(n.Callee), flattenType(n.FuncPtrType)),
+					"only functions and function-pointer values can be called",
+				)
 			}
 			defArgCount = len(funcType.Args)
+			expectedArgs = funcType.Args
 		} else {
-			defArgCount = len(n.AssociatedFnDef.Class.ArgsNode.Args)
+			definedArgs := n.AssociatedFnDef.Class.ArgsNode.Args
+			defArgCount = len(definedArgs)
 
 			if defArgCount > 0 {
-				firstArg := n.AssociatedFnDef.Class.ArgsNode.Args[0]
+				firstArg := definedArgs[0]
 				if firstArg.Name == "this" {
+					definedArgs = definedArgs[1:]
 					defArgCount -= 1
 				}
+			}
+			for _, arg := range definedArgs {
+				expectedArgs = append(expectedArgs, arg.TypeNode)
 			}
 		}
 
 		if callArgCount != defArgCount {
-			return fmt.Errorf("call to function %s has invalid number of arguments. Got %d, expected %d", flattenCallee(n.Callee), callArgCount, defArgCount)
+			return comp_err.CompilationErrorToken(
+				c.FileCtx,
+				&n.Tk,
+				fmt.Sprintf("function '%s' expects %d argument(s), but got %d", flattenCallee(n.Callee), defArgCount, callArgCount),
+				"",
+			)
 		}
 
-		for _, a := range n.Args {
+		for i, a := range n.Args {
 			e := ctExpr(c, a)
 			if e != nil {
 				return e
+			}
+			if !compatibleInitializer(expectedArgs[i], a) {
+				return comp_err.CompilationErrorToken(
+					c.FileCtx,
+					expressionSourceToken(a),
+					fmt.Sprintf("argument %d to '%s' expects type '%s', but got '%s'", i+1, flattenCallee(n.Callee), flattenType(expectedArgs[i]), flattenType(a.GetInferredType())),
+					"",
+				)
 			}
 		}
 
@@ -479,7 +632,7 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 				return e
 			}
 			if !compatibleInitializer(field.FieldType, field.Expression) {
-				return fmt.Errorf("field '%s' expects %s but initializer has type %s", field.Name, flattenType(field.FieldType), flattenType(field.Expression.GetInferredType()))
+				return comp_err.CompilationErrorToken(c.FileCtx, &field.Tk, fmt.Sprintf("field '%s' expects type '%s', but initializer has type '%s'", field.Name, flattenType(field.FieldType), flattenType(field.Expression.GetInferredType())), "")
 			}
 		}
 		return nil
@@ -497,7 +650,12 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 
 		var elemType *t.NodeType = getBoxedType(n.BoxType)
 		if elemType == nil {
-			return fmt.Errorf("failed to infer array element type")
+			return comp_err.CompilationErrorToken(
+				c.FileCtx,
+				&n.Tk,
+				fmt.Sprintf("cannot index value of type '%s'", flattenType(n.BoxType)),
+				"only arrays, slices, and pointers can be indexed",
+			)
 		}
 
 		n.ElemType = elemType
@@ -572,14 +730,26 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		}
 
 		switch n.Operator {
-		case t.KwCmpEq, t.KwCmpNeq, t.KwCmpLt, t.KwCmpGt, t.KwCmpLtEq, t.KwCmpGtEq:
+		case t.KwCmpEq, t.KwCmpNeq:
+			leftT := n.Left.GetInferredType()
+			rightT := n.Right.GetInferredType()
+			if !compatibleTypes(leftT, rightT) {
+				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("cannot compare values of unrelated types '%s' and '%s'", flattenType(leftT), flattenType(rightT)), "")
+			}
+			n.InfType = makeNamedType("bool")
+		case t.KwCmpLt, t.KwCmpGt, t.KwCmpLtEq, t.KwCmpGtEq:
+			leftT := n.Left.GetInferredType()
+			rightT := n.Right.GetInferredType()
+			if !isNumberType(leftT) || !isNumberType(rightT) {
+				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("ordering comparison requires numeric operands, but got '%s' and '%s'", flattenType(leftT), flattenType(rightT)), "")
+			}
 			n.InfType = makeNamedType("bool")
 		case t.KwAndAnd, t.KwOrOr:
 			leftT := n.Left.GetInferredType()
 			rightT := n.Right.GetInferredType()
 
 			if !isBoolType(leftT) || !isBoolType(rightT) {
-				return fmt.Errorf("logical operators require both operands to be bool")
+				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("logical operator '%s' requires 'bool' operands, but got '%s' and '%s'", t.KwTypeToRepr[n.Operator], flattenType(leftT), flattenType(rightT)), "")
 			}
 
 			n.InfType = makeNamedType("bool")
@@ -612,6 +782,14 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 			}
 			n.InfType = leftT
 			return nil
+		case t.KwPlus, t.KwMinus, t.KwAsterisk, t.KwSlash, t.KwPercent:
+			leftT := n.Left.GetInferredType()
+			rightT := n.Right.GetInferredType()
+			if !isNumberType(leftT) || !isNumberType(rightT) {
+				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("arithmetic operator '%s' requires numeric operands, but got '%s' and '%s'", t.KwTypeToRepr[n.Operator], flattenType(leftT), flattenType(rightT)), "")
+			}
+			n.InfType = leftT
+			return nil
 		default:
 			// TODO: implicit casting rules
 			n.InfType = n.Left.GetInferredType()
@@ -628,7 +806,7 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 			operandType := n.Operand.GetInferredType()
 			pointerType, ok := operandType.KindNode.(*t.NodeTypePointer)
 			if !ok {
-				return fmt.Errorf("dereference (*) requires a pointer operand")
+				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("cannot dereference value of non-pointer type '%s'", flattenType(operandType)), "")
 			}
 			n.InfType = &t.NodeType{
 				Throws:   false,
@@ -642,12 +820,17 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 				return nil
 			}
 			if !isIntegerType(operandT) {
-				return fmt.Errorf("bitwise not (~) requires an integer or bool operand")
+				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("bitwise not requires an integer or 'bool' operand, but got '%s'", flattenType(operandT)), "")
 			}
 			n.InfType = operandT
 			return nil
 		default:
-			return fmt.Errorf("unexpected unary expression type")
+			operator := t.KwTypeToRepr[n.Operator]
+			additional := "this unary operator is not supported"
+			if n.Operator == t.KwAmpersand {
+				additional = "use `addrof expression` to take an address"
+			}
+			return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("unary operator '%s' is not supported", operator), additional)
 		}
 	case *t.NodeExprVarDef:
 		if n.Type == nil {
@@ -662,6 +845,13 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 
 		if n.VarDef.Type == nil {
 			n.VarDef.Type = n.AssignExpr.GetInferredType()
+		} else if !compatibleInitializer(n.VarDef.Type, n.AssignExpr) {
+			return comp_err.CompilationErrorToken(
+				c.FileCtx,
+				&n.Tk,
+				fmt.Sprintf("cannot initialize value of type '%s' with expression of type '%s'", flattenType(n.VarDef.Type), flattenType(n.AssignExpr.GetInferredType())),
+				"",
+			)
 		}
 
 		return nil
@@ -675,12 +865,32 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 			return e
 		}
 		n.InfType = n.Left.GetInferredType()
+		if !compatibleInitializer(n.InfType, n.Right) {
+			return comp_err.CompilationErrorToken(
+				c.FileCtx,
+				&n.Tk,
+				fmt.Sprintf("cannot assign value of type '%s' to value of type '%s'", flattenType(n.Right.GetInferredType()), flattenType(n.InfType)),
+				"",
+			)
+		}
 		return nil
 	case *t.NodeExprTry:
 		e := ctExpr(c, n.Call)
 		if e != nil {
 			return e
 		}
+		callType := n.Call.GetInferredType()
+		if callType == nil || !callType.Throws {
+			return comp_err.CompilationErrorToken(
+				c.FileCtx,
+				&n.Tk,
+				fmt.Sprintf("cannot use 'try' with non-throwing call '%s'", flattenCallee(n.Call)),
+				"remove 'try' or call a function whose return type is marked with '!'",
+			)
+		}
+		unwrapped := *callType
+		unwrapped.Throws = false
+		n.InfType = &unwrapped
 		return nil
 	case *t.NodeExprDestructureAssign:
 		e := ctExpr(c, n.Call)
@@ -689,22 +899,22 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		}
 
 		if n.Call.InfType == nil {
-			return fmt.Errorf("destructuring assignment: call has null inferred type")
+			return comp_err.CompilationErrorToken(c.FileCtx, &n.Call.Tk, "cannot determine the return type for destructuring assignment", "")
 		}
 
 		if !n.Call.InfType.Throws {
-			return fmt.Errorf("destructuring assignment requires a throwing call (return type must be !T)")
+			return comp_err.CompilationErrorToken(c.FileCtx, &n.Call.Tk, fmt.Sprintf("cannot destructure non-throwing call '%s'", flattenCallee(n.Call.Callee)), "destructuring requires a call whose return type is marked with '!'")
 		}
 
 		if isVoidType(n.Call.InfType) {
-			return fmt.Errorf("destructuring assignment does not support !void calls (no value to bind)")
+			return comp_err.CompilationErrorToken(c.FileCtx, &n.Call.Tk, fmt.Sprintf("cannot bind a result value from throwing void call '%s'", flattenCallee(n.Call.Callee)), "a '!void' call only produces an error result")
 		}
 
 		if n.ErrDef.Type == nil {
 			n.ErrDef.Type = makeNamedType("error")
 		}
 		if !isErrType(n.ErrDef.Type) || n.ErrDef.Type.Throws {
-			return fmt.Errorf("destructuring assignment: error binding must be of type 'error'")
+			return comp_err.CompilationErrorToken(c.FileCtx, &n.Call.Tk, fmt.Sprintf("destructuring error binding must have type 'error', but got '%s'", flattenType(n.ErrDef.Type)), "")
 		}
 
 		unwrappedValue := *n.Call.InfType
@@ -716,11 +926,7 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		}
 
 		if !sameType(unwrapped, n.ValueDef.Type) {
-			return fmt.Errorf(
-				"destructuring assignment: value type mismatch (expected %s but call returns %s)",
-				flattenType(n.ValueDef.Type),
-				flattenType(unwrapped),
-			)
+			return comp_err.CompilationErrorToken(c.FileCtx, &n.Call.Tk, fmt.Sprintf("destructuring value binding expects type '%s', but call returns '%s'", flattenType(n.ValueDef.Type), flattenType(unwrapped)), "")
 		}
 
 		return nil
@@ -738,9 +944,7 @@ func ctIfStmt(c *ctx, ifStmt *t.NodeStmtIf) error {
 	isBool := isBoolType(infType)
 
 	if !isBool {
-		// TODO: compilation error
-		//("inferred type: %s\n", flattenType(infType))
-		return fmt.Errorf("type of expression in if statement must be of type 'bool'")
+		return comp_err.CompilationErrorToken(c.FileCtx, &ifStmt.Tk, fmt.Sprintf("if condition must have type 'bool', but got '%s'", flattenType(infType)), "")
 	}
 
 	e = ctBody(c, &ifStmt.Body)
@@ -773,12 +977,12 @@ func ctWhileStmt(c *ctx, whileStmt *t.NodeStmtWhile) error {
 	isBool := isBoolType(infType)
 
 	if !isBool {
-		// TODO: compilation error
-		//fmt.Printf("inferred type: %s\n", flattenType(infType))
-		return fmt.Errorf("type of expression in if statement must be of type 'bool'")
+		return comp_err.CompilationErrorToken(c.FileCtx, &whileStmt.Tk, fmt.Sprintf("while condition must have type 'bool', but got '%s'", flattenType(infType)), "")
 	}
 
+	c.LoopDepth++
 	e = ctBody(c, &whileStmt.Body)
+	c.LoopDepth--
 	if e != nil {
 		return e
 	}
@@ -793,10 +997,8 @@ func ctThrow(c *ctx, throw *t.NodeStmtThrow) error {
 	infType := throw.Expression.GetInferredType()
 	isErr := isErrType(infType)
 
-	if !isErr {
-		// TODO: compilation error
-		// fmt.Printf("inferred type: %s\n", flattenType(infType))
-		return fmt.Errorf("type of expression in throw statement must be of type 'error'")
+	if !isErr && !isStrType(infType) {
+		return comp_err.CompilationErrorToken(c.FileCtx, &throw.Tk, fmt.Sprintf("cannot throw value of type '%s'; expected 'error' or 'str'", flattenType(infType)), "")
 	}
 
 	return nil
@@ -833,12 +1035,21 @@ func ctReturn(c *ctx, ret *t.NodeStmtRet) error {
 
 	if retIsVoid != exprIsVoid {
 		if retIsVoid {
-			return fmt.Errorf("unexpected expression after 'ret' statment within func with return type 'void'")
+			return comp_err.CompilationErrorToken(c.FileCtx, &ret.Tk, "cannot return a value from a function returning 'void'", "use a bare 'ret' statement")
 		}
-		return fmt.Errorf("missing expression after 'ret' statement in function with non-null return type")
+		return comp_err.CompilationErrorToken(c.FileCtx, &ret.Tk, fmt.Sprintf("missing return value in function returning '%s'", flattenType(ret.OwnerFuncType)), "provide a value after 'ret'")
 	}
 
-	// TODO: check if is same type
+	expectedValue := *ret.OwnerFuncType
+	expectedValue.Throws = false
+	if !compatibleInitializer(&expectedValue, ret.Expression) {
+		return comp_err.CompilationErrorToken(
+			c.FileCtx,
+			&ret.Tk,
+			fmt.Sprintf("cannot return value of type '%s' from function returning '%s'", flattenType(ret.Expression.GetInferredType()), flattenType(&expectedValue)),
+			"",
+		)
+	}
 	return nil
 }
 
@@ -856,6 +1067,14 @@ func ctBody(c *ctx, bdy *t.NodeBody) error {
 			e = ctIfStmt(c, n)
 		case *t.NodeStmtWhile:
 			e = ctWhileStmt(c, n)
+		case *t.NodeStmtBreak:
+			if c.LoopDepth == 0 {
+				e = comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, "cannot use 'break' outside a loop", "place 'break' inside a while loop")
+			}
+		case *t.NodeStmtContinue:
+			if c.LoopDepth == 0 {
+				e = comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, "cannot use 'continue' outside a loop", "place 'continue' inside a while loop")
+			}
 		case *t.NodeStmtDefer:
 			e = ctDefer(c, n)
 		}
@@ -876,15 +1095,53 @@ func ctFuncDef(c *ctx, fnDef *t.NodeFuncDef) error {
 	return nil
 }
 
+func isSimpleConstInitializer(expr t.NodeExpr) bool {
+	switch n := expr.(type) {
+	case *t.NodeExprLit:
+		return true
+	case *t.NodeExprName:
+		switch associated := n.AssociatedNode.(type) {
+		case *t.NodeFuncDef:
+			return true
+		case *t.NodeExprVarDef:
+			return associated.IsConst && associated.Initializer != nil
+		}
+		return false
+	case *t.NodeExprStructInit:
+		for _, field := range n.Fields {
+			if !isSimpleConstInitializer(field.Expression) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
 func ctGlDecl(c *ctx, glDecl t.NodeGlobalDecl) error {
 	switch n := glDecl.(type) {
 	case *t.NodeFuncDef:
 		return ctFuncDef(c, n)
 	case *t.NodeExprVarDef:
+		if n.Initializer != nil {
+			if e := ctExpr(c, n.Initializer); e != nil {
+				return e
+			}
+			if n.Type == nil {
+				n.Type = n.Initializer.GetInferredType()
+			}
+			if !compatibleInitializer(n.Type, n.Initializer) {
+				return comp_err.CompilationErrorToken(c.FileCtx, &t.Token{}, fmt.Sprintf("cannot initialize global '%s' of type '%s' with expression of type '%s'", flattenName(n.Name), flattenType(n.Type), flattenType(n.Initializer.GetInferredType())), "")
+			}
+		}
 		return ctExpr(c, n)
 	case *t.NodeStructDef:
 		return nil // TODO: check type names of arguments
 	case *t.NodeConstDef:
+		if !isSimpleConstInitializer(n.Initializer) {
+			return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, "constant initializer must be a literal, constant value, function value, or struct constructor", "general constant expressions are not supported")
+		}
 		if e := ctExpr(c, n.Initializer); e != nil {
 			return e
 		}
@@ -920,6 +1177,7 @@ func TypeChecker(s *t.SharedState) error {
 
 		n := fCtx.GlNode
 		ctx.GlobalNode = n
+		ctx.FileCtx = fCtx
 		e := ctGlobal(ctx, n)
 		if e != nil {
 			return e

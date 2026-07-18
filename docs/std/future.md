@@ -5,7 +5,7 @@
 selects the worker count, queue capacity, and idle policy.
 
 ```magma
-pool := try thread_pool.new(a, 4, 256)
+pool := try thread_pool.new(a, 2, 8, 256)
 pending := try future.new[Data, LoadContext](a, pool, loadEntry, context)
 value := try pending.await()
 try pool.shutdown()
@@ -26,7 +26,7 @@ is not implicitly detached.
 The Future API works with both pool constructors without modification:
 
 ```magma
-lowLatencyPool := try thread_pool.newSpinning(a, 1, 8, 4096)
+lowLatencyPool := try thread_pool.newSpinning(a, 1, 4, 8, 4096)
 pending := try future.new[Data, LoadContext](a, lowLatencyPool, loadEntry, context)
 data := try pending.await()
 try lowLatencyPool.shutdown()

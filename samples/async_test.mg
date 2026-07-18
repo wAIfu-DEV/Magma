@@ -18,9 +18,7 @@ pub main() !void:
     f := try file.open(a, "main.go", file.mode().read())
     defer f.close()
     
-    reader := f.reader()
-
-    future := try reader.readAsync(pool, fake.allocator(), f.count())
+    future := try f.reader().readAsync(pool, fake.allocator(), try f.count())
     contents := try future.await()
     defer strings.free(a, contents)
 

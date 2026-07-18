@@ -168,6 +168,18 @@ func wrappedMain() error {
 	if e = join.JoinCompilationUnits(s, e); e != nil {
 		os.Exit(1)
 	}
+	mainFile := s.Files[absPath]
+	if mainFile != nil && mainFile.ModuleName != "main" {
+		return comp_err.CompilationErrorToken(
+			mainFile,
+			&types.Token{
+				Pos:  types.FilePos{Line: 1, Col: 5},
+				Repr: mainFile.ModuleName,
+			},
+			fmt.Sprintf("main file must declare module 'main', not '%s'", mainFile.ModuleName),
+			"the root compilation unit must start with: `mod main`",
+		)
+	}
 
 	if e = monomorph.Run(s); e != nil {
 		return e
@@ -259,7 +271,7 @@ func emitOutput(opts options, ir []byte, nativeLibraries []string) error {
 		return fmt.Errorf("close temporary LLVM file: %w", err)
 	}
 
-	args := []string{"-O" + strconv.Itoa(opts.opt), tempPath}
+	args := []string{"-Wno-override-module", "-O" + strconv.Itoa(opts.opt), tempPath}
 	switch opts.emit {
 	case "llvm":
 		args = append(args, "-S", "-emit-llvm")
@@ -307,7 +319,6 @@ func main() {
 		}
 		if !comp_err.Print(err) {
 			fmt.Printf("uncaught fatal error: %s\n", err.Error())
-			fmt.Println(usage)
 		}
 		os.Exit(1)
 	}

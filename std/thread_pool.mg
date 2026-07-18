@@ -20,10 +20,20 @@ Task(
     context ptr
 )
 
+WorkerContext(
+    state ptr
+    index u64
+)
+
 State(
     allocator alc.Allocator
     workers thread.Thread*
+    workerContexts WorkerContext*
+    workerStates u8*
     workerCount u64
+    minWorkers u64
+    activeWorkers u64
+    busyWorkers u64
     tasks Task*
     capacity u64
     head u64
@@ -70,9 +80,15 @@ releaseIdle(value $wake.Wake) void:
     value.free()
 ..
 
-spawnWorkerInto(state State*, destination thread.Thread*) !bool:
-    worker := try thread.new[State](workerMain, state)
+spawnWorkerInto(state State*, index u64) !bool:
+    destination thread.Thread* = workerAt(state, index)
+    context WorkerContext* = workerContextAt(state, index)
+    context.state = state
+    context.index = index
+    worker := try thread.new[WorkerContext](workerMain, context)
     *destination = claim[thread.Thread](worker)
+    state.workerStates[index] = 1
+    state.activeWorkers = state.activeWorkers + 1
     ret true
 ..
 
@@ -106,6 +122,29 @@ growQueue(state State*) !bool:
 
 workerAt(state State*, index u64) thread.Thread*:
     ret cast.utop(cast.ptou(state.workers) + (index * sizeof thread.Thread))
+..
+
+workerContextAt(state State*, index u64) WorkerContext*:
+    ret cast.utop(cast.ptou(state.workerContexts) + (index * sizeof WorkerContext))
+..
+
+# Reaps an exited worker slot and starts a replacement. The caller holds the
+# pool lock, so the new worker cannot inspect the queue until submission has
+# finished publishing its task.
+growWorkers(state State*) !bool:
+    index u64 = 0
+    while index < state.workerCount:
+        status u8 = state.workerStates[index]
+        if status != 1:
+            if status == 2:
+                try workerAt(state, index).join()
+                state.workerStates[index] = 0
+            ..
+            ret try spawnWorkerInto(state, index)
+        ..
+        index = index + 1
+    ..
+    ret false
 ..
 
 lockResult(state State*) !bool:
@@ -148,7 +187,8 @@ recordFatal(state State*, failure error) void:
     state.idle.notify()
 ..
 
-workerMain(state State*) u64:
+workerMain(context WorkerContext*) u64:
+    state State* = context.state
     running bool = true
     while running:
         locked bool, lockErr error = lockResult(state)
@@ -161,6 +201,7 @@ workerMain(state State*) u64:
             task Task = *taskAt(state, state.head)
             state.head = (state.head + 1) % state.capacity
             state.count = state.count - 1
+            state.busyWorkers = state.busyWorkers + 1
             unlocked bool, unlockErr error = unlockResult(state)
             if errors.code(unlockErr) != 0:
                 recordFatal(state, unlockErr)
@@ -174,6 +215,7 @@ workerMain(state State*) u64:
                 ret 1
             ..
             state.pending = state.pending - 1
+            state.busyWorkers = state.busyWorkers - 1
             becameIdle bool = state.pending == 0
             idleWaiters u64 = state.idleWaiters
             completionUnlocked bool, completionUnlockErr error = unlockResult(state)
@@ -189,6 +231,14 @@ workerMain(state State*) u64:
                 ..
             ..
         elif state.stopping:
+            state.lock.unlock()
+            running = false
+        elif state.activeWorkers > state.minWorkers:
+            # Keep the configured baseline and retire burst workers as soon as the
+            # queue drains. Their joinable handles remain in their slots and
+            # are reaped before reuse or during close.
+            state.activeWorkers = state.activeWorkers - 1
+            state.workerStates[context.index] = 2
             state.lock.unlock()
             running = false
         else:
@@ -258,9 +308,9 @@ waitWorkResult(state State*, observed u32) !bool:
     ret true
 ..
 
-newConfigured(a alc.Allocator, workerCount u64, queueCapacity u64, spinCount u64) !$ThreadPool:
-    if workerCount == 0 || queueCapacity == 0:
-        throw errors.invalidArgument("thread pool sizes must be greater than zero")
+newConfigured(a alc.Allocator, minWorkers u64, workerCount u64, queueCapacity u64, spinCount u64) !$ThreadPool:
+    if minWorkers == 0 || workerCount < minWorkers || queueCapacity == 0:
+        throw errors.invalidArgument("thread pool sizes or limits are invalid")
     ..
     state State* = try a.allocT[State](1)
     mem.zero(state, sizeof State)
@@ -275,11 +325,29 @@ newConfigured(a alc.Allocator, workerCount u64, queueCapacity u64, spinCount u64
         a.free(state)
         throw workersErr
     ..
+    workerContexts WorkerContext*, contextsErr error = a.allocT[WorkerContext](workerCount)
+    if errors.code(contextsErr) != 0:
+        a.free(workers)
+        a.free(tasks)
+        a.free(state)
+        throw contextsErr
+    ..
+    workerStates u8*, statesErr error = a.allocT[u8](workerCount)
+    if errors.code(statesErr) != 0:
+        a.free(workerContexts)
+        a.free(workers)
+        a.free(tasks)
+        a.free(state)
+        throw statesErr
+    ..
+    mem.zero(workerStates, workerCount)
     lock mutex.Mutex, lockErr error = mutex.new()
     if errors.code(lockErr) != 0:
         # A failed constructor does not produce an owned lock. Make that
         # conditional ownership explicit to the destructor checker.
         abandon[mutex.Mutex](lock)
+        a.free(workerStates)
+        a.free(workerContexts)
         a.free(workers)
         a.free(tasks)
         a.free(state)
@@ -288,6 +356,8 @@ newConfigured(a alc.Allocator, workerCount u64, queueCapacity u64, spinCount u64
     work generation_wait.Wait, workErr error = generation_wait.new()
     if errors.code(workErr) != 0:
         releaseLock(lock)
+        a.free(workerStates)
+        a.free(workerContexts)
         a.free(workers)
         a.free(tasks)
         a.free(state)
@@ -299,6 +369,8 @@ newConfigured(a alc.Allocator, workerCount u64, queueCapacity u64, spinCount u64
         abandon[wake.Wake](idle)
         generation_wait.free(addrof work)
         releaseLock(lock)
+        a.free(workerStates)
+        a.free(workerContexts)
         a.free(workers)
         a.free(tasks)
         a.free(state)
@@ -306,7 +378,10 @@ newConfigured(a alc.Allocator, workerCount u64, queueCapacity u64, spinCount u64
     ..
     state.allocator = a
     state.workers = workers
+    state.workerContexts = workerContexts
+    state.workerStates = workerStates
     state.workerCount = workerCount
+    state.minWorkers = minWorkers
     state.tasks = tasks
     state.capacity = queueCapacity
     state.spinCount = spinCount
@@ -315,8 +390,8 @@ newConfigured(a alc.Allocator, workerCount u64, queueCapacity u64, spinCount u64
     state.idle = claim[wake.Wake](idle)
 
     i u64 = 0
-    while i < workerCount:
-        spawned bool, spawnErr error = spawnWorkerInto(state, workerAt(state, i))
+    while i < minWorkers:
+        spawned bool, spawnErr error = spawnWorkerInto(state, i)
         if errors.code(spawnErr) != 0:
             state.stopping = true
             generation_wait.wakeAll(addrof state.work, addrof state.workGeneration, i)
@@ -328,6 +403,8 @@ newConfigured(a alc.Allocator, workerCount u64, queueCapacity u64, spinCount u64
             state.idle.free()
             generation_wait.free(addrof state.work)
             state.lock.free()
+            a.free(workerStates)
+            a.free(workerContexts)
             a.free(workers)
             a.free(tasks)
             a.free(state)
@@ -338,8 +415,8 @@ newConfigured(a alc.Allocator, workerCount u64, queueCapacity u64, spinCount u64
     ret ThreadPool(state=state)
 ..
 
-pub new(a alc.Allocator, workerCount u64, queueCapacity u64, spinCount u64) !$ThreadPool:
-    ret try newConfigured(a, workerCount, queueCapacity, spinCount)
+pub new(a alc.Allocator, minWorkers u64, maxWorkers u64, queueCapacity u64, spinCount u64) !$ThreadPool:
+    ret try newConfigured(a, minWorkers, maxWorkers, queueCapacity, spinCount)
 ..
 
 pub newDefault(a alc.Allocator) !$ThreadPool:
@@ -349,11 +426,14 @@ pub newDefault(a alc.Allocator) !$ThreadPool:
     if spinCount < 1:
         spinCount = 1
     ..
-    ret try newConfigured(a, threadCount, 256, spinCount)
+    ret try newConfigured(a, threadCount, threadCount, 256, spinCount)
 ..
 
 ThreadPool.submit(entry (ptr) u64, context ptr) !void:
-    if this.state == none || entry == none:
+    if this.state == none:
+        throw errors.invalidArgument("failed to submit to pool, invalid state")
+    ..
+    if entry == none:
         throw errors.invalidArgument("invalid thread pool submission")
     ..
     state State* = this.state
@@ -372,6 +452,17 @@ ThreadPool.submit(entry (ptr) u64, context ptr) !void:
         if errors.code(growErr) != 0:
             try state.lock.unlock()
             throw growErr
+        ..
+    ..
+    # Queueing this task would consume more workers than are currently idle.
+    # Grow by one, up to the configured maximum. Repeated submissions during a
+    # burst therefore ramp the pool up without creating surplus threads.
+    idleWorkers u64 = state.activeWorkers - state.busyWorkers
+    if state.count + 1 > idleWorkers && state.activeWorkers < state.workerCount:
+        grownWorkers bool, workerErr error = growWorkers(state)
+        if errors.code(workerErr) != 0:
+            try state.lock.unlock()
+            throw workerErr
         ..
     ..
     *taskAt(state, state.tail) = Task(entry=entry, context=context)
@@ -432,13 +523,17 @@ destr ThreadPool.close() !void:
     generation_wait.wakeAll(addrof state.work, addrof state.workGeneration, sleepers)
     i u64 = 0
     while i < state.workerCount:
-        try workerAt(state, i).join()
+        if state.workerStates[i] != 0:
+            try workerAt(state, i).join()
+        ..
         i = i + 1
     ..
     try state.idle.free()
     generation_wait.free(addrof state.work)
     try state.lock.free()
     state.allocator.free(state.workers)
+    state.allocator.free(state.workerContexts)
+    state.allocator.free(state.workerStates)
     state.allocator.free(state.tasks)
     state.allocator.free(state)
     this.state = none

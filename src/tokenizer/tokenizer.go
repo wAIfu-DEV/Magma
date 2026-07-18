@@ -380,13 +380,14 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 		}
 
 		if ctx.Mode == tkModeHexNum {
-			if !(unicode.IsDigit(r) || unicode.IsLetter(r)) {
+			isPrefixMarker := (r == 'x' || r == 'X') && string(ctx.TokReprBuff) == "u0"
+			if !(isPrefixMarker || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
 				ctx.TokReprBuff = append(ctx.TokReprBuff, r)
 				return nil, comp_err.CompilationErrorToken(
 					ctx.fCtx,
 					&t.Token{Repr: string(ctx.TokReprBuff), Pos: ctx.CurrTok.Pos},
 					fmt.Sprintf("invalid character '%c' in hex number literal", r),
-					"valid characters in hex number literal are: [0-9a-zA-Z]",
+					"valid characters in a hexadecimal literal are: [0-9a-fA-F]",
 				)
 			}
 		}

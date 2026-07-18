@@ -43,6 +43,7 @@ type IrCtx struct {
 	moduleIdx    int
 	CurrFunc     *t.NodeFuncDef
 	traceStrings *traceStringPool
+	constStrings map[*t.NodeExprLit]SsaName
 
 	CurrNestedScopeIdx int
 	SeenNestedScopes   *int
@@ -428,6 +429,9 @@ func irWriteGlf(ctx *IrCtx, format string, a ...any) {
 func irGlVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) error {
 	cpy := *ctx
 	cpy.bld.Body = ctx.bld.Head
+	if vd.Initializer != nil {
+		irPrepareConstStrings(&cpy, vd.Initializer, map[t.NodeExpr]bool{})
+	}
 
 	//irWritef(&cpy, "@%s = internal global ", vd.AbsName)
 	irWritef(&cpy, "@%s = private thread_local global ", vd.AbsName)
@@ -438,7 +442,13 @@ func irGlVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) error {
 		return e
 	}
 
-	irWrite(&cpy, " zeroinitializer\n")
+	irWrite(&cpy, " ")
+	if vd.Initializer == nil {
+		irWrite(&cpy, "zeroinitializer")
+	} else if e := irConstValue(&cpy, vd.Type, vd.Initializer); e != nil {
+		return e
+	}
+	irWrite(&cpy, "\n")
 	return nil
 }
 
@@ -449,6 +459,13 @@ func irConstValue(ctx *IrCtx, expected *t.NodeType, expr t.NodeExpr) error {
 		case t.TokLitNum, t.TokLitBool:
 			irWrite(ctx, n.Value)
 			return nil
+		case t.TokLitStr:
+			stringGlobal, ok := ctx.constStrings[n]
+			if !ok {
+				return fmt.Errorf("global string constant was not prepared")
+			}
+			irWritef(ctx, "{ ptr %s, i64 %d }", stringGlobal.Repr, len(n.Value))
+			return nil
 		case t.TokLitNone:
 			irWrite(ctx, "null")
 			return nil
@@ -456,16 +473,20 @@ func irConstValue(ctx *IrCtx, expected *t.NodeType, expr t.NodeExpr) error {
 			return fmt.Errorf("string literals are not supported in global constants")
 		}
 	case *t.NodeExprName:
-		fn, ok := n.AssociatedNode.(*t.NodeFuncDef)
-		if !ok {
-			return fmt.Errorf("constant name '%s' is not a function symbol", flattenName(n.Name))
+		switch associated := n.AssociatedNode.(type) {
+		case *t.NodeFuncDef:
+			name := associated.AbsName
+			if associated.NoAliasName != "" {
+				name = associated.NoAliasName
+			}
+			irWritef(ctx, "@%s", name)
+			return nil
+		case *t.NodeExprVarDef:
+			if associated.IsConst && associated.Initializer != nil {
+				return irConstValue(ctx, expected, associated.Initializer)
+			}
 		}
-		name := fn.AbsName
-		if fn.NoAliasName != "" {
-			name = fn.NoAliasName
-		}
-		irWritef(ctx, "@%s", name)
-		return nil
+		return fmt.Errorf("constant name '%s' is not a constant or function symbol", flattenName(n.Name))
 	case *t.NodeExprAddrof:
 		name, ok := n.Expr.(*t.NodeExprName)
 		if !ok {
@@ -500,7 +521,34 @@ func irConstValue(ctx *IrCtx, expected *t.NodeType, expr t.NodeExpr) error {
 	}
 }
 
+func irPrepareConstStrings(ctx *IrCtx, expr t.NodeExpr, seen map[t.NodeExpr]bool) {
+	if expr == nil || seen[expr] {
+		return
+	}
+	seen[expr] = true
+	switch n := expr.(type) {
+	case *t.NodeExprLit:
+		if n.LitType == t.TokLitStr {
+			if ctx.constStrings == nil {
+				ctx.constStrings = map[*t.NodeExprLit]SsaName{}
+			}
+			if _, exists := ctx.constStrings[n]; !exists {
+				ctx.constStrings[n] = irCStringGlobal(ctx, n.Value)
+			}
+		}
+	case *t.NodeExprName:
+		if variable, ok := n.AssociatedNode.(*t.NodeExprVarDef); ok && variable.IsConst {
+			irPrepareConstStrings(ctx, variable.Initializer, seen)
+		}
+	case *t.NodeExprStructInit:
+		for _, field := range n.Fields {
+			irPrepareConstStrings(ctx, field.Expression, seen)
+		}
+	}
+}
+
 func irConstDef(ctx *IrCtx, def *t.NodeConstDef) error {
+	irPrepareConstStrings(ctx, def.Initializer, map[t.NodeExpr]bool{})
 	irWriteGlf(ctx, "@%s = private constant ", def.VarDef.AbsName)
 	cpy := *ctx
 	cpy.bld.Body = ctx.bld.Global
@@ -3122,6 +3170,25 @@ func irThrowSsa(ctx *IrCtx, errSsa SsaName, fnDef *t.NodeFuncDef, pos t.FilePos)
 }
 
 func irStmtThrow(ctx *IrCtx, stmtThrow *t.NodeStmtThrow, fnDef *t.NodeFuncDef) error {
+	if flattenType(stmtThrow.Expression.GetInferredType()) == "str" {
+		strSsa, e := irExpression(ctx, makeNamedType("str"), stmtThrow.Expression, false)
+		if e != nil {
+			return e
+		}
+		message := irSsaLocal(ctx)
+		length64 := irSsaLocal(ctx)
+		length32 := irSsaLocal(ctx)
+		errorMessage := irSsaLocal(ctx)
+		errorCode := irSsaLocal(ctx)
+		errorValue := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = extractvalue %%type.str %s, 0\n", message.Repr, strSsa.Repr)
+		irWritef(ctx, "  %s = extractvalue %%type.str %s, 1\n", length64.Repr, strSsa.Repr)
+		irWritef(ctx, "  %s = trunc i64 %s to i32\n", length32.Repr, length64.Repr)
+		irWritef(ctx, "  %s = insertvalue %%type.error zeroinitializer, ptr %s, 0\n", errorMessage.Repr, message.Repr)
+		irWritef(ctx, "  %s = insertvalue %%type.error %s, i32 1, 2\n", errorCode.Repr, errorMessage.Repr)
+		irWritef(ctx, "  %s = insertvalue %%type.error %s, i32 %s, 3\n", errorValue.Repr, errorCode.Repr, length32.Repr)
+		return irThrowSsa(ctx, errorValue, fnDef, stmtThrow.Pos)
+	}
 	exprSsa, e := irExpression(ctx, makeNamedType("error"), stmtThrow.Expression, false)
 	if e != nil {
 		return e
@@ -4140,6 +4207,7 @@ func irWriteModule(
 		nextSsa:          &nextSsa,
 		moduleIdx:        i,
 		traceStrings:     traceStrings,
+		constStrings:     map[*t.NodeExprLit]SsaName{},
 		SeenNestedScopes: &seenScopes,
 		NestedLoopCnt:    &nestedLoop,
 	}

@@ -61,6 +61,7 @@ type NodeName interface {
 }
 
 type NodeNameSingle struct {
+	Tk   Token
 	Name string
 }
 
@@ -70,7 +71,8 @@ func (n *NodeNameSingle) Print(indent int) {
 }
 
 type NodeNameComposite struct {
-	Parts []string
+	Tokens []Token
+	Parts  []string
 }
 
 func (n *NodeNameComposite) Print(indent int) {
@@ -192,6 +194,7 @@ func (n *NodeExprVoid) Print(indent int) {
 }
 
 type NodeExprUnary struct {
+	Tk       Token
 	Operator KwType
 	Operand  NodeExpr
 
@@ -210,6 +213,7 @@ func (n *NodeExprUnary) Print(indent int) {
 }
 
 type NodeExprLit struct {
+	Tk      Token
 	Value   string
 	LitType TokType
 
@@ -236,6 +240,7 @@ func (n *NodeLlvm) Print(indent int) {
 }
 
 type NodeExprName struct {
+	Tk   Token
 	Name NodeName
 	// GenericArgs specializes a generic function when its name is used as a
 	// value (as opposed to being called immediately).
@@ -263,6 +268,7 @@ func (n *NodeExprName) Print(indent int) {
 }
 
 type NodeExprCall struct {
+	Tk          Token
 	Callee      NodeExpr
 	Args        []NodeExpr
 	GenericArgs []*NodeType
@@ -283,6 +289,7 @@ type NodeExprCall struct {
 }
 
 type NodeStructFieldInit struct {
+	Tk         Token
 	Name       string
 	Expression NodeExpr
 	FieldIndex int
@@ -337,6 +344,7 @@ func (n *NodeExprCall) Print(indent int) {
 }
 
 type NodeExprSubscript struct {
+	Tk     Token
 	Target NodeExpr
 	Expr   NodeExpr
 
@@ -348,6 +356,7 @@ type NodeExprSubscript struct {
 }
 
 type NodeExprMemberAccess struct {
+	Tk     Token
 	Target NodeExpr
 	Member string
 
@@ -388,6 +397,7 @@ func (n *NodeExprMemberAccess) Print(indent int) {
 }
 
 type NodeExprBinary struct {
+	Tk       Token
 	Operator KwType
 	Left     NodeExpr
 	Right    NodeExpr
@@ -419,14 +429,16 @@ type NameTypePair struct {
 }
 
 type NodeExprVarDef struct {
-	Name       NodeName
-	Type       *NodeType
-	AbsName    string
-	RetFlagId  string
-	IsSsa      bool
-	IsReturned bool
-	IsGlobal   bool
-	IrName     string
+	Name        NodeName
+	Type        *NodeType
+	Initializer NodeExpr
+	IsConst     bool
+	AbsName     string
+	RetFlagId   string
+	IsSsa       bool
+	IsReturned  bool
+	IsGlobal    bool
+	IrName      string
 }
 
 func (n *NodeExprVarDef) GetInferredType() *NodeType {
@@ -507,13 +519,14 @@ func (n *NodeExprAssign) Print(indent int) {
 }
 
 type NodeExprTry struct {
-	Call NodeExpr
-	Pos  FilePos
+	Call    NodeExpr
+	Tk      Token
+	Pos     FilePos
+	InfType *NodeType
 }
 
 func (n *NodeExprTry) GetInferredType() *NodeType {
-	//fmt.Println("ExprTry")
-	return n.Call.GetInferredType()
+	return n.InfType
 }
 
 func (n *NodeExprTry) Print(indent int) {
@@ -523,6 +536,7 @@ func (n *NodeExprTry) Print(indent int) {
 }
 
 type NodeExprSizeof struct {
+	Tk      Token
 	Type    *NodeType
 	InfType *NodeType
 }
@@ -544,6 +558,7 @@ func (n *NodeExprSizeof) Print(indent int) {
 }
 
 type NodeExprAddrof struct {
+	Tk      Token
 	Expr    NodeExpr
 	InfType *NodeType
 }
@@ -572,6 +587,7 @@ func (n *NodeExprDestructor) GetInferredType() *NodeType {
 func (n *NodeExprDestructor) Print(int) {}
 
 type NodeStmtRet struct {
+	Tk         Token
 	Expression NodeExpr
 
 	OwnerFuncType *NodeType
@@ -583,14 +599,14 @@ func (n *NodeStmtRet) Print(indent int) {
 	n.Expression.Print(indent + 1)
 }
 
-type NodeStmtContinue struct{}
+type NodeStmtContinue struct{ Tk Token }
 
 func (n *NodeStmtContinue) Print(indent int) {
 	PrintIndent(indent)
 	fmt.Printf("StmtContinue\n")
 }
 
-type NodeStmtBreak struct{}
+type NodeStmtBreak struct{ Tk Token }
 
 func (n *NodeStmtBreak) Print(indent int) {
 	PrintIndent(indent)
@@ -598,6 +614,7 @@ func (n *NodeStmtBreak) Print(indent int) {
 }
 
 type NodeStmtIf struct {
+	Tk       Token
 	CondExpr NodeExpr
 	Body     NodeBody
 
@@ -637,6 +654,7 @@ func (n *NodeStmtElse) Print(indent int) {
 }
 
 type NodeStmtWhile struct {
+	Tk       Token
 	CondExpr NodeExpr
 	Body     NodeBody
 }
@@ -663,6 +681,7 @@ func (n *NodeStmtExpr) Print(indent int) {
 }
 
 type NodeStmtThrow struct {
+	Tk         Token
 	Expression NodeExpr
 	Pos        FilePos
 }
@@ -718,6 +737,7 @@ func (n *NodeExprDestructureAssign) Print(indent int) {
 }
 
 type NodeArg struct {
+	Tk       Token
 	Name     string
 	TypeNode *NodeType
 }

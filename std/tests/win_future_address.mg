@@ -21,7 +21,7 @@ produce(context Context*) !u64:
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()
-    pool := try thread_pool.new(a, 1, 8)
+    pool := try thread_pool.new(a, 1, 1, 8, 1)
 
     pending := try future.new[u64, Context](a, pool, produce, Context(value=42, fail=false))
     done bool = try pending.isDone()

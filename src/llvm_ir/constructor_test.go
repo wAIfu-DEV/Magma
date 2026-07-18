@@ -153,7 +153,7 @@ main() void:
 ..
 `
 	_, err := compileSource(t, source)
-	if err == nil || !strings.Contains(err.Error(), "requires a throwing call") {
+	if err == nil || !strings.Contains(err.Error(), "cannot destructure non-throwing call") {
 		t.Fatalf("error = %v, want throwing-call diagnostic", err)
 	}
 }
@@ -169,7 +169,7 @@ main() void:
 ..
 `
 	_, err := compileSource(t, source)
-	if err == nil || !strings.Contains(err.Error(), "does not support !void") {
+	if err == nil || !strings.Contains(err.Error(), "cannot bind a result value from throwing void call") {
 		t.Fatalf("error = %v, want !void diagnostic", err)
 	}
 }
@@ -268,7 +268,7 @@ func TestConstructorFieldDiagnostics(t *testing.T) {
 		want   string
 	}{
 		{name: "duplicate", fields: "first=1, first=2", want: "duplicate field 'first'"},
-		{name: "unknown", fields: "first=1, other=2", want: "has no field 'other'"},
+		{name: "unknown", fields: "first=1, other=2", want: "has no field named 'other'"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -303,8 +303,25 @@ value() u64:
 const answer := value()
 `
 	_, err = compileSource(t, invalid)
-	if err == nil || !strings.Contains(err.Error(), "not supported in a global constant") {
+	if err == nil || !strings.Contains(err.Error(), "constant initializer must be") {
 		t.Fatalf("expected unsupported constant initializer error, got %v", err)
+	}
+}
+
+func TestThrowStringBuildsGenericFailure(t *testing.T) {
+	source := `mod main
+fail() !void:
+    throw "message"
+..
+main() void:
+..
+`
+	ir, err := compileSource(t, source)
+	if err != nil {
+		t.Fatalf("compile string throw: %v", err)
+	}
+	if !strings.Contains(ir, "insertvalue %type.error") || !strings.Contains(ir, "i32 1, 2") {
+		t.Fatalf("expected string throw to build error code 1, got:\n%s", ir)
 	}
 }
 

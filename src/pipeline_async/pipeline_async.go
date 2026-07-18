@@ -38,7 +38,7 @@ func PipelineAsync(shared *types.SharedState, c chan error, fCtx *types.FileCtx,
 		fCtx.GlNode.Print(0)
 	}
 
-	fCtx.ScopeTree, err = scopeinfo.BuildScopeTree(fCtx.GlNode)
+	fCtx.ScopeTree, err = scopeinfo.BuildScopeTree(fCtx, fCtx.GlNode)
 	if err != nil {
 		c <- err
 		close(c)

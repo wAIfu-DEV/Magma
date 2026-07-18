@@ -11,8 +11,6 @@
 - intercept windows argv and make UTF8 before magma.argsToSlice()
 - error on using try with non-fallible function
 - "panic: interface conversion: types.NodeTypeKind is *types.NodeTypeAbsolute, not *types.NodeTypeFunc" when calling inexistant method on struct
-- error on dereferencing this
-- error on chaining method calls: `file.mode().readable()`
 
 ## Bugs
 - extern func decl without ret type silently fails

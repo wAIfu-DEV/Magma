@@ -1,0 +1,3 @@
+mod "main"
+main() void:
+..

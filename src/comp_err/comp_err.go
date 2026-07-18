@@ -2,8 +2,10 @@ package comp_err
 
 import (
 	"Magma/src/types"
+	"bytes"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 type CompilationError struct {
@@ -18,19 +20,12 @@ func (e *CompilationError) Error() string {
 }
 
 func printLine(ctx *types.FileCtx, line int) {
-	lnStart := ctx.LineIdx[line] + 1
-	lnEnd := ctx.LineIdx[line+1] + 1
-
-	lineStr := ctx.Content[lnStart:lnEnd]
-	fmt.Printf("%d| %s", line, lineStr)
-}
-
-func printLineTok(ctx *types.FileCtx, line int) {
-	lnStart := ctx.LineIdx[line]
-	lnEnd := ctx.LineIdx[line+1]
-
-	lineStr := ctx.Content[lnStart:lnEnd]
-	fmt.Printf("%d| %s", line, lineStr)
+	lines := bytes.Split(ctx.Content, []byte{'\n'})
+	if line < 1 || line > len(lines) {
+		return
+	}
+	lineText := strings.TrimSuffix(string(lines[line-1]), "\r")
+	fmt.Printf("%d| %s\n", line, lineText)
 }
 
 func CompilationErrorToken(ctx *types.FileCtx, tk *types.Token, shortDesc string, additional string) error {
@@ -50,17 +45,20 @@ func Print(err error) bool {
 
 	ctx := compilationErr.Ctx
 	tk := compilationErr.Token
-	fmt.Printf("%s:l%d:c%d %s\n", ctx.FilePath, tk.Pos.Line, tk.Pos.Col, compilationErr.ShortDesc)
+	description := strings.ReplaceAll(compilationErr.ShortDesc, "'\r\n'", "newline")
+	description = strings.ReplaceAll(description, "'\n'", "newline")
+	description = strings.ReplaceAll(description, "'\r'", "newline")
+	fmt.Printf("%s:l%d:c%d %s\n", ctx.FilePath, tk.Pos.Line, tk.Pos.Col, description)
 
 	pos := tk.Pos
 
 	// previous line
 	if pos.Line > 1 {
-		printLine(ctx, int(pos.Line)-2)
+		printLine(ctx, int(pos.Line)-1)
 	}
 
 	if true {
-		printLine(ctx, int(pos.Line)-1)
+		printLine(ctx, int(pos.Line))
 		/*
 			// current line
 			currLine := pos.Line - 1
@@ -76,8 +74,8 @@ func Print(err error) bool {
 	}
 
 	// next line
-	if int(pos.Line)+1 < len(ctx.LineIdx)-1 {
-		printLine(ctx, int(pos.Line))
+	if int(pos.Line) < len(bytes.Split(ctx.Content, []byte{'\n'})) {
+		printLine(ctx, int(pos.Line)+1)
 	}
 
 	fmt.Printf("%s\n\n", compilationErr.Additional)
