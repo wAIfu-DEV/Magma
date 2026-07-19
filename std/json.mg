@@ -48,7 +48,7 @@ Value.asBool() !bool:
 
 Value.asFloat() !f64:
     if this.kind == 6:
-        ret cast.itof(this.asInt())
+        ret cast.itof(try this.asInt())
     ..
     if this.kind != 2:
         throw errors.invalidType("json value is not float")
@@ -59,7 +59,7 @@ Value.asFloat() !f64:
 
 Value.asInt() !i64:
     if this.kind == 2:
-        ret cast.ftoi(this.asFloat())
+        ret cast.ftoi(try this.asFloat())
     ..
     if this.kind != 6:
         throw errors.invalidType("json value is not int")

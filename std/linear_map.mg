@@ -32,7 +32,7 @@ claim[T](claimed $T) $T:
 pub new[T](a alc.Allocator, cleanup ($T) void) !$LinearMap[T]:
     keys str* = try a.allocT[str](8)
     valuesRaw T*, valuesErr error = a.allocT[T](8)
-    if err.code(valuesErr) != 0:
+    if valuesErr.nok():
         a.free(keys)
         throw valuesErr
     ..
@@ -71,7 +71,7 @@ LinearMap[T].grow() !void:
     ..
     newKeys str* = try this.allocator.allocT[str](newCapacity)
     newValuesRaw T*, valuesErr error = this.allocator.allocT[T](newCapacity)
-    if err.code(valuesErr) != 0:
+    if valuesErr.nok():
         this.allocator.free(newKeys)
         throw valuesErr
     ..
@@ -126,7 +126,7 @@ LinearMap[T].valuesView() T[]:
 
 LinearMap[T].set(key str, item $T) !void:
     idx u64, e error = this.indexOf(key)
-    if err.code(e) == 0:
+    if e.ok():
         existingValues T* = this.values
         release[T](this.cleanup, claim[T](existingValues[idx]))
         existingValues[idx] = item
@@ -134,13 +134,13 @@ LinearMap[T].set(key str, item $T) !void:
     ..
     if this.countValue == this.capacity:
         grown bool, growErr error = growForInsert[T](this)
-        if err.code(growErr) != 0:
+        if growErr.nok():
             release[T](this.cleanup, item)
             throw growErr
         ..
     ..
     ownedKey str, copyErr error = stg.copy(this.allocator, key)
-    if err.code(copyErr) != 0:
+    if copyErr.nok():
         release[T](this.cleanup, item)
         throw copyErr
     ..

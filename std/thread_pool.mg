@@ -67,11 +67,6 @@ claim[T](claimed $T) $T:
     ret claimed
 ..
 
-abandon[T](value $T) void:
-    abandoned T[1]
-    abandoned[0] = value
-..
-
 releaseLock(value $mutex.Mutex) void:
     value.free()
 ..
@@ -342,10 +337,7 @@ newConfigured(a alc.Allocator, minWorkers u64, workerCount u64, queueCapacity u6
     ..
     mem.zero(workerStates, workerCount)
     lock mutex.Mutex, lockErr error = mutex.new()
-    if errors.code(lockErr) != 0:
-        # A failed constructor does not produce an owned lock. Make that
-        # conditional ownership explicit to the destructor checker.
-        abandon[mutex.Mutex](lock)
+    if lockErr.nok():
         a.free(workerStates)
         a.free(workerContexts)
         a.free(workers)
@@ -354,7 +346,7 @@ newConfigured(a alc.Allocator, minWorkers u64, workerCount u64, queueCapacity u6
         throw lockErr
     ..
     work generation_wait.Wait, workErr error = generation_wait.new()
-    if errors.code(workErr) != 0:
+    if workErr.nok():
         releaseLock(lock)
         a.free(workerStates)
         a.free(workerContexts)
@@ -364,9 +356,7 @@ newConfigured(a alc.Allocator, minWorkers u64, workerCount u64, queueCapacity u6
         throw workErr
     ..
     idle wake.Wake, idleErr error = wake.new(wake.condition())
-    if errors.code(idleErr) != 0:
-        # As above, the error result means idle contains no live resource.
-        abandon[wake.Wake](idle)
+    if idleErr.nok():
         generation_wait.free(addrof work)
         releaseLock(lock)
         a.free(workerStates)

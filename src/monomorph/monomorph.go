@@ -1,11 +1,39 @@
 package monomorph
 
 import (
+	"Magma/src/comp_err"
 	scopeinfo "Magma/src/scope_info"
 	t "Magma/src/types"
 	"fmt"
 	"strings"
 )
+
+func (m *monoCtx) fileCtxForGlobal(gl *t.NodeGlobal) *t.FileCtx {
+	m.shared.FilesM.Lock()
+	defer m.shared.FilesM.Unlock()
+	for _, fileCtx := range m.shared.Files {
+		if fileCtx.GlNode == gl {
+			return fileCtx
+		}
+	}
+	return nil
+}
+
+func (m *monoCtx) genericFuncInstantiationError(gl *t.NodeGlobal, tk *t.Token, baseName string, err error) error {
+	if !strings.HasPrefix(err.Error(), "unknown generic function template:") {
+		return err
+	}
+	fileCtx := m.fileCtxForGlobal(gl)
+	if fileCtx == nil {
+		return err
+	}
+	return comp_err.CompilationErrorToken(
+		fileCtx,
+		tk,
+		fmt.Sprintf("cannot instantiate generic function '%s': no generic template was registered", baseName),
+		fmt.Sprintf("declare it with generic parameters, for example `%s[T](...)`, before calling it with inferred or explicit type arguments", baseName),
+	)
+}
 
 type monoCtx struct {
 	shared *t.SharedState
@@ -272,15 +300,16 @@ func cloneFuncDef(in *t.NodeFuncDef) *t.NodeFuncDef {
 			TypeParams:      append([]string{}, in.Class.TypeParams...),
 			OwnerTypeParams: append([]string{}, in.Class.OwnerTypeParams...),
 		},
-		ReturnType:   cloneType(in.ReturnType),
-		Body:         cloneBody(&in.Body),
-		AbsName:      in.AbsName,
-		NoAliasName:  in.NoAliasName,
-		DisplayName:  in.DisplayName,
-		DeferCnt:     in.DeferCnt,
-		HasDefer:     in.HasDefer,
-		IsDestructor: in.IsDestructor,
-		IsExternal:   in.IsExternal,
+		ReturnType:     cloneType(in.ReturnType),
+		Body:           cloneBody(&in.Body),
+		AbsName:        in.AbsName,
+		NoAliasName:    in.NoAliasName,
+		DisplayName:    in.DisplayName,
+		DeferCnt:       in.DeferCnt,
+		HasDefer:       in.HasDefer,
+		IsDestructor:   in.IsDestructor,
+		IsExternal:     in.IsExternal,
+		ErrorPredicate: in.ErrorPredicate,
 	}
 	for i, a := range in.Class.ArgsNode.Args {
 		out.Class.ArgsNode.Args[i] = t.NodeArg{
@@ -1084,7 +1113,7 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 		}
 		specName, e := m.instantiateFunc(targetModule, baseName, n.GenericArgs)
 		if e != nil {
-			return e
+			return m.genericFuncInstantiationError(gl, &n.Tk, baseName, e)
 		}
 		switch name := n.Name.(type) {
 		case *t.NodeNameSingle:
@@ -1153,7 +1182,7 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 			}
 			specName, e := m.instantiateFunc(targetModule, baseName, n.GenericArgs)
 			if e != nil {
-				return e
+				return m.genericFuncInstantiationError(gl, &n.Tk, baseName, e)
 			}
 			tokens := append([]t.Token{}, nm.Tokens...)
 			if len(tokens) > 2 {
@@ -1167,7 +1196,7 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 			}
 			specName, e := m.instantiateFunc(targetModule, baseName, n.GenericArgs)
 			if e != nil {
-				return e
+				return m.genericFuncInstantiationError(gl, &n.Tk, baseName, e)
 			}
 			nameExpr.Name = &t.NodeNameSingle{Tk: nm.Tk, Name: specName}
 		default:

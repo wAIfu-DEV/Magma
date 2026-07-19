@@ -19,4 +19,8 @@ pub main() !void:
     if count != 2:
         throw errors.failure("duplex behavior changed")
     ..
+    buffer u8[1]
+    if try stream.reader().readToBuff(buffer, 1) != 0:
+        throw errors.failure("duplex reader changed")
+    ..
 ..

@@ -57,13 +57,8 @@ pub allocFill(a alc.Allocator, size u64, fill u8) !$str:
 # Allocator should be the exact same that the string was allocated with.
 # @param a allocator
 # @param s allocated slice
-pub free(a alc.Allocator, s str) void:
-    p ptr = toPtr(s)
-
-    if p == none:
-        ret
-    ..
-    a.free(p)
+pub free(a alc.Allocator, s $str) void:
+    s.free(a)
 ..
 
 # Returns a str from a pointer and a length in bytes.
@@ -162,7 +157,6 @@ pub toCstr(a alc.Allocator, s str) !$u8*:
         *nt = 0
         ret nt
     ..
-
     p u8* = toPtr(s)
     np u8* = try a.alloc(size + 1)
 
@@ -171,30 +165,26 @@ pub toCstr(a alc.Allocator, s str) !$u8*:
         np[i] = p[i]
         i = i + 1
     ..
-
     np[size] = 0
     ret np
 ..
 
-# Returns the underlying string pointer after checking its trailing byte.
-# The caller must guarantee that one readable byte exists immediately after the
-# logical string data. Owned strings returned by allocating string APIs meet
-# this precondition; arbitrary borrowed strings and substring views may not.
+# Returns the underlying string pointer without reading or copying its data.
+# The caller must guarantee that the string has a null byte immediately after
+# its logical data. Owned strings returned by allocating string APIs meet this
+# precondition; arbitrary borrowed strings and substring views may not. This
+# cannot be checked safely here because the byte after a borrowed view may not
+# be readable memory.
 # O(1)
 # @param s string to copy
 # @returns a null-terminated c-style string
-pub toCstrNoCopy(s str) !u8*:
-    size u64 = countBytes(s)
+pub toCstrNoCopy(s str) u8*:
     p u8* = toPtr(s)
 
     if p == none:
         ret addrof gl_nullTerm
-    .. 
-
-    # WARNING: not sure if OOB of +1 automatically leads to crash, needs testing
-    if p[size] != 0:
-        throw err.wouldOverflow("string is not null terminated")
     ..
+
     ret p
 ..
 
@@ -248,7 +238,6 @@ pub fromCstr(a alc.Allocator, cstr u8*) !$str:
         strData[i] = cstr[i]
         i = i + 1
     ..
-
     strData[size] = 0
     ret fromPtrNoCopy(strData, size)
 ..

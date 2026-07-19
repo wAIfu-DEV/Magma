@@ -288,7 +288,7 @@ pub Client.send(method str, url str, headers str, source reader.Reader, bodyLeng
 
     if strings.countBytes(headers) > 0:
         added bool, addHeadersErr error = addHeaders(this.allocator, request, headers)
-        if errors.code(addHeadersErr) != 0:
+        if addHeadersErr.nok():
             ext_WinHttpCloseHandle(request)
             ext_WinHttpCloseHandle(connection)
             throw addHeadersErr
@@ -309,7 +309,7 @@ pub Client.send(method str, url str, headers str, source reader.Reader, bodyLeng
 
     if hasBody:
         writtenBody u64, bodyErr error = writeBody(request, source, bodyLength)
-        if errors.code(bodyErr) != 0:
+        if bodyErr.nok():
             ext_WinHttpCloseHandle(request)
             ext_WinHttpCloseHandle(connection)
             throw bodyErr
@@ -324,14 +324,14 @@ pub Client.send(method str, url str, headers str, source reader.Reader, bodyLeng
     ..
 
     status u16, statusErr error = queryStatus(request)
-    if errors.code(statusErr) != 0:
+    if statusErr.nok():
         ext_WinHttpCloseHandle(request)
         ext_WinHttpCloseHandle(connection)
         throw statusErr
     ..
 
     raw str, headerErr error = queryRawHeaders(this.allocator, request)
-    if errors.code(headerErr) != 0:
+    if headerErr.nok():
         ext_WinHttpCloseHandle(request)
         ext_WinHttpCloseHandle(connection)
         throw headerErr

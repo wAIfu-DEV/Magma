@@ -18,4 +18,8 @@ pub main() !void:
     if values[0] != 1 || values[1] != 2 || values[2] != 3:
         throw errors.failure("sort behavior changed")
     ..
+    sort.reverse[u64](values)
+    if values[0] != 3 || values[2] != 1:
+        throw errors.failure("sort reverse changed")
+    ..
 ..

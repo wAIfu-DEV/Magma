@@ -137,9 +137,8 @@ Client.send(request Request, requestBody Body) !$Response:
     responseImpl impl_http.Response, sendErr error = impl_http.send(addrof this.impl, request.method, request.url, rawHeaders, requestBody.source, requestBody.length, bodyPresent)
     strings.free(this.allocator, rawHeaders)
 
-    if errors.code(sendErr) != 0:
+    if sendErr.nok():
         drop[Response](response)
-        drop[impl_http.Response](responseImpl)
         throw sendErr
     ..
     response.impl = responseImpl

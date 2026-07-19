@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -165,7 +167,45 @@ func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath strin
 }
 
 func DoMain(shared *types.SharedState, filePath string) error {
-	return Do(shared, filePath, "", filePath, nil)
+	if err := Do(shared, filePath, "", filePath, nil); err != nil {
+		return err
+	}
+	mainFile := shared.Files[filePath]
+	if mainFile == nil {
+		absPath, err := makeabs.MakeAbs(filePath, filePath)
+		if err == nil {
+			mainFile = shared.Files[absPath]
+		}
+	}
+	if mainFile == nil || mainFile.GlNode == nil {
+		return fmt.Errorf("main compilation unit was not registered")
+	}
+	corePath, err := findCorePath(shared)
+	if err != nil {
+		return err
+	}
+	mainFile.Imports = append(mainFile.Imports, corePath)
+	return Do(shared, corePath, "__core", mainFile.FilePath, mainFile.GlNode)
+}
+
+func findCorePath(shared *types.SharedState) (string, error) {
+	candidates := []string{
+		filepath.Join(filepath.Dir(shared.ExecPath), "std", "core.mg"),
+		filepath.Join(shared.Cwd, "std", "core.mg"),
+	}
+	if _, source, _, ok := runtime.Caller(0); ok {
+		candidates = append(candidates, filepath.Join(filepath.Dir(source), "..", "..", "std", "core.mg"))
+	}
+	for _, candidate := range candidates {
+		absolute, err := filepath.Abs(candidate)
+		if err != nil {
+			continue
+		}
+		if info, err := os.Stat(absolute); err == nil && !info.IsDir() {
+			return absolute, nil
+		}
+	}
+	return "", fmt.Errorf("failed to locate implicitly imported std/core.mg")
 }
 
 func Do(shared *types.SharedState, filePath string, alias string, fromAbs string, fromGl *types.NodeGlobal) error {

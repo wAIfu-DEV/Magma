@@ -10,15 +10,21 @@ import (
 
 type sh *t.SharedState
 type ctx struct {
-	Shared       sh
-	ScopeTree    *t.Scope
-	GlobalNode   *t.NodeGlobal
-	ModuleBundle *t.ModuleBundle
-	LastFuncDef  *t.NodeFuncDef
-	FileCtx      *t.FileCtx
-	LoopDepth    int
+	Shared           sh
+	ScopeTree        *t.Scope
+	GlobalNode       *t.NodeGlobal
+	ModuleBundle     *t.ModuleBundle
+	LastFuncDef      *t.NodeFuncDef
+	FileCtx          *t.FileCtx
+	LoopDepth        int
+	PrimitiveMethods map[string]primitiveMethod
 
 	CurrScope *t.Scope
+}
+
+type primitiveMethod struct {
+	Function *t.NodeFuncDef
+	Module   string
 }
 
 type entryType int
@@ -243,25 +249,49 @@ func clResolveFieldAccess(c *ctx, ownerType *t.NodeType, member string, lvalue b
 	}
 
 	return &t.MemberAccess{
-		Type:     fieldType,
-		FieldNb:  structDef.FieldNb[member],
-		PtrDeref: ptrDeref,
+		Type:        fieldType,
+		FieldNb:     structDef.FieldNb[member],
+		PtrDeref:    ptrDeref,
+		ResultIsPtr: isPointerType(fieldType),
 	}, nil
 }
 
-func clResolveMemberFunc(c *ctx, ownerType *t.NodeType, member string) (*t.StructDef, *t.NodeFuncDef, *t.NodeType, bool, error) {
+func primitiveTypeName(nodeType *t.NodeType) (string, bool) {
+	if nodeType == nil {
+		return "", false
+	}
+	named, ok := nodeType.KindNode.(*t.NodeTypeNamed)
+	if !ok {
+		return "", false
+	}
+	single, ok := named.NameNode.(*t.NodeNameSingle)
+	if !ok {
+		return "", false
+	}
+	_, ok = magmatypes.BasicTypes[single.Name]
+	return single.Name, ok
+}
+
+func clResolveMemberFunc(c *ctx, ownerType *t.NodeType, member string) (*t.NodeFuncDef, *t.NodeType, bool, string, error) {
 	lookupType, ptrDeref := clDerefOne(ownerType)
+	if primitive, ok := primitiveTypeName(lookupType); ok {
+		method, found := c.PrimitiveMethods[primitive+"."+member]
+		if !found {
+			return nil, nil, false, "", fmt.Errorf("type %s has no member function '%s'", flattenType(ownerType), member)
+		}
+		return method.Function, lookupType, ptrDeref, method.Module, nil
+	}
 	structDef, e := clGetStructDefFromType(c, lookupType)
 	if e != nil {
-		return nil, nil, nil, false, e
+		return nil, nil, false, "", e
 	}
 
 	fnDef, ok := structDef.Funcs[member]
 	if !ok {
-		return nil, nil, nil, false, fmt.Errorf("type %s has no member function '%s'", flattenType(ownerType), member)
+		return nil, nil, false, "", fmt.Errorf("type %s has no member function '%s'", flattenType(ownerType), member)
 	}
 
-	return structDef, fnDef, lookupType, ptrDeref, nil
+	return fnDef, lookupType, ptrDeref, structDef.Module, nil
 }
 
 func clGetFuncDefFromModule(c *ctx, name parsedName) (*t.NodeFuncDef, error) {
@@ -373,6 +403,19 @@ func clVarNameChainValid(c *ctx, scope *t.Scope, source *t.NodeExprName, name *p
 			KindNode: n.Kind,
 		}
 	}
+	if primitive, ok := primitiveTypeName(lastDerefType); ok {
+		if len(name.Parts) == 1 {
+			if _, found := c.PrimitiveMethods[primitive+"."+name.Parts[0]]; found {
+				return true, []*t.MemberAccess{}, nil
+			}
+		}
+		return false, nil, comp_err.CompilationErrorToken(
+			c.FileCtx,
+			memberNameToken(source, 0),
+			fmt.Sprintf("type '%s' has no member function '%s'", primitive, name.Parts[0]),
+			"",
+		)
+	}
 
 	// get struct def for type
 	structDef, e := clGetStructDefFromType(c, lastDerefType)
@@ -423,9 +466,10 @@ func clVarNameChainValid(c *ctx, scope *t.Scope, source *t.NodeExprName, name *p
 
 			if i == last {
 				accesses = append(accesses, &t.MemberAccess{
-					Type:     fieldType,
-					FieldNb:  fieldNb,
-					PtrDeref: isFromPtrType,
+					Type:        fieldType,
+					FieldNb:     fieldNb,
+					PtrDeref:    isFromPtrType,
+					ResultIsPtr: isPointerType(fieldType),
 				})
 				return foundMemberFunc, accesses, nil
 			}
@@ -440,9 +484,10 @@ func clVarNameChainValid(c *ctx, scope *t.Scope, source *t.NodeExprName, name *p
 			}
 
 			accesses = append(accesses, &t.MemberAccess{
-				Type:     typeFromStructDef(c, structDef),
-				FieldNb:  fieldNb,
-				PtrDeref: isFromPtrType,
+				Type:        typeFromStructDef(c, structDef),
+				FieldNb:     fieldNb,
+				PtrDeref:    isFromPtrType,
+				ResultIsPtr: isPointerType(fieldType),
 			})
 
 			isFromPtrType = false
@@ -668,7 +713,7 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 		}
 
 		ownerType := n.Target.GetInferredType()
-		structDef, fnDef, memberOwnerType, isPointerOwner, err := clResolveMemberFunc(c, ownerType, n.Member)
+		fnDef, memberOwnerType, isPointerOwner, ownerModule, err := clResolveMemberFunc(c, ownerType, n.Member)
 		if err != nil {
 			return err
 		}
@@ -678,7 +723,7 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 		call.AssociatedFnDef = fnDef
 		call.MemberOwnerIsPtr = isPointerOwner
 		call.MemberOwnerExpr = n.Target
-		call.MemberOwnerModule = structDef.Module
+		call.MemberOwnerModule = ownerModule
 		n.InfType = fnDef.ReturnType
 	default:
 		if err := clExpr(c, n, false); err != nil {
@@ -766,48 +811,31 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 			//fmt.Printf("owner struct def: ")
 			//ownerType.Print(0)
 
-			// check if is member func on struct
-			strt, e := clGetStructDefFromType(c, ownerType)
-			if e == nil {
-				//fmt.Printf("found owner struct def of member call\n")
-
-				for mn, v := range strt.Funcs {
-					//fmt.Printf("member: %s\n", mn)
-					if mn == memberName {
-						//fmt.Printf("is member func call\n")
-
-						call.IsMemberFunc = true
-						call.MemberOwnerType = ownerType
-						call.AssociatedFnDef = v
-						call.MemberOwnerIsPtr = isPointerOwner
-						call.MemberOwnerName = ownerName
-						call.MemberOwnerModule = strt.Module
-						call.MemberOwnerName.MemberAccesses = nameExpr.MemberAccesses
-						return nil
-					}
+			if fn, resolvedOwner, ptrOwner, module, e := clResolveMemberFunc(c, ownerType, memberName); e == nil {
+				call.IsMemberFunc = true
+				call.MemberOwnerType = resolvedOwner
+				if ptrOwner {
+					call.MemberOwnerType = ownerType
 				}
+				call.AssociatedFnDef = fn
+				call.MemberOwnerIsPtr = isPointerOwner || ptrOwner
+				call.MemberOwnerName = ownerName
+				call.MemberOwnerModule = module
+				call.MemberOwnerName.MemberAccesses = nameExpr.MemberAccesses
+				return nil
 			}
 
 			if isShallowPtr {
-				strt, e = clGetStructDefFromType(c, shallowPtrType)
-				if e == nil {
-					//fmt.Printf("found owner struct def of member call after owner deref\n")
-
-					for mn, v := range strt.Funcs {
-						//fmt.Printf("member: %s\n", mn)
-						if mn == memberName {
-							//fmt.Printf("is member func call\n")
-
-							call.IsMemberFunc = true
-							call.MemberOwnerType = ownerType
-							call.AssociatedFnDef = v
-							call.MemberOwnerIsPtr = true
-							call.MemberOwnerName = ownerName
-							call.MemberOwnerModule = strt.Module
-							call.MemberOwnerName.MemberAccesses = nameExpr.MemberAccesses
-							return nil
-						}
-					}
+				if fn, resolvedOwner, _, module, e := clResolveMemberFunc(c, shallowPtrType, memberName); e == nil {
+					call.IsMemberFunc = true
+					_ = resolvedOwner
+					call.MemberOwnerType = ownerType
+					call.AssociatedFnDef = fn
+					call.MemberOwnerIsPtr = true
+					call.MemberOwnerName = ownerName
+					call.MemberOwnerModule = module
+					call.MemberOwnerName.MemberAccesses = nameExpr.MemberAccesses
+					return nil
 				}
 			}
 
@@ -1368,6 +1396,7 @@ func CheckLinks(s *t.SharedState) error {
 		ModuleBundle: &t.ModuleBundle{
 			Modules: map[string]*t.NodeGlobal{},
 		},
+		PrimitiveMethods: map[string]primitiveMethod{},
 	}
 
 	// Sorted by dependency resolution order
@@ -1382,6 +1411,15 @@ func CheckLinks(s *t.SharedState) error {
 	for _, v := range s.Files {
 		ctx.ModuleBundle.Modules[v.PackageName] = v.GlNode
 		pathCtxMap[v.FilePath] = v
+		for primitive, methods := range v.GlNode.PrimitiveMethods {
+			for name, function := range methods {
+				key := primitive + "." + name
+				if _, exists := ctx.PrimitiveMethods[key]; exists {
+					return fmt.Errorf("primitive method '%s' is defined more than once", key)
+				}
+				ctx.PrimitiveMethods[key] = primitiveMethod{Function: function, Module: v.PackageName}
+			}
+		}
 	}
 
 	queue := []*t.FileCtx{}

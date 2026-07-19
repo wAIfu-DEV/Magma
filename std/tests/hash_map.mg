@@ -13,8 +13,14 @@ pub main() !void:
     try values.set("answer", 42)
     try values.set("answer", 43)
     answer := try values.get("answer")
-    if answer != 43 || values.count() != 1:
+    if answer != 43 || values.count() != 1 || try values.indexOf("answer") >= 8:
         throw errors.failure("hash map behavior changed")
     ..
+    try values.resize(16)
+    taken := try values.take("answer")
+    if taken != 43 || values.count() != 0:
+        throw errors.failure("hash map resize or take changed")
+    ..
+    try values.set("answer", 44)
     try values.delete("answer")
 ..

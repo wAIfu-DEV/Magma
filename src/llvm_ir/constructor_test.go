@@ -41,6 +41,135 @@ func compileSource(t *testing.T, source string) (string, error) {
 	return string(ir), err
 }
 
+func TestAddrofSubscriptLowers(t *testing.T) {
+	source := `mod main
+
+elementAddress(items u64[], index u64) ptr:
+    ret addrof items[index]
+..
+
+main() void:
+    ret
+..
+`
+
+	if _, err := compileSource(t, source); err != nil {
+		t.Fatalf("addrof on a subscript failed to lower: %v", err)
+	}
+}
+
+func TestPointerMemberLvalueLoadsPointerBeforeFieldAddress(t *testing.T) {
+	source := `mod main
+
+State(value u64)
+Wrapper(state State*)
+
+setValue(wrapper Wrapper*) void:
+    wrapper.state.value = 42
+..
+
+main() void:
+    ret
+..
+`
+
+	ir, err := compileSource(t, source)
+	if err != nil {
+		t.Fatalf("pointer member lvalue failed to lower: %v", err)
+	}
+	namePos := strings.Index(ir, ".setValue(")
+	if namePos < 0 {
+		t.Fatal("setValue function was not emitted")
+	}
+	start := strings.LastIndex(ir[:namePos], "define ")
+	endOffset := strings.Index(ir[namePos:], "\n}")
+	if start < 0 || endOffset < 0 {
+		t.Fatal("could not isolate emitted setValue function")
+	}
+	setValueIR := ir[start : namePos+endOffset]
+	if !strings.Contains(setValueIR, "load ptr, ptr") {
+		t.Fatal("pointer member lvalue did not load its pointer field")
+	}
+}
+
+func TestMemberCallOnPointerFieldLoadsOwner(t *testing.T) {
+	source := `mod main
+
+State(value u64)
+State.get() u64:
+    ret this.value
+..
+
+Wrapper(state State*)
+
+read(wrapper Wrapper*) u64:
+    ret wrapper.state.get()
+..
+
+main() void:
+    ret
+..
+`
+
+	ir, err := compileSource(t, source)
+	if err != nil {
+		t.Fatalf("member call on pointer field failed to lower: %v", err)
+	}
+	namePos := strings.Index(ir, ".read(")
+	if namePos < 0 {
+		t.Fatal("read function was not emitted")
+	}
+	start := strings.LastIndex(ir[:namePos], "define ")
+	endOffset := strings.Index(ir[namePos:], "\n}")
+	if start < 0 || endOffset < 0 {
+		t.Fatal("could not isolate emitted read function")
+	}
+	readIR := ir[start : namePos+endOffset]
+	if !strings.Contains(readIR, "load ptr, ptr") {
+		t.Fatal("member call did not load its pointer-valued owner field")
+	}
+}
+
+func TestTypeErasedPointerConversions(t *testing.T) {
+	source := `mod main
+
+typedToErased(value u8*) ptr:
+    erased ptr = value
+    ret erased
+..
+
+erasedToTyped(value ptr) u8*:
+    typed u8* = value
+    ret typed
+..
+
+produceTyped() !u8*:
+    ret none
+..
+
+produceErased() !ptr:
+    ret none
+..
+
+throwingTypedToErased() !ptr:
+    erased ptr = try produceTyped()
+    ret erased
+..
+
+throwingErasedToTyped() !u8*:
+    typed u8* = try produceErased()
+    ret typed
+..
+
+main() void:
+..
+`
+
+	if _, err := compileSource(t, source); err != nil {
+		t.Fatalf("compile type-erased pointer conversions: %v", err)
+	}
+}
+
 func TestPointerDereferenceAssignmentLowers(t *testing.T) {
 	source := `mod test
 
@@ -110,11 +239,14 @@ main() !void:
 		strings.Contains(ir, "@magma.error.trace.cursor =") {
 		t.Fatal("error traces do not use the configured sharded ring")
 	}
-	if got := strings.Count(ir, "call %type.error @magma.error.push"); got != 3 {
-		t.Fatalf("got %d trace pushes, want throw and two try sites", got)
+	// The implicit core imports allocator support, whose two throwing wrappers
+	// also contain propagation sites. The test program itself contributes the
+	// original throw and two try sites.
+	if got := strings.Count(ir, "call %type.error @magma.error.push"); got != 5 {
+		t.Fatalf("got %d trace pushes, want three program sites and two core dependency sites", got)
 	}
-	if got := strings.Count(ir, "!prof !9000"); got != 4 {
-		t.Fatalf("got %d unlikely error branches, want throw, two tries, and main checks", got)
+	if got := strings.Count(ir, "!prof !9000"); got != 6 {
+		t.Fatalf("got %d unlikely error branches, want four program branches and two core dependency branches", got)
 	}
 	if !strings.Contains(ir, "@magma.error.push(%type.error %error, ptr %site) cold noinline") {
 		t.Fatal("trace recording helper is not kept out of hot callers")

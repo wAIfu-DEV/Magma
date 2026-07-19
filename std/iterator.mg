@@ -17,5 +17,5 @@ Iterator[T].hasData() bool:
 ..
 
 Iterator[T].next() !T:
-    ret this.fn_next(this.impl, addrof this.index)
+    ret try this.fn_next(this.impl, addrof this.index)
 ..

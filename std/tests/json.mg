@@ -9,6 +9,7 @@ use "../memory.mg" memory
 use "../slices.mg" slices
 use "../strings.mg" strings
 use "../writer.mg" writer
+use "../footgun.mg" footgun
 
 Capture(
     data u8*
@@ -67,6 +68,10 @@ pub main() !void:
 
     object := try json.newObject(a)
     defer object.free()
+    objectValue := json.objectBorrowed(addrof object)
+    if try objectValue.asObject() != addrof object:
+        throw errors.failure("JSON object accessor changed")
+    ..
     try object.set("answer", json.numberInt(41))
     try object.set("answer", json.numberInt(42))
     answer := try object.get("answer")
@@ -87,6 +92,14 @@ pub main() !void:
 
     array := try json.newArray(a)
     defer array.free()
+    arrayValue := json.arrayBorrowed(addrof array)
+    if try arrayValue.asArray() != addrof array:
+        throw errors.failure("JSON array accessor or borrowing changed")
+    ..
+    borrowedArrayValue := arrayValue.borrowed()
+    if try borrowedArrayValue.asArray() != addrof array:
+        throw errors.failure("JSON array borrowing changed")
+    ..
     specialBytes u8[5]
     specialBytes[0] = 34
     specialBytes[1] = 92
@@ -151,6 +164,7 @@ pub main() !void:
     try nested.set("ok", json.boolean(true))
     try object.set("items", json.arrayBorrowed(addrof array))
     try object.set("nested", json.objectOwned(addrof nested))
+    footgun.drop[json.Object](nested)
     encoded := try render(a, json.objectBorrowed(addrof object), 2)
     defer strings.free(a, encoded)
     encodedLength := strings.countBytes(encoded)
@@ -165,5 +179,18 @@ pub main() !void:
     ..
     cleanup := try json.newArray(a)
     try cleanup.append(copied)
+
+    borrowedValue := json.stringBorrowed("borrowed")
+    if strings.compare(try borrowedValue.asString(), "borrowed") == false:
+        cleanup.free()
+        throw errors.failure("JSON borrowed string changed")
+    ..
+    transferredText := try strings.copy(a, "transferred")
+    try cleanup.append(json.stringOwned(a, transferredText))
+
+    child := try json.newArray(a)
+    try child.append(json.boolean(true))
+    try cleanup.append(json.arrayOwned(addrof child))
+    footgun.drop[json.Array](child)
     cleanup.free()
 ..

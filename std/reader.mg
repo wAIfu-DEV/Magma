@@ -7,6 +7,7 @@ use "errors.mg"    errors
 use "cast.mg"      cast
 use "future.mg"    future
 use "thread_pool.mg" thread_pool
+use "footgun.mg"   footgun
 
 # Reader interface for pulling bytes into strings or buffers.
 # O(1) wrapper calls; underlying reader decides cost.
@@ -36,6 +37,7 @@ Reader.read(a alc.Allocator, nBytes u64) !$str:
         ret try strings.alloc(a, 0)
     ..
     result str = try strings.alloc(a, nBytes)
+
     buffPtr u8* = strings.toPtr(result)
     buff u8[] = slices.fromPtr(buffPtr, nBytes)
     readCnt u64, readErr error = this.readToBuff(buff, nBytes)
@@ -44,6 +46,9 @@ Reader.read(a alc.Allocator, nBytes u64) !$str:
         throw readErr
     ..
     buffPtr[readCnt] = 0
+
+    # Compiler warning suppression
+    footgun.drop[str](result)
     ret strings.fromPtrNoCopy(buffPtr, readCnt)
 ..
 

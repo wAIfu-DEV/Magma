@@ -5,6 +5,12 @@ use "file.mg" file
 use "strings.mg" strings
 use "errors.mg" errors
 
+@platform("windows")
+use "win/fs_impl.mg" impl_fs
+
+@platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
+use "unix/fs_impl.mg" impl_fs
+
 pub readFile(a alc.Allocator, path str) !$str:
     mode := file.mode()
     mode = mode.read()
@@ -25,4 +31,15 @@ pub writeFile(a alc.Allocator, path str, contents str) !void:
     if written != strings.countBytes(contents):
         throw errors.failure("short file write")
     ..
+..
+
+# Deletes one file. Directories are rejected.
+pub removeFile(a alc.Allocator, path str) !void:
+    try impl_fs.removeFile(a, path)
+..
+
+# Recursively visits every descendant of root. The path passed to visit is
+# borrowed and remains valid only for the duration of the callback.
+pub walk(a alc.Allocator, root str, visit (str, bool) !void) !void:
+    try impl_fs.walk(a, root, visit)
 ..

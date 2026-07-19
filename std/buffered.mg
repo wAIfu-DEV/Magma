@@ -8,6 +8,7 @@ use "slices.mg"    slices
 use "strings.mg"   strings
 use "cast.mg"      cast
 use "memory.mg"    mem
+use "footgun.mg"   footgun
 
 const DEFAULT_BUFFER_SIZE u64 = 8192
 const EOF_MASK u64 = 0x8000000000000000
@@ -348,7 +349,11 @@ resizeLineBuffer(a alc.Allocator, old u8*, newCapacity u64) !$u8*:
 Reader.readLn(a alc.Allocator) !$str:
     # Initial capacity for line buffer
     capacity u64 = 128
-    line str = try strings.alloc(a, capacity)
+    line $str = try strings.alloc(a, capacity)
+
+    # Compiler warning suppression
+    defer footgun.drop[str](line)
+
     lineBuffer u8* = strings.toPtr(line)
     lineLen u64 = 0
     dstPtr ptr = none

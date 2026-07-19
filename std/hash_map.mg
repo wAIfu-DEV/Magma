@@ -68,15 +68,9 @@ pub new[T](a alc.Allocator, capacity u64, cleanup ($T) void) !$HashMap[T]:
     if capacity == 0:
         throw errors.invalidArgument("hash map capacity must be positive")
     ..
-    m := HashMap[T](
-        allocator=a,
-        storage=try a.alloc(try storageSize[T](capacity)),
-        capacity=capacity,
-        length=0,
-        cleanup=cleanup,
-    )
-    memory.zero(statesPtr[T](addrof m), capacity)
-    ret m
+    storage := try a.alloc(try storageSize[T](capacity))
+    memory.zero(statesAt[T](storage, capacity), capacity)
+    ret HashMap[T](allocator=a, storage=storage, capacity=capacity, length=0, cleanup=cleanup)
 ..
 
 HashMap[T].indexOf(key str) !u64:
@@ -158,7 +152,7 @@ HashMap[T].set(key str, item $T) !void:
             throw errors.wouldOverflow("hash map capacity overflow")
         ..
         resized bool, resizeErr error = resizeForInsert[T](this, this.capacity * 2)
-        if errors.code(resizeErr) != 0:
+        if resizeErr.nok():
             release[T](this.cleanup, item)
             throw resizeErr
         ..
@@ -183,7 +177,7 @@ HashMap[T].set(key str, item $T) !void:
                 idx = firstDeleted
             ..
             ownedKey str, copyErr error = strings.copy(this.allocator, key)
-            if errors.code(copyErr) != 0:
+            if copyErr.nok():
                 release[T](this.cleanup, item)
                 throw copyErr
             ..
@@ -197,7 +191,7 @@ HashMap[T].set(key str, item $T) !void:
     ..
     if firstDeleted != this.capacity:
         fallbackKey str, fallbackErr error = strings.copy(this.allocator, key)
-        if errors.code(fallbackErr) != 0:
+        if fallbackErr.nok():
             release[T](this.cleanup, item)
             throw fallbackErr
         ..

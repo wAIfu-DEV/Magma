@@ -6,4 +6,4 @@ IGNORE/
 .gocache/
 *.dll
 *.lib
-REPORT.md
+REPORT*.md

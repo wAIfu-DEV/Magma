@@ -975,17 +975,19 @@ func irExprCallFuncMember(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (Ss
 			return SsaName{}, e
 		}
 
-		if !isSsaOwner && isPointerType(fnCall.MemberOwnerType) {
-			// Non-SSA pointer locals and arguments live in an alloca. A member
-			// call needs the stored pointer value as `this`, not the address of
-			// that pointer slot (which would incorrectly pass T** as T*).
+		ownerHasMemberPath := fnCall.MemberOwnerName != nil && len(fnCall.MemberOwnerName.MemberAccesses) > 0
+		pointerFieldOwner := false
+		if ownerHasMemberPath {
+			lastAccess := fnCall.MemberOwnerName.MemberAccesses[len(fnCall.MemberOwnerName.MemberAccesses)-1]
+			pointerFieldOwner = lastAccess.ResultIsPtr
+		}
+		pointerLocalOwner := !isSsaOwner && isPointerType(fnCall.MemberOwnerType)
+		if pointerFieldOwner || pointerLocalOwner {
+			// Non-SSA pointer locals and pointer-valued fields are represented by
+			// the address of their pointer slot here. A member call needs the
+			// stored pointer value as `this`, not T**.
 			loadedOwner := irSsaLocal(ctx)
-			irWritef(ctx, "  %s = load ", loadedOwner.Repr)
-			e = irType(ctx, fnCall.MemberOwnerType)
-			if e != nil {
-				return SsaName{}, e
-			}
-			irWritef(ctx, ", ptr %s\n", ownerSsa.Repr)
+			irWritef(ctx, "  %s = load ptr, ptr %s\n", loadedOwner.Repr, ownerSsa.Repr)
 			ownerSsa = loadedOwner
 		} else if isSsaOwner && !fnCall.MemberOwnerIsPtr {
 			allocSsa := irSsaLocal(ctx)
@@ -1507,6 +1509,15 @@ func irExprMemberAccessLvalue(ctx *IrCtx, member *t.NodeExprMemberAccess) (SsaNa
 		}
 	}
 
+	// For an access such as wrapper.pointerField.value, basePtr initially
+	// addresses the slot containing pointerField. Load that pointer before
+	// computing the address of value in the pointee.
+	if isPointerType(member.Target.GetInferredType()) {
+		loadedPtr := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = load ptr, ptr %s\n", loadedPtr.Repr, basePtr.Repr)
+		basePtr = loadedPtr
+	}
+
 	return irMemberAddress(ctx, basePtr, member.Target.GetInferredType(), member.Access.FieldNb)
 }
 
@@ -1568,6 +1579,7 @@ func irExprNameLvalue(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 
 	curPtr := basePtr
 	var curType *t.NodeType = nil
+	curPtrIsPointerValue := false
 
 	switch n := nameExpr.AssociatedNode.(type) {
 	case *t.NodeExprVarDef:
@@ -1575,6 +1587,7 @@ func irExprNameLvalue(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 	case *t.NodeExprVarDefAssign:
 		curType = n.VarDef.Type
 	}
+	curPtrIsPointerValue = isPointerType(curType) && nameExpr.IsSsa
 
 	// A non-SSA pointer local is an alloca containing the pointer value. Load
 	// that value before taking the address of one of the pointee's fields.
@@ -1583,9 +1596,18 @@ func irExprNameLvalue(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 		irWritef(ctx, "  %s = load ptr, ptr %s\n", loaded.Repr, basePtr.Repr)
 		basePtr = loaded
 		curPtr = loaded
+		curPtrIsPointerValue = true
 	}
 
 	for _, m := range nameExpr.MemberAccesses {
+		// Composite-name access metadata records whether this particular hop
+		// crosses a pointer. Intermediate access types are normalized to the
+		// pointee struct, so checking curType for pointer-ness loses this fact.
+		if m.PtrDeref && !curPtrIsPointerValue {
+			loaded := irSsaLocal(ctx)
+			irWritef(ctx, "  %s = load ptr, ptr %s\n", loaded.Repr, curPtr.Repr)
+			curPtr = loaded
+		}
 		nextPtr, err := irMemberAddress(ctx, curPtr, curType, m.FieldNb)
 		if err != nil {
 			return ssaName(""), err
@@ -1593,6 +1615,7 @@ func irExprNameLvalue(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 
 		curPtr = nextPtr
 		curType = m.Type
+		curPtrIsPointerValue = false
 	}
 
 	return curPtr, nil

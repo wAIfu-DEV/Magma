@@ -16,4 +16,11 @@ pub main() !void:
     if first != 3 || values.count() != 1:
         throw errors.failure("queue behavior changed")
     ..
+    if values.view()[0] != 7:
+        throw errors.failure("queue view changed")
+    ..
+    try values.clear()
+    if values.count() != 0:
+        throw errors.failure("queue clear changed")
+    ..
 ..

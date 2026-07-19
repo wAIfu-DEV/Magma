@@ -48,6 +48,67 @@ func TestWholeVariableAssignmentTransfersOwnership(t *testing.T) {
 	}
 }
 
+func TestStructConstructorTransfersFieldOwnership(t *testing.T) {
+	a, resourceType := fixture()
+	source := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "source"}, Type: resourceType}
+	out := flow{states: map[*types.NodeExprVarDef]State{source: stateLive}, deferred: map[*types.NodeExprVarDef]bool{}}
+	init := &types.NodeExprStructInit{
+		Type: resourceType,
+		Fields: []types.NodeStructFieldInit{{
+			Name:       "resource",
+			Expression: name(source),
+		}},
+	}
+
+	a.transferValue(&out, init)
+
+	if out.states[source] != stateConsumed {
+		t.Fatalf("source state = %v, want constructor field transfer to consume it", out.states[source])
+	}
+}
+
+func TestOwnedReturnEvaluatesConsumingCallArguments(t *testing.T) {
+	a, resourceType := fixture()
+	source := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "source"}, Type: resourceType}
+	ownedParameter := *resourceType
+	ownedParameter.Owned = true
+	call := &types.NodeExprCall{
+		AssociatedFnDef: &types.NodeFuncDef{Class: types.NodeGenericClass{ArgsNode: types.NodeArgList{Args: []types.NodeArg{{Name: "value", TypeNode: &ownedParameter}}}}},
+		Args:            []types.NodeExpr{name(source)},
+	}
+	out := flow{states: map[*types.NodeExprVarDef]State{source: stateLive}, deferred: map[*types.NodeExprVarDef]bool{}}
+
+	a.transferValue(&out, call)
+
+	if out.states[source] != stateConsumed {
+		t.Fatalf("source state = %v, want consuming call argument to be evaluated", out.states[source])
+	}
+}
+
+func TestErrorPredicateRefinesConditionalOwnership(t *testing.T) {
+	_, resourceType := fixture()
+	value := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "value"}, Type: resourceType}
+	errVariable := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "err"}, Type: &types.NodeType{KindNode: &types.NodeTypeNamed{NameNode: &types.NodeNameSingle{Name: "error"}}}}
+	out := flow{
+		states:     map[*types.NodeExprVarDef]State{value: stateConditional},
+		deferred:   map[*types.NodeExprVarDef]bool{},
+		conditions: map[*types.NodeExprVarDef]*types.NodeExprVarDef{value: errVariable},
+	}
+	predicate := &types.NodeExprCall{
+		AssociatedFnDef: &types.NodeFuncDef{ErrorPredicate: types.ErrorPredicateNok},
+		IsMemberFunc:    true,
+		MemberOwnerName: name(errVariable),
+	}
+
+	failure, success := predicateFlows(out, predicate)
+	if failure.states[value] != stateBorrowed {
+		t.Fatalf("nok true state = %v, want borrowed/absent", failure.states[value])
+	}
+	if success.states[value] != stateLive {
+		t.Fatalf("nok false state = %v, want live", success.states[value])
+	}
+}
+
 func TestPartialMoveDoesNotChangeAggregateOwnership(t *testing.T) {
 	a, resourceType := fixture()
 	aggregate := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "aggregate"}, Type: resourceType}
@@ -99,13 +160,19 @@ func TestBorrowedParameterIsNotAnOwnershipObligation(t *testing.T) {
 
 func TestConsumingBorrowWarns(t *testing.T) {
 	a, resourceType := fixture()
-	borrowed := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "borrowed"}, Type: resourceType}
+	borrowed := &types.NodeExprVarDef{Name: &types.NodeNameSingle{
+		Tk:   types.Token{Pos: types.FilePos{Line: 12, Col: 7}},
+		Name: "borrowed",
+	}, Type: resourceType}
 	out := flow{states: map[*types.NodeExprVarDef]State{}, deferred: map[*types.NodeExprVarDef]bool{}}
 
 	a.consume(&out, borrowed, "consuming argument")
 
 	if len(a.diagnostics) != 1 || !strings.Contains(a.diagnostics[0].Message, "borrowed destructible value") {
 		t.Fatalf("diagnostics = %+v, want borrowed-value warning", a.diagnostics)
+	}
+	if a.diagnostics[0].Line != 12 || a.diagnostics[0].Column != 7 {
+		t.Fatalf("diagnostic position = %d:%d, want 12:7", a.diagnostics[0].Line, a.diagnostics[0].Column)
 	}
 }
 

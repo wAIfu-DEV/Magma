@@ -5,6 +5,7 @@ use "strings.mg" strings
 use "memory.mg" mem
 use "cast.mg" cast
 use "errors.mg" errors
+use "footgun.mg" footgun
 
 Segment(
     value str
@@ -65,7 +66,8 @@ Builder.appendBorrowed(s str) !void:
     try this.add(s, false)
 ..
 
-Builder.appendOwned(s str) !void:
+Builder.appendOwned(s $str) !void:
+    footgun.drop[str](s)
     try this.add(s, true)
 ..
 

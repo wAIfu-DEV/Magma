@@ -255,11 +255,15 @@ func flattenTypeKind(nodeKind t.NodeTypeKind) string {
 			return strings.Join(nn.Parts, ".") + suffix
 		}
 	case *t.NodeTypePointer:
-		return "ptr<" + flattenTypeKind(n.Kind) + ">"
+		return flattenTypeKind(n.Kind) + "*"
 	case *t.NodeTypeSlice:
 		return flattenTypeKind(n.ElemKind) + "[]"
 	case *t.NodeTypeFunc:
-		return flattenTypeKind(n.RetType.KindNode) + "()"
+		args := make([]string, 0, len(n.Args))
+		for _, arg := range n.Args {
+			args = append(args, flattenType(arg))
+		}
+		return "(" + strings.Join(args, ", ") + ") " + flattenType(n.RetType)
 	case *t.NodeTypeAbsolute:
 		return n.AbsoluteName
 	}
@@ -271,7 +275,11 @@ func flattenType(node *t.NodeType) string {
 		return "nil"
 	}
 
-	return flattenTypeKind(node.KindNode)
+	name := flattenTypeKind(node.KindNode)
+	if node.Throws {
+		return "!" + name
+	}
+	return name
 }
 
 func flattenCallee(expr t.NodeExpr) string {
@@ -285,6 +293,46 @@ func flattenCallee(expr t.NodeExpr) string {
 	default:
 		return "<expr>"
 	}
+}
+
+func unmangledName(name string) string {
+	parts := strings.Split(name, ".")
+	for i, part := range parts {
+		if generic := strings.Index(part, "__g__"); generic >= 0 {
+			parts[i] = part[:generic]
+		}
+	}
+	return strings.Join(parts, ".")
+}
+
+func qualifiedDisplayName(raw string, display string) string {
+	raw = unmangledName(raw)
+	if strings.Contains(display, ".") {
+		return display
+	}
+	if separator := strings.LastIndex(raw, "."); separator >= 0 {
+		return raw[:separator+1] + display
+	}
+	return display
+}
+
+func callDisplayName(call *t.NodeExprCall) string {
+	if call.AssociatedFnDef != nil && call.AssociatedFnDef.DisplayName != "" {
+		return qualifiedDisplayName(flattenCallee(call.Callee), call.AssociatedFnDef.DisplayName)
+	}
+	return unmangledName(flattenCallee(call.Callee))
+}
+
+func expressionDisplayName(expr t.NodeExpr) string {
+	if call, ok := expr.(*t.NodeExprCall); ok {
+		return callDisplayName(call)
+	}
+	if name, ok := expr.(*t.NodeExprName); ok {
+		if fn, ok := name.AssociatedNode.(*t.NodeFuncDef); ok && fn.DisplayName != "" {
+			return qualifiedDisplayName(flattenCallee(expr), fn.DisplayName)
+		}
+	}
+	return unmangledName(flattenCallee(expr))
 }
 
 func expressionSourceToken(expr t.NodeExpr) *t.Token {
@@ -317,6 +365,25 @@ func expressionSourceToken(expr t.NodeExpr) *t.Token {
 	return &t.Token{}
 }
 
+func functionPointerMismatchHint(expected *t.NodeType, actual *t.NodeType, argument t.NodeExpr) string {
+	expectedFunc, expectedIsFunc := expected.KindNode.(*t.NodeTypeFunc)
+	actualFunc, actualIsFunc := actual.KindNode.(*t.NodeTypeFunc)
+	if !expectedIsFunc || !actualIsFunc {
+		return ""
+	}
+
+	if expectedFunc.RetType.Throws != actualFunc.RetType.Throws {
+		return fmt.Sprintf(
+			"function pointer '%s' returns '%s', but this parameter requires '%s'; throwing and non-throwing function pointers are not interchangeable",
+			expressionDisplayName(argument),
+			flattenType(actualFunc.RetType),
+			flattenType(expectedFunc.RetType),
+		)
+	}
+
+	return "pass a function pointer whose parameter and return types match the required signature"
+}
+
 func sameType(a *t.NodeType, b *t.NodeType) bool {
 	if a == nil || b == nil {
 		return a == b
@@ -339,7 +406,13 @@ func compatibleInitializer(expected *t.NodeType, expr t.NodeExpr) bool {
 }
 
 func compatibleTypes(expected *t.NodeType, actual *t.NodeType) bool {
-	if expected == nil || actual == nil || expected.Throws != actual.Throws {
+	if expected == nil || actual == nil {
+		return false
+	}
+	if isPointerType(expected) && isPointerType(actual) {
+		return true
+	}
+	if expected.Throws != actual.Throws {
 		return false
 	}
 	if sameType(expected, actual) {
@@ -360,9 +433,6 @@ func compatibleTypes(expected *t.NodeType, actual *t.NodeType) bool {
 			}
 		}
 		return compatibleTypes(expectedFunc.RetType, actualFunc.RetType)
-	}
-	if isPointerType(expected) && isPointerType(actual) {
-		return true
 	}
 	if isNumberType(expected) && isNumberType(actual) {
 		return true
@@ -530,6 +600,14 @@ func assignedConstant(expr t.NodeExpr) (*t.NodeExprName, *t.NodeExprVarDef) {
 }
 
 func ctExpr(c *ctx, expr t.NodeExpr) error {
+	return ctExprWithUsage(c, expr, true)
+}
+
+// ctExprWithUsage type-checks an expression and controls whether the value of
+// a top-level call is consumed by its parent. A throwing call has no defined
+// result on its error path, so only an ignored standalone call, try, or a
+// destructuring assignment may inspect it without first unwrapping it.
+func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 	switch n := expr.(type) {
 	case *t.NodeExprVoid:
 		n.VoidType = makeNamedType("void")
@@ -538,6 +616,9 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		n.InfType = makeNamedType("u64")
 		return nil
 	case *t.NodeExprAddrof:
+		if err := ctExpr(c, n.Expr); err != nil {
+			return err
+		}
 		n.InfType = makeNamedType("ptr")
 		return nil
 	case *t.NodeExprCall:
@@ -551,14 +632,14 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 
 		if n.IsFuncPointer {
 			if n.FuncPtrType == nil {
-				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("cannot call '%s': its type could not be resolved", flattenCallee(n.Callee)), "")
+				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("cannot call '%s': its type could not be resolved", callDisplayName(n)), "")
 			}
 			funcType, ok := n.FuncPtrType.KindNode.(*t.NodeTypeFunc)
 			if !ok {
 				return comp_err.CompilationErrorToken(
 					c.FileCtx,
 					&n.Tk,
-					fmt.Sprintf("cannot call '%s': value has non-function type '%s'", flattenCallee(n.Callee), flattenType(n.FuncPtrType)),
+					fmt.Sprintf("cannot call '%s': value has non-function type '%s'", callDisplayName(n), flattenType(n.FuncPtrType)),
 					"only functions and function-pointer values can be called",
 				)
 			}
@@ -584,7 +665,7 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 			return comp_err.CompilationErrorToken(
 				c.FileCtx,
 				&n.Tk,
-				fmt.Sprintf("function '%s' expects %d argument(s), but got %d", flattenCallee(n.Callee), defArgCount, callArgCount),
+				fmt.Sprintf("function '%s' expects %d argument(s), but got %d", callDisplayName(n), defArgCount, callArgCount),
 				"",
 			)
 		}
@@ -598,8 +679,8 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 				return comp_err.CompilationErrorToken(
 					c.FileCtx,
 					expressionSourceToken(a),
-					fmt.Sprintf("argument %d to '%s' expects type '%s', but got '%s'", i+1, flattenCallee(n.Callee), flattenType(expectedArgs[i]), flattenType(a.GetInferredType())),
-					"",
+					fmt.Sprintf("argument %d to '%s' expects type '%s', but got '%s'", i+1, callDisplayName(n), flattenType(expectedArgs[i]), flattenType(a.GetInferredType())),
+					functionPointerMismatchHint(expectedArgs[i], a.GetInferredType(), a),
 				)
 			}
 		}
@@ -620,6 +701,14 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 			n.InfType = n.FuncPtrType.KindNode.(*t.NodeTypeFunc).RetType
 		} else {
 			n.InfType = n.AssociatedFnDef.ReturnType
+		}
+		if valueUsed && n.InfType != nil && n.InfType.Throws {
+			return comp_err.CompilationErrorToken(
+				c.FileCtx,
+				&n.Tk,
+				fmt.Sprintf("cannot use the return value of throwing call '%s' without handling its error", callDisplayName(n)),
+				"use `try` to propagate the error or destructure the call into value and error bindings",
+			)
 		}
 		return nil
 	case *t.NodeExprStructInit:
@@ -875,7 +964,7 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		}
 		return nil
 	case *t.NodeExprTry:
-		e := ctExpr(c, n.Call)
+		e := ctExprWithUsage(c, n.Call, false)
 		if e != nil {
 			return e
 		}
@@ -884,7 +973,7 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 			return comp_err.CompilationErrorToken(
 				c.FileCtx,
 				&n.Tk,
-				fmt.Sprintf("cannot use 'try' with non-throwing call '%s'", flattenCallee(n.Call)),
+				fmt.Sprintf("cannot use 'try' with non-throwing call '%s'", expressionDisplayName(n.Call)),
 				"remove 'try' or call a function whose return type is marked with '!'",
 			)
 		}
@@ -893,7 +982,7 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		n.InfType = &unwrapped
 		return nil
 	case *t.NodeExprDestructureAssign:
-		e := ctExpr(c, n.Call)
+		e := ctExprWithUsage(c, n.Call, false)
 		if e != nil {
 			return e
 		}
@@ -903,11 +992,11 @@ func ctExpr(c *ctx, expr t.NodeExpr) error {
 		}
 
 		if !n.Call.InfType.Throws {
-			return comp_err.CompilationErrorToken(c.FileCtx, &n.Call.Tk, fmt.Sprintf("cannot destructure non-throwing call '%s'", flattenCallee(n.Call.Callee)), "destructuring requires a call whose return type is marked with '!'")
+			return comp_err.CompilationErrorToken(c.FileCtx, &n.Call.Tk, fmt.Sprintf("cannot destructure non-throwing call '%s'", callDisplayName(n.Call)), "destructuring requires a call whose return type is marked with '!'")
 		}
 
 		if isVoidType(n.Call.InfType) {
-			return comp_err.CompilationErrorToken(c.FileCtx, &n.Call.Tk, fmt.Sprintf("cannot bind a result value from throwing void call '%s'", flattenCallee(n.Call.Callee)), "a '!void' call only produces an error result")
+			return comp_err.CompilationErrorToken(c.FileCtx, &n.Call.Tk, fmt.Sprintf("cannot bind a result value from throwing void call '%s'", callDisplayName(n.Call)), "a '!void' call only produces an error result")
 		}
 
 		if n.ErrDef.Type == nil {
@@ -1008,7 +1097,8 @@ func ctDefer(c *ctx, def *t.NodeStmtDefer) error {
 	if def.IsBody {
 		return ctBody(c, &def.Body)
 	} else {
-		return ctExpr(c, def.Expression)
+		_, ignoredCall := def.Expression.(*t.NodeExprCall)
+		return ctExprWithUsage(c, def.Expression, !ignoredCall)
 	}
 }
 
@@ -1060,7 +1150,8 @@ func ctBody(c *ctx, bdy *t.NodeBody) error {
 		case *t.NodeStmtRet:
 			e = ctReturn(c, n)
 		case *t.NodeStmtExpr:
-			e = ctExpr(c, n.Expression)
+			_, ignoredCall := n.Expression.(*t.NodeExprCall)
+			e = ctExprWithUsage(c, n.Expression, !ignoredCall)
 		case *t.NodeStmtThrow:
 			e = ctThrow(c, n)
 		case *t.NodeStmtIf:

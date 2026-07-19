@@ -21,16 +21,20 @@ const (
 	stateConsumed
 	stateMaybeConsumed
 	stateBorrowed
+	stateConditional
 )
 
 type Diagnostic struct {
 	FilePath string
+	Line     uint32
+	Column   uint32
 	Message  string
 }
 
 type flow struct {
 	states     map[*types.NodeExprVarDef]State
 	deferred   map[*types.NodeExprVarDef]bool
+	conditions map[*types.NodeExprVarDef]*types.NodeExprVarDef
 	scopes     []deferScope
 	terminated bool
 }
@@ -51,12 +55,15 @@ type analyzer struct {
 }
 
 func cloneFlow(in flow) flow {
-	out := flow{states: map[*types.NodeExprVarDef]State{}, deferred: map[*types.NodeExprVarDef]bool{}, terminated: in.terminated}
+	out := flow{states: map[*types.NodeExprVarDef]State{}, deferred: map[*types.NodeExprVarDef]bool{}, conditions: map[*types.NodeExprVarDef]*types.NodeExprVarDef{}, terminated: in.terminated}
 	for variable, state := range in.states {
 		out.states[variable] = state
 	}
 	for variable, pending := range in.deferred {
 		out.deferred[variable] = pending
+	}
+	for variable, condition := range in.conditions {
+		out.conditions[variable] = condition
 	}
 	for _, scope := range in.scopes {
 		copyScope := deferScope{locals: map[*types.NodeExprVarDef]bool{}, deferred: append([]*types.NodeStmtDefer(nil), scope.deferred...)}
@@ -84,13 +91,33 @@ func directVariable(expr types.NodeExpr) *types.NodeExprVarDef {
 	return variable
 }
 
-func (a *analyzer) warn(message string) {
-	key := a.file.FilePath + "\x00" + message
+func variableToken(variable *types.NodeExprVarDef) types.Token {
+	if variable == nil {
+		return types.Token{}
+	}
+	switch name := variable.Name.(type) {
+	case *types.NodeNameSingle:
+		return name.Tk
+	case *types.NodeNameComposite:
+		if len(name.Tokens) != 0 {
+			return name.Tokens[0]
+		}
+	}
+	return types.Token{}
+}
+
+func (a *analyzer) warn(token types.Token, message string) {
+	key := fmt.Sprintf("%s\x00%d\x00%d\x00%s", a.file.FilePath, token.Pos.Line, token.Pos.Col, message)
 	if a.seen[key] {
 		return
 	}
 	a.seen[key] = true
-	a.diagnostics = append(a.diagnostics, Diagnostic{FilePath: a.file.FilePath, Message: message})
+	a.diagnostics = append(a.diagnostics, Diagnostic{
+		FilePath: a.file.FilePath,
+		Line:     token.Pos.Line,
+		Column:   token.Pos.Col,
+		Message:  message,
+	})
 }
 
 func (a *analyzer) structFor(kind types.NodeTypeKind) *types.StructDef {
@@ -115,6 +142,15 @@ func (a *analyzer) destructible(nodeType *types.NodeType) bool {
 	if nodeType == nil {
 		return false
 	}
+	if named, ok := nodeType.KindNode.(*types.NodeTypeNamed); ok {
+		if single, ok := named.NameNode.(*types.NodeNameSingle); ok {
+			for _, file := range a.shared.Files {
+				if len(file.GlNode.PrimitiveDestructors[single.Name]) != 0 {
+					return true
+				}
+			}
+		}
+	}
 	definition := a.structFor(nodeType.KindNode)
 	return definition != nil && len(definition.Destructors) != 0
 }
@@ -136,7 +172,7 @@ func (a *analyzer) use(out *flow, variable *types.NodeExprVarDef) {
 		return
 	}
 	if state != stateLive {
-		a.warn(fmt.Sprintf("destructible value '%s' may be used after ownership was transferred", variableName(variable)))
+		a.warn(variableToken(variable), fmt.Sprintf("destructible value '%s' may be used after ownership was transferred", variableName(variable)))
 	}
 }
 
@@ -146,15 +182,15 @@ func (a *analyzer) consume(out *flow, variable *types.NodeExprVarDef, reason str
 	}
 	state, exists := out.states[variable]
 	if !exists || state == stateBorrowed {
-		a.warn(fmt.Sprintf("borrowed destructible value '%s' cannot be consumed (%s)", variableName(variable), reason))
+		a.warn(variableToken(variable), fmt.Sprintf("borrowed destructible value '%s' cannot be consumed (%s)", variableName(variable), reason))
 		return
 	}
 	if state != stateLive {
-		a.warn(fmt.Sprintf("destructible value '%s' may be consumed more than once (%s)", variableName(variable), reason))
+		a.warn(variableToken(variable), fmt.Sprintf("destructible value '%s' may be consumed more than once (%s)", variableName(variable), reason))
 		return
 	}
 	if out.deferred[variable] {
-		a.warn(fmt.Sprintf("destructible value '%s' is transferred while a deferred destructor is pending", variableName(variable)))
+		a.warn(variableToken(variable), fmt.Sprintf("destructible value '%s' is transferred while a deferred destructor is pending", variableName(variable)))
 	}
 	out.states[variable] = stateConsumed
 }
@@ -182,6 +218,16 @@ func (a *analyzer) borrowExpr(out *flow, expr types.NodeExpr) {
 	case *types.NodeExprTry:
 		a.borrowExpr(out, node.Call)
 		a.checkTryFailure(out)
+	case *types.NodeExprStructInit:
+		a.transferStructFields(out, node)
+	}
+}
+
+// A struct constructor is an ownership boundary for its fields. Tracked local
+// values placed into the aggregate move into it; borrowed values remain borrows.
+func (a *analyzer) transferStructFields(out *flow, init *types.NodeExprStructInit) {
+	for _, field := range init.Fields {
+		a.transferValue(out, field.Expression)
 	}
 }
 
@@ -262,7 +308,7 @@ func (a *analyzer) expression(out *flow, expr types.NodeExpr) {
 	case *types.NodeExprCall:
 		a.call(out, node)
 		if node.InfType != nil && node.InfType.Owned && a.destructible(node.InfType) {
-			a.warn("owned destructible call result is discarded")
+			a.warn(node.Tk, "owned destructible call result is discarded")
 		}
 	case *types.NodeExprTry:
 		a.expression(out, node.Call)
@@ -270,7 +316,11 @@ func (a *analyzer) expression(out *flow, expr types.NodeExpr) {
 	case *types.NodeExprDestructureAssign:
 		a.call(out, node.Call)
 		if node.Call.InfType != nil && node.Call.InfType.Owned && a.destructible(node.ValueDef.Type) {
-			out.states[&node.ValueDef] = stateLive
+			out.states[&node.ValueDef] = stateConditional
+			if out.conditions == nil {
+				out.conditions = map[*types.NodeExprVarDef]*types.NodeExprVarDef{}
+			}
+			out.conditions[&node.ValueDef] = &node.ErrDef
 			a.addLocal(out, &node.ValueDef)
 		}
 	default:
@@ -308,6 +358,9 @@ func (a *analyzer) transferValue(out *flow, value types.NodeExpr) bool {
 		owned := a.transferValue(out, node.Call)
 		a.checkTryFailure(out)
 		return owned
+	case *types.NodeExprStructInit:
+		a.transferStructFields(out, node)
+		return a.destructible(node.Type)
 	default:
 		a.borrowExpr(out, value)
 		return false
@@ -327,7 +380,7 @@ func (a *analyzer) setDestinationOwnership(out *flow, destination *types.NodeExp
 		return
 	}
 	if state, exists := out.states[destination]; exists && state == stateLive {
-		a.warn(fmt.Sprintf("assignment overwrites live destructible value '%s'", variableName(destination)))
+		a.warn(variableToken(destination), fmt.Sprintf("assignment overwrites live destructible value '%s'", variableName(destination)))
 	}
 	delete(out.deferred, destination)
 	if owned {
@@ -401,6 +454,11 @@ func mergeFlows(left, right flow) flow {
 	for variable, pending := range right.deferred {
 		out.deferred[variable] = out.deferred[variable] || pending
 	}
+	for variable, state := range out.states {
+		if state != stateConditional {
+			delete(out.conditions, variable)
+		}
+	}
 	return out
 }
 
@@ -408,8 +466,8 @@ func (a *analyzer) checkExit(out *flow) {
 	exit := cloneFlow(*out)
 	a.unwindTo(&exit, 0)
 	for variable, state := range exit.states {
-		if state == stateLive || state == stateMaybeConsumed {
-			a.warn(fmt.Sprintf("destructible value '%s' is not consumed on every exit path", variableName(variable)))
+		if state == stateLive || state == stateMaybeConsumed || state == stateConditional {
+			a.warn(variableToken(variable), fmt.Sprintf("destructible value '%s' is not consumed on every exit path", variableName(variable)))
 		}
 	}
 }
@@ -431,11 +489,12 @@ func (a *analyzer) unwindScope(out *flow, checkLocals bool) {
 	}
 	for variable := range scope.locals {
 		state := out.states[variable]
-		if checkLocals && (state == stateLive || state == stateMaybeConsumed) {
-			a.warn(fmt.Sprintf("destructible value '%s' is not consumed on every scope exit path", variableName(variable)))
+		if checkLocals && (state == stateLive || state == stateMaybeConsumed || state == stateConditional) {
+			a.warn(variableToken(variable), fmt.Sprintf("destructible value '%s' is not consumed on every scope exit path", variableName(variable)))
 		}
 		delete(out.states, variable)
 		delete(out.deferred, variable)
+		delete(out.conditions, variable)
 	}
 }
 
@@ -451,10 +510,51 @@ func (a *analyzer) unwindTryFailure(out *flow) {
 	}
 }
 
+func errorPredicate(expr types.NodeExpr) (*types.NodeExprVarDef, bool, bool) {
+	call, ok := expr.(*types.NodeExprCall)
+	if !ok || call.AssociatedFnDef == nil || call.AssociatedFnDef.ErrorPredicate == types.ErrorPredicateNone {
+		return nil, false, false
+	}
+	var owner *types.NodeExprVarDef
+	if call.MemberOwnerExpr != nil {
+		owner = directVariable(call.MemberOwnerExpr)
+	} else if call.MemberOwnerName != nil {
+		owner = directVariable(call.MemberOwnerName)
+	}
+	if owner == nil {
+		return nil, false, false
+	}
+	return owner, call.AssociatedFnDef.ErrorPredicate == types.ErrorPredicateOk, true
+}
+
+func refineConditionalOwnership(in flow, errVariable *types.NodeExprVarDef, success bool) flow {
+	out := cloneFlow(in)
+	for variable, condition := range out.conditions {
+		if condition != errVariable {
+			continue
+		}
+		if success {
+			out.states[variable] = stateLive
+		} else {
+			out.states[variable] = stateBorrowed
+		}
+		delete(out.conditions, variable)
+	}
+	return out
+}
+
+func predicateFlows(in flow, expr types.NodeExpr) (flow, flow) {
+	errVariable, successOnTrue, ok := errorPredicate(expr)
+	if !ok {
+		return cloneFlow(in), cloneFlow(in)
+	}
+	return refineConditionalOwnership(in, errVariable, successOnTrue), refineConditionalOwnership(in, errVariable, !successOnTrue)
+}
+
 func (a *analyzer) conditional(out *flow, statement *types.NodeStmtIf) {
 	a.borrowExpr(out, statement.CondExpr)
 	branches := []flow{}
-	first := cloneFlow(*out)
+	first, remaining := predicateFlows(*out, statement.CondExpr)
 	a.body(&first, &statement.Body)
 	branches = append(branches, first)
 
@@ -463,21 +563,22 @@ func (a *analyzer) conditional(out *flow, statement *types.NodeStmtIf) {
 	for next != nil {
 		switch branch := next.(type) {
 		case *types.NodeStmtIf:
-			candidate := cloneFlow(*out)
+			candidate, falseFlow := predicateFlows(remaining, branch.CondExpr)
 			a.borrowExpr(&candidate, branch.CondExpr)
 			a.body(&candidate, &branch.Body)
 			branches = append(branches, candidate)
+			remaining = falseFlow
 			next = branch.NextCondStmt
 		case *types.NodeStmtElse:
 			hasElse = true
-			candidate := cloneFlow(*out)
+			candidate := cloneFlow(remaining)
 			a.body(&candidate, &branch.Body)
 			branches = append(branches, candidate)
 			next = nil
 		}
 	}
 	if !hasElse {
-		branches = append(branches, cloneFlow(*out))
+		branches = append(branches, remaining)
 	}
 	merged := branches[0]
 	for _, branch := range branches[1:] {
@@ -495,7 +596,13 @@ func (a *analyzer) statement(out *flow, statement types.NodeStatement) {
 		a.expression(out, node.Expression)
 	case *types.NodeStmtRet:
 		if node.OwnerFuncType != nil && node.OwnerFuncType.Owned {
-			a.consume(out, directVariable(node.Expression), "owned return")
+			// Evaluate the complete return expression. Calls may consume owned
+			// arguments and constructors may move locals into aggregate fields.
+			a.transferValue(out, node.Expression)
+		} else if init, ok := node.Expression.(*types.NodeExprStructInit); ok {
+			// Aggregate construction transfers its fields even when the outer
+			// return type itself is not ownership-tracked.
+			a.transferStructFields(out, init)
 		} else {
 			a.borrowExpr(out, node.Expression)
 		}
@@ -583,7 +690,7 @@ func isLiteralTrue(expr types.NodeExpr) bool {
 }
 
 func (a *analyzer) function(function *types.NodeFuncDef) {
-	out := flow{states: map[*types.NodeExprVarDef]State{}, deferred: map[*types.NodeExprVarDef]bool{}, scopes: []deferScope{{locals: map[*types.NodeExprVarDef]bool{}}}}
+	out := flow{states: map[*types.NodeExprVarDef]State{}, deferred: map[*types.NodeExprVarDef]bool{}, conditions: map[*types.NodeExprVarDef]*types.NodeExprVarDef{}, scopes: []deferScope{{locals: map[*types.NodeExprVarDef]bool{}}}}
 	// Parameter declaration nodes are manufactured by scope_info. Seed owned
 	// parameters so an unused one still produces an exit warning.
 	for _, fnScope := range a.file.ScopeTree.DeclFuncs {
@@ -631,6 +738,6 @@ func Check(shared *types.SharedState) []Diagnostic {
 // Run is the compiler pipeline hook. Warnings are intentionally non-fatal.
 func Run(shared *types.SharedState) {
 	for _, diagnostic := range Check(shared) {
-		fmt.Fprintf(os.Stderr, "%s: warning: %s\n", diagnostic.FilePath, diagnostic.Message)
+		fmt.Fprintf(os.Stderr, "%s:%d:%d: warning: %s\n", diagnostic.FilePath, diagnostic.Line, diagnostic.Column, diagnostic.Message)
 	}
 }

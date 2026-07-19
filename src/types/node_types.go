@@ -817,9 +817,18 @@ type NodeFuncDef struct {
 	DeferCnt int
 	HasDefer bool
 
-	IsDestructor bool
-	IsExternal   bool
+	IsDestructor   bool
+	IsExternal     bool
+	ErrorPredicate ErrorPredicateKind
 }
+
+type ErrorPredicateKind uint8
+
+const (
+	ErrorPredicateNone ErrorPredicateKind = iota
+	ErrorPredicateOk
+	ErrorPredicateNok
+)
 
 func (n *NodeFuncDef) Print(indent int) {
 	PrintIndent(indent)
@@ -844,8 +853,10 @@ type NodeGlobal struct {
 
 	ImportAlias map[string]string
 
-	StructDefs map[string]*StructDef
-	FuncDefs   map[string]*NodeFuncDef
+	StructDefs           map[string]*StructDef
+	FuncDefs             map[string]*NodeFuncDef
+	PrimitiveMethods     map[string]map[string]*NodeFuncDef
+	PrimitiveDestructors map[string][]*NodeFuncDef
 }
 
 func (n *NodeGlobal) Print(indent int) {

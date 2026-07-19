@@ -228,7 +228,7 @@ test() void:
 		"return wrong type":               {"type", "ret", "cannot return value of type 'bool'"},
 		"assign wrong type":               {"type", "=", "cannot assign value of type 'bool'"},
 		"subscript scalar":                {"type", "[", "cannot index value of type 'u64'"},
-		"member access on scalar":         {"link", "missing", "type 'u64' has no members"},
+		"member access on scalar":         {"link", "missing", "type 'u64' has no member function 'missing'"},
 		"try non-throwing function":       {"type", "try", "cannot use 'try' with non-throwing call"},
 	}
 

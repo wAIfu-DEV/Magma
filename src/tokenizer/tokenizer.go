@@ -176,8 +176,8 @@ func handleNonAlphaKeyword(ctx *TkCtx, first rune) (t.Token, int, error) {
 			comp_err.CompilationErrorToken(
 				ctx.fCtx,
 				&t.Token{Repr: string(first), Pos: ctx.Pos},
-				fmt.Sprintf("'%c' is not a valid keyword", first),
-				fmt.Sprintf("non alphanumeric character '%c' was not recognized as a valid keyword", first),
+				fmt.Sprintf("unexpected character '%c'", first),
+				fmt.Sprintf("'%c' is not part of Magma's syntax", first),
 			)
 	}
 

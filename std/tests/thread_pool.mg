@@ -7,6 +7,7 @@ use "../heap.mg" heap
 use "../thread_pool.mg" thread_pool
 use "../thread.mg" thread
 use "../time.mg" time
+use "../footgun.mg" footgun
 
 ScaleContext(
     ready u64*
@@ -50,29 +51,40 @@ shutdownResult(pool thread_pool.ThreadPool*) !bool:
 
 expectInvalidSizes(a allocator.Allocator) !void:
     zeroWorkers thread_pool.ThreadPool, workerErr error = thread_pool.new(a, 0, 1, 1, 1)
-    if errors.code(workerErr) != 2:
+    if workerErr.ok():
+        footgun.drop[thread_pool.ThreadPool](zeroWorkers)
         throw errors.failure("thread pool accepted zero workers")
+    ..
+    if errors.code(workerErr) != 2:
+        throw errors.failure("thread pool returned the wrong zero-worker error")
     ..
 
     invertedWorkers thread_pool.ThreadPool, limitErr error = thread_pool.new(a, 2, 1, 1, 1)
-    if errors.code(limitErr) != 2:
+    if limitErr.ok():
+        footgun.drop[thread_pool.ThreadPool](invertedWorkers)
         throw errors.failure("thread pool accepted a maximum below its minimum")
+    ..
+    if errors.code(limitErr) != 2:
+        throw errors.failure("thread pool returned the wrong limit error")
     ..
 
     zeroCapacity thread_pool.ThreadPool, capacityErr error = thread_pool.new(a, 1, 1, 0, 1)
-    if errors.code(capacityErr) != 2:
+    if capacityErr.ok():
+        footgun.drop[thread_pool.ThreadPool](zeroCapacity)
         throw errors.failure("thread pool accepted zero queue capacity")
     ..
-
-    zeroSpin thread_pool.ThreadPool, spinErr error = thread_pool.new(a, 1, 1, 1, 0)
-    if errors.code(spinErr) != 2:
-        throw errors.failure("spinning thread pool accepted zero spin count")
+    if errors.code(capacityErr) != 2:
+        throw errors.failure("thread pool returned the wrong capacity error")
     ..
+
 ..
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()
     try expectInvalidSizes(a)
+
+    defaultPool := try thread_pool.newDefault(a)
+    try defaultPool.close()
 
     value u64 = 0
     pool := try thread_pool.new(a, 1, 1, 8, 1)
@@ -89,6 +101,7 @@ pub main() !void:
         round = round + 1
     ..
     if value != 32:
+        try pool.close()
         throw errors.failure("thread pool did not execute every task")
     ..
 
@@ -107,7 +120,7 @@ pub main() !void:
     ..
 
     spinningValue u64 = 0
-    spinning := try thread_pool.newSpinning(a, 1, 1, 8, 4096)
+    spinning := try thread_pool.new(a, 1, 1, 8, 4096)
     spinRound u64 = 0
     while spinRound < 100:
         spinIndex u64 = 0

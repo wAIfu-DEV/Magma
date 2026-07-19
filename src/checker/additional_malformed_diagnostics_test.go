@@ -184,7 +184,7 @@ test() void:
 			name: "wrong call argument type",
 			source: `mod test
 
-consume(value u64) void:
+consume(item u64) void:
 ..
 
 test() void:
@@ -231,10 +231,52 @@ test() void:
 ..
 `,
 		},
+		{
+			name: "capture unhandled throwing return",
+			source: `mod test
+
+value() !u64:
+    ret 1
+..
+
+test() void:
+    result := value()
+..
+`,
+		},
+		{
+			name: "pass unhandled throwing return as argument",
+			source: `mod test
+
+value() !u64:
+    ret 1
+..
+
+consume(item u64) void:
+..
+
+test() void:
+    consume(value())
+..
+`,
+		},
+		{
+			name: "try in destructuring assignment",
+			source: `mod test
+
+value() !u64:
+    ret 1
+..
+
+test() void:
+    result, err := try value()
+..
+`,
+		},
 	}
 
-	if len(tests) != 20 {
-		t.Fatalf("additional malformed corpus has %d cases, want 20", len(tests))
+	if len(tests) != 23 {
+		t.Fatalf("additional malformed corpus has %d cases, want 23", len(tests))
 	}
 	type expectation struct {
 		stage   string
@@ -242,26 +284,29 @@ test() void:
 		message string
 	}
 	expected := map[string]expectation{
-		"duplicate struct field declaration": {"parse", "count", "duplicate field 'count' in struct 'Thing'"},
-		"unknown constructor field":          {"link", "unknown", "type 'Thing' has no field named 'unknown'"},
-		"missing constructor field":          {"link", "Thing", "missing field 'enabled'"},
-		"duplicate constructor field":        {"link", "count", "duplicate field 'count'"},
-		"wrong constructor field type":       {"link", "count", "expects type 'u64'"},
-		"constructor on intrinsic type":      {"link", "u64", "non-struct type 'u64'"},
-		"numeric if condition":               {"type", "if", "if condition must have type 'bool'"},
-		"string while condition":             {"type", "while", "while condition must have type 'bool'"},
-		"throw non-error value":              {"type", "throw", "cannot throw value of type 'i64'"},
-		"return value from void function":    {"type", "ret", "cannot return a value"},
-		"bare return from value function":    {"type", "ret", "missing return value"},
-		"dereference non-pointer":            {"link", "*", "cannot dereference value of non-pointer type 'bool'"},
-		"bitwise not string":                 {"link", "~", "bitwise not requires"},
-		"logical operator with integer":      {"link", "&&", "requires 'bool' operands"},
-		"arithmetic on booleans":             {"link", "+", "requires numeric operands"},
-		"comparison of unrelated types":      {"link", "==", "unrelated types 'str' and 'i64'"},
-		"wrong call argument type":           {"type", "true", "argument 1 to 'consume' expects type 'u64'"},
-		"destructure non-throwing call":      {"link", "value", "cannot destructure non-throwing call"},
-		"destructure throwing void call":     {"link", "work", "cannot bind a result value"},
-		"destructure into non-error binding": {"link", "value", "error binding must have type 'error'"},
+		"duplicate struct field declaration":         {"parse", "count", "duplicate field 'count' in struct 'Thing'"},
+		"unknown constructor field":                  {"link", "unknown", "type 'Thing' has no field named 'unknown'"},
+		"missing constructor field":                  {"link", "Thing", "missing field 'enabled'"},
+		"duplicate constructor field":                {"link", "count", "duplicate field 'count'"},
+		"wrong constructor field type":               {"link", "count", "expects type 'u64'"},
+		"constructor on intrinsic type":              {"link", "u64", "non-struct type 'u64'"},
+		"numeric if condition":                       {"type", "if", "if condition must have type 'bool'"},
+		"string while condition":                     {"type", "while", "while condition must have type 'bool'"},
+		"throw non-error value":                      {"type", "throw", "cannot throw value of type 'i64'"},
+		"return value from void function":            {"type", "ret", "cannot return a value"},
+		"bare return from value function":            {"type", "ret", "missing return value"},
+		"dereference non-pointer":                    {"link", "*", "cannot dereference value of non-pointer type 'bool'"},
+		"bitwise not string":                         {"link", "~", "bitwise not requires"},
+		"logical operator with integer":              {"link", "&&", "requires 'bool' operands"},
+		"arithmetic on booleans":                     {"link", "+", "requires numeric operands"},
+		"comparison of unrelated types":              {"link", "==", "unrelated types 'str' and 'i64'"},
+		"wrong call argument type":                   {"type", "true", "argument 1 to 'consume' expects type 'u64'"},
+		"destructure non-throwing call":              {"link", "value", "cannot destructure non-throwing call"},
+		"destructure throwing void call":             {"link", "work", "cannot bind a result value"},
+		"destructure into non-error binding":         {"link", "value", "error binding must have type 'error'"},
+		"capture unhandled throwing return":          {"link", "value", "cannot use the return value of throwing call"},
+		"pass unhandled throwing return as argument": {"type", "value", "cannot use the return value of throwing call"},
+		"try in destructuring assignment":            {"parse", "try", "cannot use 'try' in a destructuring assignment"},
 	}
 
 	for _, test := range tests {

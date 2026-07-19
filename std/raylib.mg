@@ -134,7 +134,7 @@ pub rayWhite() Color: ret color(245, 245, 245, 255) ..
 
 # Allocating UTF-8 wrapper intended for setup code. Hot drawing loops should
 # convert stable text once with strings.toCstr and call drawTextC.
-pub initWindow(width i32, height i32, title str) !void:
+pub initWindow(width i32, height i32, title str) void:
     titleC u8* = strings.toCstrNoCopy(title)
     ext_InitWindow(width, height, titleC)
 ..
@@ -177,12 +177,12 @@ pub drawTextC(text u8*, x i32, y i32, fontSize i32, c Color) void: ext_DrawText(
 pub drawFPS(x i32, y i32) void: ext_DrawFPS(x, y) ..
 pub measureTextC(text u8*, fontSize i32) i32: ret ext_MeasureText(text, fontSize) ..
 
-pub drawText(text str, x i32, y i32, fontSize i32, c Color) !void:
+pub drawText(text str, x i32, y i32, fontSize i32, c Color) void:
     textC u8* = strings.toCstrNoCopy(text)
     ext_DrawText(textC, x, y, fontSize, packColor(c))
 ..
 
-pub measureText(text str, fontSize i32) !i32:
+pub measureText(text str, fontSize i32) i32:
     textC u8* = strings.toCstrNoCopy(text)
     width i32 = ext_MeasureText(textC, fontSize)
     ret width

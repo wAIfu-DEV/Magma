@@ -26,7 +26,8 @@ type MemberAccess struct {
 	Type    *NodeType
 	FieldNb int
 
-	PtrDeref bool
+	PtrDeref    bool
+	ResultIsPtr bool
 }
 
 type FileCtx struct {

@@ -98,6 +98,52 @@ test() void:
 	}
 }
 
+func TestFunctionArgumentMismatchShowsCompleteSignatures(t *testing.T) {
+	diagnostic, message := checkSource(t, `mod test
+
+consume(callback (ptr, u64*) !u8) void:
+..
+
+next(impl ptr, index u64*) u8:
+    ret 0
+..
+
+test() void:
+    consume(next)
+..
+`)
+
+	want := "expects type '(ptr, u64*) !u8', but got '(ptr, u64*) u8'"
+	if !strings.Contains(message, want) {
+		t.Fatalf("diagnostic = %q, want it to contain %q", message, want)
+	}
+	if !strings.Contains(diagnostic.Additional, "throwing and non-throwing function pointers are not interchangeable") {
+		t.Fatalf("additional diagnostic = %q, want function pointer return guidance", diagnostic.Additional)
+	}
+	if diagnostic.Token.Repr != "next" {
+		t.Fatalf("diagnostic token = %q, want %q", diagnostic.Token.Repr, "next")
+	}
+}
+
+func TestGenericCallDiagnosticUsesDisplayName(t *testing.T) {
+	_, message := checkSource(t, `mod test
+
+consume[T](value T) void:
+..
+
+test() void:
+    consume[u8]()
+..
+`)
+
+	if !strings.Contains(message, "function 'consume[u8]' expects 1 argument(s), but got 0") {
+		t.Fatalf("diagnostic does not use the source-level generic name: %q", message)
+	}
+	if strings.Contains(message, "__g__") {
+		t.Fatalf("diagnostic exposes a mangled function name: %q", message)
+	}
+}
+
 func TestFormerCrashPathsReturnSourceDiagnostics(t *testing.T) {
 	tests := map[string]string{
 		"constant member assignment": `mod test

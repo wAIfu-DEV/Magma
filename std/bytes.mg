@@ -84,7 +84,7 @@ iterHasData(impl ptr, index u64*) bool:
     ret *index < count
 ..
 
-iterNext(impl ptr, index u64*) u8:
+iterNext(impl ptr, index u64*) !u8:
     bytesPtr u8[]* = impl
     bytes u8[] = *bytesPtr
     count := slc.count(bytes)

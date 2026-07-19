@@ -8,7 +8,7 @@ import (
 
 func MakeAbs(relative string, importedFromAbs string) (string, error) {
 	if filepath.IsAbs(relative) {
-		return relative, nil
+		return filepath.Clean(relative), nil
 	}
 
 	fromDir := filepath.Dir(importedFromAbs)

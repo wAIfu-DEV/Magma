@@ -138,7 +138,7 @@ destr Future[T].await() !$T:
         releaseState[T](state)
         throw failure
     ..
-    value T = state.value
+    value $T = state.value
     this.state = none
     releaseState[T](state)
     ret value

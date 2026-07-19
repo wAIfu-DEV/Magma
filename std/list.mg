@@ -16,8 +16,8 @@ List[T](
 )
 
 pub new[T](a alc.Allocator, cleanup ($T) void) !$List[T]:
-    array := try arr.new[T](a)
-    ret List[T](
+	array := try arr.new[T](a)
+	ret List[T](
         allocator=a,
         array=array,
         cleanup=cleanup,
@@ -25,7 +25,7 @@ pub new[T](a alc.Allocator, cleanup ($T) void) !$List[T]:
 ..
 
 pub fromArray[T](a alc.Allocator, array $arr.Array[T], cleanup ($T) void) $List[T]:
-    ret List[T](allocator=a, array=array, cleanup=cleanup)
+	ret List[T](allocator=a, array=array, cleanup=cleanup)
 ..
 
 List[T].count() u64:
@@ -40,7 +40,7 @@ List[T].clearKeep() !void:
     try this.array.clearKeep(this.allocator, this.cleanup)
 ..
 
-List[T].resize(usable u16, padLeft u16, padRight u16) !void:
+List[T].resize(usable u64, padLeft u64, padRight u64) !void:
     try this.array.resize(this.allocator, usable, padLeft, padRight, this.cleanup)
 ..
 
@@ -89,7 +89,7 @@ List[T].pushLeft(item $T) !void:
 ..
 
 destr List[T].free() void:
-    this.array.free(this.allocator)
+    this.array.free(this.allocator, this.cleanup)
 ..
 
 List[T].iterator() iter.Iterator[T]:

@@ -7,6 +7,7 @@ import (
 	t "Magma/src/types"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -599,6 +600,32 @@ func isKnownGenericFunction(ctx *ParseCtx, expr *t.NodeExprName) bool {
 	return ok && len(fn.Class.TypeParams) > 0
 }
 
+func isKnownFunction(ctx *ParseCtx, expr t.NodeExpr) bool {
+	nameExpr, ok := expr.(*t.NodeExprName)
+	if !ok {
+		return false
+	}
+	name, ok := nameExpr.Name.(*t.NodeNameSingle)
+	if !ok {
+		return false
+	}
+	_, ok = ctx.GlobalNode.FuncDefs[name.Name]
+	return ok
+}
+
+func parsePostfixNamedCall(ctx *ParseCtx, tk t.Token, calleeExpr t.NodeExpr, genericArgs []*t.NodeType) (*t.NodeExprCall, error) {
+	init, err := parsePostfixStructInit(ctx, tk, calleeExpr, genericArgs)
+	if err != nil {
+		return nil, err
+	}
+	args := make([]t.NodeExpr, len(init.Fields))
+	for index, field := range init.Fields {
+		args[index] = field.Expression
+	}
+	fmt.Fprintf(os.Stderr, "%s: warning: named arguments in function calls are not implemented; argument names are ignored and values are passed positionally\n", ctx.Fctx.FilePath)
+	return &t.NodeExprCall{Tk: expressionToken(calleeExpr, tk), Callee: calleeExpr, Args: args, GenericArgs: genericArgs}, nil
+}
+
 func parsePostfixSubscriptExpr(ctx *ParseCtx, tk t.Token, targetExpr t.NodeExpr) (*t.NodeExprSubscript, error) {
 	consume(ctx)
 
@@ -705,7 +732,9 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 				}
 			}
 
-			if isStructInitList(ctx) {
+			if isStructInitList(ctx) && isKnownFunction(ctx, expr) {
+				expr, e = parsePostfixNamedCall(ctx, tk, expr, nil)
+			} else if isStructInitList(ctx) {
 				expr, e = parsePostfixStructInit(ctx, tk, expr, nil)
 			} else {
 				expr, e = parsePostfixCallExpr(ctx, tk, expr, nil)
@@ -720,7 +749,9 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 			if nameExpr, ok := expr.(*t.NodeExprName); ok {
 				typeArgs, isGenericCall := tryParseGenericCallTypeArgs(ctx)
 				if isGenericCall {
-					if isStructInitList(ctx) {
+					if isStructInitList(ctx) && isKnownFunction(ctx, nameExpr) {
+						expr, e = parsePostfixNamedCall(ctx, tk, expr, typeArgs)
+					} else if isStructInitList(ctx) {
 						expr, e = parsePostfixStructInit(ctx, tk, expr, typeArgs)
 					} else {
 						expr, e = parsePostfixCallExpr(ctx, tk, expr, typeArgs)
@@ -764,6 +795,21 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 		if expr == baseExpr {
 			switch n := baseExpr.(type) {
 			case *t.NodeExprName:
+				if next.KeywType == t.KwAsterisk {
+					maybeType, typeErr := peekNth(ctx, 1)
+					afterType, afterErr := peekNth(ctx, 2)
+					if typeErr == nil && afterErr == nil && maybeType.Type == t.TokName &&
+						afterType.KeywType == t.KwNewline {
+						if _, basic := magmatypes.BasicTypes[maybeType.Repr]; basic {
+							return nil, comp_err.CompilationErrorToken(
+								ctx.Fctx,
+								&next,
+								"syntax error: pointer marker '*' must follow the type, not the variable name",
+								fmt.Sprintf("write `%s %s*` instead of `%s *%s`", flattenName(n.Name), maybeType.Repr, flattenName(n.Name), maybeType.Repr),
+							)
+						}
+					}
+				}
 				// Only treat `name <type>` as a variable definition when the next token
 				// can actually start a type. Otherwise this would incorrectly swallow
 				// valid expressions like `x = y` by trying to parse `=` as a type.
@@ -1044,6 +1090,17 @@ func parseDestructureAssignAfterComma(ctx *ParseCtx, commaTk t.Token, left t.Nod
 		return nil, true, e
 	}
 
+	// Destructuring captures the error while try propagates it. Combining the
+	// two would leave the error binding undefined on the propagated path.
+	if tryExpr, ok := rhsExpr.(*t.NodeExprTry); ok {
+		return nil, true, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&tryExpr.Tk,
+			"cannot use 'try' in a destructuring assignment",
+			"remove `try`; destructuring already handles the error",
+		)
+	}
+
 	callExpr, ok := rhsExpr.(*t.NodeExprCall)
 	if !ok {
 		return nil, true, comp_err.CompilationErrorToken(
@@ -1162,7 +1219,7 @@ func parseExpression(ctx *ParseCtx, tk t.Token, minPrecedence int) (t.NodeExpr, 
 					return nil, comp_err.CompilationErrorToken(
 						ctx.Fctx,
 						&opTk,
-						"syntax error: invalid assignment target",
+						"syntax error: unary expression is not assignable",
 						"only pointer dereference (*) is assignable among unary expressions",
 					)
 				}
@@ -1176,8 +1233,8 @@ func parseExpression(ctx *ParseCtx, tk t.Token, minPrecedence int) (t.NodeExpr, 
 				return nil, comp_err.CompilationErrorToken(
 					ctx.Fctx,
 					&opTk,
-					"syntax error: invalid assignment target",
-					"left side of '=' must be an assignable expression (e.g. a name)",
+					fmt.Sprintf("syntax error: cannot assign to %s", assignmentTargetKind(left)),
+					"left side of '=' must be a name, member, subscript, or pointer dereference",
 				)
 			}
 		} else if opTk.KeywType == t.KwInfer {
@@ -1234,6 +1291,19 @@ func parseExpression(ctx *ParseCtx, tk t.Token, minPrecedence int) (t.NodeExpr, 
 	}
 
 	return left, nil
+}
+
+func assignmentTargetKind(expr t.NodeExpr) string {
+	switch expr.(type) {
+	case *t.NodeExprLit:
+		return "a literal"
+	case *t.NodeExprCall:
+		return "a function call result"
+	case *t.NodeExprBinary:
+		return "a binary expression"
+	default:
+		return "this expression"
+	}
 }
 
 func parseName(ctx *ParseCtx, tk t.Token, allowComposite bool) (t.NodeName, error) {
@@ -1486,6 +1556,18 @@ func parseArgument(ctx *ParseCtx) (t.NodeArg, error) {
 			fmt.Sprintf("syntax error: expected argument name but got '%s'", name.Repr),
 			"expected: `(name type, ...)`",
 		)
+	}
+
+	if _, basic := magmatypes.BasicTypes[name.Repr]; basic {
+		afterName, afterErr := peekNth(ctx, 1)
+		if afterErr == nil && (afterName.KeywType == t.KwComma || afterName.KeywType == t.KwParenCl) {
+			return t.NodeArg{}, comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&name,
+				fmt.Sprintf("syntax error: expected a parameter or field name before type '%s'", name.Repr),
+				"declarations use `name type`, for example `value u64`",
+			)
+		}
 	}
 
 	consume(ctx)
@@ -1935,6 +2017,15 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (*t.NodeType, error) 
 		return n, nil
 	}
 
+	if tk.Type != t.TokName {
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&tk,
+			fmt.Sprintf("syntax error: expected a type name but got '%s'", tk.Repr),
+			"a type must follow the declaration name",
+		)
+	}
+
 	named, e := parseName(ctx, tk, true)
 	if e != nil {
 		return nil, e
@@ -2368,16 +2459,14 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 		ownerName := complexName.Parts[0]
 		memberName := complexName.Parts[1]
 
-		// check if type exists in file (at least before member func)
-		// if not, this is sign of garbage code, so I don't feel bad about
-		// making this a compiler error
-		_, ok := ctx.GlobalNode.StructDefs[ownerName]
-		if !ok {
+		ownerStruct, isStruct := ctx.GlobalNode.StructDefs[ownerName]
+		_, isPrimitive := magmatypes.BasicTypes[ownerName]
+		if !isStruct && !isPrimitive {
 			return nil, comp_err.CompilationErrorToken(
 				ctx.Fctx,
 				&nameTk,
 				fmt.Sprintf("syntax error: defined member function for '%s', but the struct was not defined in this file", ownerName),
-				"member functions need to be defined after the owner struct",
+				"member functions need a built-in owner type or a struct defined earlier in the same file",
 			)
 		}
 
@@ -2407,7 +2496,24 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 			},
 		})
 
-		ctx.GlobalNode.StructDefs[ownerName].Funcs[memberName] = fnDef
+		if isStruct {
+			ownerStruct.Funcs[memberName] = fnDef
+		} else {
+			if ctx.Fctx.ModuleName == "core" && ownerName == "error" {
+				switch memberName {
+				case "ok":
+					fnDef.ErrorPredicate = t.ErrorPredicateOk
+				case "nok":
+					fnDef.ErrorPredicate = t.ErrorPredicateNok
+				}
+			}
+			methods := ctx.GlobalNode.PrimitiveMethods[ownerName]
+			if methods == nil {
+				methods = map[string]*t.NodeFuncDef{}
+				ctx.GlobalNode.PrimitiveMethods[ownerName] = methods
+			}
+			methods[memberName] = fnDef
+		}
 
 		/* DEPRECATED: Destructors will not be implemented in language.
 		if memberName == "destructor" {
@@ -2564,10 +2670,16 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 				return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, "syntax error: destructor must be a struct member function", "expected: `destructor Type.method() void:`")
 			}
 			fn.IsDestructor = true
-			owner := ctx.GlobalNode.StructDefs[name.Parts[0]]
-			owner.Destructors = append(owner.Destructors, fn)
-			if owner.Destructor == nil {
-				owner.Destructor = fn
+			ownerName := name.Parts[0]
+			if owner := ctx.GlobalNode.StructDefs[ownerName]; owner != nil {
+				owner.Destructors = append(owner.Destructors, fn)
+				if owner.Destructor == nil {
+					owner.Destructor = fn
+				}
+			} else if _, ok := magmatypes.BasicTypes[ownerName]; ok {
+				ctx.GlobalNode.PrimitiveDestructors[ownerName] = append(ctx.GlobalNode.PrimitiveDestructors[ownerName], fn)
+			} else {
+				return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, fmt.Sprintf("unknown destructor owner type '%s'", ownerName), "")
 			}
 		}
 		return fn, nil
@@ -2960,14 +3072,16 @@ outer:
 		ctx.Fctx,
 		&tk,
 		fmt.Sprintf("syntax error: unexpected '%s' in global scope", tk.Repr),
-		"expected in global scope: `name: type = expr`, `name ( args, ... ) type`, etc.",
+		"expected in global scope: `name type = expr`, `name := expr`, `name ( args, ... ) type`, etc.",
 	)
 }
 
 func parseGlobal(ctx *ParseCtx) (*t.NodeGlobal, error) {
 	n := &t.NodeGlobal{
-		StructDefs: map[string]*t.StructDef{},
-		FuncDefs:   map[string]*t.NodeFuncDef{},
+		StructDefs:           map[string]*t.StructDef{},
+		FuncDefs:             map[string]*t.NodeFuncDef{},
+		PrimitiveMethods:     map[string]map[string]*t.NodeFuncDef{},
+		PrimitiveDestructors: map[string][]*t.NodeFuncDef{},
 
 		Declarations: []t.NodeGlobalDecl{},
 		ImportAlias:  map[string]string{},

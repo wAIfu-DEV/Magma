@@ -24,4 +24,9 @@ pub main() !void:
     if resultPtr[strings.countBytes(result)] != 0:
         throw errors.failure("read string is not null terminated")
     ..
+    buffer u8[2]
+    readCount := try input.readToBuff(buffer, 2)
+    if readCount != 1 || buffer[0] != 65:
+        throw errors.failure("reader readToBuff changed")
+    ..
 ..
