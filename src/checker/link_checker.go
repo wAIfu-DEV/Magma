@@ -5,6 +5,7 @@ import (
 	magmatypes "Magma/src/magma_types"
 	t "Magma/src/types"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -15,11 +16,13 @@ type ctx struct {
 	GlobalNode       *t.NodeGlobal
 	ModuleBundle     *t.ModuleBundle
 	LastFuncDef      *t.NodeFuncDef
+	CurrentTypeFunc  *t.NodeFuncDef
 	FileCtx          *t.FileCtx
 	LoopDepth        int
 	PrimitiveMethods map[string]primitiveMethod
 
-	CurrScope *t.Scope
+	CurrScope  *t.Scope
+	AliasStack map[string]bool
 }
 
 type primitiveMethod struct {
@@ -33,6 +36,24 @@ type parsedName struct {
 	First    string
 	Parts    []string
 	HasParts bool
+}
+
+type privateSymbolError struct {
+	kind   string
+	module string
+	name   string
+}
+
+func (e *privateSymbolError) Error() string {
+	return fmt.Sprintf("%s '%s.%s' is private and cannot be used from another module", e.kind, e.module, e.name)
+}
+
+func privateSymbolDiagnostic(c *ctx, token *t.Token, err error) error {
+	private, ok := err.(*privateSymbolError)
+	if !ok {
+		return err
+	}
+	return comp_err.CompilationErrorToken(c.FileCtx, token, private.Error(), "add 'pub' to the declaration to export it")
 }
 
 const (
@@ -157,9 +178,10 @@ func clGetStructDefFromModule(c *ctx, name parsedName) (*t.StructDef, error) {
 	structDef, ok := moduleGlNode.StructDefs[structName]
 
 	if !ok {
-		// TODO: compilation error
-		//fmt.Printf("struct name: %s\n", structName)
-		return nil, fmt.Errorf("struct name not defined in file")
+		return nil, fmt.Errorf("struct %q is not defined in module %q (imported as %q)", structName, moduleName, moduleAlias)
+	}
+	if !structDef.IsPublic {
+		return nil, &privateSymbolError{kind: "struct", module: moduleAlias, name: structName}
 	}
 
 	return structDef, nil
@@ -175,9 +197,7 @@ func clGetStructDefFromAbsolute(c *ctx, name string) (*t.StructDef, error) {
 	structDef, ok := moduleGlNode.StructDefs[structName]
 
 	if !ok {
-		// TODO: compilation error
-		//fmt.Printf("struct name: %s\n", structName)
-		return nil, fmt.Errorf("struct name not defined in file")
+		return nil, fmt.Errorf("struct %q is not defined in module %q", structName, moduleName)
 	}
 
 	return structDef, nil
@@ -192,9 +212,7 @@ func clGetStructDefFromThisModule(c *ctx, structName parsedName) (*t.StructDef, 
 	structDef, ok := c.GlobalNode.StructDefs[structName.First]
 
 	if !ok {
-		// TODO: compilation error
-		//fmt.Printf("struct name: %s\n", structName.First)
-		return nil, fmt.Errorf("struct name not defined in file")
+		return nil, fmt.Errorf("struct %q is not defined in module %q", structName.First, c.FileCtx.ModuleName)
 	}
 
 	return structDef, nil
@@ -208,6 +226,68 @@ func clGetStructDefFromName(c *ctx, nameNode t.NodeName) (*t.StructDef, error) {
 		return clGetStructDefFromThisModule(c, parseName(nameNode))
 	}
 	return nil, fmt.Errorf("failed to get struct def from name")
+}
+
+func clFindTypeAlias(c *ctx, nameNode t.NodeName) (*t.TypeAlias, *t.NodeGlobal, error) {
+	switch n := nameNode.(type) {
+	case *t.NodeNameSingle:
+		alias := c.GlobalNode.TypeAliases[n.Name]
+		return alias, c.GlobalNode, nil
+	case *t.NodeNameComposite:
+		if len(n.Parts) != 2 {
+			return nil, nil, nil
+		}
+		moduleName, ok := c.GlobalNode.ImportAlias[n.Parts[0]]
+		if !ok {
+			return nil, nil, nil
+		}
+		owner := c.ModuleBundle.Modules[moduleName]
+		if owner == nil {
+			return nil, nil, nil
+		}
+		alias := owner.TypeAliases[n.Parts[1]]
+		if alias == nil {
+			return nil, nil, nil
+		}
+		if !alias.IsPublic {
+			private := &privateSymbolError{kind: "type alias", module: n.Parts[0], name: alias.Name}
+			return nil, nil, comp_err.CompilationErrorToken(c.FileCtx, lastNameToken(nameNode), private.Error(), "add 'pub' to the alias declaration to export it")
+		}
+		return alias, owner, nil
+	}
+	return nil, nil, nil
+}
+
+func cloneAliasType(in *t.NodeType) *t.NodeType {
+	if in == nil {
+		return nil
+	}
+	out := &t.NodeType{Throws: in.Throws, Owned: in.Owned, Destructor: in.Destructor}
+	switch n := in.KindNode.(type) {
+	case *t.NodeTypeNamed:
+		args := make([]*t.NodeType, len(n.GenericArgs))
+		for i, arg := range n.GenericArgs {
+			args[i] = cloneAliasType(arg)
+		}
+		out.KindNode = &t.NodeTypeNamed{NameNode: n.NameNode, GenericArgs: args}
+	case *t.NodeTypeAbsolute:
+		out.KindNode = &t.NodeTypeAbsolute{AbsoluteName: n.AbsoluteName}
+	case *t.NodeTypeCompilerKnown:
+		out.KindNode = &t.NodeTypeCompilerKnown{Tk: n.Tk, Name: n.Name}
+	case *t.NodeTypePointer:
+		out.KindNode = &t.NodeTypePointer{Kind: cloneAliasType(&t.NodeType{KindNode: n.Kind}).KindNode}
+	case *t.NodeTypeRfc:
+		out.KindNode = &t.NodeTypeRfc{Kind: cloneAliasType(&t.NodeType{KindNode: n.Kind}).KindNode}
+	case *t.NodeTypeSlice:
+		out.KindNode = &t.NodeTypeSlice{ElemKind: cloneAliasType(&t.NodeType{KindNode: n.ElemKind}).KindNode}
+	case *t.NodeTypeFunc:
+		args := make([]*t.NodeType, len(n.Args))
+		for i, arg := range n.Args {
+			args[i] = cloneAliasType(arg)
+		}
+		out.KindNode = &t.NodeTypeFunc{Args: args, RetType: cloneAliasType(n.RetType)}
+	}
+	return out
 }
 
 func clGetStructDefFromType(c *ctx, typeNode *t.NodeType) (*t.StructDef, error) {
@@ -259,6 +339,11 @@ func clResolveFieldAccess(c *ctx, ownerType *t.NodeType, member string, lvalue b
 func primitiveTypeName(nodeType *t.NodeType) (string, bool) {
 	if nodeType == nil {
 		return "", false
+	}
+	// Typed slices have the same runtime representation as the type-erased
+	// `slice` primitive and inherit methods declared on it.
+	if _, ok := nodeType.KindNode.(*t.NodeTypeSlice); ok {
+		return "slice", true
 	}
 	named, ok := nodeType.KindNode.(*t.NodeTypeNamed)
 	if !ok {
@@ -342,6 +427,9 @@ func clGetFuncDefFromModule(c *ctx, name parsedName) (*t.NodeFuncDef, error) {
 		//fmt.Printf("(in other module)\n")
 		//fmt.Printf("name: %s\n", fnName)
 		return nil, fmt.Errorf("function name not defined in file")
+	}
+	if !fnDef.IsPublic {
+		return nil, &privateSymbolError{kind: "function", module: moduleAlias, name: fnName}
 	}
 
 	return fnDef, nil
@@ -474,6 +562,31 @@ func clVarNameChainValid(c *ctx, scope *t.Scope, source *t.NodeExprName, name *p
 				return foundMemberFunc, accesses, nil
 			}
 
+			// A field can itself have a primitive type with methods supplied by
+			// the implicit core module (for example, value.failure.nok()).  Such
+			// a field is a complete access path; it must not be looked up as a
+			// struct before resolving the final primitive method.
+			if primitive, primitiveField := primitiveTypeName(derefFieldType); primitiveField {
+				accesses = append(accesses, &t.MemberAccess{
+					Type:        fieldType,
+					FieldNb:     fieldNb,
+					PtrDeref:    isFromPtrType,
+					ResultIsPtr: isPointerType(fieldType),
+				})
+				next := name.Parts[i+1]
+				if i+1 == last {
+					if _, found := c.PrimitiveMethods[primitive+"."+next]; found {
+						return true, accesses, nil
+					}
+				}
+				return false, nil, comp_err.CompilationErrorToken(
+					c.FileCtx,
+					memberNameToken(source, i+1),
+					fmt.Sprintf("type '%s' has no member function '%s'", primitive, next),
+					"",
+				)
+			}
+
 			structDef, e = clGetStructDefFromType(c, derefFieldType)
 			if e != nil {
 				// TODO: compilation error? unsure
@@ -594,6 +707,9 @@ func clExistsInScope(c *ctx, scope *t.Scope, name *t.NodeExprName, ent entryType
 
 		fnDef, e := clGetFuncDefFromName(c, name.Name)
 		if e != nil {
+			if _, private := e.(*privateSymbolError); private {
+				return false, false, nil, false, e
+			}
 			return false, false, nil, false, nil // we drop error, is that correct?
 		} else if fnDef != nil {
 			return true, false, fnDef, false, nil
@@ -607,6 +723,9 @@ func clExistsInScope(c *ctx, scope *t.Scope, name *t.NodeExprName, ent entryType
 		s, e := clGetStructDefFromName(c, name.Name)
 		if e == nil {
 			return true, false, s, false, nil
+		}
+		if _, private := e.(*privateSymbolError); private {
+			return false, false, nil, false, e
 		}
 
 		if ent != enumEntAll {
@@ -643,7 +762,7 @@ func clName(c *ctx, name *t.NodeExprName, expected entryType, lvalue bool) error
 	found, _, expr, isSsa, err := clExistsInScopeTree(c, name, expected, lvalue)
 
 	if err != nil {
-		return err
+		return privateSymbolDiagnostic(c, lastNameToken(name.Name), err)
 	}
 
 	if !found {
@@ -682,7 +801,7 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 		isMemberCall = imc
 
 		if err != nil {
-			return err
+			return privateSymbolDiagnostic(c, lastNameToken(n.Name), err)
 		}
 
 		if !found {
@@ -913,6 +1032,11 @@ func clExpr(c *ctx, expr t.NodeExpr, lvalue bool) error {
 		return nil
 	case *t.NodeExprSizeof:
 		return clType(c, n.Type)
+	case *t.NodeExprArray:
+		if e := clType(c, n.ElemType); e != nil {
+			return e
+		}
+		return clExpr(c, n.Length, false)
 	case *t.NodeExprAddrof:
 		return clExpr(c, n.Expr, lvalue)
 	case *t.NodeExprCall:
@@ -1144,7 +1268,35 @@ func clTypeKind(c *ctx, parentType *t.NodeType, kind t.NodeTypeKind, topLevel bo
 	case *t.NodeTypeAbsolute:
 		// absolute types have already been checked
 		return nil, nil
+	case *t.NodeTypeCompilerKnown:
+		resolved, ok := c.Shared.Target.CompilerKnownTypes[n.Name]
+		if !ok {
+			return nil, comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("compiler-known type '%s' is unavailable for target '%s'", n.Name, c.Shared.Target.Triple), "")
+		}
+		if _, ok := magmatypes.BasicTypes[resolved]; !ok {
+			return nil, fmt.Errorf("compiler-known type %q resolved to invalid Magma type %q", n.Name, resolved)
+		}
+		return &t.NodeTypeNamed{NameNode: &t.NodeNameSingle{Tk: n.Tk, Name: resolved}}, nil
 	case *t.NodeTypeNamed:
+		if alias, owner, e := clFindTypeAlias(c, n.NameNode); e != nil {
+			return nil, e
+		} else if alias != nil {
+			key := alias.Module + "." + alias.Name
+			if c.AliasStack[key] {
+				return nil, comp_err.CompilationErrorToken(c.FileCtx, lastNameToken(n.NameNode), fmt.Sprintf("cyclic type alias involving '%s'", flattenName(n.NameNode)), "type aliases cannot directly or indirectly refer to themselves")
+			}
+			c.AliasStack[key] = true
+			defer delete(c.AliasStack, key)
+			resolved := cloneAliasType(alias.Target)
+			previousGlobal := c.GlobalNode
+			c.GlobalNode = owner
+			e := clType(c, resolved)
+			c.GlobalNode = previousGlobal
+			if e != nil {
+				return nil, e
+			}
+			return resolved.KindNode, nil
+		}
 		switch nn := n.NameNode.(type) {
 		case *t.NodeNameSingle:
 			_, ok := magmatypes.BasicTypes[nn.Name]
@@ -1181,6 +1333,9 @@ func clTypeKind(c *ctx, parentType *t.NodeType, kind t.NodeTypeKind, topLevel bo
 				return &t.NodeTypeAbsolute{
 					AbsoluteName: sd.Module + "." + sd.Name,
 				}, nil
+			}
+			if private, ok := e.(*privateSymbolError); ok {
+				return nil, comp_err.CompilationErrorToken(c.FileCtx, lastNameToken(n.NameNode), private.Error(), "add 'pub' to the struct declaration to export it")
 			}
 			return nil, comp_err.CompilationErrorToken(
 				c.FileCtx,
@@ -1345,6 +1500,23 @@ func clGlobal(c *ctx, gl *t.NodeGlobal) error {
 	enterScope(c, c.ScopeTree)
 	defer leaveScope(c)
 
+	aliasNames := make([]string, 0, len(gl.TypeAliases))
+	for name := range gl.TypeAliases {
+		aliasNames = append(aliasNames, name)
+	}
+	sort.Strings(aliasNames)
+	for _, name := range aliasNames {
+		alias := gl.TypeAliases[name]
+		key := alias.Module + "." + alias.Name
+		c.AliasStack[key] = true
+		resolved := cloneAliasType(alias.Target)
+		e := clType(c, resolved)
+		delete(c.AliasStack, key)
+		if e != nil {
+			return e
+		}
+	}
+
 	for _, fn := range gl.FuncDefs {
 		for _, arg := range fn.Class.ArgsNode.Args {
 			e := clType(c, arg.TypeNode)
@@ -1397,6 +1569,7 @@ func CheckLinks(s *t.SharedState) error {
 			Modules: map[string]*t.NodeGlobal{},
 		},
 		PrimitiveMethods: map[string]primitiveMethod{},
+		AliasStack:       map[string]bool{},
 	}
 
 	// Sorted by dependency resolution order

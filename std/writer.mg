@@ -1,31 +1,119 @@
 mod writer
+# Type-erased byte output with complete-write and primitive formatting helpers.
 
-use "strings.mg" strings
-use "slices.mg"  slices
-use "cast.mg"    cast
-use "errors.mg"  errors
+use "std:strings" strings
+use "std:slices"  slices
+use "std:cast"    cast
+use "std:errors"  errors
 
 # Writer interface for emitting bytes and formatted values.
-# O(1) wrapper calls; underlying writer decides cost.
-Writer(
+# @complexity O(1) wrapper calls; underlying writer decides cost.
+# Mutable type-erased byte sink. The implementation pointer is borrowed and
+# must remain alive and unmoved while this interface is used.
+pub Writer(
     impl ptr,
     fn_write (ptr, str) !u64,
 )
 
+# Immutable-vtable writer variant. This representation is useful for global
+# interfaces whose implementation and operation table never change.
+pub Vtable(
+    fn_write (ptr, str) !u64,
+)
+
+# Type-erased byte sink whose write callback receives immutable implementation state.
+pub ConstWriter(
+    impl ptr,
+    vtable Vtable*,
+)
+
+# Attempts one write and returns the number of bytes accepted.
+# @warning A successful call may write fewer bytes than requested.
+# @complexity O(N), determined by the underlying sink
+# @example
+#   written := try output.write("data")
+ConstWriter.write(bytes str) !u64:
+    ret try this.vtable.fn_write(this.impl, bytes)
+..
+
+constWriterWriteRemaining(cw ConstWriter*, bytes str, firstWritten u64) !u64:
+    total u64 = firstWritten
+    bound u64 = strings.countBytes(bytes)
+    base ptr = strings.toPtr(bytes)
+    while total < bound:
+        remaining u64 = bound - total
+        next ptr = cast.utop(cast.ptou(base) + total)
+        written u64 = try cw.write(strings.fromPtrNoCopy(next, remaining))
+        if written > remaining:
+            throw errors.failure("writer returned more bytes than requested")
+        ..
+        if written == 0:
+            throw errors.failure("writer made no progress")
+        ..
+        total = total + written
+    ..
+    ret total
+..
+
+# Repeats writes until every byte is accepted or the sink fails to progress.
+# @complexity O(N) plus underlying call overhead
+# @example
+#   try output.writeAll("complete payload")
+ConstWriter.writeAll(bytes str) !u64:
+    firstWritten u64 = try this.write(bytes)
+    if firstWritten == strings.countBytes(bytes):
+        ret firstWritten
+    ..
+    ret try constWriterWriteRemaining(this, bytes, firstWritten)
+..
+
+# Writes all bytes followed by a line-feed byte.
+# @complexity O(N)
+# @example
+#   try output.writeLn("record")
+ConstWriter.writeLn(bytes str) !u64:
+    written u64 = try this.writeAll(bytes)
+    written = written + try this.writeAll("\n")
+    ret written
+..
+
+# Converts to the mutable Writer interface without changing the implementation.
+# @ownership The returned interface borrows the same implementation.
+# @complexity O(1)
+# @example
+#   writer := output.toWriter()
+ConstWriter.toWriter() Writer:
+    ret Writer(
+        impl = this.impl
+        fn_write = this.vtable.fn_write
+    )
+..
+
+# Constructs a writer from borrowed implementation state and a write callback.
+# @warning writeFunc must return no more than the requested byte count.
+# @complexity O(1)
+# @example
+#   output := writer.new(context, writeBytes)
 pub new(impl ptr, writeFunc (ptr, str) !u64) Writer:
     ret Writer(impl=impl, fn_write=writeFunc)
 ..
 
 # Writes the provided bytes and returns the count written.
-# O(N) for byte count.
+# @complexity O(N) for byte count.
 # @param bytes string to write
 # @returns number of bytes written
+# @warning A successful call may write fewer bytes than requested.
+# @example
+#   written := try output.write("data")
 Writer.write(bytes str) !u64:
     ret try this.fn_write(this.impl, bytes)
 ..
 
 # Writes the complete byte string or returns an error if the adapter makes no
 # progress or reports an invalid count.
+# @complexity O(N) plus underlying call overhead
+# @example
+#   try output.writeAll("complete payload")
 Writer.writeAll(bytes str) !u64:
     firstWritten u64 = try this.fn_write(this.impl, bytes)
 
@@ -54,9 +142,11 @@ Writer.writeAll(bytes str) !u64:
 ..
 
 # Writes the provided bytes followed by a newline.
-# O(N) for byte count.
+# @complexity O(N) for byte count.
 # @param bytes string to write
 # @returns number of bytes written
+# @example
+#   try output.writeLn("record")
 Writer.writeLn(bytes str) !u64:
     written u64 = try this.writeAll(bytes)
     written = written + try this.writeAll("\n")
@@ -64,9 +154,11 @@ Writer.writeLn(bytes str) !u64:
 ..
 
 # Writes "true" or "false" based on the boolean value.
-# O(1).
+# @complexity O(1).
 # @param b boolean value
 # @returns number of bytes written
+# @example
+#   try output.writeBool(true)
 Writer.writeBool(b bool) !u64:
     if b == true:
         ret try this.writeAll("true")
@@ -76,7 +168,7 @@ Writer.writeBool(b bool) !u64:
 ..
 
 # Converts a digit 0-9 to its ASCII character.
-# O(1).
+# @complexity O(1).
 digitToChar(i i16) u8:
     if i > 9:
         ret 0
@@ -86,11 +178,13 @@ digitToChar(i i16) u8:
 ..
 
 # Writes a signed 64-bit integer in decimal form.
-# O(1) bounded by integer width.
+# @complexity O(1) bounded by integer width.
 # @param num integer value
 # @returns number of bytes written
+# @example
+#   try output.writeInt64(-42)
 Writer.writeInt64(num i64) !u64:
-    buf u8[20]
+    buf := array u8[20]
     n u64 = cast.itou(num)
     idx u64 = 20
     isNeg bool = false
@@ -126,11 +220,13 @@ Writer.writeInt64(num i64) !u64:
 ..
 
 # Writes an unsigned 64-bit integer in decimal form.
-# O(1) bounded by integer width.
+# @complexity O(1) bounded by integer width.
 # @param num integer value
 # @returns number of bytes written
+# @example
+#   try output.writeUint64(42)
 Writer.writeUint64(num u64) !u64:
-    buf u8[20]
+    buf := array u8[20]
     n u64 = num
     idx u64 = 20
 
@@ -155,10 +251,13 @@ Writer.writeUint64(num u64) !u64:
 
 
 # Writes a floating point value with the provided precision.
-# O(P) for precision digits.
+# @complexity O(P) for precision digits.
 # @param flt floating point value
 # @param precision digits after decimal point
 # @returns number of bytes written
+# @warning Precision is capped at 42 digits; large finite values must fit u64's integer range.
+# @example
+#   try output.writeFloat64(3.14159, 2)
 Writer.writeFloat64(flt f64, precision u64) !u64:
     # bitcast and read bits as u64
 
@@ -193,7 +292,7 @@ Writer.writeFloat64(flt f64, precision u64) !u64:
         precision = 42
     ..
 
-    buf u8[64]
+    buf := array u8[64]
     idx u64 = 64
     isNeg bool = false
     fltCpy f64 = flt

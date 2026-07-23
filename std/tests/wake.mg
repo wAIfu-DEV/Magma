@@ -1,8 +1,8 @@
 mod main
 
-use "../errors.mg" errors
-use "../wake.mg" wake
-use "../footgun.mg" footgun
+use "std:errors" errors
+use "std:wake" wake
+use "std:footgun" footgun
 
 check(strategy u8) !void:
     signal := try wake.new(strategy)

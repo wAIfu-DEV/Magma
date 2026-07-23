@@ -34,12 +34,12 @@ done:
     ret i64 %shard
 }
 
-define i64 @magma.error.trace.capacity() cold noinline {
+define internal i64 @magma.error.trace.capacity() cold noinline {
 entry:
     ret i64 {{TRACE_SLOTS}}
 }
 
-define %type.error @magma.error.push(%type.error %error, ptr %site) cold noinline {
+define internal %type.error @magma.error.push(%type.error %error, ptr %site) cold noinline {
 entry:
     %shard = call i64 @magma.error.trace.shard()
     %state = getelementptr [64 x %type.error.trace.shard], ptr @magma.error.trace.shards, i64 0, i64 %shard
@@ -113,13 +113,13 @@ return.truncated:
     ret %type.error.trace.snapshot %truncated
 }
 
-define i64 @magma.error.trace(%type.error %error) cold noinline {
+define internal i64 @magma.error.trace(%type.error %error) cold noinline {
 entry:
     %handle = extractvalue %type.error %error, 1
     ret i64 %handle
 }
 
-define i32 @magma.error.trace.status(i64 %handle) cold noinline {
+define internal i32 @magma.error.trace.status(i64 %handle) cold noinline {
 entry:
     %empty = icmp eq i64 %handle, 0
     br i1 %empty, label %return.empty, label %check
@@ -134,7 +134,7 @@ return.empty:
     ret i32 1
 }
 
-define i64 @magma.error.trace.next(i64 %handle) cold noinline {
+define internal i64 @magma.error.trace.next(i64 %handle) cold noinline {
 entry:
     %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i64 %handle)
     %truncated = extractvalue %type.error.trace.snapshot %snapshot, 2
@@ -143,7 +143,7 @@ entry:
     ret i64 %next
 }
 
-define %type.str @magma.error.trace.function(i64 %handle) cold noinline {
+define internal %type.str @magma.error.trace.function(i64 %handle) cold noinline {
 entry:
     %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i64 %handle)
     %site = extractvalue %type.error.trace.snapshot %snapshot, 1
@@ -162,7 +162,7 @@ invalid:
     ret %type.str zeroinitializer
 }
 
-define %type.str @magma.error.trace.file(i64 %handle) cold noinline {
+define internal %type.str @magma.error.trace.file(i64 %handle) cold noinline {
 entry:
     %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i64 %handle)
     %site = extractvalue %type.error.trace.snapshot %snapshot, 1
@@ -181,7 +181,7 @@ invalid:
     ret %type.str zeroinitializer
 }
 
-define i32 @magma.error.trace.line(i64 %handle) cold noinline {
+define internal i32 @magma.error.trace.line(i64 %handle) cold noinline {
 entry:
     %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i64 %handle)
     %site = extractvalue %type.error.trace.snapshot %snapshot, 1
@@ -197,7 +197,7 @@ invalid:
     ret i32 0
 }
 
-define i32 @magma.error.trace.column(i64 %handle) cold noinline {
+define internal i32 @magma.error.trace.column(i64 %handle) cold noinline {
 entry:
     %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i64 %handle)
     %site = extractvalue %type.error.trace.snapshot %snapshot, 1
@@ -213,7 +213,7 @@ invalid:
     ret i32 0
 }
 
-define void @magma.error.printTrace(%type.error %error) cold noinline {
+define internal void @magma.error.printTrace(%type.error %error) cold noinline {
 entry:
     %head = extractvalue %type.error %error, 1
     br label %loop
@@ -250,7 +250,7 @@ finish:
     ret void
 }
 
-define void @magma.error.print(%type.error %error) cold noinline {
+define internal void @magma.error.print(%type.error %error) cold noinline {
 entry:
     %message = extractvalue %type.error %error, 0
     %code = extractvalue %type.error %error, 2
@@ -265,7 +265,7 @@ entry:
 ; - array indexing implemented
 ; - allocators implemented
 ; - string ops (strlen) implemented
-define %type.slice @magma.argsToSlice(i32 %argc, ptr %argv, ptr %buf) {
+define internal %type.slice @magma.argsToSlice(i32 %argc, ptr %argv, ptr %buf) {
 enter:
     %argc64 = sext i32 %argc to i64
     br label %loop

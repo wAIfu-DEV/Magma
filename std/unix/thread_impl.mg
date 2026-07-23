@@ -1,17 +1,20 @@
 mod thread_impl_unix
+# Unix native-thread backend used by the portable thread module.
 
+
+use "std:c" c
 @platform("linux", "freebsd", "netbsd", "openbsd")
 link "pthread"
 
-use "../cast.mg" cast
-use "../errors.mg" errors
-use "../heap.mg" heap
+use "std:cast" cast
+use "std:errors" errors
+use "std:heap" heap
 
-ext ext_pthread_create pthread_create(thread u64*, attributes ptr, startRoutine (ptr) u64, argument ptr) i32
-ext ext_pthread_join   pthread_join(thread u64, result ptr) i32
-ext ext_sched_yield    sched_yield() i32
+ext ext_pthread_create pthread_create(thread u64*, attributes ptr, startRoutine (ptr) u64, argument ptr) c.int
+ext ext_pthread_join   pthread_join(thread u64, result ptr) c.int
+ext ext_sched_yield    sched_yield() c.int
 
-Thread(
+pub Thread(
     handle u64
     launch Launch*
 )

@@ -1,15 +1,18 @@
 mod time_impl_unix
+# Unix clock backend used by the portable time module.
 
-use "../cast.mg" cast
+
+use "std:c" c
+use "std:cast" cast
 
 Timespec(
     sec i64,
     nsec i64,
 )
 
-ext ext_unix_clock_gettime clock_gettime(clockId i32, value Timespec*) i32
-ext ext_unix_usleep        usleep(useconds u32) i32
-ext ext_unix_getrusage     getrusage(who i32, usage RUsage*) i32
+ext ext_unix_clock_gettime clock_gettime(clockId c.int, value Timespec*) c.int
+ext ext_unix_usleep        usleep(useconds c.unsigned_int) c.int
+ext ext_unix_getrusage     getrusage(who c.int, usage RUsage*) c.int
 
 # The first two fields of rusage are the user and system timeval values.
 # Remaining ABI fields are covered by oversized, naturally aligned storage.
@@ -18,7 +21,7 @@ RUsage(
     userUsec i64
     systemSec i64
     systemUsec i64
-    remaining u64[32]
+    remaining := array u64[32]
 )
 
 pub processCpuTimeNs() u64:

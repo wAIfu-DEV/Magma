@@ -1,12 +1,14 @@
 package types
 
 import (
+	"Magma/src/target"
 	"sync"
 )
 
 type StructDef struct {
 	Module     string
 	Name       string
+	IsPublic   bool
 	TypeParams []string
 
 	FieldNb    map[string]int
@@ -37,6 +39,7 @@ type FileCtx struct {
 	MainPckgName    string
 	Imports         []string
 	NativeLibraries []string
+	Bundles         []string
 	ImportAlias     map[string]string
 	Content         []byte
 	LineIdx         []int
@@ -52,6 +55,7 @@ type SharedState struct {
 	// ErrorTraceSlots is the number of reusable trace nodes in each runtime
 	// shard. It is a power of two so generated code can mask instead of divide.
 	ErrorTraceSlots uint64
+	Target          target.Target
 
 	ImportedFiles  map[string]<-chan error
 	ImportedFilesM sync.Mutex
@@ -59,11 +63,22 @@ type SharedState struct {
 	Files  map[string]*FileCtx
 	FilesM sync.Mutex
 
+	// SourceOverrides lets editor tooling analyze unsaved buffers while imports
+	// continue to be loaded from disk.
+	SourceOverrides  map[string][]byte
+	SourceOverridesM sync.RWMutex
+
 	PipeChans  []<-chan error
 	PipeChansM sync.Mutex
 
 	LlvmDecl  map[string]bool
 	LlvmDeclM sync.Mutex
+
+	// ExportedSymbols tracks native symbol names across every module in one
+	// compilation. Parsing modules may happen concurrently, so registration is
+	// protected separately from the LLVM declaration set.
+	ExportedSymbols  map[string]string
+	ExportedSymbolsM sync.Mutex
 
 	PipelineFunc func(shared *SharedState, filePath string, alias string, fromAbs string, fromGl *NodeGlobal) <-chan error
 	WaitGroup    sync.WaitGroup

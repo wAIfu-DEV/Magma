@@ -21,7 +21,7 @@ tools to HTTP, threading, and graphics.
   and other scope exits.
 - **Abstractions remain lightweight.** Generics are monomorphized, methods use
   value-oriented structs, and function pointers support vtable-style interfaces.
-- **Systems programming is first-class.** Pointers, slices, fixed arrays, raw
+- **Systems programming is first-class.** Pointers, slices, stack-backed arrays, raw
   memory operations, external functions, and inline LLVM are directly available.
 - **Portability is designed in.** Platform directives and Windows/Unix standard
   library backends keep platform-specific code behind shared APIs.
@@ -118,33 +118,49 @@ without requiring a runtime generic representation.
 
 ### Direct access to the machine
 
-The language includes typed pointers, raw `ptr`, slices, fixed-size arrays,
+The language includes typed pointers, raw `ptr`, slices, stack-backed array expressions,
 `sizeof`, address and dereference operations, and external function declarations.
 When a primitive cannot yet be expressed in Magma itself, inline LLVM provides a
 deliberate escape hatch.
+
+Top-level non-throwing functions can also be exposed to C using
+`@export_name`. The compiler preserves the ordinary mangled Magma definition and
+emits a forwarding wrapper with the requested native symbol:
+
+```magma
+@export_name("magma_add")
+add(a i32, b i32) i32:
+    ret a + b
+..
+```
+
+The ABI defaults to C. Export names must be unique within the compilation, and
+generic, member, and throwing functions cannot currently be exported.
 
 ### Asynchronous work with futures
 
 Magma provides asynchronous work through the standard library rather than
 language-level `async` and `await` keywords. Library operations submit work to a
 reusable `thread_pool.ThreadPool` and return a typed `future.Future[T]` that
-publishes either a value or an error. For example, readers provide `readAsync`:
+publishes either a value or an error. The opt-in `async.Async` context bundles
+a borrowed pool and allocator so synchronous I/O modules remain lightweight:
 
 ```magma
 use "../std/file.mg" file
 use "../std/heap.mg" heap
 use "../std/strings.mg" strings
 use "../std/thread_pool.mg" thread_pool
+use "../std/async.mg" async
 
 a := heap.allocator()
 pool := try thread_pool.newDefault(a)
 defer pool.close()
+as := async.new(pool, a)
 
 f := try file.open(a, "data.txt", file.mode().read())
 defer f.close()
 
-reader := f.reader()
-pending := try reader.readAsync(pool, a, f.count())
+pending := try as.read(f.reader(), f.count())
 
 if try pending.isDone():
     # The non-blocking poll is optional.

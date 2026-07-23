@@ -1,6 +1,7 @@
 mod path_impl
+# Unix path rules used by the portable path module.
 
-use "../strings.mg" strings
+use "std:strings" strings
 
 pub separator() u8:
     ret 47

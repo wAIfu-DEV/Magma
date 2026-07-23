@@ -210,6 +210,19 @@ test() void:
 ..
 `,
 		},
+		{
+			name: "try in non-throwing function",
+			source: `mod test
+
+fails() !void:
+    throw "failure"
+..
+
+test() void:
+    try fails()
+..
+`,
+		},
 	}
 	type expectation struct {
 		stage   string
@@ -230,6 +243,7 @@ test() void:
 		"subscript scalar":                {"type", "[", "cannot index value of type 'u64'"},
 		"member access on scalar":         {"link", "missing", "type 'u64' has no member function 'missing'"},
 		"try non-throwing function":       {"type", "try", "cannot use 'try' with non-throwing call"},
+		"try in non-throwing function":    {"type", "try", "cannot use 'try' inside a non-throwing function"},
 	}
 
 	for _, test := range tests {

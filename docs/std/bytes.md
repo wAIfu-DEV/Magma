@@ -3,7 +3,7 @@
 ## Example
 
 ```magma
-data u8[3]
+data := array u8[3]
 data[0] = 1
 data[1] = 2
 data[2] = 3

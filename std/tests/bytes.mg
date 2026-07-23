@@ -1,8 +1,8 @@
 mod main
-use "../bytes.mg" bytes
-use "../errors.mg" errors
+use "std:bytes" bytes
+use "std:errors" errors
 pub main() !void:
-    value u8[3]
+    value := array u8[3]
     value[0] = 1
     value[1] = 2
     value[2] = 3
@@ -10,10 +10,10 @@ pub main() !void:
     if index != 1 || bytes.contains(value, 3) == false || bytes.equal(value, value) == false:
         throw errors.failure("bytes search changed")
     ..
-    prefix u8[2]
+    prefix := array u8[2]
     prefix[0] = 1
     prefix[1] = 2
-    suffix u8[2]
+    suffix := array u8[2]
     suffix[0] = 2
     suffix[1] = 3
     if bytes.startsWith(value, prefix) == false || bytes.endsWith(value, suffix) == false:

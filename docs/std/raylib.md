@@ -14,8 +14,8 @@ while raylib.windowShouldClose() == false:
 ```
 
 Initial Windows bindings for raylib 5.5 using its shared-library distribution.
-Put the import library at `vendor/raylib/raylib.lib`, compile normally, and put
-`raylib.dll` beside the resulting executable before running it.
+The import library is linked automatically, and the `bundle` declaration copies
+`raylib.dll` beside the resulting executable after a successful build.
 
 The initial surface includes window management, timing, drawing basic 2D
 shapes and text, keyboard input, mouse input, config flags, key constants, and

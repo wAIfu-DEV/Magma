@@ -440,9 +440,6 @@ func compatibleTypes(expected *t.NodeType, actual *t.NodeType) bool {
 	expectedSlice, expectedIsSlice := expected.KindNode.(*t.NodeTypeSlice)
 	actualSlice, actualIsSlice := actual.KindNode.(*t.NodeTypeSlice)
 	if expectedIsSlice && actualIsSlice {
-		if expectedSlice.HasSize && actualSlice.HasSize && expectedSlice.Size != actualSlice.Size {
-			return false
-		}
 		return compatibleTypes(&t.NodeType{KindNode: expectedSlice.ElemKind}, &t.NodeType{KindNode: actualSlice.ElemKind})
 	}
 	if (isUntypedSlice(expected) && isTypedSlice(actual)) || (isTypedSlice(expected) && isUntypedSlice(actual)) {
@@ -482,9 +479,6 @@ func sameTypeKind(a t.NodeTypeKind, b t.NodeTypeKind) bool {
 	case *t.NodeTypeSlice:
 		tb, ok := b.(*t.NodeTypeSlice)
 		if !ok {
-			return false
-		}
-		if ta.HasSize != tb.HasSize || ta.Size != tb.Size {
 			return false
 		}
 		return sameTypeKind(ta.ElemKind, tb.ElemKind)
@@ -614,6 +608,15 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 		return nil
 	case *t.NodeExprSizeof:
 		n.InfType = makeNamedType("u64")
+		return nil
+	case *t.NodeExprArray:
+		if e := ctExpr(c, n.Length); e != nil {
+			return e
+		}
+		if !isIntegerType(n.Length.GetInferredType()) {
+			return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, "array length must be an integer", "expected: `array Type[integer-expression]`")
+		}
+		n.InfType = &t.NodeType{KindNode: &t.NodeTypeSlice{ElemKind: n.ElemType.KindNode}}
 		return nil
 	case *t.NodeExprAddrof:
 		if err := ctExpr(c, n.Expr); err != nil {
@@ -977,6 +980,14 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 				"remove 'try' or call a function whose return type is marked with '!'",
 			)
 		}
+		if c.CurrentTypeFunc != nil && (c.CurrentTypeFunc.ReturnType == nil || !c.CurrentTypeFunc.ReturnType.Throws) {
+			return comp_err.CompilationErrorToken(
+				c.FileCtx,
+				&n.Tk,
+				"cannot use 'try' inside a non-throwing function",
+				"mark the enclosing function's return type with '!' or handle the error explicitly",
+			)
+		}
 		unwrapped := *callType
 		unwrapped.Throws = false
 		n.InfType = &unwrapped
@@ -1103,17 +1114,17 @@ func ctDefer(c *ctx, def *t.NodeStmtDefer) error {
 }
 
 func ctReturn(c *ctx, ret *t.NodeStmtRet) error {
-	if c.LastFuncDef == nil {
+	if c.CurrentTypeFunc == nil {
 		// TODO: compiler error
 		return fmt.Errorf("return statement outside function")
 	}
 
-	if c.LastFuncDef.ReturnType == nil {
+	if c.CurrentTypeFunc.ReturnType == nil {
 		// TODO: compiler error
 		return fmt.Errorf("function return type is null when trying to infer ret type")
 	}
 
-	ret.OwnerFuncType = c.LastFuncDef.ReturnType
+	ret.OwnerFuncType = c.CurrentTypeFunc.ReturnType
 
 	e := ctExpr(c, ret.Expression)
 	if e != nil {
@@ -1178,6 +1189,9 @@ func ctBody(c *ctx, bdy *t.NodeBody) error {
 
 func ctFuncDef(c *ctx, fnDef *t.NodeFuncDef) error {
 	c.LastFuncDef = fnDef
+	previousTypeFunc := c.CurrentTypeFunc
+	c.CurrentTypeFunc = fnDef
+	defer func() { c.CurrentTypeFunc = previousTypeFunc }()
 
 	e := ctBody(c, &fnDef.Body)
 	if e != nil {
@@ -1198,6 +1212,13 @@ func isSimpleConstInitializer(expr t.NodeExpr) bool {
 			return associated.IsConst && associated.Initializer != nil
 		}
 		return false
+	case *t.NodeExprAddrof:
+		name, ok := n.Expr.(*t.NodeExprName)
+		if !ok {
+			return false
+		}
+		variable, ok := name.AssociatedNode.(*t.NodeExprVarDef)
+		return ok && variable.IsGlobal
 	case *t.NodeExprStructInit:
 		for _, field := range n.Fields {
 			if !isSimpleConstInitializer(field.Expression) {

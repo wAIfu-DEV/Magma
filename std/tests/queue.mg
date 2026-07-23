@@ -1,10 +1,10 @@
 mod main
 
-use "../allocator.mg" allocator
-use "../errors.mg" errors
-use "../heap.mg" heap
-use "../queue.mg" queue
-use "../cast.mg" cast
+use "std:allocator" allocator
+use "std:errors" errors
+use "std:heap" heap
+use "std:queue" queue
+use "std:cast" cast
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()

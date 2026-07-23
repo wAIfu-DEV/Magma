@@ -112,8 +112,6 @@ func cloneType(in *t.NodeType) *t.NodeType {
 		out.KindNode = &t.NodeTypeRfc{Kind: cloneType(&t.NodeType{KindNode: n.Kind}).KindNode}
 	case *t.NodeTypeSlice:
 		out.KindNode = &t.NodeTypeSlice{
-			HasSize:  n.HasSize,
-			Size:     n.Size,
 			ElemKind: cloneType(&t.NodeType{KindNode: n.ElemKind}).KindNode,
 		}
 	case *t.NodeTypeFunc:
@@ -137,6 +135,8 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 		return &t.NodeExprUnary{Tk: n.Tk, Operator: n.Operator, Operand: cloneExpr(n.Operand), InfType: cloneType(n.InfType)}
 	case *t.NodeExprLit:
 		return &t.NodeExprLit{Tk: n.Tk, Value: n.Value, LitType: n.LitType, InfType: cloneType(n.InfType)}
+	case *t.NodeExprArray:
+		return &t.NodeExprArray{Tk: n.Tk, ElemType: cloneType(n.ElemType), Length: cloneExpr(n.Length), InfType: cloneType(n.InfType)}
 	case *t.NodeExprName:
 		genericArgs := make([]*t.NodeType, len(n.GenericArgs))
 		for i, g := range n.GenericArgs {
@@ -309,6 +309,9 @@ func cloneFuncDef(in *t.NodeFuncDef) *t.NodeFuncDef {
 		HasDefer:       in.HasDefer,
 		IsDestructor:   in.IsDestructor,
 		IsExternal:     in.IsExternal,
+		IsPublic:       in.IsPublic,
+		ExportName:     in.ExportName,
+		ExportABI:      in.ExportABI,
 		ErrorPredicate: in.ErrorPredicate,
 	}
 	for i, a := range in.Class.ArgsNode.Args {
@@ -326,6 +329,7 @@ func cloneStructDef(in *t.NodeStructDef) *t.NodeStructDef {
 		return nil
 	}
 	out := &t.NodeStructDef{
+		IsPublic: in.IsPublic,
 		Class: t.NodeGenericClass{
 			NameNode:        cloneName(in.Class.NameNode),
 			ArgsNode:        t.NodeArgList{Args: make([]t.NodeArg, len(in.Class.ArgsNode.Args))},
@@ -365,11 +369,7 @@ func CanonicalTypeSignature(tp *t.NodeType) string {
 	case *t.NodeTypeRfc:
 		return "R__" + CanonicalTypeSignature(&t.NodeType{KindNode: n.Kind})
 	case *t.NodeTypeSlice:
-		prefix := "S"
-		if n.HasSize {
-			prefix = fmt.Sprintf("A%d", n.Size)
-		}
-		return prefix + "__" + CanonicalTypeSignature(&t.NodeType{KindNode: n.ElemKind})
+		return "S__" + CanonicalTypeSignature(&t.NodeType{KindNode: n.ElemKind})
 	case *t.NodeTypeFunc:
 		argParts := make([]string, len(n.Args))
 		for i, a := range n.Args {
@@ -433,9 +433,6 @@ func (m *monoCtx) displayType(tp *t.NodeType) string {
 	case *t.NodeTypeRfc:
 		return m.displayType(&t.NodeType{KindNode: n.Kind}) + "&"
 	case *t.NodeTypeSlice:
-		if n.HasSize {
-			return fmt.Sprintf("%s[%d]", m.displayType(&t.NodeType{KindNode: n.ElemKind}), n.Size)
-		}
 		return m.displayType(&t.NodeType{KindNode: n.ElemKind}) + "[]"
 	case *t.NodeTypeFunc:
 		args := make([]string, len(n.Args))
@@ -502,8 +499,6 @@ func substituteType(tp *t.NodeType, subst map[string]*t.NodeType) *t.NodeType {
 		return &t.NodeType{
 			Throws: tp.Throws, Owned: tp.Owned, Destructor: tp.Destructor,
 			KindNode: &t.NodeTypeSlice{
-				HasSize:  n.HasSize,
-				Size:     n.Size,
 				ElemKind: substituteType(&t.NodeType{KindNode: n.ElemKind}, subst).KindNode,
 			},
 		}
@@ -529,6 +524,10 @@ func substituteExpr(expr t.NodeExpr, subst map[string]*t.NodeType) {
 		}
 	case *t.NodeExprUnary:
 		substituteExpr(n.Operand, subst)
+	case *t.NodeExprArray:
+		n.ElemType = substituteType(n.ElemType, subst)
+		n.InfType = substituteType(n.InfType, subst)
+		substituteExpr(n.Length, subst)
 	case *t.NodeExprCall:
 		substituteExpr(n.Callee, subst)
 		for _, a := range n.Args {
@@ -838,9 +837,11 @@ func (m *monoCtx) instantiateStruct(module string, baseName string, args []*t.No
 		specStruct.Class.ArgsNode.Args[i].TypeNode = substituteType(specStruct.Class.ArgsNode.Args[i].TypeNode, subst)
 	}
 
+	origDef := gl.StructDefs[baseName]
 	stDef := &t.StructDef{
 		Module:     module,
 		Name:       specName,
+		IsPublic:   origDef.IsPublic,
 		TypeParams: nil,
 		FieldNb:    map[string]int{},
 		Fields:     map[string]*t.NodeType{},
@@ -853,7 +854,6 @@ func (m *monoCtx) instantiateStruct(module string, baseName string, args []*t.No
 		stDef.FieldOrder = append(stDef.FieldOrder, fld.Name)
 	}
 
-	origDef := gl.StructDefs[baseName]
 	for memberName, fnTpl := range origDef.Funcs {
 		if len(fnTpl.Class.TypeParams) > 0 {
 			memberTpl := cloneFuncDef(fnTpl)
@@ -1040,7 +1040,10 @@ func (m *monoCtx) rewriteType(module string, gl *t.NodeGlobal, tp *t.NodeType) e
 			targetModule, baseName, e := resolveQualifiedName(module, gl, n.NameNode)
 			if e == nil {
 				if target := m.modules[targetModule]; target != nil {
-					if _, ok := target.StructDefs[baseName]; ok {
+					if definition, ok := target.StructDefs[baseName]; ok {
+						if targetModule != module && !definition.IsPublic {
+							return fmt.Errorf("struct '%s' is private and cannot be used from another module", flattenName(n.NameNode))
+						}
 						tp.KindNode = &t.NodeTypeAbsolute{
 							AbsoluteName: targetModule + "." + baseName,
 						}
@@ -1053,6 +1056,11 @@ func (m *monoCtx) rewriteType(module string, gl *t.NodeGlobal, tp *t.NodeType) e
 		targetModule, baseName, e := resolveQualifiedName(module, gl, n.NameNode)
 		if e != nil {
 			return e
+		}
+		if target := m.modules[targetModule]; targetModule != module && target != nil {
+			if definition := target.StructDefs[baseName]; definition != nil && !definition.IsPublic {
+				return fmt.Errorf("struct '%s' is private and cannot be used from another module", flattenName(n.NameNode))
+			}
 		}
 
 		specName, e := m.instantiateStruct(targetModule, baseName, n.GenericArgs)
@@ -1111,6 +1119,11 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 		if e != nil {
 			return e
 		}
+		if target := m.modules[targetModule]; targetModule != module && target != nil {
+			if definition := target.FuncDefs[baseName]; definition != nil && !definition.IsPublic {
+				return fmt.Errorf("function '%s' is private and cannot be used from another module", flattenName(n.Name))
+			}
+		}
 		specName, e := m.instantiateFunc(targetModule, baseName, n.GenericArgs)
 		if e != nil {
 			return m.genericFuncInstantiationError(gl, &n.Tk, baseName, e)
@@ -1128,6 +1141,11 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 		return nil
 	case *t.NodeExprUnary:
 		return m.rewriteExpr(module, gl, n.Operand, env)
+	case *t.NodeExprArray:
+		if e := m.rewriteType(module, gl, n.ElemType); e != nil {
+			return e
+		}
+		return m.rewriteExpr(module, gl, n.Length, env)
 	case *t.NodeExprMemberAccess:
 		return m.rewriteExpr(module, gl, n.Target, env)
 	case *t.NodeExprCall:
@@ -1179,6 +1197,11 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 			targetModule, baseName, e := resolveQualifiedName(module, gl, nameExpr.Name)
 			if e != nil {
 				return e
+			}
+			if target := m.modules[targetModule]; targetModule != module && target != nil {
+				if definition := target.FuncDefs[baseName]; definition != nil && !definition.IsPublic {
+					return fmt.Errorf("function '%s' is private and cannot be used from another module", flattenName(nameExpr.Name))
+				}
 			}
 			specName, e := m.instantiateFunc(targetModule, baseName, n.GenericArgs)
 			if e != nil {

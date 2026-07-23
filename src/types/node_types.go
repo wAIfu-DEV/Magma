@@ -120,6 +120,16 @@ type NodeTypeAbsolute struct {
 	AbsoluteName string
 }
 
+type NodeTypeCompilerKnown struct {
+	Tk   Token
+	Name string
+}
+
+func (n *NodeTypeCompilerKnown) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("TypeCompilerKnown(name=%s)\n", n.Name)
+}
+
 func (n *NodeTypeAbsolute) Print(indent int) {
 	PrintIndent(indent)
 	fmt.Printf("TypeAbsolute(name='%s')\n", n.AbsoluteName)
@@ -146,8 +156,6 @@ func (n *NodeTypeRfc) Print(indent int) {
 }
 
 type NodeTypeSlice struct {
-	HasSize  bool
-	Size     int
 	ElemKind NodeTypeKind
 }
 
@@ -218,6 +226,23 @@ type NodeExprLit struct {
 	LitType TokType
 
 	InfType *NodeType
+}
+
+// NodeExprArray allocates local backing storage and returns it as a typed
+// slice. Length is a value expression and is not part of the resulting type.
+type NodeExprArray struct {
+	Tk       Token
+	ElemType *NodeType
+	Length   NodeExpr
+	InfType  *NodeType
+}
+
+func (n *NodeExprArray) GetInferredType() *NodeType { return n.InfType }
+func (n *NodeExprArray) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprArray\n")
+	n.ElemType.Print(indent + 1)
+	n.Length.Print(indent + 1)
 }
 
 func (n *NodeExprLit) GetInferredType() *NodeType {
@@ -819,6 +844,9 @@ type NodeFuncDef struct {
 
 	IsDestructor   bool
 	IsExternal     bool
+	IsPublic       bool
+	ExportName     string
+	ExportABI      string
 	ErrorPredicate ErrorPredicateKind
 }
 
@@ -839,7 +867,26 @@ func (n *NodeFuncDef) Print(indent int) {
 }
 
 type NodeStructDef struct {
-	Class NodeGenericClass
+	Class    NodeGenericClass
+	IsPublic bool
+}
+
+type TypeAlias struct {
+	Name     string
+	Module   string
+	Target   *NodeType
+	IsPublic bool
+	Tk       Token
+}
+
+type NodeTypeAlias struct {
+	Alias *TypeAlias
+}
+
+func (n *NodeTypeAlias) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("TypeAlias(name=%s)\n", n.Alias.Name)
+	n.Alias.Target.Print(indent + 1)
 }
 
 func (n *NodeStructDef) Print(indent int) {
@@ -854,6 +901,7 @@ type NodeGlobal struct {
 	ImportAlias map[string]string
 
 	StructDefs           map[string]*StructDef
+	TypeAliases          map[string]*TypeAlias
 	FuncDefs             map[string]*NodeFuncDef
 	PrimitiveMethods     map[string]map[string]*NodeFuncDef
 	PrimitiveDestructors map[string][]*NodeFuncDef
@@ -880,6 +928,7 @@ type ModuleBundle struct {
 func (*NodeExprVoid) IsExpr()              {}
 func (*NodeExprUnary) IsExpr()             {}
 func (*NodeExprLit) IsExpr()               {}
+func (*NodeExprArray) IsExpr()             {}
 func (*NodeExprName) IsExpr()              {}
 func (*NodeExprCall) IsExpr()              {}
 func (*NodeExprStructInit) IsExpr()        {}
@@ -900,6 +949,7 @@ func (*NodeTypeRfc) IsType()               {}
 func (*NodeTypeSlice) IsType()             {}
 func (*NodeTypeFunc) IsType()              {}
 func (*NodeTypeAbsolute) IsType()          {}
+func (*NodeTypeCompilerKnown) IsType()     {}
 func (*NodeNameSingle) IsName()            {}
 func (*NodeNameComposite) IsName()         {}
 func (*NodeStmtRet) IsStatement()          {}
@@ -915,5 +965,6 @@ func (*NodeStmtDefer) IsStatement()        {}
 func (*NodeExprVarDef) IsGlobalDecl()      {}
 func (*NodeFuncDef) IsGlobalDecl()         {}
 func (*NodeStructDef) IsGlobalDecl()       {}
+func (*NodeTypeAlias) IsGlobalDecl()       {}
 func (*NodeLlvm) IsGlobalDecl()            {}
 func (*NodeConstDef) IsGlobalDecl()        {}

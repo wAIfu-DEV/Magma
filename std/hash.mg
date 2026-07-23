@@ -1,8 +1,17 @@
 mod hash
+# Stable non-cryptographic hashing for byte slices and strings.
+# @warning Do not use these hashes for passwords or cryptographic integrity.
 
-use "strings.mg" strings
-use "slices.mg" slices
+use "std:strings" strings
+use "std:slices" slices
 
+# Computes the 64-bit FNV-1a hash of a byte slice.
+# @complexity O(N)
+# @param in bytes to hash
+# @returns deterministic hash value
+# @warning This hash is not suitable for cryptographic integrity or secrets.
+# @example
+#   value := hash.bytes(data)
 pub bytes(in u8[]) u64:
     h u64 = 14695981039346656037
     i u64 = 0
@@ -14,6 +23,12 @@ pub bytes(in u8[]) u64:
     ret h
 ..
 
+# Computes the 64-bit FNV-1a hash of a string's UTF-8 bytes.
+# @complexity O(N)
+# @param in string to hash
+# @returns deterministic hash value
+# @example
+#   value := hash.string("magma")
 pub string(in str) u64:
     data u8[] = slices.fromPtr(strings.toPtr(in), strings.countBytes(in))
     ret bytes(data)

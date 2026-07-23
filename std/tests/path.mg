@@ -1,9 +1,9 @@
 mod main
-use "../errors.mg" errors
-use "../path.mg" path
-use "../strings.mg" strings
-use "../allocator.mg" allocator
-use "../heap.mg" heap
+use "std:errors" errors
+use "std:path" path
+use "std:strings" strings
+use "std:allocator" allocator
+use "std:heap" heap
 pub main() !void:
     a allocator.Allocator = heap.allocator()
     separator := path.separator()

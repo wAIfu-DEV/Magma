@@ -1,7 +1,7 @@
 mod main
-use "../errors.mg" errors
-use "../heap.mg" heap
-use "../strings.mg" strings
+use "std:errors" errors
+use "std:heap" heap
+use "std:strings" strings
 
 pub main() !void:
     a := heap.allocator()

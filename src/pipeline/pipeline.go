@@ -100,10 +100,18 @@ func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath strin
 
 	debug.Printf("resolved to abs path: %s\n", absPath)
 
-	fileBytes, err := os.ReadFile(absPath)
-	if err != nil {
-		registerImportResult(shared, absPath, c)
-		return nil, fmt.Errorf("failed to open file")
+	shared.SourceOverridesM.RLock()
+	fileBytes, overridden := shared.SourceOverrides[absPath]
+	if overridden {
+		fileBytes = append([]byte(nil), fileBytes...)
+	}
+	shared.SourceOverridesM.RUnlock()
+	if !overridden {
+		fileBytes, err = os.ReadFile(absPath)
+		if err != nil {
+			registerImportResult(shared, absPath, c)
+			return nil, fmt.Errorf("failed to open file")
+		}
 	}
 
 	fCtx := &types.FileCtx{
@@ -112,6 +120,7 @@ func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath strin
 		ImportAlias:     map[string]string{},
 		Imports:         []string{},
 		NativeLibraries: []string{},
+		Bundles:         []string{},
 		LineIdx:         lineidx.GetLineIdx(fileBytes),
 	}
 

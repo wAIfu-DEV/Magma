@@ -8,7 +8,8 @@ SET "COMPILER=%~dp0Magma.exe"
 SET "GOCACHE=%~dp0.gocache"
 SET "LOG_FILE=%TEMP%\magma-tests-%RANDOM%-%RANDOM%.log"
 SET "OUTPUT_FILE=%TEMP%\magma-tests-%RANDOM%-%RANDOM%.ll"
-SET "EXECUTABLE_FILE=%TEMP%\magma-tests-%RANDOM%-%RANDOM%.exe"
+SET "EXECUTABLE_PREFIX=%TEMP%\magma-tests-%RANDOM%-%RANDOM%"
+SET "EXECUTABLE_FILE="
 SET /A TOTAL=0, PASSED=0, FAILED=0
 
 ECHO Building Magma...
@@ -61,7 +62,7 @@ SET "TEST_SUITE_ROOT=%STD_TEST_ROOT%"
 SET "RUN_ASSERTIONS=Y"
 FOR /R "%STD_TEST_ROOT%" %%F IN (*.mg) DO CALL :RunOne "%%~fF"
 
-DEL /Q "%LOG_FILE%" "%OUTPUT_FILE%" "%EXECUTABLE_FILE%" >NUL 2>&1
+DEL /Q "%LOG_FILE%" "%OUTPUT_FILE%" >NUL 2>&1
 ECHO.
 ECHO Results: %PASSED% passed, %FAILED% failed, %TOTAL% total.
 
@@ -92,7 +93,13 @@ GOTO FindExpectation
 
 :ExpectationFound
 DEL /Q "%OUTPUT_FILE%" >NUL 2>&1
-DEL /Q "%EXECUTABLE_FILE%" >NUL 2>&1
+SET "EXECUTABLE_FILE=%EXECUTABLE_PREFIX%-%TOTAL%.exe"
+IF EXIST "%EXECUTABLE_FILE%" (
+    SET /A FAILED+=1
+    ECHO [FAILURE] %TEST_FILE% - stale test executable is still locked: "%EXECUTABLE_FILE%"
+    ECHO          Use Process Explorer or Sysinternals Handle to find the process holding it.
+    GOTO :EOF
+)
 CALL :GetTimeCs COMPILE_START
 IF /I "%RUN_ASSERTIONS%"=="Y" (
     "%COMPILER%" --emit exe --out "%EXECUTABLE_FILE%" "%TEST_FILE%" >"%LOG_FILE%" 2>&1
@@ -149,12 +156,21 @@ CALL :GetTimeCs RUN_END
 SET /A RUN_TIME=(RUN_END-RUN_START)*10
 IF %RUN_TIME% LSS 0 SET /A RUN_TIME+=86400000
 IF "%RUN_EXIT%"=="0" (
+    DEL /Q "%EXECUTABLE_FILE%" >NUL 2>&1
+    IF EXIST "%EXECUTABLE_FILE%" (
+        SET /A FAILED+=1
+        ECHO [FAILURE] %TEST_FILE% - assertions returned success, but the test executable is still in use.
+        ECHO          Locked file: "%EXECUTABLE_FILE%"
+        ECHO          Use Process Explorer or Sysinternals Handle to find the process holding it.
+        GOTO :EOF
+    )
     SET /A PASSED+=1
     ECHO [PASS] %TEST_FILE% %COMPILE_TIME% ms compile, %RUN_TIME% ms assertions
     GOTO :EOF
 )
 
 SET /A FAILED+=1
+DEL /Q "%EXECUTABLE_FILE%" >NUL 2>&1
 ECHO [FAILURE] %TEST_FILE% %RUN_TIME% ms - assertions failed with exit code %RUN_EXIT%.
 TYPE "%LOG_FILE%"
 ECHO.

@@ -1,6 +1,6 @@
 mod main
-use "../errors.mg" errors
-use "../time.mg" time
+use "std:errors" errors
+use "std:time" time
 pub main() !void:
     start := time.ticks()
     if time.ticksToSec(time.secToTicks(2)) != 2 || time.ticksToMs(time.msToTicks(5)) != 5 || time.ticksToUs(time.usToTicks(5)) != 5 || time.ticksToNs(time.nsToTicks(100)) != 100:

@@ -1,12 +1,15 @@
 mod wake_impl_win
+# Windows wait-and-notify backend used by the portable wake module.
 
-use "../cast.mg" cast
-use "../errors.mg" errors
+
+use "std:c" c
+use "std:cast" cast
+use "std:errors" errors
 
 const condition u8 = 0
 const infinite u32 = 0xFFFFFFFF
 
-Wake(
+pub Wake(
     strategy u8
     lock ptr
     conditionVariable ptr
@@ -14,14 +17,14 @@ Wake(
     semaphore ptr
 )
 
-ext ext_win32_CreateSemaphoreW CreateSemaphoreW(attributes ptr, initialCount i32, maximumCount i32, name ptr) ptr
-ext ext_win32_ReleaseSemaphore ReleaseSemaphore(semaphore ptr, releaseCount i32, previousCount ptr) i32
-ext ext_win32_WaitForSingleObject WaitForSingleObject(handle ptr, milliseconds u32) u32
-ext ext_win32_CloseHandle CloseHandle(handle ptr) u32
-ext ext_win32_GetLastError GetLastError() u32
+ext ext_win32_CreateSemaphoreW CreateSemaphoreW(attributes ptr, initialCount c.int, maximumCount c.int, name ptr) ptr
+ext ext_win32_ReleaseSemaphore ReleaseSemaphore(semaphore ptr, releaseCount c.int, previousCount ptr) c.int
+ext ext_win32_WaitForSingleObject WaitForSingleObject(handle ptr, milliseconds c.unsigned_int) c.unsigned_int
+ext ext_win32_CloseHandle CloseHandle(handle ptr) c.unsigned_int
+ext ext_win32_GetLastError GetLastError() c.unsigned_int
 ext ext_win32_AcquireSRWLockExclusive AcquireSRWLockExclusive(lock ptr) void
 ext ext_win32_ReleaseSRWLockExclusive ReleaseSRWLockExclusive(lock ptr) void
-ext ext_win32_SleepConditionVariableSRW SleepConditionVariableSRW(conditionVariable ptr, lock ptr, milliseconds u32, flags u32) i32
+ext ext_win32_SleepConditionVariableSRW SleepConditionVariableSRW(conditionVariable ptr, lock ptr, milliseconds c.unsigned_int, flags c.unsigned_int) c.int
 ext ext_win32_WakeConditionVariable WakeConditionVariable(conditionVariable ptr) void
 
 pub new(strategy u8) !$Wake:

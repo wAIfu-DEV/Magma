@@ -1,8 +1,8 @@
 mod main
-use "../allocator.mg" allocator
-use "../errors.mg" errors
-use "../heap.mg" heap
-use "../slices.mg" slices
+use "std:allocator" allocator
+use "std:errors" errors
+use "std:heap" heap
+use "std:slices" slices
 pub main() !void:
     a allocator.Allocator = heap.allocator()
     empty := slices.fromPtr(none, 0)

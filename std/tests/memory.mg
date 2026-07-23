@@ -1,10 +1,10 @@
 mod main
-use "../errors.mg" errors
-use "../memory.mg" memory
-use "../slices.mg" slices
+use "std:errors" errors
+use "std:memory" memory
+use "std:slices" slices
 pub main() !void:
-    source u8[4]
-    target u8[4]
+    source := array u8[4]
+    target := array u8[4]
     source[0] = 1
     source[1] = 2
     memory.copy(slices.toPtr(source), slices.toPtr(target), 4)
@@ -23,7 +23,7 @@ pub main() !void:
     if source[0] != 9 || target[0] != 1:
         throw errors.failure("memory swap changed")
     ..
-    overlap u8[4]
+    overlap := array u8[4]
     overlap[0] = 1
     overlap[1] = 2
     overlap[2] = 3

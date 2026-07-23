@@ -5,7 +5,6 @@ import (
 	magmatypes "Magma/src/magma_types"
 	t "Magma/src/types"
 	"bytes"
-	"encoding/hex"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -57,26 +56,41 @@ type IrCtx struct {
 }
 
 // traceStringPool gives trace metadata one constant per distinct byte string.
-// Names are derived from the complete contents, so parallel module generation
-// cannot affect either references or final IR ordering.
+// IDs are assigned from a sorted prepass, so names stay compact while parallel
+// module generation cannot affect either references or final IR ordering.
 type traceStringPool struct {
 	mu     sync.Mutex
 	values map[string]struct{}
+	names  map[string]string
 }
 
-func newTraceStringPool() *traceStringPool {
-	return &traceStringPool{values: make(map[string]struct{})}
-}
-
-func traceStringName(value string) string {
-	return "@.magma.trace.str." + hex.EncodeToString([]byte(value))
+func newTraceStringPool(candidates []string) *traceStringPool {
+	unique := make(map[string]struct{}, len(candidates))
+	for _, value := range candidates {
+		unique[value] = struct{}{}
+	}
+	ordered := make([]string, 0, len(unique))
+	for value := range unique {
+		ordered = append(ordered, value)
+	}
+	slices.Sort(ordered)
+	names := make(map[string]string, len(ordered))
+	for id, value := range ordered {
+		names[value] = "@.mt" + strconv.Itoa(id)
+	}
+	return &traceStringPool{values: make(map[string]struct{}), names: names}
 }
 
 func (p *traceStringPool) intern(value string) SsaName {
 	p.mu.Lock()
+	name, ok := p.names[value]
+	if !ok {
+		p.mu.Unlock()
+		panic(fmt.Sprintf("trace string %q was not collected before LLVM emission", value))
+	}
 	p.values[value] = struct{}{}
 	p.mu.Unlock()
-	return ssaName(traceStringName(value))
+	return ssaName(name)
 }
 
 func escapeCString(value string) string {
@@ -102,8 +116,30 @@ func (p *traceStringPool) writeTo(b *bytes.Buffer) {
 	slices.Sort(values)
 	for _, value := range values {
 		fmt.Fprintf(b, "%s = private unnamed_addr constant [%d x i8] c\"%s\\00\"\n",
-			traceStringName(value), len(value)+1, escapeCString(value))
+			p.names[value], len(value)+1, escapeCString(value))
 	}
+}
+
+func collectTraceStrings(files map[string]*t.FileCtx) []string {
+	values := []string{"<global>"}
+	for _, file := range files {
+		values = append(values, filepath.Base(file.FilePath))
+		if file.GlNode == nil {
+			continue
+		}
+		for _, declaration := range file.GlNode.Declarations {
+			fn, ok := declaration.(*t.NodeFuncDef)
+			if !ok || fn.NoAliasName != "" {
+				continue
+			}
+			name := fn.DisplayName
+			if name == "" {
+				name = traceDisplayName(fn.Class.NameNode)
+			}
+			values = append(values, name)
+		}
+	}
+	return values
 }
 
 func flattenName(name t.NodeName) string {
@@ -593,53 +629,6 @@ func irVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) (SsaName, error) {
 		return ssaName(""), e
 	}
 	irWritef(ctx, " zeroinitializer, ptr %s\n", allocSsa.Repr)
-
-	if isSliceType(vd.Type) {
-		sliceT := vd.Type.KindNode.(*t.NodeTypeSlice)
-		elemType := makeTypeFromKind(sliceT.ElemKind)
-
-		if sliceT.HasSize {
-			arrSsa := irSsaLocal(ctx)
-
-			// making dud ctx to redirect name IR to head
-			cpy := *ctx
-			cpy.bld = ScopeBuilder{
-				Global: ctx.bld.Global,
-				Head:   ctx.bld.Head,
-				Tail:   ctx.bld.Head,
-				Body:   ctx.bld.Head,
-			}
-
-			irWritef(&cpy, "  %s = alloca [ %d x ", arrSsa.Repr, sliceT.Size)
-			e = irType(&cpy, elemType)
-			if e != nil {
-				return SsaName{}, e
-			}
-			irWrite(&cpy, " ]\n")
-
-			sizeofSsa, e := irExprSizeof(ctx, &t.NodeExprSizeof{
-				Type: elemType,
-			})
-
-			if e != nil {
-				return SsaName{}, e
-			}
-
-			totalSizeSsa := irSsaLocal(ctx)
-			irWritef(ctx, "  %s = mul i64 ", totalSizeSsa.Repr)
-			irPossibleLitSsa(ctx, sizeofSsa)
-			irWritef(ctx, ", %d\n", sliceT.Size)
-
-			irWritef(ctx, "  call void @llvm.memset.p0i8.i64(ptr %s, i8 0, i64 %s, i32 1, i1 0)\n", arrSsa.Repr, totalSizeSsa.Repr)
-
-			fldPtrSsa := irSsaLocal(ctx)
-			fldSizSsa := irSsaLocal(ctx)
-
-			irWritef(ctx, "  %s = insertvalue %%type.slice zeroinitializer, ptr %s, 0\n", fldPtrSsa.Repr, arrSsa.Repr)
-			irWritef(ctx, "  %s = insertvalue %%type.slice %s, i64 %d, 1\n", fldSizSsa.Repr, fldPtrSsa.Repr, sliceT.Size)
-			irWritef(ctx, "  store %%type.slice %s, ptr %s\n", fldSizSsa.Repr, allocSsa.Repr)
-		}
-	}
 
 	return allocSsa, nil
 }
@@ -1204,15 +1193,8 @@ func irExprSizeof(ctx *IrCtx, sz *t.NodeExprSizeof) (SsaName, error) {
 	}
 
 	switch n := sz.Type.KindNode.(type) {
-	case *t.NodeTypePointer, *t.NodeTypeRfc, *t.NodeTypeFunc:
-		ptrBytes := 8 // TODO: make machine specific
-		return SsaName{Repr: strconv.Itoa(ptrBytes), IsLiteral: true}, nil
 	case *t.NodeTypeNamed:
 		if nn, ok := n.NameNode.(*t.NodeNameSingle); ok {
-			if nn.Name == "ptr" {
-				ptrBytes := 8 // TODO: make machine specific
-				return SsaName{Repr: strconv.Itoa(ptrBytes), IsLiteral: true}, nil
-			}
 			if nn.Name == "bool" {
 				return SsaName{Repr: "1", IsLiteral: true}, nil
 			}
@@ -2852,6 +2834,8 @@ func irTryCall(ctx *IrCtx, callRetSsa SsaName, fnCall *t.NodeExprCall, pos t.Fil
 
 func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr, topLevel bool) (SsaName, error) {
 	switch ne := expr.(type) {
+	case *t.NodeExprArray:
+		return irExprArray(ctx, ne)
 	case *t.NodeExprVarDefAssign:
 		return irVarDefAssign(ctx, ne)
 	case *t.NodeExprVarDef:
@@ -2891,6 +2875,45 @@ func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr, topLeve
 		return irExprBinary(ctx, expectedType, ne)
 	}
 	return ssaName(""), fmt.Errorf("unsupported expression")
+}
+
+func irExprArray(ctx *IrCtx, expr *t.NodeExprArray) (SsaName, error) {
+	length, e := irExpression(ctx, makeNamedType("u64"), expr.Length, false)
+	if e != nil {
+		return SsaName{}, e
+	}
+	length, e = irPromoteSingleToNum(ctx, makeNamedType("u64"), length, expr.Length.GetInferredType())
+	if e != nil {
+		return SsaName{}, e
+	}
+	data := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = alloca ", data.Repr)
+	if e := irType(ctx, expr.ElemType); e != nil {
+		return SsaName{}, e
+	}
+	irWrite(ctx, ", i64 ")
+	irPossibleLitSsa(ctx, length)
+	irWrite(ctx, "\n")
+
+	elemSize, e := irExprSizeof(ctx, &t.NodeExprSizeof{Type: expr.ElemType})
+	if e != nil {
+		return SsaName{}, e
+	}
+	totalSize := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = mul i64 ", totalSize.Repr)
+	irPossibleLitSsa(ctx, elemSize)
+	irWrite(ctx, ", ")
+	irPossibleLitSsa(ctx, length)
+	irWrite(ctx, "\n")
+	irWritef(ctx, "  call void @llvm.memset.p0i8.i64(ptr %s, i8 0, i64 %s, i32 1, i1 0)\n", data.Repr, totalSize.Repr)
+
+	withPtr := irSsaLocal(ctx)
+	result := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = insertvalue %%type.slice zeroinitializer, ptr %s, 0\n", withPtr.Repr, data.Repr)
+	irWritef(ctx, "  %s = insertvalue %%type.slice %s, i64 ", result.Repr, withPtr.Repr)
+	irPossibleLitSsa(ctx, length)
+	irWrite(ctx, ", 1\n")
+	return result, nil
 }
 
 func irExpressionLvalue(ctx *IrCtx, expr t.NodeExpr) (SsaName, error) {
@@ -3709,8 +3732,110 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 
 func irMainWrapper(ctx *IrCtx, mainFnDef *t.NodeFuncDef) error {
 	irWrite(ctx, "; Entry point\n")
-	irWrite(ctx, "define i32 @main(i32 %argc, ptr %argv) {\n") // alwaysinline
+	if ctx.Shared.Target.OS == "windows" {
+		irWrite(ctx, "declare dllimport ptr @GetProcessHeap()\n")
+		irWrite(ctx, "declare dllimport ptr @HeapAlloc(ptr, i32, i64)\n")
+		irWrite(ctx, "declare dllimport i32 @HeapFree(ptr, i32, ptr)\n")
+		irWrite(ctx, "declare dllimport i32 @SetConsoleOutputCP(i32)\n")
+		irWrite(ctx, "declare dllimport i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)\n\n")
+		irWrite(ctx, `define internal i1 @magma.argsFromUtf16(i32 %argc, ptr %argv, ptr %buf) {
+entry:
+  %heap = call ptr @GetProcessHeap()
+  %argc64 = sext i32 %argc to i64
+  br label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %store ]
+  %done = icmp eq i64 %i, %argc64
+  br i1 %done, label %success, label %convert
+
+convert:
+  %arg.slot = getelementptr ptr, ptr %argv, i64 %i
+  %wide = load ptr, ptr %arg.slot
+  %size = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %wide, i32 -1, ptr null, i32 0, ptr null, ptr null)
+  %size.ok = icmp sgt i32 %size, 0
+  br i1 %size.ok, label %allocate, label %fail
+
+allocate:
+  %size64 = zext i32 %size to i64
+  %bytes = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %size64)
+  %allocated = icmp ne ptr %bytes, null
+  br i1 %allocated, label %encode, label %fail
+
+encode:
+  %written = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %wide, i32 -1, ptr %bytes, i32 %size, ptr null, ptr null)
+  %encoded = icmp eq i32 %written, %size
+  br i1 %encoded, label %store, label %free.current
+
+free.current:
+  call i32 @HeapFree(ptr %heap, i32 0, ptr %bytes)
+  br label %fail
+
+store:
+  %length32 = sub i32 %size, 1
+  %length = zext i32 %length32 to i64
+  %elem = getelementptr %type.str, ptr %buf, i64 %i
+  %str0 = insertvalue %type.str zeroinitializer, ptr %bytes, 0
+  %str1 = insertvalue %type.str %str0, i64 %length, 1
+  store %type.str %str1, ptr %elem
+  %next = add i64 %i, 1
+  br label %loop
+
+fail:
+  br label %cleanup
+
+cleanup:
+  %j = phi i64 [ 0, %fail ], [ %j.next, %cleanup.body ]
+  %cleaned = icmp eq i64 %j, %i
+  br i1 %cleaned, label %failure, label %cleanup.body
+
+cleanup.body:
+  %old.elem = getelementptr %type.str, ptr %buf, i64 %j
+  %old = load %type.str, ptr %old.elem
+  %old.bytes = extractvalue %type.str %old, 0
+  call i32 @HeapFree(ptr %heap, i32 0, ptr %old.bytes)
+  %j.next = add i64 %j, 1
+  br label %cleanup
+
+failure:
+  ret i1 false
+
+success:
+  ret i1 true
+}
+
+define internal void @magma.freeUtf8Args(i32 %argc, ptr %buf) {
+entry:
+  %heap = call ptr @GetProcessHeap()
+  %argc64 = sext i32 %argc to i64
+  br label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %body ]
+  %done = icmp eq i64 %i, %argc64
+  br i1 %done, label %finish, label %body
+
+body:
+  %elem = getelementptr %type.str, ptr %buf, i64 %i
+  %arg = load %type.str, ptr %elem
+  %bytes = extractvalue %type.str %arg, 0
+  call i32 @HeapFree(ptr %heap, i32 0, ptr %bytes)
+  %next = add i64 %i, 1
+  br label %loop
+
+finish:
+  ret void
+}
+
+`)
+		irWrite(ctx, "define i32 @wmain(i32 %argc, ptr %argv) {\n")
+	} else {
+		irWrite(ctx, "define i32 @main(i32 %argc, ptr %argv) {\n")
+	}
 	irWrite(ctx, "entry:\n")
+	if ctx.Shared.Target.OS == "windows" {
+		irWrite(ctx, "  %console.utf8 = call i32 @SetConsoleOutputCP(i32 65001)\n")
+	}
 
 	hasArgs := false
 
@@ -3722,7 +3847,18 @@ func irMainWrapper(ctx *IrCtx, mainFnDef *t.NodeFuncDef) error {
 			hasArgs = true
 
 			irWrite(ctx, "  %arr = alloca %type.str, i32 %argc\n")
-			irWrite(ctx, "  %a = call %type.slice @magma.argsToSlice(i32 %argc, ptr %argv, ptr %arr)\n")
+			if ctx.Shared.Target.OS == "windows" {
+				irWrite(ctx, "  %args.ok = call i1 @magma.argsFromUtf16(i32 %argc, ptr %argv, ptr %arr)\n")
+				irWrite(ctx, "  br i1 %args.ok, label %args.ready, label %args.failed\n")
+				irWrite(ctx, "args.failed:\n")
+				irWrite(ctx, "  ret i32 1\n")
+				irWrite(ctx, "args.ready:\n")
+				irWrite(ctx, "  %argc64 = sext i32 %argc to i64\n")
+				irWrite(ctx, "  %a0 = insertvalue %type.slice zeroinitializer, ptr %arr, 0\n")
+				irWrite(ctx, "  %a = insertvalue %type.slice %a0, i64 %argc64, 1\n")
+			} else {
+				irWrite(ctx, "  %a = call %type.slice @magma.argsToSlice(i32 %argc, ptr %argv, ptr %arr)\n")
+			}
 		}
 	}
 
@@ -3738,6 +3874,9 @@ func irMainWrapper(ctx *IrCtx, mainFnDef *t.NodeFuncDef) error {
 		irWrite(ctx, "  br i1 %isnz, label %enz, label %ez, !prof !9000\n")
 		irWrite(ctx, "enz:\n")
 		irWrite(ctx, "  call void @magma.error.print(%type.error %e)\n")
+		if hasArgs && ctx.Shared.Target.OS == "windows" {
+			irWrite(ctx, "  call void @magma.freeUtf8Args(i32 %argc, ptr %arr)\n")
+		}
 		irWrite(ctx, "  ret i32 %ecd\n")
 		irWrite(ctx, "ez:\n")
 	} else {
@@ -3746,6 +3885,9 @@ func irMainWrapper(ctx *IrCtx, mainFnDef *t.NodeFuncDef) error {
 		} else {
 			irWritef(ctx, "  call void @%s.main()\n", ctx.fCtx.MainPckgName)
 		}
+	}
+	if hasArgs && ctx.Shared.Target.OS == "windows" {
+		irWrite(ctx, "  call void @magma.freeUtf8Args(i32 %argc, ptr %arr)\n")
 	}
 	irWrite(ctx, "  ret i32 0\n")
 	irWrite(ctx, "}\n\n")
@@ -3801,7 +3943,11 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 		}
 	}
 
-	irWrite(ctx, "define ")
+	// Magma implementations are private to the generated LLVM module. Native
+	// entry points and explicit export wrappers are emitted separately with
+	// external linkage. Keeping implementations internal allows LLVM to inline
+	// and eliminate functions which are unreachable from those external roots.
+	irWrite(ctx, "define internal ")
 	e := irThrowingType(ctx, fnDefNode.ReturnType)
 	if e != nil {
 		return e
@@ -3834,7 +3980,52 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 	if e != nil {
 		return e
 	}
+	if fnDefNode.ExportName != "" {
+		if e := irExportWrapper(ctx, fnDefNode); e != nil {
+			return e
+		}
+	}
 	ctx.CurrFunc = nil
+	return nil
+}
+
+func irExportWrapper(ctx *IrCtx, fn *t.NodeFuncDef) error {
+	irWrite(ctx, "define ")
+	if err := irThrowingType(ctx, fn.ReturnType); err != nil {
+		return err
+	}
+	irWritef(ctx, " @%s", fn.ExportName)
+	if err := irArgsList(ctx, &fn.Class.ArgsNode, false); err != nil {
+		return err
+	}
+	irWrite(ctx, " {\n  ")
+	returnsVoid := isVoidType(fn.ReturnType) && !fn.ReturnType.Throws
+	if !returnsVoid {
+		irWrite(ctx, "%export.ret = ")
+	}
+	irWrite(ctx, "call ")
+	if err := irThrowingType(ctx, fn.ReturnType); err != nil {
+		return err
+	}
+	irWritef(ctx, " @%s(", fn.AbsName)
+	for i, arg := range fn.Class.ArgsNode.Args {
+		if i != 0 {
+			irWrite(ctx, ", ")
+		}
+		if err := irType(ctx, arg.TypeNode); err != nil {
+			return err
+		}
+		irWritef(ctx, " %%%s", arg.Name)
+	}
+	irWrite(ctx, ")\n  ret ")
+	if returnsVoid {
+		irWrite(ctx, "void\n}\n")
+		return nil
+	}
+	if err := irThrowingType(ctx, fn.ReturnType); err != nil {
+		return err
+	}
+	irWrite(ctx, " %export.ret\n}\n")
 	return nil
 }
 
@@ -4269,6 +4460,12 @@ func IrWrite(shared *t.SharedState) ([]byte, error) {
 	// write header
 	headBld := &bytes.Buffer{}
 	headBld.WriteString("; Magma\n\n")
+	if shared.Target.DataLayout != "" {
+		fmt.Fprintf(headBld, "target datalayout = %q\n", shared.Target.DataLayout)
+	}
+	if shared.Target.Triple != "" {
+		fmt.Fprintf(headBld, "target triple = %q\n\n", shared.Target.Triple)
+	}
 	headBld.WriteString("; Basic Types\n")
 	magmatypes.WriteIrBasicTypes(headBld)
 
@@ -4315,7 +4512,7 @@ func IrWrite(shared *t.SharedState) ([]byte, error) {
 
 	structDefBld := &bytes.Buffer{}
 	structDefBldM := sync.Mutex{}
-	traceStrings := newTraceStringPool()
+	traceStrings := newTraceStringPool(collectTraceStrings(filesMap))
 
 	i := fragLen
 	for _, v := range filesMap {

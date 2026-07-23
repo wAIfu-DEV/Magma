@@ -108,6 +108,29 @@ else:
 
 Magma uses postfix type modifiers for pointers, slices, and arrays.
 
+Type aliases give an existing type another name without creating a distinct
+runtime type. Aliases are transparent during type checking and emit no LLVM
+definition:
+
+```magma
+alias c_int = i32
+pub alias c_size_t = u64
+```
+
+Public aliases can be imported and qualified like other exported declarations:
+
+```magma
+use "c.mg" c
+
+ext malloc(size c.c_size_t) ptr
+```
+
+Internal library code may use `@compiler_known_type("name")` as an alias target
+when the compiler supplies a concrete type for the selected target.
+
+Standard-library imports use `std:`, resolved from the `std` directory beside
+the compiler executable. The `.mg` extension is optional on all imports.
+
 Basic built-in types include:
 
 ```magma
@@ -161,12 +184,23 @@ u8[]
 T[]
 ```
 
-Fixed-size array definition use postfix `[N]`:
+Local array backing storage is created by the `array` expression:
 
 ```magma
-u8[16]
-str[3]
+bytes := array u8[16]
+names := array str[3]
 ```
+
+The length can be any integer expression:
+
+```magma
+count u64 = someSize()
+items := array str[count]
+pairs := array Pair[str, u64][count + 1]
+```
+
+The length expression is evaluated once. The result is a typed slice (`T[]`)
+whose storage lives in the current function's stack frame.
 
 The same expression syntax is used for element access on pointers and slices:
 
@@ -271,7 +305,7 @@ Declarations without an initializer are zero-initialized:
 
 ```magma
 v0 i64
-buffer u8[16]
+buffer := array u8[16]
 ```
 
 Declarations with initializers use `=`:
@@ -384,7 +418,9 @@ stdout.flush()
 bytesLen u64 = strings.countBytes(bytes)
 ```
 
-The `pub` modifier exports top-level declarations from a module:
+The `pub` modifier exports top-level functions and struct types from a module.
+Without it, those declarations can be used only inside their defining module.
+Methods of a public struct are public by default:
 
 ```magma
 pub open(a alc.Allocator, path str, openMode fopm.OpenMode) !$File:
@@ -803,7 +839,8 @@ fd i32 = ext_unix_open(path_cstr, flags, mode)
 
 ## Compiler Directives
 
-Compiler directives begin with `@`. The only currently implemented directive is `platform`.
+Compiler directives begin with `@`. The implemented directives are `platform`
+and `export_name`.
 
 ```magma
 @platform("windows")
@@ -818,6 +855,54 @@ current compiler platform does not match one of the string arguments, that next
 declaration is pruned.
 
 Directive arguments must be literal constants: strings, numbers, or booleans.
+
+## Exported Native Symbols
+
+`@export_name` exposes a top-level, non-generic Magma function to native code.
+The function keeps its normal Magma-mangled definition, and the compiler emits
+an ABI-compatible forwarding wrapper under the requested symbol name:
+
+```magma
+@export_name("magma_add")
+add(a i32, b i32) i32:
+    ret a + b
+..
+```
+
+The ABI defaults to C and may be written explicitly as the second argument:
+
+```magma
+@export_name("magma_add", "C")
+```
+
+The generated LLVM retains the Magma implementation and adds a forwarding
+definition (package suffixes vary between compilations):
+
+```llvm
+define i32 @module_suffix.add(i32 %a, i32 %b) {
+  ; Magma function body
+}
+
+define i32 @magma_add(i32 %a, i32 %b) {
+  %export.ret = call i32 @module_suffix.add(i32 %a, i32 %b)
+  ret i32 %export.ret
+}
+```
+
+C code can then link against the emitted object and call the wrapper:
+
+```c
+#include <stdint.h>
+
+extern int32_t magma_add(int32_t a, int32_t b);
+```
+
+`pub` remains independent: it controls visibility to other Magma modules, while
+`@export_name` controls native symbol visibility. Other ABIs, generic functions,
+member functions, and throwing functions are not currently supported. Throwing
+functions require an explicit non-throwing wrapper that translates failures to
+a C-compatible representation. Exported symbol names must be unique across all
+modules in a compilation.
 
 ## External Functions
 
@@ -861,8 +946,20 @@ be selected with `@platform(...)`.
 
 On Windows, linking an import library such as `raylib.lib` keeps the dependency
 dynamic: `raylib.dll` must be beside the generated executable or otherwise on
-the DLL search path at runtime. Selecting a static `.lib` later uses the same
-declaration; the referenced library artifact determines the linkage kind.
+the DLL search path at runtime. Files declared with `bundle` are copied beside
+the generated executable after a successful link:
+
+```magma
+@platform("windows")
+link "./vendor/raylib/raylibdll.lib"
+@platform("windows")
+bundle "./vendor/raylib/raylib.dll"
+```
+
+Bundle paths are resolved relative to the declaring Magma file, deduplicated
+across imported modules, and ignored for LLVM and object emission. Selecting a
+static `.lib` later uses the same `link` declaration; the referenced library
+artifact determines the linkage kind.
 
 Declaration of external functions from within Magma is planned but currently WIP.
 
@@ -1101,14 +1198,16 @@ const counter_value u64 = 1
 Mutable global state is used in parts of `std/` for low-level platform calls.
 Because globals lower to storage, updates are visible across calls.
 
-### Platform Directives
+### Compiler Directives
 
 `@platform(...)` applies only to the next top-level declaration, import, external
 declaration, or inline LLVM item. It does not apply to a whole file or to a
 block of declarations.
 
 Directive arguments must be literal strings, numbers, or booleans. The
-implemented directive name is `platform`; other directive names are rejected.
+implemented directive names are `platform` and `export_name`; other directive
+names are rejected. `@export_name` must immediately precede the function it
+exports.
 
 ### Low-Level and Runtime Caveats
 

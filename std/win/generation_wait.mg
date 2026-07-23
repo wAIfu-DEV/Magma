@@ -1,19 +1,22 @@
 mod generation_wait_win
+# Windows generation-counter wait backend used by synchronization APIs.
 
-use "../errors.mg" errors
+
+use "std:c" c
+use "std:errors" errors
 
 link "synchronization"
 
 const infinite u32 = 0xFFFFFFFF
 
-Wait(
+pub Wait(
     marker u8
 )
 
-ext ext_win32_WaitOnAddress WaitOnAddress(address ptr, compareAddress ptr, addressSize u64, milliseconds u32) i32
+ext ext_win32_WaitOnAddress WaitOnAddress(address ptr, compareAddress ptr, addressSize c.size_t, milliseconds c.unsigned_int) c.int
 ext ext_win32_WakeByAddressSingle WakeByAddressSingle(address ptr) void
 ext ext_win32_WakeByAddressAll WakeByAddressAll(address ptr) void
-ext ext_win32_GetLastError GetLastError() u32
+ext ext_win32_GetLastError GetLastError() c.unsigned_int
 
 pub new() !$Wait:
     ret Wait(marker=0)

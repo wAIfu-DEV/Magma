@@ -1,18 +1,20 @@
 mod builder
+# Efficiently constructs owned strings from incrementally appended values.
 
-use "allocator.mg" alc
-use "strings.mg" strings
-use "memory.mg" mem
-use "cast.mg" cast
-use "errors.mg" errors
-use "footgun.mg" footgun
+use "std:allocator" alc
+use "std:strings" strings
+use "std:memory" mem
+use "std:cast" cast
+use "std:errors" errors
+use "std:footgun" footgun
 
 Segment(
     value str
     owned bool
 )
 
-Builder(
+# Accumulates borrowed and owned string segments before producing one owned string.
+pub Builder(
     allocator alc.Allocator
     segments ptr
     count u64
@@ -20,6 +22,11 @@ Builder(
     totalBytes u64
 )
 
+# Creates an empty builder using a for segment storage and copied strings.
+# @complexity O(1), excluding allocator cost
+# @ownership Release with Builder.free.
+# @example
+#   output := try builder.new(a)
 pub new(a alc.Allocator) !$Builder:
     ret Builder(
         allocator=a,
@@ -62,15 +69,29 @@ Builder.add(s str, owned bool) !void:
     this.totalBytes = this.totalBytes + byteCount
 ..
 
+# Appends a borrowed segment without copying it.
+# @complexity Amortized O(1)
+# @ownership s must remain valid until build or reset completes.
+# @example
+#   try output.appendBorrowed("prefix: ")
 Builder.appendBorrowed(s str) !void:
     try this.add(s, false)
 ..
 
+# Transfers an owned string into the builder.
+# @complexity Amortized O(1)
+# @ownership The builder releases s during reset or free.
+# @example
+#   try output.appendOwned(ownedText)
 Builder.appendOwned(s $str) !void:
-    footgun.drop[str](s)
     try this.add(s, true)
+    footgun.drop[str](s)
 ..
 
+# Copies and appends a string, making the segment independent of s.
+# @complexity O(N), where N is the string byte length
+# @example
+#   try output.appendCopy(temporaryText)
 Builder.appendCopy(s str) !void:
     byteCount := strings.countBytes(s)
     if byteCount == 0:
@@ -91,6 +112,12 @@ Builder.appendCopy(s str) !void:
     this.totalBytes = this.totalBytes + byteCount
 ..
 
+# Concatenates all segments into a newly allocated owned string.
+# Building does not clear the builder or release copied segments.
+# @complexity O(N), where N is the total output byte length
+# @ownership Release the returned string with the builder's allocator.
+# @example
+#   text := try output.build()
 Builder.build() !$str:
     if this.totalBytes == 0:
         ret try strings.alloc(this.allocator, 0)
@@ -110,10 +137,14 @@ Builder.build() !$str:
     ret result
 ..
 
+# Returns the byte length of the string that build would produce.
+# @complexity O(1)
 Builder.byteCount() u64:
     ret this.totalBytes
 ..
 
+# Reports whether no segments have been appended.
+# @complexity O(1)
 Builder.isEmpty() bool:
     ret this.count == 0
 ..
@@ -129,12 +160,20 @@ Builder.releaseCopies() void:
     ..
 ..
 
+# Releases copied and transferred segments while retaining segment capacity.
+# @complexity O(S), where S is the number of segments
+# @example
+#   try output.reset()
 Builder.reset() !void:
     this.releaseCopies()
     this.count = 0
     this.totalBytes = 0
 ..
 
+# Releases all owned segments and the builder's segment storage.
+# @complexity O(S), where S is the number of segments
+# @example
+#   output.free()
 destr Builder.free() void:
     this.releaseCopies()
     this.allocator.free(this.segments)

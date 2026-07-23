@@ -3,36 +3,40 @@
 `ThreadPool` sends tasks through a growing ring buffer to a dynamically sized
 set of native threads. It keeps a configurable minimum number of workers, grows when queued work has
 consumed every available worker, and retires burst workers when the queue
-drains. The pool has two idle policies: its baseline workers can park
-immediately, or briefly spin before parking.
+drains. Its baseline workers briefly spin before parking when `spinCount` is
+nonzero.
 
 ## Construction
 
 ```magma
-normal := try thread_pool.new(a, 2, 8, 256)
-spinning := try thread_pool.newSpinning(a, 2, 8, 256, 4096)
+normal := try thread_pool.new(a, 2, 8, 256, 0)
+spinning := try thread_pool.new(a, 2, 8, 256, 4096)
 ```
 
-`new(a, minWorkers, maxWorkers, queueCapacity)` creates the normal pool with the
-specified worker limits and initial queue capacity. The pool initially creates
+`new(a, minWorkers, maxWorkers, queueCapacity, spinCount)` creates a pool with
+the specified worker limits, initial queue capacity, and spin budget. It initially creates
 `minWorkers` workers and grows toward `maxWorkers` as concurrent demand requires. An idle worker
 registers itself as sleeping and waits using the platform generation-wait
 backend. On Windows this uses `WaitOnAddress`; Unix platforms use the standard
 library's mutex/condition fallback.
 
-`newSpinning(a, minWorkers, maxWorkers, queueCapacity, spinCount)` creates the alternative
-low-latency pool. When its queue becomes empty, the remaining baseline workers check the atomic
+When `spinCount` is nonzero and the queue becomes empty, the remaining baseline workers check the atomic
 work generation up to `spinCount` times. An LLVM `pause` instruction is issued
 between checks. If submission changes the generation during that interval, the
 worker checks the queue without entering the operating-system wait. If the
 budget expires, the worker parks exactly like a normal pool worker.
 
-Both worker limits, `queueCapacity`, and the spinning pool's `spinCount` must
-all be greater than zero, and `maxWorkers` must not be less than `minWorkers`.
+Both worker limits and `queueCapacity` must be greater than zero, and
+`maxWorkers` must not be less than `minWorkers`. A zero `spinCount` disables
+spinning.
+
+Worker bookkeeping starts at `minWorkers` slots and doubles only when those
+slots are occupied, capped by `maxWorkers`. Contexts are allocated separately,
+so this growth does not relocate context pointers held by running workers.
 
 When the queue fills, submission doubles its capacity and linearizes queued
 tasks into the new ring in FIFO order. Growth is amortized O(1) and occurs while
-holding the queue mutex. Allocation failure or integer capacity exhaustion is
+holding the pool spin lock. Allocation failure or integer capacity exhaustion is
 returned without modifying the existing queue.
 
 `spinCount` is an iteration budget, not a duration. Its duration depends on the
@@ -45,15 +49,15 @@ target hardware rather than treating a particular count as a time unit.
 must remain valid until that task completes. Submission grows a full queue
 rather than blocking the submitting thread.
 
-`wait()` blocks until all pending work is complete. `shutdown()` first drains
+`wait()` blocks until all pending work is complete. `close()` first drains
 pending work, stops and joins all workers, and releases the pool. It consumes
 the pool.
 
 ```magma
-pool := try thread_pool.new(a, 2, 8, 256)
+pool := try thread_pool.new(a, 2, 8, 256, 0)
 try pool.submit(doWork, context)
 try pool.wait()
-try pool.shutdown()
+try pool.close()
 ```
 
 ## Spinner trade-offs

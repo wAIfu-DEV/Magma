@@ -1,14 +1,15 @@
 mod buffered
+# Buffered reader and writer adapters that reduce underlying I/O operations.
 
-use "allocator.mg" alc
-use "writer.mg"    writer
-use "reader.mg"    reader
-use "errors.mg"    errors
-use "slices.mg"    slices
-use "strings.mg"   strings
-use "cast.mg"      cast
-use "memory.mg"    mem
-use "footgun.mg"   footgun
+use "std:allocator" alc
+use "std:writer"    writer
+use "std:reader"    reader
+use "std:errors"    errors
+use "std:slices"    slices
+use "std:strings"   strings
+use "std:cast"      cast
+use "std:memory"    mem
+use "std:footgun"   footgun
 
 const DEFAULT_BUFFER_SIZE u64 = 8192
 const EOF_MASK u64 = 0x8000000000000000
@@ -16,8 +17,8 @@ const FILLED_MASK u64 = 0x7FFFFFFFFFFFFFFF
 
 # Buffered writer that accumulates writes before flushing.
 # Reduces syscall overhead for many small writes.
-# O(1) for most operations until buffer fills.
-Writer(
+# @complexity O(1) for most operations until buffer fills.
+pub Writer(
     underlying writer.Writer
     buffer ptr
     position u64
@@ -25,11 +26,14 @@ Writer(
 )
 
 # Creates a buffered writer with default buffer size.
-# Warning: caller must call close() or flush() to ensure all data is written.
-# O(1) aside from allocation.
+# @warning caller must call close() or flush() to ensure all data is written.
+# @complexity O(1) aside from allocation.
 # @param a allocator for buffer
 # @param w underlying writer
 # @returns buffered writer
+# @ownership The returned writer owns its buffer and must be closed.
+# @example
+#   bufferedWriter := try buffered.writerBuffered(a, output)
 pub writerBuffered(a alc.Allocator, w writer.Writer) !$Writer:
     ret Writer(
         underlying=w,
@@ -41,8 +45,10 @@ pub writerBuffered(a alc.Allocator, w writer.Writer) !$Writer:
 
 # Flushes buffered data to underlying writer.
 # Handles partial writes, errors, and maintains buffer consistency.
-# O(N) for bytes in buffer.
+# @complexity O(N) for bytes in buffer.
 # @returns total bytes written
+# @example
+#   try bufferedWriter.flush()
 Writer.flush() !u64:
     if this.position == 0:
         ret 0
@@ -85,7 +91,7 @@ Writer.flush() !u64:
 ..
 
 # Internal write implementation for Writer.
-# O(N) for byte count, amortized O(1) for small writes.
+# @complexity O(N) for byte count, amortized O(1) for small writes.
 bufferedWrite(bw Writer*, bytes str) !u64:
     bytesLen u64 = strings.countBytes(bytes)
     
@@ -115,14 +121,20 @@ bufferedWrite(bw Writer*, bytes str) !u64:
 ..
 
 # Returns a Writer interface for this buffered writer.
-# O(1).
+# @complexity O(1).
 # @returns writer interface
+# @ownership The interface borrows this Writer, which must remain alive and unmoved.
+# @example
+#   output := bufferedWriter.writer()
 Writer.writer() writer.Writer:
     ret writer.new(this, bufferedWrite)
 ..
 
 # Closes the buffered writer, flushing any remaining data.
-# O(N) for remaining buffered bytes.
+# @complexity O(N) for remaining buffered bytes.
+# @warning If close throws, the buffer remains allocated so the caller can retry.
+# @example
+#   try bufferedWriter.close()
 destr Writer.close() !void:
     try this.flush()
     this.allocator.free(this.buffer)
@@ -131,65 +143,82 @@ destr Writer.close() !void:
 ..
 
 # Writes the provided bytes and returns the count written.
-# O(N) for byte count.
+# @complexity O(N) for byte count.
 # @param bytes string to write
 # @returns number of bytes written
+# @note This convenience method writes directly to the underlying writer; use writer() for buffering.
+# @example
+#   written := try bufferedWriter.write("data")
 Writer.write(bytes str) !u64:
     ret try this.underlying.write(bytes)
 ..
 
 # Writes the complete byte string or returns an error if the adapter makes no
 # progress or reports an invalid count.
+# @complexity O(N) for byte count
+# @note This convenience method writes directly to the underlying writer; use writer() for buffering.
+# @example
+#   try bufferedWriter.writeAll("complete payload")
 Writer.writeAll(bytes str) !u64:
     ret try this.underlying.writeAll(bytes)
 ..
 
 # Writes the provided bytes followed by a newline.
-# O(N) for byte count.
+# @complexity O(N) for byte count.
 # @param bytes string to write
 # @returns number of bytes written
+# @example
+#   try bufferedWriter.writeLn("record")
 Writer.writeLn(bytes str) !u64:
     ret try this.underlying.writeLn(bytes)
 ..
 
 # Writes "true" or "false" based on the boolean value.
-# O(1).
+# @complexity O(1).
 # @param b boolean value
 # @returns number of bytes written
+# @example
+#   try bufferedWriter.writeBool(true)
 Writer.writeBool(b bool) !u64:
     ret try this.underlying.writeBool(b)
 ..
 
 # Writes a signed 64-bit integer in decimal form.
-# O(1) bounded by integer width.
+# @complexity O(1) bounded by integer width.
 # @param num integer value
 # @returns number of bytes written
+# @example
+#   try bufferedWriter.writeInt64(-42)
 Writer.writeInt64(num i64) !u64:
     ret try this.underlying.writeInt64(num)
 ..
 
 # Writes an unsigned 64-bit integer in decimal form.
-# O(1) bounded by integer width.
+# @complexity O(1) bounded by integer width.
 # @param num integer value
 # @returns number of bytes written
+# @example
+#   try bufferedWriter.writeUint64(42)
 Writer.writeUint64(num u64) !u64:
     ret try this.underlying.writeUint64(num)
 ..
 
 
 # Writes a floating point value with the provided precision.
-# O(P) for precision digits.
+# @complexity O(P) for precision digits.
 # @param flt floating point value
 # @param precision digits after decimal point
 # @returns number of bytes written
+# @example
+#   try bufferedWriter.writeFloat64(3.14159, 2)
 Writer.writeFloat64(flt f64, precision u64) !u64:
     ret try this.underlying.writeFloat64(flt, precision)
 ..
 
 # Buffered reader that reads in chunks and serves from buffer.
 # Reduces syscall overhead for many small reads.
-# O(1) for most operations when reading from buffer.
-Reader(
+# @complexity O(1) for most operations when reading from buffer.
+pub Reader(
     underlying reader.Reader
     buffer u8*
     position u64   # Current read position in buffer
@@ -214,10 +243,13 @@ Reader.markEof() void:
 ..
 
 # Creates a buffered reader with default buffer size.
-# O(1) aside from allocation.
+# @complexity O(1) aside from allocation.
 # @param a allocator for buffer
 # @param r underlying reader
 # @returns buffered reader
+# @ownership The returned reader owns its buffer and must be closed.
+# @example
+#   bufferedReader := try buffered.readerBuffered(a, input)
 pub readerBuffered(a alc.Allocator, r reader.Reader) !$Reader:
     ret Reader(
         underlying=r,
@@ -229,7 +261,7 @@ pub readerBuffered(a alc.Allocator, r reader.Reader) !$Reader:
 ..
 
 # Fills the internal buffer from underlying reader.
-# O(N) for buffer size.
+# @complexity O(N) for buffer size.
 Reader.fillBuffer() !bool:
     if this.isEof():
         ret false
@@ -267,7 +299,7 @@ Reader.fillBuffer() !bool:
 ..
 
 # Internal read implementation for Reader.
-# O(N) for requested bytes, amortized O(1) when reading from buffer.
+# @complexity O(N) for requested bytes, amortized O(1) when reading from buffer.
 bufferedRead(br Reader*, buff u8[], nBytes u64) !u64:
     if nBytes == 0:
         ret 0
@@ -322,8 +354,11 @@ bufferedRead(br Reader*, buff u8[], nBytes u64) !u64:
 ..
 
 # Returns a Reader interface for this buffered reader.
-# O(1).
+# @complexity O(1).
 # @returns reader interface
+# @ownership The interface borrows this Reader, which must remain alive and unmoved.
+# @example
+#   input := bufferedReader.reader()
 Reader.reader() reader.Reader:
     ret reader.new(this, bufferedRead)
 ..
@@ -343,9 +378,13 @@ resizeLineBuffer(a alc.Allocator, old u8*, newCapacity u64) !$u8*:
 
 # Reads a line (up to \n) from the buffered reader.
 # Returns string without the newline character.
-# O(N) for line length.
+# @complexity O(N) for line length.
 # @param a allocator for result string
 # @returns line as string
+# @ownership The caller owns the returned string and must free it with a.
+# @throws endOfFile when no bytes remain; a final unterminated line is returned first
+# @example
+#   line := try bufferedReader.readLn(a)
 Reader.readLn(a alc.Allocator) !$str:
     # Initial capacity for line buffer
     capacity u64 = 128
@@ -462,7 +501,11 @@ Reader.readLn(a alc.Allocator) !$str:
 ..
 
 # Closes the buffered reader and frees buffer.
-# O(1).
+# @complexity O(1).
+# Releases the internal read buffer and invalidates interfaces borrowed from this reader.
+# @complexity O(1)
+# @example
+#   bufferedReader.close()
 destr Reader.close() void:
     this.allocator.free(this.buffer)
     this.buffer = none

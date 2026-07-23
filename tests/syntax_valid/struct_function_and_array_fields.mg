@@ -1,5 +1,5 @@
 mod main
-Bundle(callback (u64) u64, values u64[2])
+Bundle(callback (u64) u64, values u64[])
 main() void:
-    bundle Bundle
+    value Bundle
 ..

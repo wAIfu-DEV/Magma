@@ -1,6 +1,6 @@
 mod main
-use "../errors.mg" errors
-use "../random.mg" random
+use "std:errors" errors
+use "std:random" random
 pub main() !void:
     first := random.new(123)
     second := random.new(123)

@@ -1,16 +1,17 @@
 mod future
+# Owned asynchronous results that can be awaited and released safely.
 
-use "allocator.mg" alc
-use "cast.mg" cast
-use "errors.mg" errors
-use "thread_pool.mg" thread_pool
-use "time.mg" time
+use "std:allocator" alc
+use "std:cast" cast
+use "std:errors" errors
+use "std:thread_pool" thread_pool
+use "std:time" time
 
 @platform("windows")
-use "win/address_wait.mg" address_wait
+use "std:win/address_wait" address_wait
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "unix/address_wait.mg" address_wait
+use "std:unix/address_wait" address_wait
 
 State[T](
     allocator alc.Allocator
@@ -27,7 +28,9 @@ Work[T, Context](
     context Context
 )
 
-Future[T](
+# Single-consumer asynchronous result backed by worker-pool state.
+# @mustcall await
+pub Future[T](
     state State[T]*
 )
 
@@ -89,6 +92,15 @@ submitWork[T, Context](pool thread_pool.ThreadPool, work Work[T, Context]*) !boo
 ..
 
 # Future backend using atomic publication and a platform completion wait.
+# @complexity O(1) to allocate and submit
+# @param a allocator for task and result state
+# @param pool pool that executes entry
+# @param entry function producing the result
+# @param context context copied into task storage
+# @returns owned active future
+# @ownership pool and a must remain valid until await completes.
+# @example
+#   pending := try future.new[u64, Work](a, pool, run, work)
 pub new[T, Context](a alc.Allocator, pool thread_pool.ThreadPool, entry (Context*) !T, context Context) !$Future[T]:
     work Work[T, Context]* = try a.allocT[Work[T, Context]](1)
     state State[T]* = addrof work.state
@@ -115,6 +127,11 @@ pub new[T, Context](a alc.Allocator, pool thread_pool.ThreadPool, entry (Context
     ret Future[T](state=state)
 ..
 
+# Reports whether the worker has published a result without consuming it.
+# @complexity O(1)
+# @throws invalidArgument after the future has been consumed
+# @example
+#   complete := try pending.isDone()
 Future[T].isDone() !bool:
     if this.state == none:
         throw errors.invalidArgument("future is not active")
@@ -123,6 +140,12 @@ Future[T].isDone() !bool:
     ret loadStatus(addrof state.status) != 0
 ..
 
+# Blocks until completion, consumes the future, and returns ownership of its result.
+# @complexity O(1) when complete; otherwise blocks without busy-waiting
+# @throws the error returned by the worker entry function
+# @throws invalidArgument when the future was already consumed
+# @example
+#   value := try pending.await()
 destr Future[T].await() !$T:
     if this.state == none:
         throw errors.invalidArgument("future is not active")

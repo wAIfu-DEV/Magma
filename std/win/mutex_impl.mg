@@ -1,7 +1,10 @@
 mod mutex_impl_win
+# Windows mutex backend used by the portable mutex module.
 
+
+use "std:c" c
 # SRWLOCK_INIT is a single zero-initialized pointer.
-Mutex(
+pub Mutex(
     state ptr
 )
 

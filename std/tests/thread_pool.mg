@@ -1,13 +1,13 @@
 mod main
 
-use "../allocator.mg" allocator
-use "../cast.mg" cast
-use "../errors.mg" errors
-use "../heap.mg" heap
-use "../thread_pool.mg" thread_pool
-use "../thread.mg" thread
-use "../time.mg" time
-use "../footgun.mg" footgun
+use "std:allocator" allocator
+use "std:cast" cast
+use "std:errors" errors
+use "std:heap" heap
+use "std:thread_pool" thread_pool
+use "std:thread" thread
+use "std:time" time
+use "std:footgun" footgun
 
 ScaleContext(
     ready u64*
@@ -156,6 +156,10 @@ pub main() !void:
     release u64 = 0
     scaleContext := ScaleContext(ready=addrof ready, release=addrof release)
     scaling := try thread_pool.new(a, 2, 4, 4, 1)
+    if scaling.state.workerCapacity != 2:
+        try scaling.close()
+        throw errors.failure("thread pool allocated its maximum worker storage eagerly")
+    ..
     scaleIndex u64 = 0
     while scaleIndex < 4:
         try scaling.submit(occupy, addrof scaleContext)
@@ -170,14 +174,19 @@ pub main() !void:
         try scaling.close()
         throw errors.failure("thread pool did not grow when all workers were busy")
     ..
+    if scaling.state.workerCapacity != 4 || scaling.state.workerCapacity > scaling.state.activeWorkers * 2:
+        atomicStore(addrof release, 1)
+        try scaling.close()
+        throw errors.failure("thread pool worker storage did not grow geometrically")
+    ..
     atomicStore(addrof release, 1)
     try scaling.wait()
     shrinkDeadline u64 = time.ticks() + time.msToTicks(2000)
     active u64 = 4
     while active != 2 && time.ticks() < shrinkDeadline:
-        try scaling.state.lock.lock()
+        scaling.state.lock.lock()
         active = scaling.state.activeWorkers
-        try scaling.state.lock.unlock()
+        scaling.state.lock.unlock()
         thread.yield()
     ..
     if active != 2:

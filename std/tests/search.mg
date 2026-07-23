@@ -1,6 +1,6 @@
 mod main
-use "../errors.mg" errors
-use "../search.mg" search
+use "std:errors" errors
+use "std:search" search
 compare(a u64, b u64) i64:
     if a < b:
         ret -1
@@ -10,7 +10,7 @@ compare(a u64, b u64) i64:
     ret 0
 ..
 pub main() !void:
-    values u64[3]
+    values := array u64[3]
     values[0] = 2
     values[1] = 4
     values[2] = 6

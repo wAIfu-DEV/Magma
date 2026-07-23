@@ -1,8 +1,8 @@
 mod main
-use "../errors.mg" errors
-use "../cast.mg" cast
-use "../strings.mg" strings
-use "../writer.mg" writer
+use "std:errors" errors
+use "std:cast" cast
+use "std:strings" strings
+use "std:writer" writer
 sink(impl ptr, bytes str) !u64:
     ret strings.countBytes(bytes)
 ..

@@ -1,15 +1,17 @@
 mod heap_impl_win
+# Windows process-heap backend used by the portable heap module.
 
-use "../allocator.mg" a
-use "../errors.mg"    e
-use "../cast.mg"      cast
-use "../memory.mg"    mem
 
+use "std:c" c
+use "std:allocator" a
+use "std:errors"    e
+use "std:cast"      cast
+use "std:memory"    mem
 # Windows heap API
 ext ext_win32_GetProcessHeap GetProcessHeap() ptr
-ext ext_win32_HeapAlloc      HeapAlloc(hHeap ptr, dwFlags u32, dwBytes u64) ptr
-ext ext_win32_HeapReAlloc    HeapReAlloc(hHeap ptr, dwFlags u32, lpMem ptr, dwBytes u64) ptr
-ext ext_win32_HeapFree       HeapFree(hHeap ptr, dwFlags u32, lpMem ptr) u32
+ext ext_win32_HeapAlloc      HeapAlloc(hHeap ptr, dwFlags c.unsigned_int, dwBytes c.size_t) ptr
+ext ext_win32_HeapReAlloc    HeapReAlloc(hHeap ptr, dwFlags c.unsigned_int, lpMem ptr, dwBytes c.size_t) ptr
+ext ext_win32_HeapFree       HeapFree(hHeap ptr, dwFlags c.unsigned_int, lpMem ptr) c.unsigned_int
 
 # Heap handle caching for performance
 gl_heap ptr

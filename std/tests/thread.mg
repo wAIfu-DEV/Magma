@@ -1,7 +1,7 @@
 mod main
 
-use "../errors.mg" errors
-use "../thread.mg" thread
+use "std:errors" errors
+use "std:thread" thread
 
 worker(context ptr) u64:
     value u64* = context
@@ -27,7 +27,7 @@ pub main() !void:
 
     valueA u64 = 0
     valueB u64 = 0
-    threads thread.Thread[2]
+    threads := array thread.Thread[2]
     threads[0] = try thread.new[ptr](worker, addrof valueA)
     threads[1] = try thread.new[ptr](worker, addrof valueB)
     try thread.joinAll(threads)

@@ -1,7 +1,7 @@
 mod main
 
-use "../cpu.mg" cpu
-use "../errors.mg" errors
+use "std:cpu" cpu
+use "std:errors" errors
 
 pub main() !void:
     if cpu.coreCount() == 0:

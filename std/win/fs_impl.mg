@@ -1,18 +1,21 @@
 mod fs_impl_win
+# Windows filesystem backend used by the portable fs module.
 
-use "../allocator.mg" allocator
-use "../builder.mg" builder
-use "../cast.mg" cast
-use "../errors.mg" errors
-use "../slices.mg" slices
-use "../strings.mg" strings
-use "../utf8.mg" utf8
 
-ext ext_FindFirstFileW FindFirstFileW(pattern u16*, data ptr) ptr
-ext ext_FindNextFileW FindNextFileW(handle ptr, data ptr) i32
-ext ext_FindClose FindClose(handle ptr) i32
-ext ext_DeleteFileW DeleteFileW(path u16*) i32
-ext ext_GetLastError GetLastError() u32
+use "std:c" c
+use "std:allocator" allocator
+use "std:builder" builder
+use "std:cast" cast
+use "std:errors" errors
+use "std:slices" slices
+use "std:strings" strings
+use "std:utf8" utf8
+
+ext ext_FindFirstFileW FindFirstFileW(pattern c.unsigned_short*, data ptr) ptr
+ext ext_FindNextFileW FindNextFileW(handle ptr, data ptr) c.int
+ext ext_FindClose FindClose(handle ptr) c.int
+ext ext_DeleteFileW DeleteFileW(path c.unsigned_short*) c.int
+ext ext_GetLastError GetLastError() c.unsigned_int
 
 pub removeFile(a allocator.Allocator, path str) !void:
     wide := try utf8.utf8To16NT(a, path)
@@ -41,7 +44,7 @@ walkInner(a allocator.Allocator, root str, visit (str, bool) !void) !void:
 
     # WIN32_FIND_DATAW is 592 bytes. Fixed arrays inside Magma structs are
     # slices, so use raw ABI storage and the documented field offsets.
-    data u8[592]
+    data := array u8[592]
     dataPtr := slices.toPtr(data)
     attributes u32* = dataPtr
     namePtr u16* = cast.utop(cast.ptou(dataPtr) + 44)

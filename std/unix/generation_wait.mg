@@ -1,8 +1,9 @@
 mod generation_wait_unix
+# Unix generation-counter wait backend used by thread synchronization APIs.
 
-use "../wake.mg" wake_mod
+use "std:wake" wake_mod
 
-Wait(
+pub Wait(
     wake wake_mod.Wake
 )
 

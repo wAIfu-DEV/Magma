@@ -9,9 +9,42 @@ import (
 	"Magma/src/shared"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestWindowsMainConvertsWideArgumentsToUtf8(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows entry-point lowering")
+	}
+
+	ir, err := compileSource(t, `mod main
+
+main(args str[]) void:
+    ret
+..
+`)
+	if err != nil {
+		t.Fatalf("compile main with arguments: %v", err)
+	}
+
+	for _, want := range []string{
+		"define i32 @wmain(i32 %argc, ptr %argv)",
+		"declare dllimport i32 @SetConsoleOutputCP(i32)",
+		"call i32 @SetConsoleOutputCP(i32 65001)",
+		"@WideCharToMultiByte(i32 65001, i32 128",
+		"call ptr @HeapAlloc",
+		"call void @magma.freeUtf8Args(i32 %argc, ptr %arr)",
+	} {
+		if !strings.Contains(ir, want) {
+			t.Fatalf("Windows entry wrapper is missing %q", want)
+		}
+	}
+	if strings.Contains(ir, "define i32 @main(i32 %argc, ptr %argv)") {
+		t.Fatal("Windows entry wrapper still exposes narrow argv")
+	}
+}
 
 func compileSource(t *testing.T, source string) (string, error) {
 	t.Helper()
@@ -39,6 +72,142 @@ func compileSource(t *testing.T, source string) (string, error) {
 	}
 	ir, err := llvmir.IrWrite(state)
 	return string(ir), err
+}
+
+func TestRuntimeArrayExpressionLowersToStackBackedSlice(t *testing.T) {
+	ir, err := compileSource(t, `mod main
+
+Pair[T, U](first T, second U)
+
+make(count u64) void:
+    bytes := array u8[count]
+    pairs := array Pair[u8, u64][count + 1]
+    bytes[0] = 7
+    pairs[0] = Pair[u8, u64](first=1, second=2)
+    ret
+..
+`)
+	if err != nil {
+		t.Fatalf("compile runtime array expression: %v", err)
+	}
+	for _, want := range []string{"alloca i8, i64", "alloca %", "insertvalue %type.slice"} {
+		if !strings.Contains(ir, want) {
+			t.Fatalf("runtime array IR is missing %q", want)
+		}
+	}
+}
+
+func TestMagmaFunctionsHaveInternalLinkage(t *testing.T) {
+	ir, err := compileSource(t, `mod main
+
+helper() void:
+    ret
+..
+
+main() void:
+    helper()
+..
+`)
+	if err != nil {
+		t.Fatalf("compile ordinary functions: %v", err)
+	}
+	if !strings.Contains(ir, "define internal void @") ||
+		!strings.Contains(ir, ".helper()") ||
+		!strings.Contains(ir, ".main()") {
+		t.Fatalf("ordinary Magma functions do not have internal linkage:\n%s", ir)
+	}
+	if !strings.Contains(ir, "define i32 @main(") && !strings.Contains(ir, "define i32 @wmain(") {
+		t.Fatalf("native entry point does not retain external linkage:\n%s", ir)
+	}
+}
+
+func TestExportNameEmitsForwardingWrapper(t *testing.T) {
+	ir, err := compileSource(t, `mod main
+
+@export_name("magma_add")
+add(a i32, b i32) i32:
+    ret a + b
+..
+
+main() void:
+    ret
+..
+`)
+	if err != nil {
+		t.Fatalf("compile exported function: %v", err)
+	}
+	for _, want := range []string{
+		"define internal i32 @",
+		".add(i32 %a, i32 %b)",
+		"define i32 @magma_add(i32 %a, i32 %b)",
+		"%export.ret = call i32 @",
+		"ret i32 %export.ret",
+	} {
+		if !strings.Contains(ir, want) {
+			t.Fatalf("export wrapper is missing %q\n%s", want, ir)
+		}
+	}
+}
+
+func TestExportNameDefaultsToCAndAcceptsExplicitC(t *testing.T) {
+	_, err := compileSource(t, `mod main
+
+@export_name("magma_ping", "C")
+ping() void:
+    ret
+..
+
+main() void:
+    ret
+..
+`)
+	if err != nil {
+		t.Fatalf("compile explicit C export: %v", err)
+	}
+}
+
+func TestExportNameRejectsUnsupportedABI(t *testing.T) {
+	_, err := compileSource(t, `mod main
+
+@export_name("magma_ping", "stdcall")
+ping() void:
+    ret
+..
+`)
+	if err == nil || !strings.Contains(err.Error(), "unsupported export ABI") {
+		t.Fatalf("expected unsupported ABI error, got %v", err)
+	}
+}
+
+func TestExportNameRejectsDuplicateNativeSymbol(t *testing.T) {
+	_, err := compileSource(t, `mod main
+
+@export_name("magma_duplicate")
+first() void:
+    ret
+..
+
+@export_name("magma_duplicate")
+second() void:
+    ret
+..
+`)
+	if err == nil || !strings.Contains(err.Error(), "duplicate exported symbol name 'magma_duplicate'") {
+		t.Fatalf("expected duplicate exported symbol error, got %v", err)
+	}
+}
+
+func TestExportNameRejectsThrowingFunction(t *testing.T) {
+	_, err := compileSource(t, `mod main
+
+@export_name("magma_fallible")
+fallible() !i32:
+    ret 42
+..
+`)
+	if err == nil || !strings.Contains(err.Error(), "throwing functions cannot be exported") {
+		t.Fatalf("expected throwing export error, got %v", err)
+	}
 }
 
 func TestAddrofSubscriptLowers(t *testing.T) {
@@ -170,6 +339,21 @@ main() void:
 	}
 }
 
+func TestTypedSliceResolvesTypeErasedSliceMethod(t *testing.T) {
+	source := `mod main
+
+main(args str[]) void:
+    if args.count() == 0:
+        ret
+    ..
+..
+`
+
+	if _, err := compileSource(t, source); err != nil {
+		t.Fatalf("compile typed slice method call: %v", err)
+	}
+}
+
 func TestPointerDereferenceAssignmentLowers(t *testing.T) {
 	source := `mod test
 
@@ -248,7 +432,7 @@ main() !void:
 	if got := strings.Count(ir, "!prof !9000"); got != 6 {
 		t.Fatalf("got %d unlikely error branches, want four program branches and two core dependency branches", got)
 	}
-	if !strings.Contains(ir, "@magma.error.push(%type.error %error, ptr %site) cold noinline") {
+	if !strings.Contains(ir, "define internal %type.error @magma.error.push(%type.error %error, ptr %site) cold noinline") {
 		t.Fatal("trace recording helper is not kept out of hot callers")
 	}
 	if !strings.Contains(ir, "private constant %type.error.site") ||
@@ -437,6 +621,27 @@ const answer := value()
 	_, err = compileSource(t, invalid)
 	if err == nil || !strings.Contains(err.Error(), "constant initializer must be") {
 		t.Fatalf("expected unsupported constant initializer error, got %v", err)
+	}
+}
+
+func TestConstAggregateCanAddressConstGlobal(t *testing.T) {
+	source := `mod test
+
+Vtable(fn_call (ptr) void)
+Interface(impl ptr, vtable Vtable*)
+
+call(impl ptr) void:
+..
+
+const vtable := Vtable(fn_call=call)
+const object := Interface(impl=none, vtable=addrof vtable)
+`
+	ir, err := compileSource(t, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ir, "ptr @test_") {
+		t.Fatalf("expected constant aggregate to address vtable global, got:\n%s", ir)
 	}
 }
 

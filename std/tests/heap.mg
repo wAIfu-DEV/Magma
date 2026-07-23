@@ -1,6 +1,6 @@
 mod main
-use "../errors.mg" errors
-use "../heap.mg" heap
+use "std:errors" errors
+use "std:heap" heap
 pub main() !void:
     a := heap.allocator()
     viaAllocator := try a.alloc(8)

@@ -1,30 +1,33 @@
 mod http_impl_win
+# Windows HTTP backend used by the portable http module.
 
+
+use "std:c" c
 link "winhttp"
 
-use "../allocator.mg" alc
-use "../reader.mg"    reader
-use "../strings.mg"   strings
-use "../slices.mg"    slices
-use "../utf8.mg"      utf8
-use "../cast.mg"      cast
-use "../errors.mg"    errors
+use "std:allocator" alc
+use "std:reader"    reader
+use "std:strings"   strings
+use "std:slices"    slices
+use "std:utf8"      utf8
+use "std:cast"      cast
+use "std:errors"    errors
 
-ext ext_WinHttpOpen               WinHttpOpen(agent u16*, accessType u32, proxy u16*, bypass u16*, flags u32) ptr
-ext ext_WinHttpConnect            WinHttpConnect(session ptr, server u16*, port u16, reserved u32) ptr
-ext ext_WinHttpOpenRequest        WinHttpOpenRequest(connect ptr, verb u16*, object u16*, version u16*, referer u16*, acceptTypes ptr, flags u32) ptr
-ext ext_WinHttpAddRequestHeaders  WinHttpAddRequestHeaders(request ptr, headers u16*, length u32, modifiers u32) u32
-ext ext_WinHttpSendRequest        WinHttpSendRequest(request ptr, headers u16*, headerLength u32, optional ptr, optionalLength u32, totalLength u32, context u64) u32
-ext ext_WinHttpWriteData          WinHttpWriteData(request ptr, buffer ptr, bytes u32, written u32*) u32
-ext ext_WinHttpReceiveResponse    WinHttpReceiveResponse(request ptr, reserved ptr) u32
-ext ext_WinHttpQueryHeaders       WinHttpQueryHeaders(request ptr, infoLevel u32, name u16*, buffer ptr, bufferLength u32*, index u32*) u32
-ext ext_WinHttpQueryDataAvailable WinHttpQueryDataAvailable(request ptr, available u32*) u32
-ext ext_WinHttpReadData           WinHttpReadData(request ptr, buffer ptr, bytes u32, read u32*) u32
-ext ext_WinHttpSetTimeouts        WinHttpSetTimeouts(session ptr, resolve i32, connect i32, sendTimeout i32, receive i32) u32
-ext ext_WinHttpSetOption          WinHttpSetOption(handle ptr, option u32, buffer ptr, length u32) u32
-ext ext_WinHttpCloseHandle        WinHttpCloseHandle(handle ptr) u32
-ext ext_WinHttpCrackUrl           WinHttpCrackUrl(url u16*, length u32, flags u32, components ptr) u32
-ext ext_GetLastError              GetLastError() u32
+ext ext_WinHttpOpen               WinHttpOpen(agent c.unsigned_short*, accessType c.unsigned_int, proxy c.unsigned_short*, bypass c.unsigned_short*, flags c.unsigned_int) ptr
+ext ext_WinHttpConnect            WinHttpConnect(session ptr, server c.unsigned_short*, port c.unsigned_short, reserved c.unsigned_int) ptr
+ext ext_WinHttpOpenRequest        WinHttpOpenRequest(connect ptr, verb c.unsigned_short*, object c.unsigned_short*, version c.unsigned_short*, referer c.unsigned_short*, acceptTypes ptr, flags c.unsigned_int) ptr
+ext ext_WinHttpAddRequestHeaders  WinHttpAddRequestHeaders(request ptr, headers c.unsigned_short*, length c.unsigned_int, modifiers c.unsigned_int) c.unsigned_int
+ext ext_WinHttpSendRequest        WinHttpSendRequest(request ptr, headers c.unsigned_short*, headerLength c.unsigned_int, optional ptr, optionalLength c.unsigned_int, totalLength c.unsigned_int, context c.uintptr_t) c.unsigned_int
+ext ext_WinHttpWriteData          WinHttpWriteData(request ptr, buffer ptr, bytes c.unsigned_int, written c.unsigned_int*) c.unsigned_int
+ext ext_WinHttpReceiveResponse    WinHttpReceiveResponse(request ptr, reserved ptr) c.unsigned_int
+ext ext_WinHttpQueryHeaders       WinHttpQueryHeaders(request ptr, infoLevel c.unsigned_int, name c.unsigned_short*, buffer ptr, bufferLength c.unsigned_int*, index c.unsigned_int*) c.unsigned_int
+ext ext_WinHttpQueryDataAvailable WinHttpQueryDataAvailable(request ptr, available c.unsigned_int*) c.unsigned_int
+ext ext_WinHttpReadData           WinHttpReadData(request ptr, buffer ptr, bytes c.unsigned_int, read c.unsigned_int*) c.unsigned_int
+ext ext_WinHttpSetTimeouts        WinHttpSetTimeouts(session ptr, resolve c.int, connect c.int, sendTimeout c.int, receive c.int) c.unsigned_int
+ext ext_WinHttpSetOption          WinHttpSetOption(handle ptr, option c.unsigned_int, buffer ptr, length c.unsigned_int) c.unsigned_int
+ext ext_WinHttpCloseHandle        WinHttpCloseHandle(handle ptr) c.unsigned_int
+ext ext_WinHttpCrackUrl           WinHttpCrackUrl(url c.unsigned_short*, length c.unsigned_int, flags c.unsigned_int, components ptr) c.unsigned_int
+ext ext_GetLastError              GetLastError() c.unsigned_int
 
 URLComponents(
     structSize u32
@@ -45,12 +48,12 @@ URLComponents(
     extraLength u32
 )
 
-Client(
+pub Client(
     session ptr
     allocator alc.Allocator
 )
 
-Response(
+pub Response(
     connection ptr
     request ptr
     allocator alc.Allocator
@@ -158,7 +161,7 @@ addHeaders(a alc.Allocator, request ptr, headers str) !bool:
 
 writeBody(request ptr, source reader.Reader, length u64) !u64:
     remaining u64 = length
-    buffer u8[16384]
+    buffer := array u8[16384]
     while remaining > 0:
         wanted u64 = remaining
         if wanted > 16384:

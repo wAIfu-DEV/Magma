@@ -1,22 +1,25 @@
 mod file_impl_win
+# Windows file backend used by the portable file and I/O modules.
 
-use "../utf8.mg"      utf8
-use "../allocator.mg" alc
-use "../slices.mg"    slices
-use "../strings.mg"   strings
-use "../cast.mg"      cast
-use "../errors.mg"    errors
-use "../writer.mg"    writer
-use "../reader.mg"    reader
-use "../file_op_mode.mg" fopm
 
-ext ext_win32_CreateFileW      CreateFileW(pathUtf16 i16*, accessMode u32, _arg0 i32, _arg1 ptr, createMode i32, _arg2 i32, _arg3 ptr) ptr
-ext ext_win32_CloseHandle      CloseHandle(handle ptr) i32
-ext ext_win32_WriteFile        WriteFile(handle ptr, arg0 ptr, arg1 u32, arg2 ptr, arg3 ptr) u32
-ext ext_win32_ReadFile         ReadFile(handle ptr, arg0 ptr, arg1 u32, arg2 ptr, arg3 ptr) u32
-ext ext_win32_GetStdHandle     GetStdHandle(handleNum i32) ptr
-ext ext_win32_SetFilePointerEx SetFilePointerEx(handle ptr, distance i64, newPosition i64*, moveMethod u32) i32
-ext ext_win32_GetLastError     GetLastError() u32
+use "std:c" c
+use "std:utf8"      utf8
+use "std:allocator" alc
+use "std:slices"    slices
+use "std:strings"   strings
+use "std:cast"      cast
+use "std:errors"    errors
+use "std:writer"    writer
+use "std:reader"    reader
+use "std:file_op_mode" fopm
+
+ext ext_win32_CreateFileW      CreateFileW(pathUtf16 c.short*, accessMode c.unsigned_int, _arg0 c.int, _arg1 ptr, createMode c.int, _arg2 c.int, _arg3 ptr) ptr
+ext ext_win32_CloseHandle      CloseHandle(handle ptr) c.int
+ext ext_win32_WriteFile        WriteFile(handle ptr, arg0 ptr, arg1 c.unsigned_int, arg2 ptr, arg3 ptr) c.unsigned_int
+ext ext_win32_ReadFile         ReadFile(handle ptr, arg0 ptr, arg1 c.unsigned_int, arg2 ptr, arg3 ptr) c.unsigned_int
+ext ext_win32_GetStdHandle     GetStdHandle(handleNum c.int) ptr
+ext ext_win32_SetFilePointerEx SetFilePointerEx(handle ptr, distance i64, newPosition i64*, moveMethod c.unsigned_int) c.int
+ext ext_win32_GetLastError     GetLastError() c.unsigned_int
 
 # Magma globals are thread-local by default. These syscall output slots avoid
 # repeated stack allocation without sharing state between threads.
@@ -156,6 +159,28 @@ pub stdout() writer.Writer:
    ret writer.new(ext_win32_GetStdHandle(-11), write)
 ..
 
+# The interface is constant; only the OS handle cache is mutable. Magma globals
+# are thread-local, so this preserves the existing per-thread behavior.
+gl_constStdoutHandle ptr
+
+writeConstStdout(impl ptr, bytes str) !u64:
+   if gl_constStdoutHandle == none:
+      gl_constStdoutHandle = ext_win32_GetStdHandle(-11)
+   ..
+   ret try write(gl_constStdoutHandle, bytes)
+..
+
+const gl_stdoutVtable := writer.Vtable(fn_write=writeConstStdout)
+
+const gl_stdoutWriter := writer.ConstWriter(
+   impl=none,
+   vtable=addrof gl_stdoutVtable,
+)
+
+pub stdoutConst() writer.ConstWriter*:
+   ret addrof gl_stdoutWriter
+..
+
 # Returns a writer for the Win32 standard error handle.
 # O(1).
 pub stderr() writer.Writer:
@@ -190,6 +215,7 @@ pub openFile(a alc.Allocator, path str, openMode fopm.OpenMode) !$ptr:
    OPEN_EXISTING i32 = 3
    CREATE_ALWAYS i32 = 2
    OPEN_ALWAYS i32 = 4
+   TRUNCATE_EXISTING i32 = 5
 
    access_mode u32
    open_mode i32
@@ -199,18 +225,24 @@ pub openFile(a alc.Allocator, path str, openMode fopm.OpenMode) !$ptr:
       if openMode.r:
          access_mode = access_mode | READ
       ..
-      open_mode = OPEN_ALWAYS
    elif openMode.r && openMode.w:
       access_mode = READ | WRITE
-      open_mode = CREATE_ALWAYS
    elif openMode.r:
       access_mode = READ
-      open_mode = OPEN_EXISTING
    elif openMode.w:
       access_mode = WRITE
-      open_mode = CREATE_ALWAYS
    else:
       throw errors.invalidArgument("invalid open mode")
+   ..
+
+   if openMode.c && openMode.t:
+      open_mode = CREATE_ALWAYS
+   elif openMode.c:
+      open_mode = OPEN_ALWAYS
+   elif openMode.t:
+      open_mode = TRUNCATE_EXISTING
+   else:
+      open_mode = OPEN_EXISTING
    ..
 
    path_u16 u16[] = try utf8.utf8To16NT(a, path)
@@ -222,14 +254,7 @@ pub openFile(a alc.Allocator, path str, openMode fopm.OpenMode) !$ptr:
 
    # invalid handle
    if cast.ptou(handle) == cast.itou(-1):
-      if openMode.a:
-         # create file if append mode
-         handle = ext_win32_CreateFileW(path_ptr, access_mode, 0, none, 2, 0, none)
-      ..
-
-      if cast.ptou(handle) == cast.itou(-1):
-          throw errors.native(ext_win32_GetLastError(), "CreateFileW failed")
-      ..
+      throw errors.native(ext_win32_GetLastError(), "CreateFileW failed")
    ..
    ret handle
 ..

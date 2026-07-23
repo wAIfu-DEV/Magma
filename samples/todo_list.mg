@@ -15,7 +15,7 @@ main() !void:
 
     out := stdout.writer()
 
-    tasks str[32]
+    tasks := array str[32]
     count u64 = 0
     running bool = true
 

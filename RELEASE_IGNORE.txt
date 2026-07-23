@@ -1,0 +1,11 @@
+# Paths are relative to the repository root. Use / as the separator.
+# Blank lines and lines beginning with # are ignored.
+.git/*
+.gocache/*
+.agents/*
+.codex/*
+IGNORE/*
+out/*
+out.exe
+out*.ll
+magma-*.zip

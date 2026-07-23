@@ -1,15 +1,15 @@
 mod main
 
-use "../allocator.mg" allocator
-use "../cast.mg" cast
-use "../errors.mg" errors
-use "../heap.mg" heap
-use "../json.mg" json
-use "../memory.mg" memory
-use "../slices.mg" slices
-use "../strings.mg" strings
-use "../writer.mg" writer
-use "../footgun.mg" footgun
+use "std:allocator" allocator
+use "std:cast" cast
+use "std:errors" errors
+use "std:heap" heap
+use "std:json" json
+use "std:memory" memory
+use "std:slices" slices
+use "std:strings" strings
+use "std:writer" writer
+use "std:footgun" footgun
 
 Capture(
     data u8*
@@ -100,7 +100,7 @@ pub main() !void:
     if try borrowedArrayValue.asArray() != addrof array:
         throw errors.failure("JSON array borrowing changed")
     ..
-    specialBytes u8[5]
+    specialBytes := array u8[5]
     specialBytes[0] = 34
     specialBytes[1] = 92
     specialBytes[2] = 10
@@ -130,7 +130,7 @@ pub main() !void:
     if escapedLength != 21:
         throw errors.failure("JSON escaped output has the wrong length")
     ..
-    expected u8[21]
+    expected := array u8[21]
     expected[0] = 91
     expected[1] = 34
     expected[2] = 92

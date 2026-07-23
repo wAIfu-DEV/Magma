@@ -12,6 +12,8 @@ Standard process-stream adapters.
 
 - `pub stdout(a alc.Allocator) !$buffered.Writer` creates an owned buffered standard-output writer; close or flush it.
 - `pub stdoutUnbuffered() writer.Writer` returns an unbuffered standard-output writer.
+- `pub print(bytes str) !u64` writes bytes to standard output through the constant global writer.
+- `pub printLn(bytes str) !u64` writes bytes followed by a newline through the constant global writer.
 - `pub stderr(a alc.Allocator) !$buffered.Writer` creates an owned buffered standard-error writer; close or flush it.
 - `pub stderrUnbuffered() writer.Writer` returns an unbuffered standard-error writer.
 - `pub stdin(a alc.Allocator) !$buffered.Reader` creates an owned buffered standard-input reader; close it.

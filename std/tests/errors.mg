@@ -1,6 +1,6 @@
 mod main
-use "../errors.mg" errors
-use "../strings.mg" strings
+use "std:errors" errors
+use "std:strings" strings
 
 tracedFailure() !u8:
     throw errors.invalidArgument("traced failure")
@@ -9,11 +9,11 @@ tracedFailure() !u8:
 pub main() !void:
     success := errors.ok()
     errors.printTrace(success)
-    if errors.code(success) != 0 || errors.isOk(success) == false || errors.isError(success):
+    if errors.code(success) != 0 || success.ok() == false || success.nok():
         throw errors.failure("ok error classification changed")
     ..
     failure := errors.invalidArgument("bad input")
-    if errors.hasCode(failure, 2) == false || errors.isError(failure) == false || errors.is(failure, errors.invalidArgument("other")) == false || strings.compare(errors.message(failure), "bad input") == false:
+    if errors.hasCode(failure, 2) == false || failure.nok() == false || errors.is(failure, errors.invalidArgument("other")) == false || strings.compare(errors.message(failure), "bad input") == false:
         throw errors.failure("error behavior changed")
     ..
     if strings.compare(errors.toStr(failure), "invalid argument") == false:

@@ -1,15 +1,18 @@
 mod fs_impl_unix
+# Unix filesystem backend used by the portable fs module.
 
-use "../allocator.mg" allocator
-use "../builder.mg" builder
-use "../cast.mg" cast
-use "../errors.mg" errors
-use "../strings.mg" strings
 
-ext ext_unlink unlink(path u8*) i32
+use "std:c" c
+use "std:allocator" allocator
+use "std:builder" builder
+use "std:cast" cast
+use "std:errors" errors
+use "std:strings" strings
+
+ext ext_unlink unlink(path u8*) c.int
 ext ext_opendir opendir(path u8*) ptr
 ext ext_readdir readdir(directory ptr) ptr
-ext ext_closedir closedir(directory ptr) i32
+ext ext_closedir closedir(directory ptr) c.int
 
 pub removeFile(a allocator.Allocator, path str) !void:
     if ext_unlink(strings.toCstrNoCopy(path)) != 0:

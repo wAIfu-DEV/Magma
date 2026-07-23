@@ -1,6 +1,6 @@
 mod main
-use "../errors.mg" errors
-use "../sort.mg" sort
+use "std:errors" errors
+use "std:sort" sort
 compare(a u64, b u64) i64:
     if a < b:
         ret -1
@@ -10,7 +10,7 @@ compare(a u64, b u64) i64:
     ret 0
 ..
 pub main() !void:
-    values u64[3]
+    values := array u64[3]
     values[0] = 3
     values[1] = 1
     values[2] = 2

@@ -1,20 +1,23 @@
 mod file_impl_unix
+# Unix file backend used by the portable file and I/O modules.
 
-use "../file.mg"      file
-use "../allocator.mg" alc
-use "../slices.mg"    slices
-use "../strings.mg"   strings
-use "../cast.mg"      cast
-use "../errors.mg"    errors
-use "../writer.mg"    writer
-use "../reader.mg"    reader
-use "../file_op_mode.mg" fopm
 
-ext ext_unix_open  open(path u8*, flags i32, mode i32) i32
-ext ext_unix_close close(fd i32) i32
-ext ext_unix_write write(fd i32, buf ptr, count u64) i64
-ext ext_unix_read  read(fd i32, buf ptr, count u64) i64
-ext ext_unix_lseek lseek(fd i32, offset i64, whence i32) i64
+use "std:c" c
+use "std:file"      file
+use "std:allocator" alc
+use "std:slices"    slices
+use "std:strings"   strings
+use "std:cast"      cast
+use "std:errors"    errors
+use "std:writer"    writer
+use "std:reader"    reader
+use "std:file_op_mode" fopm
+
+ext ext_unix_open  open(path u8*, flags c.int, mode c.int) c.int
+ext ext_unix_close close(fd c.int) c.int
+ext ext_unix_write write(fd c.int, buf ptr, count u64) i64
+ext ext_unix_read  read(fd c.int, buf ptr, count u64) i64
+ext ext_unix_lseek lseek(fd c.int, offset i64, whence c.int) i64
 
 # Magma globals are thread-local by default. These syscall result slots avoid
 # repeated stack allocation without sharing state between threads.
@@ -128,6 +131,23 @@ pub stdout() writer.Writer:
     ret writer.new(cast.utop(1), write)
 ..
 
+# Constant-interface variant used by std:io. Keeping the callback in a
+# constant aggregate lets LLVM turn Writer.write calls into direct calls.
+writeConstStdout(impl ptr, bytes str) !u64:
+    ret try write(cast.utop(1), bytes)
+..
+
+const gl_stdoutVtable := writer.Vtable(fn_write=writeConstStdout)
+
+const gl_stdoutWriter := writer.ConstWriter(
+    impl=none,
+    vtable=addrof gl_stdoutVtable,
+)
+
+pub stdoutConst() writer.ConstWriter*:
+    ret addrof gl_stdoutWriter
+..
+
 # Returns a writer for standard error.
 # O(1).
 pub stderr() writer.Writer:
@@ -170,20 +190,20 @@ pub openFile(a alc.Allocator, path str, openMode fopm.OpenMode) !$ptr:
         flags = O_RDONLY
     elif openMode.w && openMode.r == false:
         flags = O_WRONLY
-        if openMode.a == false:
-            flags = flags | O_CREAT | O_TRUNC
-        else:
-            flags = flags | O_CREAT | O_APPEND
-        ..
     elif openMode.r && openMode.w:
         flags = O_RDWR
-        if openMode.a == false && openMode.w:
-            flags = flags | O_CREAT | O_TRUNC
-        elif openMode.a:
-            flags = flags | O_CREAT | O_APPEND
-        ..
     else:
         throw errors.invalidArgument("invalid open mode")
+    ..
+
+    if openMode.c:
+        flags = flags | O_CREAT
+    ..
+    if openMode.t:
+        flags = flags | O_TRUNC
+    ..
+    if openMode.a:
+        flags = flags | O_APPEND
     ..
 
     path_cstr u8* = strings.toCstrNoCopy(path)

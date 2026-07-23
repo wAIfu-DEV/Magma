@@ -1,9 +1,23 @@
 mod core
+# Intrinsic types and methods imported implicitly by every Magma program.
 
-use "allocator.mg" alc
+use "std:allocator" alc
+
+# Returns the number of elements in a slice.
+# @complexity O(1)
+# @example
+#   length := values.count()
+slice.count() u64:
+    llvm "  %value = load %type.slice, ptr %this\n"
+    llvm "  %cnt = extractvalue %type.slice %value, 1\n"
+    llvm "  ret i64 %cnt\n"
+..
 
 # Canonical error predicates. Besides being convenient, these are the only
 # predicates used by ownership flow refinement for destructured throwing calls.
+# @complexity O(1)
+# @example
+#   if resultError.ok():
 error.ok() bool:
     llvm "  %value = load %type.error, ptr %this\n"
     llvm "  %code = extractvalue %type.error %value, 2\n"
@@ -11,6 +25,10 @@ error.ok() bool:
     llvm "  ret i1 %ok\n"
 ..
 
+# Reports whether an error represents failure.
+# @complexity O(1)
+# @example
+#   if resultError.nok():
 error.nok() bool:
     llvm "  %value = load %type.error, ptr %this\n"
     llvm "  %code = extractvalue %type.error %value, 2\n"
@@ -28,6 +46,11 @@ strData(value str) u8*:
 
 # Releases the backing allocation of an owned string. Borrowed strings and
 # literals are not ownership obligations and must not be passed to this method.
+# @complexity O(1), excluding allocator cost
+# @param a allocator that created the owned string
+# @warning Passing a borrowed string or the wrong allocator is invalid.
+# @example
+#   owned.free(a)
 destr str.free(a alc.Allocator) void:
     value str = *this
     data u8* = strData(value)

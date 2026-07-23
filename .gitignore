@@ -1,4 +1,5 @@
 Magma.exe
+magma-*.zip
 out.exe
 out/*
 /out*.ll
@@ -6,4 +7,4 @@ IGNORE/
 .gocache/
 *.dll
 *.lib
-REPORT*.md
+~*

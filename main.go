@@ -9,23 +9,27 @@ import (
 	ircleaner "Magma/src/ir_cleaner"
 	"Magma/src/join"
 	llvmir "Magma/src/llvm_ir"
+	"Magma/src/lsp"
 	"Magma/src/makeabs"
 	"Magma/src/monomorph"
 	"Magma/src/pipeline"
 	"Magma/src/shared"
+	magmatarget "Magma/src/target"
 	"Magma/src/types"
+	_ "embed"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
-	builddebug "runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
 )
+
+//go:embed VERSION.txt
+var compilerVersionText string
 
 const usage = `usage: magma [options] <input-file>
 
@@ -36,6 +40,8 @@ options:
   --emit, -e <kind>       llvm, object, or exe (default llvm)
   --opt, -O <0-3>         LLVM optimization level (default 3)
   --error-trace-slots <n> trace slots per runtime shard (default 1024)
+  --target <triple>       compilation target (default: Clang native target)
+  --lsp                   run the Magma language server over stdio
   --clang-version, -cv    print the resolved Clang version and path`
 
 type options struct {
@@ -47,6 +53,8 @@ type options struct {
 	opt             int
 	errorTraceSlots uint64
 	clangVersion    bool
+	target          string
+	lsp             bool
 }
 
 func parseArgs(args []string) (options, error) {
@@ -66,10 +74,12 @@ func parseArgs(args []string) (options, error) {
 	flags.Uint64Var(&opts.errorTraceSlots, "error-trace-slots", 1024, "error trace slots per runtime shard")
 	flags.BoolVar(&opts.clangVersion, "clang-version", false, "print the resolved Clang version")
 	flags.BoolVar(&opts.clangVersion, "cv", false, "print the resolved Clang version")
+	flags.StringVar(&opts.target, "target", "", "target triple or architecture")
+	flags.BoolVar(&opts.lsp, "lsp", false, "run the language server over stdio")
 	if err := flags.Parse(args); err != nil {
 		return options{}, err
 	}
-	if opts.version || opts.clangVersion {
+	if opts.version || opts.clangVersion || opts.lsp {
 		if flags.NArg() != 0 {
 			return options{}, fmt.Errorf("information commands do not accept an input file")
 		}
@@ -96,9 +106,6 @@ func parseArgs(args []string) (options, error) {
 		return options{}, fmt.Errorf("invalid --error-trace-slots value %d (expected a power of two from 1 through 65536)", opts.errorTraceSlots)
 	}
 	opts.inputFile = flags.Arg(0)
-	if opts.out == "" {
-		opts.out = defaultOutput(opts.emit)
-	}
 	return opts, nil
 }
 
@@ -120,6 +127,9 @@ func wrappedMain() error {
 		return err
 	}
 	debug.SetEnabled(opts.debug)
+	if opts.lsp {
+		return lsp.Serve(os.Stdin, os.Stdout)
+	}
 	if opts.version {
 		fmt.Printf("Magma %s\n", compilerVersion())
 		return nil
@@ -132,6 +142,19 @@ func wrappedMain() error {
 		fmt.Printf("Clang %s (%s)\n", version, path)
 		return nil
 	}
+	clangPath, _, err := clangresolver.Resolve("")
+	if err != nil {
+		return err
+	}
+	target, err := magmatarget.Resolve(clangPath, opts.target)
+	if err != nil {
+		return err
+	}
+	if opts.out == "" {
+		opts.out = defaultOutput(opts.emit, string(target.OS))
+	}
+	opts.target = target.Triple
+	debug.Printf("target: %s\n", target.Triple)
 	filePathArg := opts.inputFile
 
 	cwd, e := os.Getwd()
@@ -153,6 +176,7 @@ func wrappedMain() error {
 		return e
 	}
 	s.ErrorTraceSlots = opts.errorTraceSlots
+	s.Target = target
 
 	// actual meat of the program, multithreaded per file
 	// 1. lexing/tokenization
@@ -211,7 +235,7 @@ func wrappedMain() error {
 	//debug.Printf("LLVM IR:\n%s\n", irStr)
 	debug.Printf("Successful lowering to LLVM\n")
 
-	return emitOutput(opts, irStr, nativeLibraries(s))
+	return emitOutput(opts, irStr, nativeLibraries(s), bundledFiles(s))
 }
 
 func nativeLibraries(s *types.SharedState) []string {
@@ -229,15 +253,30 @@ func nativeLibraries(s *types.SharedState) []string {
 	return libraries
 }
 
-func defaultOutput(emit string) string {
+func bundledFiles(s *types.SharedState) []string {
+	seen := map[string]bool{}
+	for _, file := range s.Files {
+		for _, bundle := range file.Bundles {
+			seen[bundle] = true
+		}
+	}
+	bundles := make([]string, 0, len(seen))
+	for bundle := range seen {
+		bundles = append(bundles, bundle)
+	}
+	sort.Strings(bundles)
+	return bundles
+}
+
+func defaultOutput(emit, targetOS string) string {
 	switch emit {
 	case "object":
-		if runtime.GOOS == "windows" {
+		if targetOS == "windows" {
 			return "out.obj"
 		}
 		return "out.o"
 	case "exe":
-		if runtime.GOOS == "windows" {
+		if targetOS == "windows" {
 			return "out.exe"
 		}
 		return "out"
@@ -246,7 +285,7 @@ func defaultOutput(emit string) string {
 	}
 }
 
-func emitOutput(opts options, ir []byte, nativeLibraries []string) error {
+func emitOutput(opts options, ir []byte, nativeLibraries, bundles []string) error {
 	if opts.emit == "llvm" && opts.opt == 0 {
 		return os.WriteFile(opts.out, []byte(ir), 0666)
 	}
@@ -272,6 +311,9 @@ func emitOutput(opts options, ir []byte, nativeLibraries []string) error {
 	}
 
 	args := []string{"-Wno-override-module", "-O" + strconv.Itoa(opts.opt), tempPath}
+	if opts.target != "" {
+		args = append([]string{"--target=" + opts.target}, args...)
+	}
 	switch opts.emit {
 	case "llvm":
 		args = append(args, "-S", "-emit-llvm")
@@ -300,14 +342,76 @@ func emitOutput(opts options, ir []byte, nativeLibraries []string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("Clang failed: %w", err)
 	}
+	if opts.emit == "exe" {
+		if err := copyBundles(opts.out, bundles); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyBundles(output string, bundles []string) error {
+	outputDir := filepath.Dir(output)
+	destinations := make(map[string]string, len(bundles))
+	for _, source := range bundles {
+		destination := filepath.Join(outputDir, filepath.Base(source))
+		key := strings.ToLower(filepath.Clean(destination))
+		if previous, exists := destinations[key]; exists && previous != source {
+			return fmt.Errorf("bundle files %q and %q have the same output name", previous, source)
+		}
+		destinations[key] = source
+	}
+
+	for _, source := range bundles {
+		destination := filepath.Join(outputDir, filepath.Base(source))
+		sourceAbs, err := filepath.Abs(source)
+		if err != nil {
+			return fmt.Errorf("resolve bundle %q: %w", source, err)
+		}
+		destinationAbs, err := filepath.Abs(destination)
+		if err != nil {
+			return fmt.Errorf("resolve bundle destination %q: %w", destination, err)
+		}
+		if strings.EqualFold(sourceAbs, destinationAbs) {
+			continue
+		}
+
+		input, err := os.Open(source)
+		if err != nil {
+			return fmt.Errorf("open bundle %q: %w", source, err)
+		}
+		info, err := input.Stat()
+		if err != nil {
+			input.Close()
+			return fmt.Errorf("inspect bundle %q: %w", source, err)
+		}
+		if !info.Mode().IsRegular() {
+			input.Close()
+			return fmt.Errorf("bundle %q is not a regular file", source)
+		}
+		out, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode().Perm())
+		if err != nil {
+			input.Close()
+			return fmt.Errorf("create bundled file %q: %w", destination, err)
+		}
+		_, copyErr := io.Copy(out, input)
+		closeOutErr := out.Close()
+		closeInputErr := input.Close()
+		if copyErr != nil {
+			return fmt.Errorf("copy bundle %q to %q: %w", source, destination, copyErr)
+		}
+		if closeOutErr != nil {
+			return fmt.Errorf("close bundled file %q: %w", destination, closeOutErr)
+		}
+		if closeInputErr != nil {
+			return fmt.Errorf("close bundle %q: %w", source, closeInputErr)
+		}
+	}
 	return nil
 }
 
 func compilerVersion() string {
-	if info, ok := builddebug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
-		return info.Main.Version
-	}
-	return "(devel)"
+	return strings.TrimSpace(compilerVersionText)
 }
 
 func main() {

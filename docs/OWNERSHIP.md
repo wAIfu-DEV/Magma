@@ -1,7 +1,8 @@
 # Ownership and Destruction
 
 Magma has a warning-only destroy/borrow checker for structs that declare at
-least one destructor. It catches common ownership mistakes while preserving the
+least one destructor and for primitives with a registered destructor, currently
+including `str`. It catches common ownership mistakes while preserving the
 language's explicit, low-level memory model.
 
 ## Owned and borrowed values

@@ -1,12 +1,14 @@
 mod heap_impl_unix
+# Unix process-heap backend used by the portable heap module.
 
-use "../allocator.mg" a
-use "../errors.mg"    e
-use "../cast.mg"      cast
-use "../memory.mg"    mem
 
-ext ext_stdlib_malloc  malloc(size u64) ptr
-ext ext_stdlib_realloc realloc(block ptr, newSize u64) ptr
+use "std:c" c
+use "std:allocator" a
+use "std:errors"    e
+use "std:cast"      cast
+use "std:memory"    mem
+ext ext_stdlib_malloc  malloc(size c.size_t) ptr
+ext ext_stdlib_realloc realloc(block ptr, newSize c.size_t) ptr
 ext ext_stdlib_free    free(block ptr) void
 
 # Internals for alloc, used by both alloc() and HeapAllocator.alloc()

@@ -1,15 +1,18 @@
 mod thread_impl_win
+# Windows native-thread backend used by the portable thread module.
 
-use "../cast.mg" cast
-use "../errors.mg" errors
 
-ext ext_win32_CreateThread       CreateThread(attributes ptr, stackSize u64, startAddress (ptr) u64, parameter ptr, creationFlags u32, threadId ptr) ptr
-ext ext_win32_WaitForSingleObject WaitForSingleObject(handle ptr, milliseconds u32) u32
-ext ext_win32_CloseHandle        CloseHandle(handle ptr) u32
-ext ext_win32_GetLastError       GetLastError() u32
-ext ext_win32_SwitchToThread     SwitchToThread() u32
+use "std:c" c
+use "std:cast" cast
+use "std:errors" errors
 
-Thread(
+ext ext_win32_CreateThread       CreateThread(attributes ptr, stackSize c.size_t, startAddress (ptr) u64, parameter ptr, creationFlags c.unsigned_int, threadId ptr) ptr
+ext ext_win32_WaitForSingleObject WaitForSingleObject(handle ptr, milliseconds c.unsigned_int) c.unsigned_int
+ext ext_win32_CloseHandle        CloseHandle(handle ptr) c.unsigned_int
+ext ext_win32_GetLastError       GetLastError() c.unsigned_int
+ext ext_win32_SwitchToThread     SwitchToThread() c.unsigned_int
+
+pub Thread(
     handle ptr
 )
 

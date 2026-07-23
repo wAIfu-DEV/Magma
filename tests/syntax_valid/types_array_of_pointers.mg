@@ -1,4 +1,4 @@
 mod main
 main() void:
-    values u64*[4]
+    values := array u64*[4]
 ..

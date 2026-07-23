@@ -1,6 +1,6 @@
 mod main
 
-use "../footgun.mg" footgun
+use "std:footgun" footgun
 
 Owned(value u64)
 destr Owned.free() void: this.value = 0 ..

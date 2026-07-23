@@ -1,10 +1,10 @@
 mod main
-use "../allocator.mg" allocator
-use "../cast.mg" cast
-use "../errors.mg" errors
-use "../heap.mg" heap
-use "../reader.mg" reader
-use "../strings.mg" strings
+use "std:allocator" allocator
+use "std:cast" cast
+use "std:errors" errors
+use "std:heap" heap
+use "std:reader" reader
+use "std:strings" strings
 source(impl ptr, bytes u8[], count u64) !u64:
     if count > 0:
         bytes[0] = 65
@@ -24,7 +24,7 @@ pub main() !void:
     if resultPtr[strings.countBytes(result)] != 0:
         throw errors.failure("read string is not null terminated")
     ..
-    buffer u8[2]
+    buffer := array u8[2]
     readCount := try input.readToBuff(buffer, 2)
     if readCount != 1 || buffer[0] != 65:
         throw errors.failure("reader readToBuff changed")

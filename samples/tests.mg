@@ -221,7 +221,7 @@ testVars() !void:
 
     # test if array elements are correctly zero initialized
 
-    v3 u8[3]
+    v3 := array u8[3]
     if v3[0] != 0 || v3[1] != 0 || v3[2] != 0:
         throw errors.failure("from `if v3[n] != 0:` block")
     ..

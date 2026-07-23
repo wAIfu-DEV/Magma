@@ -1,10 +1,10 @@
 mod main
-use "../allocator.mg" allocator
-use "../errors.mg" errors
-use "../heap.mg" heap
-use "../slices.mg" slices
-use "../strings.mg" strings
-use "../utf8.mg" utf8
+use "std:allocator" allocator
+use "std:errors" errors
+use "std:heap" heap
+use "std:slices" slices
+use "std:strings" strings
+use "std:utf8" utf8
 pub main() !void:
     a allocator.Allocator = heap.allocator()
     iterator := utf8.iterator("A")

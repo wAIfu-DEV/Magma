@@ -9,9 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 )
 
@@ -32,6 +30,8 @@ type ParseCtx struct {
 	TokIdx          int
 	NextModifiers   []ModifierType
 	CurrentFunction *t.NodeFuncDef
+	NextExportName  string
+	NextExportABI   string
 
 	PruneNext  bool
 	ModuleSeen bool
@@ -227,7 +227,7 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token, prune bool) error {
 		)
 	}
 
-	absPath, err := makeabs.MakeAbs(path.Repr, ctx.Fctx.FilePath)
+	absPath, err := makeabs.ResolveImport(path.Repr, ctx.Fctx.FilePath, ctx.Shared.ExecPath)
 	if err != nil {
 		return comp_err.CompilationErrorToken(
 			ctx.Fctx,
@@ -306,7 +306,136 @@ func parseLinkDecl(ctx *ParseCtx, tk t.Token, prune bool) error {
 	return nil
 }
 
+func parseBundleDecl(ctx *ParseCtx, tk t.Token, prune bool) error {
+	if err := ensureNoModifiers(ctx, tk); err != nil {
+		return err
+	}
+	file, err := peekNth(ctx, 1)
+	if err != nil || file.Type != t.TokLitStr || file.Repr == "" {
+		return comp_err.CompilationErrorToken(ctx.Fctx, &tk,
+			"syntax error: expected file path after 'bundle'",
+			"expected: `bundle \"<file>\"`")
+	}
+	newline, err := peekNth(ctx, 2)
+	if err == nil && newline.KeywType != t.KwNewline {
+		return comp_err.CompilationErrorToken(ctx.Fctx, &newline,
+			fmt.Sprintf("syntax error: expected end of line after bundle path but got '%s'", newline.Repr),
+			"expected: `bundle \"<file>\"(\\n)`")
+	}
+	consume(ctx)
+	consume(ctx)
+	consume(ctx)
+	if prune {
+		return nil
+	}
+	path := file.Repr
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(filepath.Dir(ctx.Fctx.FilePath), path)
+	}
+	path = filepath.Clean(path)
+	if !slices.Contains(ctx.Fctx.Bundles, path) {
+		ctx.Fctx.Bundles = append(ctx.Fctx.Bundles, path)
+	}
+	return nil
+}
+
+// parseArrayExpr parses `array T[length]`. Generic element types retain their
+// own brackets: `array Pair[A, B][length]`.
+func parseArrayExpr(ctx *ParseCtx, arrayTk t.Token) (t.NodeExpr, error) {
+	typeTk, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+	openIdx := -1
+	for i := ctx.TokIdx; i < len(ctx.Toks); i++ {
+		if ctx.Toks[i].KeywType == t.KwBrackOp {
+			openIdx = i
+			break
+		}
+		if ctx.Toks[i].KeywType == t.KwNewline {
+			break
+		}
+	}
+	if openIdx < 0 {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &typeTk, "array expression is missing its length", "expected: `array Type[length]`")
+	}
+	depth, closeIdx := 0, -1
+	for i := openIdx; i < len(ctx.Toks); i++ {
+		switch ctx.Toks[i].KeywType {
+		case t.KwBrackOp:
+			depth++
+		case t.KwBrackCl:
+			depth--
+			if depth == 0 {
+				closeIdx = i
+			}
+		}
+		if closeIdx >= 0 {
+			break
+		}
+	}
+	if closeIdx >= 0 && closeIdx+1 < len(ctx.Toks) && ctx.Toks[closeIdx+1].KeywType == t.KwBrackOp {
+		openIdx = closeIdx + 1
+	}
+
+	original := ctx.Toks[openIdx]
+	ctx.Toks[openIdx] = t.Token{Repr: "<array-length>", Type: t.TokKeyword, Pos: original.Pos}
+	elemType, typeErr := parseType(ctx, typeTk, false)
+	ctx.Toks[openIdx] = original
+	if typeErr != nil {
+		return nil, typeErr
+	}
+	if ctx.TokIdx != openIdx {
+		unexpected, _ := peek(ctx)
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &unexpected, "invalid array element type", "expected: `array Type[length]`")
+	}
+	consume(ctx)
+	lengthTk, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+	if lengthTk.KeywType == t.KwBrackCl {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &lengthTk, "array length cannot be empty", "provide an integer expression")
+	}
+	length, e := parseExpression(ctx, lengthTk, 0)
+	if e != nil {
+		return nil, e
+	}
+	closeTk, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+	if closeTk.KeywType != t.KwBrackCl {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &closeTk, "array expression is missing closing ']'", "expected: `array Type[length]`")
+	}
+	consume(ctx)
+	return &t.NodeExprArray{Tk: arrayTk, ElemType: elemType, Length: length}, nil
+}
+
 func parseSimplePrimaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
+	// `array` is contextual so existing variables, imports, and modules may
+	// continue to use that name. It starts an array expression only when it is
+	// followed by the beginning of an element type.
+	if tk.Type == t.TokName && tk.Repr == "array" {
+		next, nextErr := peekNth(ctx, 1)
+		hasBracket := false
+		for i := ctx.TokIdx + 1; i < len(ctx.Toks); i++ {
+			if ctx.Toks[i].KeywType == t.KwEqual {
+				hasBracket = false
+				break
+			}
+			if ctx.Toks[i].KeywType == t.KwNewline {
+				break
+			}
+			if ctx.Toks[i].KeywType == t.KwBrackOp {
+				hasBracket = true
+			}
+		}
+		if hasBracket && nextErr == nil && (next.Type == t.TokName || next.KeywType == t.KwParenOp || next.KeywType == t.KwDollar) {
+			consume(ctx)
+			return parseArrayExpr(ctx, tk)
+		}
+	}
 	if tk.KeywType == t.KwParenOp {
 		consume(ctx)
 
@@ -1459,7 +1588,8 @@ func parseDeclNameWithGenerics(ctx *ParseCtx) (*parsedDeclName, error) {
 
 	return &parsedDeclName{
 		NameNode: &t.NodeNameComposite{
-			Parts: []string{firstName, secondName},
+			Tokens: []t.Token{firstTk, secondTk},
+			Parts:  []string{firstName, secondName},
 		},
 		TypeParams:      secondParams,
 		OwnerTypeParams: firstParams,
@@ -1882,29 +2012,13 @@ func parseTypePostfix(ctx *ParseCtx, inType *t.NodeType) (*t.NodeType, error) {
 			return nil, e
 		}
 
-		// parse array types / (future) templated types
+		// Typed slice suffix. Array storage is created by `array T[length]`.
 		if after.KeywType == t.KwBrackOp {
 			consume(ctx)
 
 			maybeCl, e := peek(ctx)
 			if e != nil {
 				return nil, e
-			}
-
-			size := int64(-1)
-
-			if maybeCl.Type == t.TokLitNum {
-				consume(ctx)
-
-				size, e = strconv.ParseInt(maybeCl.Repr, 10, 64)
-				if e != nil {
-					return nil, e
-				}
-
-				maybeCl, e = peek(ctx)
-				if e != nil {
-					return nil, e
-				}
 			}
 
 			if maybeCl.KeywType == t.KwBrackCl {
@@ -1920,11 +2034,6 @@ func parseTypePostfix(ctx *ParseCtx, inType *t.NodeType) (*t.NodeType, error) {
 					KindNode: sliceKind,
 				}
 
-				if size > -1 {
-					sliceKind.HasSize = true
-					sliceKind.Size = int(size)
-				}
-
 				outT = sliceT
 				continue
 			}
@@ -1932,8 +2041,8 @@ func parseTypePostfix(ctx *ParseCtx, inType *t.NodeType) (*t.NodeType, error) {
 			return nil, comp_err.CompilationErrorToken(
 				ctx.Fctx,
 				&maybeCl,
-				"syntax error: expected an integer array length or ']'",
-				"array types use `Type[]` for a slice or `Type[length]` for a fixed array",
+				"syntax error: expected ']' in slice type",
+				"use `Type[]` for a slice or `array Type[length]` to create local backing storage",
 			)
 		}
 
@@ -2050,16 +2159,16 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (*t.NodeType, error) 
 			return nil, e
 		}
 
-		// In type context, [] / [num] are slice/array suffixes.
-		// Any other bracket content is parsed as generic type arguments.
-		if maybeInner.KeywType != t.KwBrackCl && maybeInner.Type != t.TokLitNum {
+		// In type context, [] is a slice suffix. Non-empty brackets are
+		// generic arguments; array lengths only occur in `array` expressions.
+		if maybeInner.KeywType != t.KwBrackCl {
 			if simple, ok := named.(*t.NodeNameSingle); ok {
 				if _, basic := magmatypes.BasicTypes[simple.Name]; basic {
 					return nil, comp_err.CompilationErrorToken(
 						ctx.Fctx,
 						&maybeInner,
-						"syntax error: expected an integer array length or ']'",
-						"array types use `Type[]` for a slice or `Type[length]` for a fixed array",
+						"syntax error: basic types do not take generic arguments",
+						"use `Type[]` for a slice or `array Type[length]` to create local backing storage",
 					)
 				}
 			}
@@ -2354,6 +2463,9 @@ func parseStructDef(ctx *ParseCtx, tk t.Token, gncls t.NodeGenericClass) (*t.Nod
 	}
 
 	simpleName := gncls.NameNode.(*t.NodeNameSingle)
+	if _, exists := ctx.GlobalNode.TypeAliases[simpleName.Name]; exists {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &simpleName.Tk, fmt.Sprintf("type name '%s' is already declared as an alias", simpleName.Name), "type aliases and structs share a namespace")
+	}
 
 	// create struct def in global node for easir type checking later
 	structMap := &t.StructDef{
@@ -2387,6 +2499,77 @@ func parseStructDef(ctx *ParseCtx, tk t.Token, gncls t.NodeGenericClass) (*t.Nod
 	}, nil
 }
 
+func parseAliasDecl(ctx *ParseCtx, aliasTk t.Token) (t.NodeGlobalDecl, error) {
+	pruned := ctx.PruneNext
+	ctx.PruneNext = false
+	modifiers := slices.Clone(ctx.NextModifiers)
+	ctx.NextModifiers = []ModifierType{}
+	if slices.Contains(modifiers, MdDestructor) {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &aliasTk, "destructor modifier cannot be applied to a type alias", "")
+	}
+	consume(ctx)
+	nameTk, e := peek(ctx)
+	if e != nil || nameTk.Type != t.TokName {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &aliasTk, "expected a name after 'alias'", "expected: `alias name = Type`")
+	}
+	consume(ctx)
+	equalTk, e := peek(ctx)
+	if e != nil || equalTk.KeywType != t.KwEqual {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &nameTk, "type alias is missing '='", "expected: `alias name = Type`")
+	}
+	consume(ctx)
+	typeTk, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+	var target *t.NodeType
+	if typeTk.KeywType == t.KwAt {
+		target, e = parseCompilerKnownType(ctx, typeTk)
+	} else {
+		target, e = parseType(ctx, typeTk, false)
+	}
+	if e != nil {
+		return nil, e
+	}
+	if _, exists := ctx.GlobalNode.TypeAliases[nameTk.Repr]; exists {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &nameTk, fmt.Sprintf("type alias '%s' is already declared", nameTk.Repr), "alias names must be unique within a module")
+	}
+	if _, exists := ctx.GlobalNode.StructDefs[nameTk.Repr]; exists {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &nameTk, fmt.Sprintf("type name '%s' is already declared as a struct", nameTk.Repr), "type aliases and structs share a namespace")
+	}
+	alias := &t.TypeAlias{Name: nameTk.Repr, Module: ctx.Fctx.PackageName, Target: target, IsPublic: slices.Contains(modifiers, MdPublic), Tk: nameTk}
+	if pruned {
+		return nil, nil
+	}
+	ctx.GlobalNode.TypeAliases[nameTk.Repr] = alias
+	return &t.NodeTypeAlias{Alias: alias}, nil
+}
+
+func parseCompilerKnownType(ctx *ParseCtx, atTk t.Token) (*t.NodeType, error) {
+	consume(ctx)
+	nameTk, e := peek(ctx)
+	if e != nil || nameTk.Type != t.TokName || nameTk.Repr != "compiler_known_type" {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &atTk, "unknown compiler type directive", "expected: `@compiler_known_type(\"name\")`")
+	}
+	consume(ctx)
+	openTk, e := peek(ctx)
+	if e != nil || openTk.KeywType != t.KwParenOp {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &nameTk, "compiler_known_type is missing '('", "expected: `@compiler_known_type(\"name\")`")
+	}
+	consume(ctx)
+	valueTk, e := peek(ctx)
+	if e != nil || valueTk.Type != t.TokLitStr {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &nameTk, "compiler_known_type requires one string argument", "expected: `@compiler_known_type(\"name\")`")
+	}
+	consume(ctx)
+	closeTk, e := peek(ctx)
+	if e != nil || closeTk.KeywType != t.KwParenCl {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &valueTk, "compiler_known_type is missing ')'", "expected: `@compiler_known_type(\"name\")`")
+	}
+	consume(ctx)
+	return parseTypePostfix(ctx, &t.NodeType{KindNode: &t.NodeTypeCompilerKnown{Tk: valueTk, Name: valueTk.Repr}})
+}
+
 func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGenericClass, alias string) (*t.NodeFuncDef, error) {
 	isMemberFunc := false
 	fnNameSimple := ""
@@ -2402,6 +2585,21 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 	fnDef := &t.NodeFuncDef{
 		Class:      gncls,
 		IsExternal: alias != "",
+	}
+	if ctx.NextExportName != "" {
+		if alias != "" {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &nameTk, "syntax error: 'export_name' cannot be applied to an external declaration", "apply it to a function definition")
+		}
+		if isMemberFunc {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &nameTk, "syntax error: 'export_name' cannot be applied to a member function", "export a top-level, non-generic function")
+		}
+		if len(gncls.TypeParams) != 0 {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &nameTk, "syntax error: 'export_name' cannot be applied to a generic function", "export a top-level, non-generic function")
+		}
+		fnDef.ExportName = ctx.NextExportName
+		fnDef.ExportABI = ctx.NextExportABI
+		ctx.NextExportName = ""
+		ctx.NextExportABI = ""
 	}
 
 	if alias != "" {
@@ -2435,6 +2633,14 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 	}
 
 	fnDef.ReturnType = typeNode
+	if fnDef.ExportName != "" && typeNode.Throws {
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&nameTk,
+			"syntax error: throwing functions cannot be exported",
+			"use a non-throwing ABI wrapper that converts the error to a C-compatible result",
+		)
+	}
 	fnDef.AbsName = ctx.Fctx.PackageName + "." + flattenName(gncls.NameNode)
 
 	// =========================================================================
@@ -2444,6 +2650,25 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 		return nil, nil
 	}
 	// =========================================================================
+	if fnDef.ExportName != "" {
+		ctx.Shared.ExportedSymbolsM.Lock()
+		if ctx.Shared.ExportedSymbols == nil {
+			ctx.Shared.ExportedSymbols = map[string]string{}
+		}
+		previous, duplicate := ctx.Shared.ExportedSymbols[fnDef.ExportName]
+		if !duplicate {
+			ctx.Shared.ExportedSymbols[fnDef.ExportName] = ctx.Fctx.FilePath + ":" + fnNameSimple
+		}
+		ctx.Shared.ExportedSymbolsM.Unlock()
+		if duplicate {
+			return nil, comp_err.CompilationErrorToken(
+				ctx.Fctx,
+				&nameTk,
+				fmt.Sprintf("duplicate exported symbol name '%s'", fnDef.ExportName),
+				fmt.Sprintf("the symbol was already exported by %s", previous),
+			)
+		}
+	}
 
 	if isMemberFunc && alias == "" { // alias == "" since aliased functions cannot be also member funcs
 		complexName := gncls.NameNode.(*t.NodeNameComposite)
@@ -2657,7 +2882,13 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 			if slices.Contains(modifiers, MdDestructor) {
 				return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, "syntax error: destructor modifier requires a member function", "expected: `destructor Type.method() void:`")
 			}
-			return parseStructDef(ctx, tk, gncls)
+			st, e := parseStructDef(ctx, tk, gncls)
+			if e == nil && st != nil {
+				st.IsPublic = slices.Contains(modifiers, MdPublic)
+				name := st.Class.NameNode.(*t.NodeNameSingle).Name
+				ctx.GlobalNode.StructDefs[name].IsPublic = st.IsPublic
+			}
+			return st, e
 		}
 
 		fn, e := parseFuncDef(ctx, tk, after, gncls, "")
@@ -2681,6 +2912,9 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 			} else {
 				return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, fmt.Sprintf("unknown destructor owner type '%s'", ownerName), "")
 			}
+		}
+		if fn != nil {
+			fn.IsPublic = slices.Contains(modifiers, MdPublic)
 		}
 		return fn, nil
 	case t.KwInfer:
@@ -2971,11 +3205,11 @@ func parseCompilerDirective(ctx *ParseCtx, tk t.Token) error {
 		found := false
 
 		for _, tok := range dirArgs {
-			if runtime.GOOS == tok.Repr {
+			if string(ctx.Shared.Target.OS) == tok.Repr {
 				found = true
 
 				if found {
-					//fmt.Printf("found platform: %s\n", runtime.GOOS)
+					//fmt.Printf("found platform: %s\n", ctx.Shared.Target.OS)
 					break
 				}
 			}
@@ -2983,14 +3217,47 @@ func parseCompilerDirective(ctx *ParseCtx, tk t.Token) error {
 
 		ctx.PruneNext = !found
 		return nil
+	case "export_name":
+		if len(dirArgs) < 1 || len(dirArgs) > 2 || dirArgs[0].Type != t.TokLitStr || (len(dirArgs) == 2 && dirArgs[1].Type != t.TokLitStr) {
+			return comp_err.CompilationErrorToken(ctx.Fctx, &tk, "syntax error: directive 'export_name' takes a symbol name and optional ABI string", "expected: `@export_name(\"<symbol>\")` or `@export_name(\"<symbol>\", \"C\")`")
+		}
+		if ctx.NextExportName != "" {
+			return comp_err.CompilationErrorToken(ctx.Fctx, &tk, "syntax error: duplicate 'export_name' directive", "only one export name can be applied to a function")
+		}
+		abi := "C"
+		if len(dirArgs) == 2 {
+			abi = dirArgs[1].Repr
+		}
+		if !strings.EqualFold(abi, "C") {
+			return comp_err.CompilationErrorToken(ctx.Fctx, &dirArgs[1], fmt.Sprintf("syntax error: unsupported export ABI '%s'", abi), "currently supported ABI: \"C\"")
+		}
+		if !validExportName(dirArgs[0].Repr) {
+			return comp_err.CompilationErrorToken(ctx.Fctx, &dirArgs[0], "syntax error: invalid external symbol name", "use a C identifier containing letters, digits, and underscores")
+		}
+		ctx.NextExportName = dirArgs[0].Repr
+		ctx.NextExportABI = "C"
+		return nil
 	default:
 		return comp_err.CompilationErrorToken(
 			ctx.Fctx,
 			&next,
 			"syntax error: invalid compiler directive name",
-			"expected: `@platform(...)`",
+			"expected: `@platform(...)` or `@export_name(...)`",
 		)
 	}
+}
+
+func validExportName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		letter := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == '_'
+		if !letter && !(i > 0 && r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func parseGlobalDecl(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
@@ -3022,6 +3289,9 @@ outer:
 		case t.KwConst:
 			n, e = parseConstDecl(ctx, tk)
 			return n, e
+		case t.KwAlias:
+			n, e = parseAliasDecl(ctx, tk)
+			return n, e
 		case t.KwAt:
 			e = parseCompilerDirective(ctx, tk)
 		case t.KwModule:
@@ -3034,6 +3304,12 @@ outer:
 			}
 		case t.KwLink:
 			e = parseLinkDecl(ctx, tk, ctx.PruneNext)
+			if ctx.PruneNext {
+				ctx.PruneNext = false
+				return nil, nil
+			}
+		case t.KwBundle:
+			e = parseBundleDecl(ctx, tk, ctx.PruneNext)
 			if ctx.PruneNext {
 				ctx.PruneNext = false
 				return nil, nil
@@ -3079,6 +3355,7 @@ outer:
 func parseGlobal(ctx *ParseCtx) (*t.NodeGlobal, error) {
 	n := &t.NodeGlobal{
 		StructDefs:           map[string]*t.StructDef{},
+		TypeAliases:          map[string]*t.TypeAlias{},
 		FuncDefs:             map[string]*t.NodeFuncDef{},
 		PrimitiveMethods:     map[string]map[string]*t.NodeFuncDef{},
 		PrimitiveDestructors: map[string][]*t.NodeFuncDef{},

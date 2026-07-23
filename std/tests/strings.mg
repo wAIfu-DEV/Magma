@@ -1,8 +1,8 @@
 mod main
-use "../allocator.mg" allocator
-use "../errors.mg" errors
-use "../heap.mg" heap
-use "../strings.mg" strings
+use "std:allocator" allocator
+use "std:errors" errors
+use "std:heap" heap
+use "std:strings" strings
 pub main() !void:
     a allocator.Allocator = heap.allocator()
     copy := try strings.copy(a, "magma")
@@ -59,5 +59,48 @@ pub main() !void:
     defer strings.free(a, ownedCstr)
     if strings.compare(borrowedCstr, "magma") == false || strings.compare(ownedCstr, "magma") == false:
         throw errors.failure("C string conversion changed")
+    ..
+
+    if try strings.findByte("magma", 103) != 2 || try strings.find("one two", "two") != 4:
+        throw errors.failure("string find changed")
+    ..
+    sub := try strings.substring(a, "magma", 1, 4)
+    defer strings.free(a, sub)
+    if strings.compare(sub, "agm") == false:
+        throw errors.failure("substring changed")
+    ..
+    trimmed := try strings.trim(a, " \t magma \r\n")
+    defer strings.free(a, trimmed)
+    withoutPrefix := try strings.trimPrefix(a, "std:strings", "std:")
+    defer strings.free(a, withoutPrefix)
+    withoutSuffix := try strings.trimSuffix(a, "file.mg", ".mg")
+    defer strings.free(a, withoutSuffix)
+    if strings.compare(trimmed, "magma") == false || strings.compare(withoutPrefix, "strings") == false || strings.compare(withoutSuffix, "file") == false:
+        throw errors.failure("string trimming changed")
+    ..
+
+    parts := try strings.split(a, "one::two::", "::")
+    defer parts.free()
+    if parts.count() != 3 || strings.compare(try parts.get(0), "one") == false || strings.compare(try parts.get(1), "two") == false || strings.compare(try parts.get(2), "") == false:
+        throw errors.failure("eager split changed")
+    ..
+
+    splitPair := try strings.splitOnce(a, "left=right", "=")
+    defer strings.free(a, splitPair.first)
+    defer strings.free(a, splitPair.second)
+    if strings.compare(splitPair.first, "left") == false || strings.compare(splitPair.second, "right") == false:
+        throw errors.failure("splitOnce changed")
+    ..
+
+    splitIterator := try strings.splitIter(a, "a,b,c", ",")
+    defer splitIterator.free()
+    iterFirst := try splitIterator.next()
+    defer strings.free(a, iterFirst)
+    iterSecond := try splitIterator.next()
+    defer strings.free(a, iterSecond)
+    iterThird := try splitIterator.next()
+    defer strings.free(a, iterThird)
+    if splitIterator.hasData() || strings.compare(iterFirst, "a") == false || strings.compare(iterSecond, "b") == false || strings.compare(iterThird, "c") == false:
+        throw errors.failure("split iterator changed")
     ..
 ..

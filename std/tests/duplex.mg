@@ -1,8 +1,8 @@
 mod main
-use "../duplex.mg" duplex
-use "../cast.mg" cast
-use "../errors.mg" errors
-use "../strings.mg" strings
+use "std:duplex" duplex
+use "std:cast" cast
+use "std:errors" errors
+use "std:strings" strings
 write(impl ptr, bytes str) !u64:
     ret strings.countBytes(bytes)
 ..
@@ -19,7 +19,7 @@ pub main() !void:
     if count != 2:
         throw errors.failure("duplex behavior changed")
     ..
-    buffer u8[1]
+    buffer := array u8[1]
     if try stream.reader().readToBuff(buffer, 1) != 0:
         throw errors.failure("duplex reader changed")
     ..

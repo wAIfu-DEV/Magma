@@ -1,34 +1,37 @@
 mod wake_impl_unix
+# Unix wait-and-notify backend used by the portable wake module.
 
+
+use "std:c" c
 @platform("linux", "freebsd", "netbsd", "openbsd")
 link "pthread"
 
-use "../cast.mg" cast
-use "../errors.mg" errors
+use "std:cast" cast
+use "std:errors" errors
 
 const condition u8 = 0
 
 # Opaque, naturally aligned storage for pthread and POSIX semaphore objects.
-Wake(
+pub Wake(
     strategy u8
-    lock u64[16]
-    conditionVariable u64[16]
+    lock := array u64[16]
+    conditionVariable := array u64[16]
     count u64
-    semaphore u64[16]
+    semaphore := array u64[16]
 )
 
-ext ext_pthread_mutex_init pthread_mutex_init(mutex ptr, attributes ptr) i32
-ext ext_pthread_mutex_lock pthread_mutex_lock(mutex ptr) i32
-ext ext_pthread_mutex_unlock pthread_mutex_unlock(mutex ptr) i32
-ext ext_pthread_mutex_destroy pthread_mutex_destroy(mutex ptr) i32
-ext ext_pthread_cond_init pthread_cond_init(condition ptr, attributes ptr) i32
-ext ext_pthread_cond_wait pthread_cond_wait(condition ptr, mutex ptr) i32
-ext ext_pthread_cond_signal pthread_cond_signal(condition ptr) i32
-ext ext_pthread_cond_destroy pthread_cond_destroy(condition ptr) i32
-ext ext_sem_init sem_init(semaphore ptr, shared i32, value u32) i32
-ext ext_sem_wait sem_wait(semaphore ptr) i32
-ext ext_sem_post sem_post(semaphore ptr) i32
-ext ext_sem_destroy sem_destroy(semaphore ptr) i32
+ext ext_pthread_mutex_init pthread_mutex_init(mutex ptr, attributes ptr) c.int
+ext ext_pthread_mutex_lock pthread_mutex_lock(mutex ptr) c.int
+ext ext_pthread_mutex_unlock pthread_mutex_unlock(mutex ptr) c.int
+ext ext_pthread_mutex_destroy pthread_mutex_destroy(mutex ptr) c.int
+ext ext_pthread_cond_init pthread_cond_init(condition ptr, attributes ptr) c.int
+ext ext_pthread_cond_wait pthread_cond_wait(condition ptr, mutex ptr) c.int
+ext ext_pthread_cond_signal pthread_cond_signal(condition ptr) c.int
+ext ext_pthread_cond_destroy pthread_cond_destroy(condition ptr) c.int
+ext ext_sem_init sem_init(semaphore ptr, shared c.int, value c.unsigned_int) c.int
+ext ext_sem_wait sem_wait(semaphore ptr) c.int
+ext ext_sem_post sem_post(semaphore ptr) c.int
+ext ext_sem_destroy sem_destroy(semaphore ptr) c.int
 
 nativeError(code i32, message str) error:
     ret errors.native(cast.u64to32(cast.itou(cast.i32to64(code))), message)

@@ -1,13 +1,17 @@
 mod hash_map
+# Allocator-backed string maps with owned generic values.
 
-use "allocator.mg" alc
-use "hash.mg" hash
-use "strings.mg" strings
-use "errors.mg" errors
-use "memory.mg" memory
-use "cast.mg" cast
+use "std:allocator" alc
+use "std:hash" hash
+use "std:strings" strings
+use "std:errors" errors
+use "std:memory" memory
+use "std:cast" cast
 
-HashMap[T](
+# Owning string-keyed hash map using open addressing. Keys are copied; values
+# are moved into the map and released through cleanup when replaced or removed.
+# @warning A HashMap must be freed with the same allocator used to create it.
+pub HashMap[T](
     allocator alc.Allocator
     storage ptr
     capacity u64
@@ -53,7 +57,7 @@ storageSize[T](capacity u64) !u64:
 
 release[T](cleanup ($T) void, value $T) void:
     if cleanup == none:
-        abandoned T[1]
+        abandoned := array T[1]
         abandoned[0] = value
         ret
     ..
@@ -64,6 +68,12 @@ claim[T](claimed $T) $T:
     ret claimed
 ..
 
+# Creates an empty map with at least the requested initial capacity.
+# @param cleanup optional callback invoked for values still owned by the map
+# @complexity O(C) initialization, where C is the normalized capacity
+# @ownership The returned map owns its storage and every value passed to set().
+# @example
+#   users := try hash_map.new[User](a, 16, freeUser)
 pub new[T](a alc.Allocator, capacity u64, cleanup ($T) void) !$HashMap[T]:
     if capacity == 0:
         throw errors.invalidArgument("hash map capacity must be positive")
@@ -73,6 +83,10 @@ pub new[T](a alc.Allocator, capacity u64, cleanup ($T) void) !$HashMap[T]:
     ret HashMap[T](allocator=a, storage=storage, capacity=capacity, length=0, cleanup=cleanup)
 ..
 
+# Returns the storage index for key or throws outOfBounds when it is absent.
+# @complexity O(1) average, O(N) worst case
+# @example
+#   index := try users.indexOf("alice")
 HashMap[T].indexOf(key str) !u64:
     keys str* = keysPtr[T](this)
     states u8* = statesPtr[T](this)
@@ -91,6 +105,12 @@ HashMap[T].indexOf(key str) !u64:
     throw errors.failure("key not found in hash map")
 ..
 
+# Returns a borrowed copy of the value associated with key.
+# @throws outOfBounds if key is absent
+# @ownership The map retains ownership; use take() to transfer it.
+# @complexity O(1) average, O(N) worst case
+# @example
+#   user := try users.get("alice")
 HashMap[T].get(key str) !T:
     idx := try this.indexOf(key)
     values T* = valuesPtr[T](this)
@@ -99,6 +119,10 @@ HashMap[T].get(key str) !T:
 
 # Rebuilds the table at a larger capacity. Owned keys and values are moved
 # without copying.
+# Rebuilds the table with a larger capacity while preserving all entries.
+# @complexity O(N + C), where N is entry count and C is new capacity
+# @throws outOfMemory if replacement storage cannot be allocated
+# @warning newCapacity must be large enough to contain every current entry.
 HashMap[T].resize(newCapacity u64) !void:
     if newCapacity <= this.length:
         throw errors.invalidArgument("hash map capacity is too small")
@@ -143,6 +167,11 @@ resizeForInsert[T](map HashMap[T]*, newCapacity u64) !bool:
     ret true
 ..
 
+# Inserts item under a copied key, or replaces and cleans up the existing value.
+# @ownership Always consumes item, including when allocation or resizing fails.
+# @complexity O(1) amortized, O(N) when rebuilding or under heavy collisions
+# @example
+#   try users.set("alice", user)
 HashMap[T].set(key str, item $T) !void:
     # Keep the load factor below 75%. Besides maintaining probe performance,
     # rebuilding also discards tombstones left by delete().
@@ -205,11 +234,22 @@ HashMap[T].set(key str, item $T) !void:
     throw errors.wouldOverflow("hash map is full")
 ..
 
+# Removes key and releases its value through the configured cleanup callback.
+# @throws outOfBounds if key is absent
+# @complexity O(1) average, O(N) worst case
+# @example
+#   try users.delete("alice")
 HashMap[T].delete(key str) !void:
     value := try this.take(key)
     release[T](this.cleanup, value)
 ..
 
+# Removes key and transfers its value to the caller without invoking cleanup.
+# @throws outOfBounds if key is absent
+# @ownership The caller becomes responsible for the returned value.
+# @complexity O(1) average, O(N) worst case
+# @example
+#   user := try users.take("alice")
 HashMap[T].take(key str) !$T:
     idx := try this.indexOf(key)
     keys str* = keysPtr[T](this)
@@ -222,10 +262,19 @@ HashMap[T].take(key str) !$T:
     ret taken
 ..
 
+# Returns the number of live entries.
+# @complexity O(1)
+# @example
+#   size := users.count()
 HashMap[T].count() u64:
     ret this.length
 ..
 
+# Releases copied keys, owned values, and map storage.
+# @complexity O(C), where C is table capacity
+# @ownership Invalidates the map and all values borrowed from it.
+# @example
+#   users.free()
 destr HashMap[T].free() void:
     keys str* = keysPtr[T](this)
     states u8* = statesPtr[T](this)

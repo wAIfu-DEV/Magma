@@ -1,14 +1,14 @@
 mod main
 
-use "../http.mg" http
-use "../cast.mg" cast
-use "../slices.mg" slices
-use "../allocator.mg" allocator
-use "../heap.mg" heap
-use "../reader.mg" reader
-use "../errors.mg" errors
-use "../memory.mg" memory
-use "../strings.mg" strings
+use "std:http" http
+use "std:cast" cast
+use "std:slices" slices
+use "std:allocator" allocator
+use "std:heap" heap
+use "std:reader" reader
+use "std:errors" errors
+use "std:memory" memory
+use "std:strings" strings
 
 emptyRead(impl ptr, bytes u8[], count u64) !u64: ret 0 ..
 

@@ -23,7 +23,7 @@ consume(x $Destructible) void: # $ before arg type marks ownership transfer (non
 ..
 
 assign(x $Destructible) void:
-    someSlice Destructible[1]
+    someSlice := array Destructible[1]
     someSlice[0] = x # ownership is transferred, checker is satisfied
 
     # WRONG

@@ -9,25 +9,20 @@ use "../std/strings.mg"   strs
 
 main(args str[]) !void:
     a := heap.allocator()
-
-    stdout := try io.stdout(a)
     stdin :=  try io.stdin(a)
 
     defer:
-        stdout.close()
         stdin.close()
     ..
 
-    out := stdout.writer()
-
-    out.writeLn("Started program. Write file path to print.")
+    io.writeLn("Started program. Write file path to print.")
 
     while true:
-        out.write("Path: ")
-        stdout.flush()
+        io.write("Path: ")
+        io.flush()
 
         input := stdin.readLn(a)
-        defer strs.free(a, input)
+        defer input.free(a)
 
         f := try file.open(a, input, file.mode().read())
         defer f.close()
@@ -36,17 +31,18 @@ main(args str[]) !void:
         defer reader.close()
 
         while true:
-            line str, e error = reader.readLn(a)
+            line, e := reader.readLn(a)
 
-            if err.code(e) == 4:
-                out.writeLn("<EOF>")
-                break
-            elif err.code(e) != 0:
+            if e.nok():
+                if err.code(e) == 4:
+                    io.writeLn("<EOF>")
+                    break
+                ..
                 throw e
             ..
             
-            out.writeLn(line)
-            strs.free(a, line)
+            io.writeLn(line)
+            line.free(a)
         ..
     ..
 .. 

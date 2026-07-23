@@ -5,7 +5,7 @@ use "../std/io.mg" io
 use "../std/strconv.mg" strconv
 use "../std/strings.mg" strings
 
-won(board u8[9], mark u8) bool:
+won(board u8[], mark u8) bool:
     if board[0] == mark && board[1] == mark && board[2] == mark:
         ret true
     elif board[3] == mark && board[4] == mark && board[5] == mark:
@@ -26,7 +26,7 @@ won(board u8[9], mark u8) bool:
     ret false
 ..
 
-printBoard(out writer.Writer, board u8[9]) !void:
+printBoard(out writer.Writer, board u8[]) !void:
     i u64 = 0
 
     while i < 9:
@@ -60,7 +60,7 @@ main() !void:
 
     out := stdout.writer()
 
-    board u8[9]
+    board := array u8[9]
     turn u64 = 0
 
     while turn < 9:

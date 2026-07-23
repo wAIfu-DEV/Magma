@@ -1,26 +1,26 @@
 mod main
 
-use "../std/fake_alloc.mg" fake
-use "../std/strings.mg" strings
-use "../std/io.mg" io
-use "../std/heap.mg" heap
-use "../std/thread_pool.mg" tp
-use "../std/file.mg" file
+use "std:fake_alloc" fake
+use "std:strings" strings
+use "std:io" io
+use "std:heap" heap
+use "std:thread_pool" tp
+use "std:file" file
+use "std:async" async
 
 pub main() !void:
     a := heap.allocator()
-    out := try io.stdout(a)
-    defer out.close()
 
     pool := try tp.newDefault(a)
     defer pool.close()
+    as := async.new(pool, fake.allocator())
 
     f := try file.open(a, "main.go", file.mode().read())
     defer f.close()
     
-    future := try f.reader().readAsync(pool, fake.allocator(), try f.count())
+    future := try as.read(f.reader(), try f.count())
     contents := try future.await()
-    defer strings.free(a, contents)
+    defer contents.free(a)
 
-    out.writeLn(contents)
+    io.writeLn(contents)
 ..

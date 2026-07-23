@@ -1,7 +1,7 @@
 mod main
-use "../errors.mg" errors
-use "../iterator.mg" iterator
-use "../cast.mg" cast
+use "std:errors" errors
+use "std:iterator" iterator
+use "std:cast" cast
 hasData(impl ptr, index u64*) bool:
     ret *index < 2
 ..

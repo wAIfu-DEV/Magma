@@ -1,8 +1,11 @@
 mod cpu_impl_netbsd
+# NetBSD processor-count backend used by the portable cpu module.
 
-use "../cast.mg" cast
 
-ext ext_sysconf sysconf(name i32) i64
+use "std:c" c
+use "std:cast" cast
+
+ext ext_sysconf sysconf(name c.int) c.long
 
 pub coreCount() u64:
     count i64 = ext_sysconf(1002)

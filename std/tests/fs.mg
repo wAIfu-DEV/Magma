@@ -1,9 +1,9 @@
 mod main
-use "../allocator.mg" allocator
-use "../errors.mg" errors
-use "../fs.mg" fs
-use "../heap.mg" heap
-use "../strings.mg" strings
+use "std:allocator" allocator
+use "std:errors" errors
+use "std:fs" fs
+use "std:heap" heap
+use "std:strings" strings
 
 found bool
 

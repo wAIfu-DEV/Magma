@@ -3,10 +3,11 @@
 ## Scope and method
 
 This report analyzes the Magma language as it is actually used in `std/*.mg`,
-`std/{win,unix}/*.mg`, and `samples/*.mg`. The compiler sources and the existing
-syntax documentation were used only to resolve ambiguities such as operator
-precedence and parser restrictions. Consequently, this is a description of the
-current implemented language, not a proposal for a future version.
+`std/{win,unix}/*.mg`, `std/tests/*.mg`, `tests/**/*.mg`, and `samples/*.mg`.
+Compiler and runtime sources are also used to verify static-analysis, lowering,
+error-trace, and concurrency behavior that cannot be established from examples
+alone. Consequently, this is a description of the current implemented language,
+not a proposal for a future version.
 
 The corpus presents Magma as a small, statically typed systems language. Its
 surface syntax combines name-before-type declarations, explicit error
@@ -26,7 +27,7 @@ in the observed corpus. Instead, abstraction is built from:
 - monomorphized generic functions, structs, and methods;
 - function pointers stored in structs;
 - throwing function signatures and a first-class `error` value;
-- pointers, slices, fixed arrays, raw memory routines, external symbols, and
+- pointers, slices, stack-backed arrays, raw memory routines, external symbols, and
   inline LLVM.
 
 This produces a recognizable design: high-level conveniences are supplied where
@@ -63,9 +64,10 @@ pub new[T](a alc.Allocator) !$Array[T]:
 ..
 ```
 
-Declarations without `pub` are module-private. Methods in the standard library
-are usually not marked `pub`; their availability follows from the public owner
-type and the compiler's member resolution rules.
+Functions and struct types without `pub` are module-private and cannot be named
+through an import alias. Both public and private declarations remain available
+inside their defining module. Methods are public by default when their owner
+struct is public and do not require a separate `pub` modifier.
 
 ### 2.2 Comments, whitespace, and statement boundaries
 
@@ -107,6 +109,7 @@ functions or values.
 Observed literals include:
 
 - booleans: `true`, `false`;
+- the null-like literal `none`, used for pointers and function pointers;
 - decimal integers: `0`, `65535`, `-1`;
 - hexadecimal integers: `0x80000000`, `0x7FF0000000000000`;
 - decimal floating point: `1.75`, `0.0`;
@@ -126,7 +129,7 @@ Explicit declarations put the name before the type:
 ```magma
 count u64
 position u64 = 0
-buffer u8[64]
+buffer := array u8[64]
 ```
 
 `:=` infers a local type:
@@ -156,9 +159,20 @@ this.entries.values[i] = value
 bytes[i] = 0
 ```
 
-All observed data is mutable; there is no `const`, `let`, or read-only binding.
-Globals use the same `name Type` form at module scope and are zero-initialized.
-The current language does not reliably support initialized global declarations.
+Ordinary variables are mutable; there is no `let` or read-only local binding.
+Module-level immutable values use `const` with either an explicit or inferred
+type:
+
+```magma
+const DEFAULT_BUFFER_SIZE u64 = 8192
+const EMPTY := Value(kind=0, payload=0)
+```
+
+Constant initializers are restricted to LLVM-compatible literals, constant and
+function references, global addresses, and struct aggregates; Magma does not
+perform general compile-time evaluation. Globals use the same `name Type` form
+at module scope. Uninitialized globals are zeroed, while initialized globals
+accept the same restricted constant forms.
 
 `:=` is declaration syntax, not general assignment. Its left side is a simple
 new name, so field or indexed inference such as `obj.field := x` is not part of
@@ -252,7 +266,8 @@ The examples exercise:
 
 - unsigned integers: `u8`, `u16`, `u32`, `u64`, `u128`;
 - signed integers: `i8`, `i16`, `i32`, `i64`, `i128`;
-- floating point: principally `f64`;
+- floating point: `f16`, `f32`, `f64`, and `f128`, with `f32` and `f64`
+  exercised by the current library and tests;
 - `bool`, `void`, `ptr`, `str`, `slice`, and `error`.
 
 `str` and `slice` are runtime descriptor values rather than raw pointers. Tests
@@ -271,13 +286,14 @@ Memory-related type syntax is postfix:
 ```magma
 u8*       # pointer to u8
 u8[]      # slice of u8
-u8[64]    # fixed array of 64 u8 values
+array u8[64] # zero-initialized local backing storage, returned as u8[]
 Object**  # pointer to pointer to Object
 ```
 
-Fixed arrays own inline storage and their element count is part of the type.
+Array expressions own local inline storage and produce a typed slice (`T[]`);
+their element count is not part of type identity.
 Slices are a pointer-and-count view. Pointers and slices share indexing syntax,
-and fixed arrays are accepted by generic slice utilities in the examples.
+and stack-backed arrays are accepted by generic slice utilities in the examples.
 
 The untyped `ptr` is the raw interoperation type. Typed and raw pointers are
 frequently passed through the explicit functions in `std/cast.mg`.
@@ -294,13 +310,16 @@ pub utf8To16(a alc.Allocator, s str) !$u16[]:
 
 Prefix `$` marks ownership transfer without changing runtime layout. On a return
 type it gives ownership to the caller; on a parameter it consumes the argument.
-The unmarked form borrows. For structs with a `destr` member, a warning-only
-flow checker tracks these transfers through direct locals, assignments, calls,
-returns, control flow, and explicit destructor calls. It catches common leaks,
-double consumption, consuming borrows, use after transfer, and discarded owned
-results. It does not model aliases, pointers, fields, indexed values, aggregate
-contents, or partial moves, so it is not a memory-safety guarantee. Detailed
-rules are in [OWNERSHIP.md](OWNERSHIP.md).
+The unmarked form borrows. For structs with a `destr` member, and for primitives
+with a registered destructor such as `str`, a warning-only flow checker tracks
+these transfers through direct locals, assignments, calls,
+returns, struct-constructor fields, control flow, and explicit destructor calls.
+It catches common leaks, double consumption, consuming borrows, use after
+transfer, and discarded owned results. A struct constructor consumes tracked
+locals placed in its fields, but the checker does not subsequently model the
+aggregate's contents. It also does not model aliases, pointers, field or indexed
+state, or partial moves, so it is not a memory-safety guarantee. Detailed rules
+are in [OWNERSHIP.md](OWNERSHIP.md).
 
 ### 4.4 Function types and interface-like structs
 
@@ -526,9 +545,9 @@ error followed by its propagation sites, newest first:
 ```text
 Uncaught Error: 1 'fake alloc'
   at main (async_test.mg:21:14)
-  at Reader.readAsync (reader.mg:58:9)
-  at new[str, reader.ReaderReadTask] (future.mg:126:30)
-  at Allocator.allocT[future.Work[str, reader.ReaderReadTask]] (allocator.mg:37:9)
+  at Async.read (async.mg:36:9)
+  at new[str, async.ReaderReadTask] (future.mg:92:9)
+  at Allocator.allocT[future.Work[str, async.ReaderReadTask]] (allocator.mg:37:9)
   at fakeAlloc (fake_alloc.mg:9:5)
 ```
 
@@ -542,7 +561,7 @@ Handled errors expose the same information through `std/errors.mg`:
 
 ```magma
 value, failure := mayFail()
-if errors.isError(failure):
+if failure.nok():
     errors.printTrace(failure)
 
     cursor := errors.trace(failure)
@@ -574,18 +593,23 @@ result.
 ### 8.1 Creating a pool
 
 Pools require an allocator and own their worker, queue, and synchronization
-storage. `newDefault` selects a maximum worker count from the available CPU
-cores and a default queue capacity. Explicitly configured pools start at their
-minimum, grow toward their maximum when every available worker is occupied, and
-shrink to the minimum after bursts drain. `new` exposes both worker limits and
-the initial queue capacity; `newSpinning` additionally exposes the worker spin count:
+storage. They start with their configured minimum worker count, grow toward the
+configured maximum when the available workers are occupied, and shrink to the
+minimum after bursts drain. `new` exposes both worker limits, the initial queue
+capacity, and the worker spin count. `newDefault` starts one worker per available
+CPU core, uses an initial queue capacity of 256, derives its spin count from the
+core count, and requests the largest `u64` worker limit. The current
+implementation initially allocates bookkeeping for only the minimum workers and
+doubles that storage on demand, capped by the configured maximum. Worker
+contexts have stable individual allocations, so growing the bookkeeping arrays
+does not invalidate running workers.
 
 ```magma
 pool := try thread_pool.newDefault(a)
 defer pool.close()
 
-# Or configure it explicitly:
-pool := try thread_pool.new(a, 2, 8, 256)
+# Or configure minimum and maximum workers, queue capacity, and spin count:
+pool := try thread_pool.new(a, 2, 8, 256, 1024)
 defer pool.close()
 ```
 
@@ -631,19 +655,21 @@ or otherwise finish outstanding work before closing the pool or destroying
 those resources. Tasks which block awaiting other tasks on the same fully
 occupied pool can deadlock through worker starvation.
 
-### 8.3 Async reader convenience
+### 8.3 Async execution context
 
-`Reader.readAsync(pool, allocator, nBytes)` packages `Reader.read` as a future:
+`async.Async` bundles a borrowed pool and allocator. Its `read` operation
+packages `Reader.read` as a future without making `std:reader` depend on the
+thread-pool stack:
 
 ```magma
 pool := try thread_pool.newDefault(a)
 defer pool.close()
+as := async.new(pool, a)
 
 f := try file.open(a, "main.go", file.mode().read())
 defer f.close()
 
-r := f.reader()
-pending := try r.readAsync(pool, a, f.count())
+pending := try as.read(f.reader(), f.count())
 contents := try pending.await()
 ```
 
@@ -651,11 +677,6 @@ The returned string is allocator-owned, just as with synchronous `Reader.read`.
 If work fails on a worker, its existing propagation trace is stored with the
 error. `await()` rethrows that same error and adds the awaiting path, so an
 uncaught trace connects the caller to the asynchronous task's failure origin.
-
-`future.resetCreationTiming()` and `future.creationTiming()` provide cumulative
-diagnostic counters for allocation, initialization, waiter creation, and pool
-submission phases. Durations are reported in platform tick units; these global
-atomic counters are intended for measurement rather than application logic.
 
 ## 9. Platform and low-level facilities
 
@@ -687,7 +708,46 @@ The first name is used by Magma code; the second is the linked external symbol.
 Arguments and the return type remain explicit, and declarations have no body.
 Windows and Unix implementations use this directly for OS and C-runtime APIs.
 
-### 9.3 Inline LLVM
+### 9.3 Exported native functions
+
+`@export_name` exposes a top-level Magma function under a stable native symbol:
+
+```magma
+@export_name("magma_add")
+add(a i32, b i32) i32:
+    ret a + b
+..
+```
+
+Magma continues to emit and use the ordinary module-mangled implementation. A
+second function named `magma_add` forwards its arguments and result, allowing C
+code to declare and call it normally:
+
+```c
+#include <stdint.h>
+
+extern int32_t magma_add(int32_t a, int32_t b);
+```
+
+The optional second argument selects the ABI. It defaults to C, and C is the
+only ABI currently supported:
+
+```magma
+@export_name("magma_add", "C")
+```
+
+Native export visibility and Magma module visibility are separate. Add `pub`
+only when other Magma modules must also access the function. Symbol names must
+be valid C identifiers and unique across every module in the compilation.
+
+Exported functions must be top-level, concrete, and non-throwing. Generic and
+member functions have no single stable native signature. Throwing results use
+Magma's internal error aggregate, which does not have a supported C ABI. Expose
+a throwing operation through an explicit non-throwing adapter instead, for
+example by returning an integer status and writing the successful value through
+a pointer argument.
+
+### 9.4 Inline LLVM
 
 `llvm "..."` injects textual LLVM IR, most often inside a function:
 
@@ -703,7 +763,7 @@ intrinsics that are absent from the core syntax. It is a powerful escape hatch,
 but its strings are not type-checked against surrounding Magma code. Invalid or
 mismatched IR is deferred to LLVM and can compromise optimizer assumptions.
 
-### 9.4 Memory model in practice
+### 9.5 Memory model in practice
 
 Allocation is explicit and allocator-driven. Resource-owning structs expose
 explicit `destr` methods such as `free` or `close`; callers invoke or defer them.
@@ -732,6 +792,10 @@ systems library:
 - UTF-8 decoding and UTF-8/UTF-16 conversion;
 - files, readers, writers, buffered streams, and duplex streams;
 - worker thread pools, typed futures, and asynchronous reader operations;
+- processes and asynchronous process execution;
+- atomics, mutexes, spin locks, lockers, and platform wake primitives;
+- HTTP clients and streaming request and response bodies;
+- generic iterators and pseudorandom number generation;
 - growable arrays, lists, queues, builders, linear maps, and hash maps;
 - generic sorting and searching through comparison callbacks;
 - numeric formatting and parsing;
@@ -749,8 +813,9 @@ operations compose beyond toy programs.
 Several restrictions matter when reading or writing present-day Magma:
 
 1. **No automatic memory safety.** `$` drives warning-only checking for direct
-   destructible locals; pointers, aliases, fields, indexed values, aggregate
-   contents, and partial moves are unchecked.
+   destructible locals and transfers into struct constructors; pointers,
+   aliases, field and indexed state, aggregate contents, and partial moves
+   remain unchecked.
 2. **Incomplete static checking.** Some invalid assignments, returns, casts, or
    throwing-call uses can survive farther into lowering than a mature language
    would permit.
@@ -759,9 +824,9 @@ Several restrictions matter when reading or writing present-day Magma:
    than general compile-time evaluation.
 4. **Restricted destructuring.** Only the two-result throwing-call form is
    supported.
-5. **Restricted subscripting.** Named pointer-, slice-, and array-like targets
-   are reliable; indexing arbitrary call or grouped expressions is not a safe
-   assumption.
+5. **Type-directed subscripting.** Postfix indexing can target general
+   expressions, including calls and grouped expressions, but the resulting
+   target must have a pointer, slice, or fixed-array type.
 6. **No high-level sum types or interfaces.** Libraries manually encode tags,
    payload storage, and vtables.
 7. **No `for`, `switch`, closures, or inference-heavy generic constraints.**
@@ -781,7 +846,8 @@ null tests via pointer-to-integer conversion, and careful error cleanup.
 Magma's syntax is internally coherent. Name-before-type declarations work
 uniformly for fields, parameters, locals, globals, and destructured results.
 Square brackets consistently denote generic arguments or element shapes, while
-postfix `*`, `[]`, and `[N]` keep low-level type composition compact. The
+postfix `*` and `[]` keep low-level type composition compact, while
+`array T[N]` creates explicit local backing storage. The
 colon/`..` block form is unusual but easy to scan and independent of indentation.
 
 The error system is the most distinctive high-level feature. `!T`, `try`,

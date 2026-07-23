@@ -1,6 +1,6 @@
 mod main
-use "../cast.mg" cast
-use "../errors.mg" errors
+use "std:cast" cast
+use "std:errors" errors
 pub main() !void:
     value u64 = 42
     pointer ptr = addrof value

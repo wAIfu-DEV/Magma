@@ -2,32 +2,33 @@ mod main
 
 use "../std/heap.mg"      heap
 use "../std/io.mg"        io
+use "../std/fmt.mg"       fmt
 use "../std/strings.mg"   strs
 use "../std/http.mg"      http
 use "../std/builder.mg"   builder
 use "../std/thread_pool.mg" thread_pool
+use "../std/async.mg"       async
 
 pub main(args str[]) !void:
     a := heap.allocator()
 
     tp := try thread_pool.newDefault(a)
     defer tp.close()
+    as := async.new(tp, a)
 
-    out := try io.stdout(a)
     in :=  try io.stdin(a)
 
     defer:
-        out.close()
         in.close()
     ..
 
-    out.writeLn("Started program. URL to query.")
+    io.writeLn("Started program. URL to query.")
 
     client := try http.new(a, http.defaultOptions())
     defer client.close()
 
     while true:
-        out.write("URL: ")
+        io.write("URL: ")
         out.flush()
 
         input := try in.readLn(a)
@@ -37,9 +38,8 @@ pub main(args str[]) !void:
         defer resp.close()
 
         if resp.statusCode() != 200:
-            out.write("Request failed with code: ")
-            out.writeInt64(resp.statusCode())
-            out.writeLn("")
+            fmt.str(a, "Request failed with code: ").int(resp.statusCode()).print()
+            io.writeLn("")
             continue
         ..
 
@@ -49,7 +49,7 @@ pub main(args str[]) !void:
         defer bld.free()
 
         while true:
-            readFuture := try body.readAsync(tp, a, 512)
+            readFuture := try as.read(body, 512)
             chunk := try readFuture.await()
 
             if strs.countBytes(chunk) == 0:

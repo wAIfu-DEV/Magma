@@ -1,13 +1,13 @@
 mod main
 
-use "../allocator.mg" allocator
-use "../buffered.mg" buffered
-use "../cast.mg" cast
-use "../errors.mg" errors
-use "../heap.mg" heap
-use "../reader.mg" reader
-use "../strings.mg" strings
-use "../writer.mg" writer
+use "std:allocator" allocator
+use "std:buffered" buffered
+use "std:cast" cast
+use "std:errors" errors
+use "std:heap" heap
+use "std:reader" reader
+use "std:strings" strings
+use "std:writer" writer
 
 sink(impl ptr, bytes str) !u64:
     total u64* = impl
@@ -62,7 +62,7 @@ pub main() !void:
         throw errors.failure("buffered line is not null terminated")
     ..
     rawReader := bufferedInput.reader()
-    spare u8[1]
+    spare := array u8[1]
     if try rawReader.readToBuff(spare, 1) != 0:
         throw errors.failure("buffered reader EOF changed")
     ..

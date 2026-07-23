@@ -1,8 +1,8 @@
 mod main
-use "../errors.mg" errors
-use "../hash.mg" hash
+use "std:errors" errors
+use "std:hash" hash
 pub main() !void:
-    value u8[3]
+    value := array u8[3]
     value[0] = 97
     value[1] = 98
     value[2] = 99

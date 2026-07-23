@@ -1,13 +1,16 @@
 mod linear_map
+# Compact string maps optimized for small collections and linear lookup.
 
-use "allocator.mg" alc
-use "strings.mg" stg
-use "errors.mg" err
-use "cast.mg" cast
-use "memory.mg" mem
-use "slices.mg" slices
+use "std:allocator" alc
+use "std:strings" stg
+use "std:errors" err
+use "std:cast" cast
+use "std:memory" mem
+use "std:slices" slices
 
-LinearMap[T](
+# Owning insertion-ordered string map optimized for small collections. Keys are
+# copied and lookup is linear; deletion may change entry order.
+pub LinearMap[T](
     allocator alc.Allocator
     keys str*
     values T*
@@ -18,7 +21,7 @@ LinearMap[T](
 
 release[T](cleanup ($T) void, value $T) void:
     if cleanup == none:
-        abandoned T[1]
+        abandoned := array T[1]
         abandoned[0] = value
         ret
     ..
@@ -29,6 +32,11 @@ claim[T](claimed $T) $T:
     ret claimed
 ..
 
+# Creates an empty map and optionally installs a value cleanup callback.
+# @complexity O(1), excluding allocation
+# @ownership The map owns inserted values and must be freed.
+# @example
+#   map := try linear_map.new[Value](a, freeValue)
 pub new[T](a alc.Allocator, cleanup ($T) void) !$LinearMap[T]:
     keys str* = try a.allocT[str](8)
     valuesRaw T*, valuesErr error = a.allocT[T](8)
@@ -47,6 +55,11 @@ pub new[T](a alc.Allocator, cleanup ($T) void) !$LinearMap[T]:
     )
 ..
 
+# Returns the current index of key.
+# @throws failure if key is absent
+# @complexity O(N)
+# @example
+#   index := try map.indexOf("name")
 LinearMap[T].indexOf(key str) !u64:
     bound := cast.u16to64(this.countValue)
     keys str* = this.keys
@@ -60,6 +73,11 @@ LinearMap[T].indexOf(key str) !u64:
     throw err.failure("key not found in linear map")
 ..
 
+# Expands storage while preserving current entry order.
+# @throws wouldOverflow after the map reaches 65,535 entries
+# @complexity O(N)
+# @example
+#   try map.grow()
 LinearMap[T].grow() !void:
     oldCapacity := cast.u16to64(this.capacity)
     if oldCapacity >= 65535:
@@ -86,11 +104,21 @@ LinearMap[T].grow() !void:
     this.capacity = cast.u64to16(newCapacity)
 ..
 
+# Removes key and releases its value through the cleanup callback.
+# @throws failure if key is absent
+# @complexity O(N)
+# @example
+#   try map.delete("temporary")
 LinearMap[T].delete(key str) !void:
     value := try this.take(key)
     release[T](this.cleanup, value)
 ..
 
+# Removes key and transfers its value to the caller without cleanup.
+# @ownership The caller becomes responsible for the returned value.
+# @complexity O(N)
+# @example
+#   value := try map.take("name")
 LinearMap[T].take(key str) !$T:
     idx := try this.indexOf(key)
     lastIdx := cast.u16to64(this.countValue) - 1
@@ -106,24 +134,48 @@ LinearMap[T].take(key str) !$T:
     ret taken
 ..
 
+# Returns the value for key without removing it.
+# @ownership The returned value is borrowed from the map.
+# @complexity O(N)
+# @example
+#   value := try map.get("name")
 LinearMap[T].get(key str) !T:
     idx := try this.indexOf(key)
     values T* = this.values
     ret values[idx]
 ..
 
+# Returns the number of entries.
+# @complexity O(1)
+# @example
+#   size := map.count()
 LinearMap[T].count() u64:
     ret cast.u16to64(this.countValue)
 ..
 
+# Returns a volatile borrowed view of keys in current storage order.
+# @warning Any mutation can invalidate the view.
+# @complexity O(1)
+# @example
+#   keys := map.keysView()
 LinearMap[T].keysView() str[]:
     ret slices.fromPtr(this.keys, cast.u16to64(this.countValue))
 ..
 
+# Returns a volatile borrowed view of values matching keysView() by index.
+# @warning Any mutation can invalidate the view.
+# @complexity O(1)
+# @example
+#   values := map.valuesView()
 LinearMap[T].valuesView() T[]:
     ret slices.fromPtr(this.values, cast.u16to64(this.countValue))
 ..
 
+# Inserts item under a copied key or replaces and cleans up the old value.
+# @ownership Always consumes item, including when growth or key copying fails.
+# @complexity O(N), including lookup
+# @example
+#   try map.set("name", value)
 LinearMap[T].set(key str, item $T) !void:
     idx u64, e error = this.indexOf(key)
     if e.ok():
@@ -157,6 +209,10 @@ growForInsert[T](map LinearMap[T]*) !bool:
     ret true
 ..
 
+# Frees copied keys, owned values, and all backing storage.
+# @complexity O(N)
+# @example
+#   map.free()
 destr LinearMap[T].free() void:
     i u64 = 0
     bound := cast.u16to64(this.countValue)
@@ -181,6 +237,11 @@ destr LinearMap[T].free() void:
     this.capacity = 0
 ..
 
+# Removes all entries and returns the map to its initial capacity.
+# @complexity O(N)
+# @ownership Releases every stored value through cleanup.
+# @example
+#   try map.clear()
 LinearMap[T].clear() !void:
     replacement := try new[T](this.allocator, this.cleanup)
     this.free()
@@ -188,6 +249,6 @@ LinearMap[T].clear() !void:
     this.values = replacement.values
     this.countValue = replacement.countValue
     this.capacity = replacement.capacity
-    abandoned LinearMap[T][1]
+    abandoned := array LinearMap[T][1]
     abandoned[0] = replacement
 ..

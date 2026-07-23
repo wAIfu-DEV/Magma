@@ -1,7 +1,14 @@
 mod sort
+# In-place generic sorting and reversal operations for slices.
 
-use "slices.mg" slices
+use "std:slices" slices
 
+# Sorts a slice in ascending comparator order using stable insertion sort.
+# @complexity O(N²) comparisons and swaps; O(N) for an already sorted slice
+# @param in mutable slice to sort
+# @param compare comparator returning a negative, zero, or positive value
+# @example
+#   sort.insertion(values, compare)
 pub insertion[T](in T[], compare (T, T) i64) void:
     n := slices.count(in)
     i u64 = 1
@@ -19,6 +26,11 @@ pub insertion[T](in T[], compare (T, T) i64) void:
     ..
 ..
 
+# Reverses a slice in place.
+# @complexity O(N)
+# @param in mutable slice to reverse
+# @example
+#   sort.reverse(values)
 pub reverse[T](in T[]) void:
     n := slices.count(in)
     i u64 = 0

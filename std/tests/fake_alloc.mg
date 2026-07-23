@@ -1,8 +1,8 @@
 mod main
 
-use "../allocator.mg" allocator
-use "../errors.mg" errors
-use "../fake_alloc.mg" fake_alloc
+use "std:allocator" allocator
+use "std:errors" errors
+use "std:fake_alloc" fake_alloc
 
 pub main() !void:
     a allocator.Allocator = fake_alloc.allocator()

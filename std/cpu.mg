@@ -1,22 +1,26 @@
 mod cpu
+# Portable information about processors available to the current process.
 
 @platform("windows")
-use "win/cpu_impl.mg" impl_cpu
+use "std:win/cpu_impl" impl_cpu
 
 @platform("linux")
-use "unix/cpu_impl_linux.mg" impl_cpu
+use "std:unix/cpu_impl_linux" impl_cpu
 
 @platform("android")
-use "unix/cpu_impl_android.mg" impl_cpu
+use "std:unix/cpu_impl_android" impl_cpu
 
 @platform("ios", "darwin", "freebsd", "openbsd")
-use "unix/cpu_impl_posix.mg" impl_cpu
+use "std:unix/cpu_impl_posix" impl_cpu
 
 @platform("netbsd")
-use "unix/cpu_impl_netbsd.mg" impl_cpu
+use "std:unix/cpu_impl_netbsd" impl_cpu
 
 # Returns the number of logical CPU cores currently available to the process.
 # The result is always at least one, even when the operating-system query fails.
+# @complexity O(1), excluding the operating-system query
+# @example
+#   workerCount := cpu.coreCount()
 pub coreCount() u64:
     count u64 = impl_cpu.coreCount()
     if count == 0:
