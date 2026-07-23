@@ -49,7 +49,7 @@ pub main() !void:
         throw errors.failure("JSON accessor accepted the wrong type")
     ..
 
-    truth := json.boolean(true)
+    truth := json.bool(true)
     if try truth.asBool() == false:
         throw errors.failure("JSON bool round trip failed")
     ..
@@ -84,7 +84,7 @@ pub main() !void:
     if takenValue != 42 || object.count() != 0:
         throw errors.failure("JSON object take failed")
     ..
-    try object.set("temporary", json.boolean(false))
+    try object.set("temporary", json.bool(false))
     try object.delete("temporary")
     if object.count() != 0:
         throw errors.failure("JSON object delete failed")
@@ -161,7 +161,7 @@ pub main() !void:
     ..
 
     nested := try json.newObject(a)
-    try nested.set("ok", json.boolean(true))
+    try nested.set("ok", json.bool(true))
     try object.set("items", json.arrayBorrowed(addrof array))
     try object.set("nested", json.objectOwned(addrof nested))
     footgun.drop[json.Object](nested)
@@ -189,7 +189,7 @@ pub main() !void:
     try cleanup.append(json.stringOwned(a, transferredText))
 
     child := try json.newArray(a)
-    try child.append(json.boolean(true))
+    try child.append(json.bool(true))
     try cleanup.append(json.arrayOwned(addrof child))
     footgun.drop[json.Array](child)
     cleanup.free()

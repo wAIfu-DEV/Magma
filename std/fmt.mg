@@ -159,7 +159,7 @@ Format.int(value i64) $Format:
 
 # Appends `true` or `false`.
 # @complexity Amortized O(1)
-Format.boolean(value bool) $Format:
+Format.bool(value bool) $Format:
     append(this, boolPart(value))
     ret *this
 ..
@@ -255,7 +255,7 @@ destr Format.print() !u64:
 # Writes and consumes a deferred format on standard output.
 # @complexity O(P + B)
 # @example
-#   try fmt.printf(fmt.str(a, "ready: ").boolean(true))
+#   try fmt.printf(fmt.str(a, "ready: ").bool(true))
 pub printf(format $Format) !void:
     try format.print()
 ..

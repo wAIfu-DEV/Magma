@@ -48,7 +48,7 @@ Random.bounded(bound u64) u64:
 # Returns a pseudo-random boolean with equal probability for both values.
 # @complexity O(1)
 # @example
-#   heads := rng.boolean()
-Random.boolean() bool:
+#   heads := rng.bool()
+Random.bool() bool:
     ret (this.next() & 1) == 1
 ..

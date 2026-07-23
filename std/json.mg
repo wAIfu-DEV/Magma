@@ -202,8 +202,8 @@ pub null() Value:
 # Creates a JSON boolean value.
 # @complexity O(1)
 # @example
-#   value := json.boolean(true)
-pub boolean(value bool) Value:
+#   value := json.bool(true)
+pub bool(value bool) Value:
     out Value = memory.zeroValue[Value]()
     out.kind = 1
     r bool* = cast.reinterpret[bool](addrof out.value)

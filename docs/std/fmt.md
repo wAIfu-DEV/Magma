@@ -3,7 +3,7 @@
 ## Example
 
 ```magma
-message := fmt.str(a, "Value: ").uint(5).str(", active: ").boolean(true)
+message := fmt.str(a, "Value: ").uint(5).str(", active: ").bool(true)
 
 try message.writeTo(output)
 ```
@@ -23,7 +23,7 @@ operation reports that error before writing any output.
 - `Format.str(value str) $Format` appends a borrowed string.
 - `Format.uint(value u64) $Format` appends an unsigned decimal integer.
 - `Format.int(value i64) $Format` appends a signed decimal integer.
-- `Format.boolean(value bool) $Format` appends `true` or `false`.
+- `Format.bool(value bool) $Format` appends `true` or `false`.
 - `Format.float(value f64, precision u64) $Format` appends a fixed-point value.
 - `destr Format.writeTo(out writer.Writer) !u64` writes and consumes the format.
 - `destr Format.print() !u64` writes to standard output and consumes the format.

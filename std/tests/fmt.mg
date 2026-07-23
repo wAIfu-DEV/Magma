@@ -28,7 +28,7 @@ captureWrite(impl ptr, bytes str) !u64:
 pub main() !void:
     a allocator.Allocator = heap.allocator()
 
-    rendered $str, renderErr error = fmt.str(a, "Value: ").uint(5).str(", signed: ").int(-2).str(", active: ").boolean(true).str(", ratio: ").float(1.5, 1).toStr(a)
+    rendered $str, renderErr error = fmt.str(a, "Value: ").uint(5).str(", signed: ").int(-2).str(", active: ").bool(true).str(", ratio: ").float(1.5, 1).toStr(a)
     if renderErr.nok():
         throw renderErr
     ..
