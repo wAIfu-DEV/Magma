@@ -9,11 +9,11 @@ tracedFailure() !u8:
 pub main() !void:
     success := errors.ok()
     errors.printTrace(success)
-    if errors.code(success) != 0 || success.ok() == false || success.nok():
+    if success.nok() || success.ok() == false || success.nok():
         throw errors.failure("ok error classification changed")
     ..
     failure := errors.invalidArgument("bad input")
-    if errors.hasCode(failure, 2) == false || failure.nok() == false || errors.is(failure, errors.invalidArgument("other")) == false || strings.compare(errors.message(failure), "bad input") == false:
+    if errors.hasCode(failure, 2) == false || failure.nok() == false || errors.is(failure, errors.invalidArgument("other")) == false || strings.compare(failure.message(), "bad input") == false:
         throw errors.failure("error behavior changed")
     ..
     if strings.compare(errors.toStr(failure), "invalid argument") == false:
@@ -23,7 +23,7 @@ pub main() !void:
     if errors.isNative(native) == false || errors.nativeCode(native) != 123:
         throw errors.failure("native error behavior changed")
     ..
-    if errors.code(errors.failure("")) != 1 || errors.code(errors.outOfMemory("")) != 3 || errors.code(errors.endOfFile("")) != 4 || errors.code(errors.wouldOverflow("")) != 5 || errors.code(errors.invalidType("")) != 6 || errors.code(errors.outOfBounds("")) != 7:
+    if errors.failure("").code() != 1 || errors.outOfMemory("").code() != 3 || errors.endOfFile("").code() != 4 || errors.wouldOverflow("").code() != 5 || errors.invalidType("").code() != 6 || errors.outOfBounds("").code() != 7:
         throw errors.failure("standard error codes changed")
     ..
 

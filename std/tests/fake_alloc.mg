@@ -7,12 +7,12 @@ use "std:fake_alloc" fake_alloc
 pub main() !void:
     a allocator.Allocator = fake_alloc.allocator()
     value u8*, allocErr error = a.alloc(1)
-    if value != none || errors.code(allocErr) != errors.code(errors.failure("")):
+    if value != none || allocErr.code() != errors.failure("").code():
         throw errors.failure("fake allocator did not reject allocation")
     ..
 
     resized u8*, reallocErr error = a.realloc(none, 1)
-    if resized != none || errors.code(reallocErr) != errors.code(errors.failure("")):
+    if resized != none || reallocErr.code() != errors.failure("").code():
         throw errors.failure("fake allocator did not reject reallocation")
     ..
     a.free(none)

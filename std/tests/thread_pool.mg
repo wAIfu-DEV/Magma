@@ -55,7 +55,7 @@ expectInvalidSizes(a allocator.Allocator) !void:
         footgun.drop[thread_pool.ThreadPool](zeroWorkers)
         throw errors.failure("thread pool accepted zero workers")
     ..
-    if errors.code(workerErr) != 2:
+    if workerErr.code() != 2:
         throw errors.failure("thread pool returned the wrong zero-worker error")
     ..
 
@@ -64,7 +64,7 @@ expectInvalidSizes(a allocator.Allocator) !void:
         footgun.drop[thread_pool.ThreadPool](invertedWorkers)
         throw errors.failure("thread pool accepted a maximum below its minimum")
     ..
-    if errors.code(limitErr) != 2:
+    if limitErr.code() != 2:
         throw errors.failure("thread pool returned the wrong limit error")
     ..
 
@@ -73,7 +73,7 @@ expectInvalidSizes(a allocator.Allocator) !void:
         footgun.drop[thread_pool.ThreadPool](zeroCapacity)
         throw errors.failure("thread pool accepted zero queue capacity")
     ..
-    if errors.code(capacityErr) != 2:
+    if capacityErr.code() != 2:
         throw errors.failure("thread pool returned the wrong capacity error")
     ..
 
@@ -115,7 +115,7 @@ pub main() !void:
 
     # shutdown clears the handle and rejects a second release.
     stopped bool, shutdownErr error = shutdownResult(addrof pool)
-    if errors.code(shutdownErr) != 2 || pool.state != none:
+    if shutdownErr.code() != 2 || pool.state != none:
         throw errors.failure("thread pool allowed repeated shutdown")
     ..
 

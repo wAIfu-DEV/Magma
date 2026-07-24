@@ -101,7 +101,7 @@ func readMessage(r *bufio.Reader) ([]byte, error) {
 func (s *server) handle(msg message) error {
 	switch msg.Method {
 	case "initialize":
-		return s.respond(msg.ID, map[string]any{"capabilities": map[string]any{"textDocumentSync": 1, "hoverProvider": true}})
+		return s.respond(msg.ID, map[string]any{"capabilities": map[string]any{"textDocumentSync": 1, "hoverProvider": true, "completionProvider": map[string]any{"triggerCharacters": []string{"."}}}})
 	case "shutdown":
 		return s.respond(msg.ID, nil)
 	case "initialized", "$/cancelRequest", "textDocument/didSave":
@@ -168,6 +168,21 @@ func (s *server) handle(msg message) error {
 			return s.respond(msg.ID, nil)
 		}
 		return s.respond(msg.ID, map[string]any{"contents": map[string]string{"kind": "markdown", "value": value}})
+	case "textDocument/completion":
+		var p struct {
+			TextDocument struct {
+				URI string `json:"uri"`
+			} `json:"textDocument"`
+			Position position `json:"position"`
+		}
+		if err := json.Unmarshal(msg.Params, &p); err != nil {
+			return err
+		}
+		d := s.documents[p.TextDocument.URI]
+		if d == nil {
+			return s.respond(msg.ID, []completionItem{})
+		}
+		return s.respond(msg.ID, complete(d.URI, d.Text, p.Position))
 	default:
 		if len(msg.ID) != 0 {
 			return s.respondError(msg.ID, -32601, "method not found")
@@ -226,6 +241,9 @@ func analyze(rawURI, source string) *analysis {
 	if err == nil {
 		err = checker.TypeChecker(state)
 	}
+	// Preserve the pre-monomorphization generic index while enriching concrete
+	// function locals with call/try types resolved by semantic analysis.
+	docs.refreshCompletionBindings(file.PackageName, file.GlNode)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "magma-lsp: semantic analysis failed for %s: %v\n", path, err)
 	}

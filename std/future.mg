@@ -75,7 +75,7 @@ taskMain[T, Context](raw ptr) u64:
     work Work[T, Context]* = cast.reinterpret[Work[T, Context]](raw)
     state State[T]* = addrof work.state
     value T, failure error = work.entry(addrof work.context)
-    if errors.code(failure) == 0:
+    if failure.ok():
         state.value = value
     else:
         state.failure = failure
@@ -112,14 +112,14 @@ pub new[T, Context](a alc.Allocator, pool thread_pool.ThreadPool, entry (Context
     work.context = context
 
     waiter address_wait.Wait, waiterErr error = address_wait.new()
-    if errors.code(waiterErr) != 0:
+    if waiterErr.nok():
         a.free(work)
         throw waiterErr
     ..
     state.waiter = waiter
 
     submitted bool, submitErr error = submitWork[T, Context](pool, work)
-    if errors.code(submitErr) != 0:
+    if submitErr.nok():
         address_wait.free(addrof state.waiter)
         a.free(work)
         throw submitErr
@@ -155,7 +155,7 @@ destr Future[T].await() !$T:
         try address_wait.wait(addrof state.waiter, addrof state.status)
     ..
 
-    if errors.code(state.failure) != 0:
+    if state.failure.nok():
         failure error = state.failure
         this.state = none
         releaseState[T](state)

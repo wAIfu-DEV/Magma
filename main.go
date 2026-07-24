@@ -79,6 +79,7 @@ func parseArgs(args []string) (options, error) {
 	if err := flags.Parse(args); err != nil {
 		return options{}, err
 	}
+
 	if opts.version || opts.clangVersion || opts.lsp {
 		if flags.NArg() != 0 {
 			return options{}, fmt.Errorf("information commands do not accept an input file")

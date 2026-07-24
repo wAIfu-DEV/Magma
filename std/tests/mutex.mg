@@ -35,13 +35,13 @@ worker(context Context*) u64:
     i u64 = 0
     while i < incrementsPerWorker:
         locked bool, lockErr error = lockResult(context.lock)
-        if errors.code(lockErr) != 0:
+        if lockErr.nok():
             context.failed.store(1)
             ret 1
         ..
         *context.value = *context.value + 1
         unlocked bool, unlockErr error = unlockResult(context.lock)
-        if errors.code(unlockErr) != 0:
+        if unlockErr.nok():
             context.failed.store(1)
             ret 1
         ..

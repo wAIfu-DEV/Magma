@@ -512,7 +512,7 @@ A throwing call can be destructured into a value and error:
 
 ```magma
 count u64, countErr error = file.count()
-if errors.code(countErr) != 0:
+if countErr.nok():
     throw countErr
 ..
 ```

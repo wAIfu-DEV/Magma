@@ -102,7 +102,7 @@ File.count() !u64:
     ..
     position u64 = try impl_file.seek(this.handle, 0, 1)
     count u64, countErr error = impl_file.seek(this.handle, 0, 2)
-    if errors.code(countErr) != 0:
+    if countErr.nok():
         # Best effort restoration; preserve the original seek failure.
         impl_file.seek(this.handle, cast.utoi(position), 0)
         throw countErr

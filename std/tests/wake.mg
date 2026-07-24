@@ -23,7 +23,7 @@ pub main() !void:
         footgun.drop[wake.Wake](invalid)
         throw errors.failure("wake accepted an invalid strategy")
     ..
-    if errors.code(invalidErr) != 2:
+    if invalidErr.code() != 2:
         throw errors.failure("wake returned the wrong invalid-strategy error")
     ..
 ..

@@ -233,8 +233,8 @@ joinResult(state State*, index u64) !bool:
 
 recordFatal(state State*, failure error) void:
     locked bool, lockErr error = lockResult(state)
-    if errors.code(lockErr) == 0:
-        if errors.code(state.fatalError) == 0:
+    if lockErr.ok():
+        if state.fatalError.ok():
             state.fatalError = failure
         ..
         state.stopping = true
@@ -256,7 +256,7 @@ workerMain(context WorkerContext*) u64:
     running bool = true
     while running:
         locked bool, lockErr error = lockResult(state)
-        if errors.code(lockErr) != 0:
+        if lockErr.nok():
             recordFatal(state, lockErr)
             ret 1
         ..
@@ -267,14 +267,14 @@ workerMain(context WorkerContext*) u64:
             state.count = state.count - 1
             state.busyWorkers = state.busyWorkers + 1
             unlocked bool, unlockErr error = unlockResult(state)
-            if errors.code(unlockErr) != 0:
+            if unlockErr.nok():
                 recordFatal(state, unlockErr)
                 ret 1
             ..
 
             task.entry(task.context)
             completionLocked bool, completionLockErr error = lockResult(state)
-            if errors.code(completionLockErr) != 0:
+            if completionLockErr.nok():
                 recordFatal(state, completionLockErr)
                 ret 1
             ..
@@ -283,7 +283,7 @@ workerMain(context WorkerContext*) u64:
             becameIdle bool = state.pending == 0
             idleWaiters u64 = state.idleWaiters
             completionUnlocked bool, completionUnlockErr error = unlockResult(state)
-            if errors.code(completionUnlockErr) != 0:
+            if completionUnlockErr.nok():
                 recordFatal(state, completionUnlockErr)
                 ret 1
             ..
@@ -309,7 +309,7 @@ workerMain(context WorkerContext*) u64:
             observed u32 = generation_wait.observe(addrof state.workGeneration)
             if state.spinCount != 0:
                 unlocked bool, unlockErr error = unlockResult(state)
-                if errors.code(unlockErr) != 0:
+                if unlockErr.nok():
                     recordFatal(state, unlockErr)
                     ret 1
                 ..
@@ -322,13 +322,13 @@ workerMain(context WorkerContext*) u64:
                     continue
                 ..
                 spinLocked bool, spinLockErr error = lockResult(state)
-                if errors.code(spinLockErr) != 0:
+                if spinLockErr.nok():
                     recordFatal(state, spinLockErr)
                     ret 1
                 ..
                 if state.count != 0 || state.stopping || generation_wait.observe(addrof state.workGeneration) != observed:
                     spinUnlocked bool, spinUnlockErr error = unlockResult(state)
-                    if errors.code(spinUnlockErr) != 0:
+                    if spinUnlockErr.nok():
                         recordFatal(state, spinUnlockErr)
                         ret 1
                     ..
@@ -337,17 +337,17 @@ workerMain(context WorkerContext*) u64:
             ..
             state.sleepingWorkers = state.sleepingWorkers + 1
             unlocked bool, unlockErr error = unlockResult(state)
-            if errors.code(unlockErr) != 0:
+            if unlockErr.nok():
                 recordFatal(state, unlockErr)
                 ret 1
             ..
             waited bool, waitErr error = waitWorkResult(state, observed)
-            if errors.code(waitErr) != 0:
+            if waitErr.nok():
                 recordFatal(state, waitErr)
                 ret 1
             ..
             wakeLocked bool, wakeLockErr error = lockResult(state)
-            if errors.code(wakeLockErr) != 0:
+            if wakeLockErr.nok():
                 recordFatal(state, wakeLockErr)
                 ret 1
             ..
@@ -358,7 +358,7 @@ workerMain(context WorkerContext*) u64:
                 state.wakeReservations = state.wakeReservations - 1
             ..
             wakeUnlocked bool, wakeUnlockErr error = unlockResult(state)
-            if errors.code(wakeUnlockErr) != 0:
+            if wakeUnlockErr.nok():
                 recordFatal(state, wakeUnlockErr)
                 ret 1
             ..
@@ -379,25 +379,25 @@ newConfigured(a alc.Allocator, minWorkers u64, maxWorkers u64, queueCapacity u64
     state State* = try a.allocT[State](1)
     mem.zero(state, sizeof State)
     tasks Task*, tasksErr error = a.allocT[Task](queueCapacity)
-    if errors.code(tasksErr) != 0:
+    if tasksErr.nok():
         a.free(state)
         throw tasksErr
     ..
     workers thread.Thread*, workersErr error = a.allocT[thread.Thread](minWorkers)
-    if errors.code(workersErr) != 0:
+    if workersErr.nok():
         a.free(tasks)
         a.free(state)
         throw workersErr
     ..
     workerContexts WorkerContext**, contextsErr error = a.allocT[WorkerContext*](minWorkers)
-    if errors.code(contextsErr) != 0:
+    if contextsErr.nok():
         a.free(workers)
         a.free(tasks)
         a.free(state)
         throw contextsErr
     ..
     workerStates u8*, statesErr error = a.allocT[u8](minWorkers)
-    if errors.code(statesErr) != 0:
+    if statesErr.nok():
         a.free(workerContexts)
         a.free(workers)
         a.free(tasks)
@@ -444,7 +444,7 @@ newConfigured(a alc.Allocator, minWorkers u64, maxWorkers u64, queueCapacity u64
     i u64 = 0
     while i < minWorkers:
         spawned bool, spawnErr error = spawnWorkerInto(state, i)
-        if errors.code(spawnErr) != 0:
+        if spawnErr.nok():
             state.stopping = true
             generation_wait.wakeAll(addrof state.work, addrof state.workGeneration, i)
             j u64 = 0
@@ -510,7 +510,7 @@ ThreadPool.submit(entry (ptr) u64, context ptr) !void:
     ..
     state State* = this.state
     state.lock.lock()
-    if errors.code(state.fatalError) != 0:
+    if state.fatalError.nok():
         failure error = state.fatalError
         state.lock.unlock()
         throw failure
@@ -521,7 +521,7 @@ ThreadPool.submit(entry (ptr) u64, context ptr) !void:
     ..
     if state.count == state.capacity:
         grown bool, growErr error = growQueue(state)
-        if errors.code(growErr) != 0:
+        if growErr.nok():
             state.lock.unlock()
             throw growErr
         ..
@@ -532,7 +532,7 @@ ThreadPool.submit(entry (ptr) u64, context ptr) !void:
     idleWorkers u64 = state.activeWorkers - state.busyWorkers
     if state.count + 1 > idleWorkers && state.activeWorkers < state.maxWorkers:
         grownWorkers bool, workerErr error = growWorkers(state)
-        if errors.code(workerErr) != 0:
+        if workerErr.nok():
             state.lock.unlock()
             throw workerErr
         ..
@@ -563,7 +563,7 @@ ThreadPool.wait() !void:
     waiting bool = true
     while waiting:
         state.lock.lock()
-        if errors.code(state.fatalError) != 0:
+        if state.fatalError.nok():
             failure error = state.fatalError
             state.lock.unlock()
             throw failure
@@ -578,7 +578,7 @@ ThreadPool.wait() !void:
             state.lock.lock()
             state.idleWaiters = state.idleWaiters - 1
             state.lock.unlock()
-            if errors.code(waitErr) != 0:
+            if waitErr.nok():
                 throw waitErr
             ..
         ..

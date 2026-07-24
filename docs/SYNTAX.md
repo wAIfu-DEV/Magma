@@ -786,7 +786,7 @@ To handle errors manually, destructure a throwing call into a value and an
 
 ```magma
 myVal i32, myE error = throwing(true)
-if errors.code(myE) != 0:
+if myE.nok():
     handle(myE)
 ..
 ```

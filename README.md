@@ -73,7 +73,7 @@ recover can handle both results directly:
 
 ```magma
 value u8, err error = readByte()
-if errors.code(err) != 0:
+if err.nok():
     # recover or propagate with `throw err`
 ..
 ```

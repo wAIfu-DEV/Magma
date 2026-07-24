@@ -369,7 +369,7 @@ resizeLineBuffer(a alc.Allocator, old u8*, newCapacity u64) !$u8*:
         throw errors.wouldOverflow("line buffer capacity overflow")
     ..
     resized u8*, resizeErr error = a.realloc(old, newCapacity + 1)
-    if errors.code(resizeErr) != 0:
+    if resizeErr.nok():
         a.free(old)
         throw resizeErr
     ..
@@ -489,7 +489,7 @@ Reader.readLn(a alc.Allocator) !$str:
         ..
         
         filled bool, fillErr error = this.fillBuffer()
-        if errors.code(fillErr) != 0:
+        if fillErr.nok():
             a.free(lineBuffer)
             throw fillErr
         ..

@@ -34,7 +34,7 @@ main(args str[]) !void:
             line, e := reader.readLn(a)
 
             if e.nok():
-                if err.code(e) == 4:
+                if e.code() == 4:
                     io.writeLn("<EOF>")
                     break
                 ..

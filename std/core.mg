@@ -36,6 +36,33 @@ error.nok() bool:
     llvm "  ret i1 %nok\n"
 ..
 
+# Returns the error code of an error.
+# A code of 0 indicates a successful operation.
+# @complexity O(1).
+# @returns error code
+# @example
+#   category := failure.code()
+error.code() u32:
+    llvm "  %value = load %type.error, ptr %this\n"
+	llvm "  %e0 = extractvalue %type.error %value, 2\n"
+    llvm "  ret i32 %e0\n"
+..
+
+# Returns the message from an error.
+# @complexity O(1).
+# @returns error message
+# @example
+#   detail := failure.message()
+error.message() str:
+    llvm "  %value = load %type.error, ptr %this\n"
+	llvm "  %ep = extractvalue %type.error %value, 0\n"
+	llvm "  %el = extractvalue %type.error %value, 3\n"
+	llvm "  %el64 = zext i32 %el to i64\n"
+	llvm "  %s0 = insertvalue %type.str zeroinitializer, ptr %ep, 0\n"
+	llvm "  %s1 = insertvalue %type.str %s0, i64 %el64, 1\n"
+	llvm "  ret %type.str %s1\n"
+..
+
 # Methods declared on primitive types form Magma's implicit core method set.
 # The compiler passes a pointer to the receiver as `this`, just as it does for
 # struct member functions.

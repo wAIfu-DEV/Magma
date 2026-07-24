@@ -5,7 +5,7 @@
 ```magma
 problem := errors.invalidArgument("expected a positive count")
 if errors.hasCode(problem, 2):
-    message := errors.message(problem)
+    message := problem.message()
 ..
 ```
 
@@ -13,8 +13,6 @@ Creates and inspects Magma `error` values. Standard-library errors use category 
 
 ## Inspection
 
-- `pub code(e error) u32` returns the stored code; zero means success.
-- `pub message(e error) str` returns the stored message.
 - `pub is(a error, b error) bool` compares error categories, not messages.
 - `pub hasCode(e error, expected u32) bool` tests a numeric category.
 - `pub toStr(e error) str` returns the category name.

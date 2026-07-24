@@ -14,6 +14,7 @@ pub main(args str[]) !void:
 
     tp := try thread_pool.newDefault(a)
     defer tp.close()
+    
     as := async.new(tp, a)
 
     in :=  try io.stdin(a)
@@ -44,7 +45,7 @@ pub main(args str[]) !void:
         ..
 
         body := resp.body()
-        
+
         bld := builder.new(a)
         defer bld.free()
 

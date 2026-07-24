@@ -33,10 +33,29 @@ type docIndex struct {
 	hoverSymbols map[string]string
 	hoverByName  map[string]string
 	valueHovers  map[string]string
+	// completionVisible distinguishes exported module declarations from members.
+	// Members are part of their receiver's public surface even though Magma does
+	// not spell `pub` on each method or field.
+	completionVisible  map[string]bool
+	completionBindings []completionBinding
+	memberTypes        map[string]*types.NodeType
+	expressionSymbols  map[string]map[string]completionItem
+	functionReturns    map[string]*types.NodeType
+}
+
+// completionBinding is captured from the source AST before monomorphization.
+// Generic templates are intentionally pruned later, so editor features cannot
+// recover their arguments, `this`, or local declarations from the final tree.
+type completionBinding struct {
+	module          string
+	name            string
+	valueType       *types.NodeType
+	functionLine    uint32
+	declarationLine uint32
 }
 
 func buildDocIndex(state *types.SharedState) *docIndex {
-	index := &docIndex{byNode: map[any]string{}, modules: map[string]string{}, symbols: map[string]string{}, hoverSymbols: map[string]string{}, hoverByName: map[string]string{}, valueHovers: map[string]string{}}
+	index := &docIndex{byNode: map[any]string{}, modules: map[string]string{}, symbols: map[string]string{}, hoverSymbols: map[string]string{}, hoverByName: map[string]string{}, valueHovers: map[string]string{}, completionVisible: map[string]bool{}, memberTypes: map[string]*types.NodeType{}, expressionSymbols: map[string]map[string]completionItem{}, functionReturns: map[string]*types.NodeType{}}
 	for _, file := range state.Files {
 		if file == nil || file.GlNode == nil {
 			continue
@@ -51,13 +70,31 @@ func buildDocIndex(state *types.SharedState) *docIndex {
 				name := flattenName(node.Class.NameNode)
 				docs := index.add(file, name, nameLine(node.Class.NameNode), node, byLine)
 				index.addHover(file.PackageName, name, joinHover(code(formatFunction(node)), docs))
-				index.indexFunctionValueUsages(file.PackageName, node)
+				index.completionVisible[file.PackageName+"\x00"+name] = node.IsPublic || strings.Contains(name, ".")
+				index.functionReturns[file.PackageName+"\x00"+name] = node.ReturnType
+				if !strings.Contains(name, ".") {
+					index.addExpressionSymbol(file.PackageName, completionItem{Label: name, Kind: 3, Detail: formatFunction(node), Documentation: markdownContent(index.hoverSymbols[file.PackageName+"\x00"+name])})
+				}
+			case *types.NodeExprVarDef:
+				name := flattenName(node.Name)
+				detail := formatVariable(node)
+				index.addExpressionSymbol(file.PackageName, completionItem{Label: name, Kind: 6, Detail: detail, Documentation: markdownContent(code(detail))})
+			case *types.NodeConstDef:
+				if node.VarDef != nil {
+					name := flattenName(node.VarDef.Name)
+					detail := formatVariable(node.VarDef)
+					index.addExpressionSymbol(file.PackageName, completionItem{Label: name, Kind: 21, Detail: detail, Documentation: markdownContent(code(detail))})
+				}
 			case *types.NodeStructDef:
 				name := flattenName(node.Class.NameNode)
 				text := index.add(file, name, nameLine(node.Class.NameNode), node, byLine)
 				index.addHover(file.PackageName, name, joinHover(code("struct "+name), text))
+				index.completionVisible[file.PackageName+"\x00"+name] = node.IsPublic
 				for _, field := range node.Class.ArgsNode.Args {
-					index.hoverSymbols[file.PackageName+"\x00"+name+"."+field.Name] = code(field.Name + " " + formatType(field.TypeNode))
+					key := file.PackageName + "\x00" + name + "." + field.Name
+					index.hoverSymbols[key] = code(field.Name + " " + formatType(field.TypeNode))
+					index.completionVisible[key] = true
+					index.memberTypes[key] = field.TypeNode
 				}
 				if definition := file.GlNode.StructDefs[name]; definition != nil && text != "" {
 					index.byNode[definition] = text
@@ -66,24 +103,63 @@ func buildDocIndex(state *types.SharedState) *docIndex {
 				if node.Alias != nil {
 					docs := index.add(file, node.Alias.Name, node.Alias.Tk.Pos.Line, node.Alias, byLine)
 					index.addHover(file.PackageName, node.Alias.Name, joinHover(code("alias "+node.Alias.Name+" = "+formatType(node.Alias.Target)), docs))
+					index.completionVisible[file.PackageName+"\x00"+node.Alias.Name] = node.Alias.IsPublic
 				}
 			}
 		}
 		index.indexValueDeclarations(file.PackageName, file.GlNode)
 	}
+	// Resolve local inference only after every imported declaration has been
+	// indexed; state.Files iteration order is intentionally unspecified.
+	for _, file := range state.Files {
+		if file == nil || file.GlNode == nil {
+			continue
+		}
+		for _, declaration := range file.GlNode.Declarations {
+			if function, ok := declaration.(*types.NodeFuncDef); ok {
+				index.indexFunctionValueUsages(file.PackageName, file.GlNode.ImportAlias, function)
+			}
+		}
+	}
 	return index
+}
+
+// refreshCompletionBindings runs after linking and type checking. The initial
+// index must be built earlier to preserve generic templates, but inferred
+// locals initialized by calls only receive their types during those semantic
+// passes. Re-indexing the surviving functions merges those resolved types.
+func (d *docIndex) refreshCompletionBindings(module string, root *types.NodeGlobal) {
+	if d == nil || root == nil {
+		return
+	}
+	for _, declaration := range root.Declarations {
+		if function, ok := declaration.(*types.NodeFuncDef); ok {
+			d.indexFunctionValueUsages(module, root.ImportAlias, function)
+		}
+	}
+}
+
+func (d *docIndex) addExpressionSymbol(module string, item completionItem) {
+	if d.expressionSymbols[module] == nil {
+		d.expressionSymbols[module] = map[string]completionItem{}
+	}
+	d.expressionSymbols[module][item.Label] = item
 }
 
 // indexFunctionValueUsages preserves argument and local-variable references
 // inside generic function bodies. Those bodies may be pruned before the
 // semantic hover walker runs, but their explicitly declared types are already
 // available while the source tree is intact.
-func (d *docIndex) indexFunctionValueUsages(module string, function *types.NodeFuncDef) {
+func (d *docIndex) indexFunctionValueUsages(module string, aliases map[string]string, function *types.NodeFuncDef) {
 	bindings := map[string]*types.NodeType{}
+	functionLine := nameLine(function.Class.NameNode)
 	for _, argument := range function.Class.ArgsNode.Args {
-		if argument.Tk.Pos.Line != 0 {
-			bindings[argument.Name] = argument.TypeNode
+		bindings[argument.Name] = argument.TypeNode
+		declarationLine := argument.Tk.Pos.Line
+		if declarationLine == 0 {
+			declarationLine = functionLine
 		}
+		d.completionBindings = append(d.completionBindings, completionBinding{module: module, name: argument.Name, valueType: argument.TypeNode, functionLine: functionLine, declarationLine: declarationLine})
 	}
 	seen := map[uintptr]bool{}
 	var walk func(reflect.Value)
@@ -102,9 +178,27 @@ func (d *docIndex) indexFunctionValueUsages(module string, function *types.NodeF
 				return
 			}
 			seen[value.Pointer()] = true
-			if variable, ok := value.Interface().(*types.NodeExprVarDef); ok && variable.Type != nil {
+			if assignment, ok := value.Interface().(*types.NodeExprVarDefAssign); ok && assignment.VarDef != nil && assignment.AssignExpr != nil {
+				if single, ok := assignment.VarDef.Name.(*types.NodeNameSingle); ok {
+					valueType := assignment.VarDef.Type
+					if valueType == nil {
+						valueType = d.inferredCompletionType(module, aliases, assignment.AssignExpr, bindings)
+					}
+					if valueType != nil {
+						bindings[single.Name] = valueType
+						d.completionBindings = append(d.completionBindings, completionBinding{module: module, name: single.Name, valueType: valueType, functionLine: functionLine, declarationLine: single.Tk.Pos.Line})
+						d.addInferredValueHover(module, single, valueType, assignment.VarDef.IsConst)
+					}
+				}
+			}
+			if variable, ok := value.Interface().(*types.NodeExprVarDef); ok {
 				if single, ok := variable.Name.(*types.NodeNameSingle); ok {
-					bindings[single.Name] = variable.Type
+					valueType := completionVariableType(variable)
+					if valueType != nil {
+						bindings[single.Name] = valueType
+						d.completionBindings = append(d.completionBindings, completionBinding{module: module, name: single.Name, valueType: valueType, functionLine: functionLine, declarationLine: single.Tk.Pos.Line})
+						d.addInferredValueHover(module, single, valueType, variable.IsConst)
+					}
 				}
 			}
 			if expression, ok := value.Interface().(*types.NodeExprName); ok {
@@ -147,6 +241,153 @@ func (d *docIndex) indexFunctionValueUsages(module string, function *types.NodeF
 		}
 	}
 	walk(reflect.ValueOf(&function.Body))
+}
+
+func (d *docIndex) addInferredValueHover(module string, name *types.NodeNameSingle, valueType *types.NodeType, isConst bool) {
+	if name == nil || name.Tk.Pos.Line == 0 || valueType == nil {
+		return
+	}
+	if d.valueHovers == nil {
+		d.valueHovers = map[string]string{}
+	}
+	prefix := ""
+	if isConst {
+		prefix = "const "
+	}
+	d.valueHovers[scopedTokenPositionKey(module, name.Tk)] = code(prefix + name.Name + " " + formatType(valueType))
+}
+
+// inferredCompletionType resolves the common source-level inference forms
+// before the type checker runs. This is essential for generic templates,
+// which may be pruned before a post-checker completion index could inspect
+// their locals.
+func (d *docIndex) inferredCompletionType(module string, aliases map[string]string, expression types.NodeExpr, bindings map[string]*types.NodeType) *types.NodeType {
+	if expression == nil {
+		return nil
+	}
+	if valueType := expression.GetInferredType(); valueType != nil {
+		return valueType
+	}
+	switch node := expression.(type) {
+	case *types.NodeExprName:
+		switch name := node.Name.(type) {
+		case *types.NodeNameSingle:
+			return bindings[name.Name]
+		case *types.NodeNameComposite:
+			if len(name.Parts) != 0 {
+				return bindings[name.Parts[0]]
+			}
+		}
+	case *types.NodeExprTry:
+		return d.inferredCompletionType(module, aliases, node.Call, bindings)
+	case *types.NodeExprCall:
+		if node.AssociatedFnDef != nil {
+			return node.AssociatedFnDef.ReturnType
+		}
+		if callee, ok := node.Callee.(*types.NodeExprName); ok {
+			if name, ok := callee.Name.(*types.NodeNameSingle); ok {
+				return d.functionReturns[module+"\x00"+name.Name]
+			}
+			if name, ok := callee.Name.(*types.NodeNameComposite); ok && len(name.Parts) >= 2 {
+				first, member := name.Parts[0], name.Parts[len(name.Parts)-1]
+				if imported := aliases[first]; imported != "" {
+					return d.functionReturns[imported+"\x00"+member]
+				}
+				ownerModule, owner := completionTypeIdentity(module, aliases, bindings[first])
+				if owner != "" {
+					return d.functionReturns[ownerModule+"\x00"+owner+"."+member]
+				}
+			}
+		}
+	case *types.NodeExprStructInit:
+		return node.Type
+	}
+	return nil
+}
+
+func completionTypeIdentity(module string, aliases map[string]string, node *types.NodeType) (string, string) {
+	if node == nil {
+		return "", ""
+	}
+	switch kind := node.KindNode.(type) {
+	case *types.NodeTypePointer:
+		return completionTypeIdentity(module, aliases, &types.NodeType{KindNode: kind.Kind})
+	case *types.NodeTypeRfc:
+		return completionTypeIdentity(module, aliases, &types.NodeType{KindNode: kind.Kind})
+	case *types.NodeTypeAbsolute:
+		parts := strings.Split(kind.AbsoluteName, ".")
+		if len(parts) == 1 {
+			return module, documentationSymbolName(parts[0])
+		}
+		return parts[0], documentationSymbolName(parts[len(parts)-1])
+	case *types.NodeTypeNamed:
+		parts := strings.Split(flattenInternalName(kind.NameNode), ".")
+		ownerModule := module
+		if len(parts) > 1 {
+			ownerModule = aliases[parts[0]]
+			if ownerModule == "" {
+				ownerModule = parts[0]
+			}
+		}
+		return ownerModule, documentationSymbolName(parts[len(parts)-1])
+	}
+	return "", ""
+}
+
+func completionVariableType(variable *types.NodeExprVarDef) *types.NodeType {
+	if variable == nil {
+		return nil
+	}
+	if variable.Type != nil {
+		return variable.Type
+	}
+	if variable.Initializer != nil {
+		return variable.Initializer.GetInferredType()
+	}
+	return nil
+}
+
+func (d *docIndex) completionTypeAt(module, name string, line uint32) *types.NodeType {
+	var best *completionBinding
+	for i := range d.completionBindings {
+		binding := &d.completionBindings[i]
+		if binding.module != module || binding.name != name || binding.functionLine > line || binding.declarationLine > line {
+			continue
+		}
+		if best == nil || binding.functionLine > best.functionLine || (binding.functionLine == best.functionLine && binding.declarationLine >= best.declarationLine) {
+			best = binding
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	return best.valueType
+}
+
+func (d *docIndex) expressionBindingsAt(module string, line uint32) []completionBinding {
+	functionLine := uint32(0)
+	for _, binding := range d.completionBindings {
+		if binding.module == module && binding.functionLine <= line && binding.functionLine > functionLine {
+			functionLine = binding.functionLine
+		}
+	}
+	if functionLine == 0 {
+		return nil
+	}
+	byName := map[string]completionBinding{}
+	for _, binding := range d.completionBindings {
+		if binding.module != module || binding.functionLine != functionLine || binding.declarationLine > line {
+			continue
+		}
+		if previous, ok := byName[binding.name]; !ok || binding.declarationLine >= previous.declarationLine {
+			byName[binding.name] = binding
+		}
+	}
+	result := make([]completionBinding, 0, len(byName))
+	for _, binding := range byName {
+		result = append(result, binding)
+	}
+	return result
 }
 
 func tokenPositionKey(token types.Token) string {

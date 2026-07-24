@@ -65,12 +65,12 @@ pub joinAll(threads Thread[]) !void:
         implPtr ptr = cast.utop(cast.ptou(base) + (i * sizeof Thread))
         joined bool, joinError error = impl_thread.join(implPtr)
 
-        if errors.code(joinError) != 0 && errors.code(firstError) == 0:
+        if joinError.nok() && firstError.ok():
             firstError = joinError
         ..
         i = i + 1
     ..
-    if errors.code(firstError) != 0:
+    if firstError.nok():
         throw firstError
     ..
 ..

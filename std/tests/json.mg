@@ -45,7 +45,7 @@ pub main() !void:
     nullValue := json.null()
     try nullValue.asNull()
     wrongBool bool, wrongType error = nullValue.asBool()
-    if errors.code(wrongType) != 6:
+    if wrongType.code() != 6:
         throw errors.failure("JSON accessor accepted the wrong type")
     ..
 
@@ -120,7 +120,7 @@ pub main() !void:
         throw errors.failure("JSON array access failed")
     ..
     missing json.Value, boundsErr error = array.get(2)
-    if errors.code(boundsErr) != 2:
+    if boundsErr.code() != 2:
         throw errors.failure("JSON array accepted an out-of-bounds index")
     ..
 

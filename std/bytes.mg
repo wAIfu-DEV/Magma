@@ -54,7 +54,7 @@ pub indexByte(in u8[], value u8) !u64:
 #   found := bytes.contains(data, 0)
 pub contains(in u8[], value u8) bool:
     i u64, e error = indexByte(in, value)
-    ret errors.code(e) == 0
+    ret e.ok()
 ..
 
 # Reports whether a slice begins with prefix.
