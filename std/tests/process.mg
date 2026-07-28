@@ -14,7 +14,7 @@ fileExists(path str) bool:
     a := heap.allocator()
     contents str, readError error = fs.readFile(a, path)
     if readError.ok():
-        strings.free(a, contents)
+        contents.free(a)
         ret true
     ..
     ret false

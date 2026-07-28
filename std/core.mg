@@ -86,3 +86,16 @@ destr str.free(a alc.Allocator) void:
     ..
     a.free(data)
 ..
+
+# Returns size in bytes of string, for UTF8 strings codepoint (UTF8 character) count may be
+# different from byte size.
+# @complexity O(1) regardless of size.
+# @param s input string
+# @returns size in bytes of string
+# @example
+#   byteCount := myStr.countBytes()
+str.countBytes() u64:
+    llvm "  %value = load %type.str, ptr %this\n"
+    llvm "  %l0 = extractvalue %type.str %value, 1\n"
+    llvm "  ret i64 %l0\n"
+..

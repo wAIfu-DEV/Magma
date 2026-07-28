@@ -23,7 +23,7 @@ pub Process(
 
 containsNull(value str) bool:
     i u64 = 0
-    while i < strings.countBytes(value):
+    while i < value.countBytes():
         if strings.byteAt(value, i) == 0:
             ret true
         ..
@@ -52,7 +52,7 @@ freeArguments(argv u8**, count u64) void:
 ..
 
 pub spawn(executable str, arguments str[]) !$Process:
-    if strings.countBytes(executable) == 0 || containsNull(executable):
+    if executable.countBytes() == 0 || containsNull(executable):
         throw errors.invalidArgument("process executable is empty or contains a null byte")
     ..
     count u64 = slices.count(arguments)

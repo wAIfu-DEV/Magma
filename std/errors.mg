@@ -1,6 +1,15 @@
 mod errors
 # Error construction, classification, and bounded propagation-trace inspection.
 
+pub const ERR_OK u32 = 0
+pub const ERR_FAIL u32 = 1
+pub const ERR_INVALID_ARG u32 = 2
+pub const ERR_OUT_OF_MEMORY u32 = 3
+pub const ERR_END_OF_FILE u32 = 4
+pub const ERR_WOULD_OVERFLOW u32 = 5
+pub const ERR_INVALID_TYPE u32 = 6
+pub const ERR_OUT_OF_BOUNDS u32 = 7
+
 # A cursor over an error's bounded propagation trace. The newest propagation
 # site is returned first. Ring reuse can truncate an old cursor; accessors stay
 # safe and isTruncated reports that condition.
@@ -115,14 +124,14 @@ pub printTrace(e error) void:
 # @example
 #   sameKind := errors.is(actual, errors.outOfBounds(""))
 pub is(a error, b error) bool:
-    ret code(a) == code(b)
+    ret a.code() == b.code()
 ..
 
 # Returns whether an error belongs to a numeric category. Error equality is
 # category-based; messages and platform details are not compared.
 # @complexity O(1)
 pub hasCode(e error, expected u32) bool:
-    ret code(e) == expected
+    ret e.code() == expected
 ..
 
 # Returns the error type as a string.
@@ -133,23 +142,23 @@ pub hasCode(e error, expected u32) bool:
 # @example
 #   label := errors.toStr(failure)
 pub toStr(e error) str:
-    c u32 = code(e)
+    c u32 = e.code()
 
-    if c == 0:
+    if c == ERR_OK:
         ret "ok"
-    elif c == 1:
+    elif c == ERR_FAIL:
         ret "unexpected"
-    elif c == 2:
+    elif c == ERR_INVALID_ARG:
         ret "invalid argument"
-    elif c == 3:
+    elif c == ERR_OUT_OF_MEMORY:
         ret "out of memory"
-    elif c == 4:
+    elif c == ERR_END_OF_FILE:
         ret "end of file"
-    elif c == 5:
+    elif c == ERR_WOULD_OVERFLOW:
         ret "would overflow"
-    elif c == 6:
+    elif c == ERR_INVALID_TYPE:
         ret "invalid type"
-    elif c == 7:
+    elif c == ERR_OUT_OF_BOUNDS:
         ret "out of bounds"
     ..
     ret "unknown error"
@@ -179,13 +188,13 @@ pub native(errorCode u32, msg str) error:
 # Reports whether an error wraps a native platform code.
 # @complexity O(1)
 pub isNative(e error) bool:
-    ret (code(e) & 0x80000000) != 0
+    ret (e.code() & 0x80000000) != 0
 ..
 
 # Returns the wrapped platform code, or zero for a non-native error.
 # @complexity O(1)
 pub nativeCode(e error) u32:
-    ret code(e) & 0x7FFFFFFF
+    ret e.code() & 0x7FFFFFFF
 ..
 
 # Returns an error with code 0 indicating success.
@@ -206,7 +215,7 @@ pub ok() error:
 # @example
 #   ret errors.failure("operation failed")
 pub failure(msg str) error:
-    ret makeErr(1, msg)
+    ret makeErr(ERR_FAIL, msg)
 ..
 
 # Returns an error with code 2 indicating that the client provided an invalid
@@ -217,7 +226,7 @@ pub failure(msg str) error:
 # @example
 #   ret errors.invalidArgument("count must be positive")
 pub invalidArgument(msg str) error:
-    ret makeErr(2, msg)
+    ret makeErr(ERR_INVALID_ARG, msg)
 ..
 
 # Returns an error with code 3 indicating that the system is out of memory.
@@ -227,7 +236,7 @@ pub invalidArgument(msg str) error:
 # @example
 #   ret errors.outOfMemory("could not grow buffer")
 pub outOfMemory(msg str) error:
-    ret makeErr(3, msg)
+    ret makeErr(ERR_OUT_OF_MEMORY, msg)
 ..
 
 # Returns an error with code 4 indicating the operation hitting the end of a file.
@@ -239,7 +248,7 @@ pub outOfMemory(msg str) error:
 # @example
 #   ret errors.endOfFile("record is incomplete")
 pub endOfFile(msg str) error:
-    ret makeErr(4, msg)
+    ret makeErr(ERR_END_OF_FILE, msg)
 ..
 
 # Returns an error with code 5 indicating a would-overflow condition.
@@ -249,7 +258,7 @@ pub endOfFile(msg str) error:
 # @example
 #   ret errors.wouldOverflow("capacity exceeds u64")
 pub wouldOverflow(msg str) error:
-    ret makeErr(5, msg)
+    ret makeErr(ERR_WOULD_OVERFLOW, msg)
 ..
 
 # Returns an error with code 6 indicating an invalid type.
@@ -259,7 +268,7 @@ pub wouldOverflow(msg str) error:
 # @example
 #   ret errors.invalidType("expected integer")
 pub invalidType(msg str) error:
-    ret makeErr(6, msg)
+    ret makeErr(ERR_INVALID_TYPE, msg)
 ..
 
 # Returns an error with code 7 indicating an index being out of bounds of a container.
@@ -269,5 +278,5 @@ pub invalidType(msg str) error:
 # @example
 #   ret errors.outOfBounds("index exceeds length")
 pub outOfBounds(msg str) error:
-    ret makeErr(7, msg)
+    ret makeErr(ERR_OUT_OF_BOUNDS, msg)
 ..

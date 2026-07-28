@@ -28,7 +28,7 @@ func compileMalformed(t *testing.T, source string) (string, error) {
 		t.Fatal(err)
 	}
 
-	state, err := shared.MakeShared(dir)
+	state, err := shared.MakeShared(dir, filepath.Join("..", "..", "std"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,6 +199,36 @@ test() void:
 `,
 		},
 		{
+			name: "mixed bool bitwise operands",
+			source: `mod test
+
+test() void:
+    value := true & 1
+..
+`,
+		},
+		{
+			name: "floating bitwise operands",
+			source: `mod test
+
+test() void:
+    left f64 = 1.0
+    right f64 = 2.0
+    value := left | right
+..
+`,
+		},
+		{
+			name: "floating shift operand",
+			source: `mod test
+
+test() void:
+    left f64 = 1.0
+    value := left << 2
+..
+`,
+		},
+		{
 			name: "try non-throwing function",
 			source: `mod test
 
@@ -242,6 +272,9 @@ test() void:
 		"assign wrong type":               {"type", "=", "cannot assign value of type 'bool'"},
 		"subscript scalar":                {"type", "[", "cannot index value of type 'u64'"},
 		"member access on scalar":         {"link", "missing", "type 'u64' has no member function 'missing'"},
+		"mixed bool bitwise operands":     {"link", "&", "cannot mix 'bool' with 'i64'"},
+		"floating bitwise operands":       {"link", "|", "requires integer operands"},
+		"floating shift operand":          {"link", "<<", "requires integer operands"},
 		"try non-throwing function":       {"type", "try", "cannot use 'try' with non-throwing call"},
 		"try in non-throwing function":    {"type", "try", "cannot use 'try' inside a non-throwing function"},
 	}

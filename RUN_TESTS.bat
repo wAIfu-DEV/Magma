@@ -102,9 +102,9 @@ IF EXIST "%EXECUTABLE_FILE%" (
 )
 CALL :GetTimeCs COMPILE_START
 IF /I "%RUN_ASSERTIONS%"=="Y" (
-    "%COMPILER%" --emit exe --out "%EXECUTABLE_FILE%" "%TEST_FILE%" >"%LOG_FILE%" 2>&1
+    "%COMPILER%" --std "%ROOT%std" --emit exe --out "%EXECUTABLE_FILE%" "%TEST_FILE%" >"%LOG_FILE%" 2>&1
 ) ELSE (
-    "%COMPILER%" --emit llvm --out "%OUTPUT_FILE%" "%TEST_FILE%" >"%LOG_FILE%" 2>&1
+    "%COMPILER%" --std "%ROOT%std" --emit llvm --out "%OUTPUT_FILE%" "%TEST_FILE%" >"%LOG_FILE%" 2>&1
 )
 SET "COMPILE_EXIT=%ERRORLEVEL%"
 CALL :GetTimeCs COMPILE_END

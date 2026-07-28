@@ -66,7 +66,7 @@ decodeOnce(it Utf8Iterator*) !Codepoint:
 #   it := utf8.iterator(text)
 pub iterator(s str) Utf8Iterator:
     p u8* = strings.toPtr(s)
-    sLen u64 = strings.countBytes(s)
+    sLen u64 = s.countBytes()
     ret Utf8Iterator(start=p, end=cast.utop(cast.ptou(p) + sLen))
 ..
 

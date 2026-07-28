@@ -20,7 +20,7 @@ main() !void:
     try stdout.flush()
 
     text := try stdin.readLn(a)
-    defer strings.free(a, text)
+    defer text.free(a)
 
     c := try strconv.parseUint(text)
     f := c * 9 / 5 + 32

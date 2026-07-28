@@ -18,7 +18,7 @@ Capture(
 
 captureWrite(raw ptr, bytes str) !u64:
     output Capture* = raw
-    count := strings.countBytes(bytes)
+    count := bytes.countBytes()
     countPtr u64* = output.count
     destination := cast.utop(cast.ptou(output.data) + *countPtr)
     memory.copy(strings.toPtr(bytes), destination, count)
@@ -109,7 +109,7 @@ pub main() !void:
     special := strings.fromPtrNoCopy(slices.toPtr(specialBytes), 5)
     specialValue := try json.stringCopy(a, special)
     specialRoundTrip := try specialValue.asString()
-    if strings.countBytes(specialRoundTrip) != 5:
+    if specialRoundTrip.countBytes() != 5:
         throw errors.failure("JSON string payload round trip failed")
     ..
     try array.append(specialValue)
@@ -125,8 +125,8 @@ pub main() !void:
     ..
 
     escaped := try render(a, json.arrayBorrowed(addrof array), 2)
-    defer strings.free(a, escaped)
-    escapedLength := strings.countBytes(escaped)
+    defer escaped.free(a)
+    escapedLength := escaped.countBytes()
     if escapedLength != 21:
         throw errors.failure("JSON escaped output has the wrong length")
     ..
@@ -166,8 +166,8 @@ pub main() !void:
     try object.set("nested", json.objectOwned(addrof nested))
     footgun.drop[json.Object](nested)
     encoded := try render(a, json.objectBorrowed(addrof object), 2)
-    defer strings.free(a, encoded)
-    encodedLength := strings.countBytes(encoded)
+    defer encoded.free(a)
+    encodedLength := encoded.countBytes()
     if encodedLength < 2 || strings.byteAt(encoded, 0) != 123 || strings.byteAt(encoded, encodedLength - 1) != 125:
         throw errors.failure("JSON nested object serialization changed")
     ..

@@ -2,9 +2,8 @@
 package lsp
 
 import (
-	"Magma/src/checker"
-	"Magma/src/monomorph"
-	"Magma/src/pipeline"
+	"Magma/src/comp_err"
+	compilerpipeline "Magma/src/compiler_pipeline"
 	"Magma/src/shared"
 	"Magma/src/types"
 	"bufio"
@@ -15,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -39,17 +37,77 @@ type document struct {
 type server struct {
 	in        *bufio.Reader
 	out       io.Writer
+	stdRoot   string
 	documents map[string]*document
 }
 type analysis struct {
-	file *types.FileCtx
-	err  error
-	docs *docIndex
+	file        *types.FileCtx
+	err         error
+	warnings    []types.Diagnostic
+	docs        *docIndex
+	definitions map[string]location
+}
+
+type rangePosition struct {
+	Start position `json:"start"`
+	End   position `json:"end"`
+}
+type location struct {
+	URI   string        `json:"uri"`
+	Range rangePosition `json:"range"`
+}
+
+type diagnostic struct {
+	Range    rangePosition `json:"range"`
+	Severity int           `json:"severity"`
+	Source   string        `json:"source"`
+	Message  string        `json:"message"`
+}
+
+// diagnosticsForFile is the protocol adapter for compiler diagnostics. It is
+// intentionally side-effect free so analysis and publication remain separate.
+func diagnosticsForFile(err error, warnings []types.Diagnostic, path string) []diagnostic {
+	cleanPath := filepath.Clean(path)
+	result := []diagnostic{}
+	items := comp_err.Diagnostics(err)
+	for i := range warnings {
+		items = append(items, &warnings[i])
+	}
+	for _, item := range items {
+		if item.FilePath == "" || filepath.Clean(item.FilePath) != cleanPath {
+			continue
+		}
+		line, column := item.Token.Pos.Line, item.Token.Pos.Col
+		if line > 0 {
+			line--
+		}
+		if column > 0 {
+			column--
+		}
+		end := column + uint32(utf8.RuneCountInString(item.Token.Repr))
+		if end == column {
+			end++
+		}
+		severity := 1
+		if item.Severity == types.SeverityWarning {
+			severity = 2
+		}
+		message := item.Error()
+		if item.Additional != "" {
+			message += ": " + strings.Join(strings.Fields(item.Additional), " ")
+		}
+		message = strings.Join(strings.Fields(message), " ")
+		result = append(result, diagnostic{
+			Range:    rangePosition{Start: position{Line: line, Character: column}, End: position{Line: line, Character: end}},
+			Severity: severity, Source: "magma", Message: message,
+		})
+	}
+	return result
 }
 
 // Serve processes LSP messages until exit or end-of-file.
-func Serve(input io.Reader, output io.Writer) error {
-	s := &server{bufio.NewReader(input), output, map[string]*document{}}
+func Serve(input io.Reader, output io.Writer, stdRoot string) error {
+	s := &server{in: bufio.NewReader(input), out: output, stdRoot: stdRoot, documents: map[string]*document{}}
 	for {
 		payload, err := readMessage(s.in)
 		if errors.Is(err, io.EOF) {
@@ -59,14 +117,16 @@ func Serve(input io.Reader, output io.Writer) error {
 			return err
 		}
 		var msg message
-		if json.Unmarshal(payload, &msg) != nil {
-			continue
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			return fmt.Errorf("decode LSP message: %w", err)
 		}
 		if msg.Method == "exit" {
 			return nil
 		}
 		if err := s.handle(msg); err != nil && len(msg.ID) != 0 {
-			_ = s.respondError(msg.ID, -32603, err.Error())
+			if responseErr := s.respondError(msg.ID, -32603, err.Error()); responseErr != nil {
+				return responseErr
+			}
 		}
 	}
 }
@@ -101,7 +161,7 @@ func readMessage(r *bufio.Reader) ([]byte, error) {
 func (s *server) handle(msg message) error {
 	switch msg.Method {
 	case "initialize":
-		return s.respond(msg.ID, map[string]any{"capabilities": map[string]any{"textDocumentSync": 1, "hoverProvider": true, "completionProvider": map[string]any{"triggerCharacters": []string{"."}}}})
+		return s.respond(msg.ID, map[string]any{"capabilities": map[string]any{"textDocumentSync": 1, "hoverProvider": true, "definitionProvider": true, "completionProvider": map[string]any{"triggerCharacters": []string{"."}}}})
 	case "shutdown":
 		return s.respond(msg.ID, nil)
 	case "initialized", "$/cancelRequest", "textDocument/didSave":
@@ -118,6 +178,7 @@ func (s *server) handle(msg message) error {
 			return err
 		}
 		s.documents[p.TextDocument.URI] = &document{URI: p.TextDocument.URI, Text: p.TextDocument.Text, Version: p.TextDocument.Version}
+		return s.publishDiagnostics(p.TextDocument.URI)
 	case "textDocument/didChange":
 		var p struct {
 			TextDocument struct {
@@ -135,6 +196,7 @@ func (s *server) handle(msg message) error {
 			d.Text = p.ContentChanges[len(p.ContentChanges)-1].Text
 			d.Version = p.TextDocument.Version
 			d.result = nil
+			return s.publishDiagnostics(p.TextDocument.URI)
 		}
 	case "textDocument/didClose":
 		var p struct {
@@ -146,6 +208,7 @@ func (s *server) handle(msg message) error {
 			return err
 		}
 		delete(s.documents, p.TextDocument.URI)
+		return s.write(map[string]any{"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": map[string]any{"uri": p.TextDocument.URI, "diagnostics": []diagnostic{}}})
 	case "textDocument/hover":
 		var p struct {
 			TextDocument struct {
@@ -161,13 +224,35 @@ func (s *server) handle(msg message) error {
 			return s.respond(msg.ID, nil)
 		}
 		if d.result == nil {
-			d.result = analyze(d.URI, d.Text)
+			d.result = analyze(d.URI, d.Text, s.stdRoot)
 		}
 		value := d.result.hover(p.Position)
 		if value == "" {
 			return s.respond(msg.ID, nil)
 		}
 		return s.respond(msg.ID, map[string]any{"contents": map[string]string{"kind": "markdown", "value": value}})
+	case "textDocument/definition":
+		var p struct {
+			TextDocument struct {
+				URI string `json:"uri"`
+			} `json:"textDocument"`
+			Position position `json:"position"`
+		}
+		if err := json.Unmarshal(msg.Params, &p); err != nil {
+			return err
+		}
+		d := s.documents[p.TextDocument.URI]
+		if d == nil {
+			return s.respond(msg.ID, nil)
+		}
+		if d.result == nil {
+			d.result = analyze(d.URI, d.Text, s.stdRoot)
+		}
+		definition, ok := d.result.definition(p.Position)
+		if !ok {
+			return s.respond(msg.ID, nil)
+		}
+		return s.respond(msg.ID, definition)
 	case "textDocument/completion":
 		var p struct {
 			TextDocument struct {
@@ -182,13 +267,38 @@ func (s *server) handle(msg message) error {
 		if d == nil {
 			return s.respond(msg.ID, []completionItem{})
 		}
-		return s.respond(msg.ID, complete(d.URI, d.Text, p.Position))
+		return s.respond(msg.ID, complete(d.URI, d.Text, p.Position, s.stdRoot))
 	default:
 		if len(msg.ID) != 0 {
 			return s.respondError(msg.ID, -32601, "method not found")
 		}
 	}
 	return nil
+}
+
+func (s *server) publishDiagnostics(uri string) error {
+	d := s.documents[uri]
+	if d == nil {
+		return nil
+	}
+	d.result = analyze(d.URI, d.Text, s.stdRoot)
+	path, err := uriPath(uri)
+	if err != nil {
+		return err
+	}
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	return s.write(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "textDocument/publishDiagnostics",
+		"params": map[string]any{
+			"uri":         uri,
+			"version":     d.Version,
+			"diagnostics": diagnosticsForFile(d.result.err, d.result.warnings, path),
+		},
+	})
 }
 
 func (s *server) respond(id json.RawMessage, result any) error {
@@ -206,7 +316,11 @@ func (s *server) write(v any) error {
 	return err
 }
 
-func analyze(rawURI, source string) *analysis {
+func analyze(rawURI, source, stdRoot string) *analysis {
+	return analyzeWithRecovery(rawURI, source, stdRoot, true)
+}
+
+func analyzeWithRecovery(rawURI, source, stdRoot string, recoverSyntax bool) *analysis {
 	path, err := uriPath(rawURI)
 	if err != nil {
 		return &analysis{err: err}
@@ -215,31 +329,55 @@ func analyze(rawURI, source string) *analysis {
 	if err != nil {
 		return &analysis{err: err}
 	}
-	state, err := shared.MakeShared(filepath.Dir(path))
+	state, err := shared.MakeShared(filepath.Dir(path), stdRoot)
 	if err != nil {
 		return &analysis{err: err}
 	}
 	state.SourceOverrides[path] = []byte(source)
-	err = pipeline.DoMain(state, path)
-	state.WaitGroup.Wait()
-	for _, result := range state.ImportedFiles {
-		if e := <-result; e != nil && err == nil {
-			err = e
-		}
-	}
+	parsed, err := compilerpipeline.Parse(state, path)
 	file := state.Files[path]
 	docs := buildDocIndex(state)
-	if err != nil || file == nil || file.GlNode == nil {
+	definitions := buildDefinitionIndex(state)
+	if recoverSyntax && err != nil {
+		for _, syntaxError := range comp_err.Diagnostics(err) {
+			if syntaxError.Ctx != nil && filepath.Clean(syntaxError.Ctx.FilePath) == path {
+				if recovered, ok := blankSourceLine(source, syntaxError.Token.Pos.Line); ok {
+					result := analyzeWithRecovery(rawURI, recovered, stdRoot, false)
+					result.err = err
+					return result
+				}
+			}
+		}
+	}
+	if file == nil || file.GlNode == nil {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "magma-lsp: analysis failed for %s: %v\n", path, err)
 		}
-		return &analysis{file: file, err: err, docs: docs}
+		return &analysis{file: file, err: err, docs: docs, definitions: definitions}
 	}
-	if err = monomorph.Run(state); err == nil {
-		err = checker.CheckLinks(state)
+	// The parser returns the portion of the global tree completed before a
+	// syntax error. Keep that tree useful for editor features: a half-written
+	// expression later in the buffer must not disable hover for imports and
+	// declarations that were parsed successfully.
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "magma-lsp: partial analysis for %s: %v\n", path, err)
+		return &analysis{file: file, err: err, docs: docs, definitions: definitions}
 	}
+	specialized, err := compilerpipeline.Specialize(parsed)
 	if err == nil {
-		err = checker.TypeChecker(state)
+		var linked compilerpipeline.LinkedProgram
+		linked, err = compilerpipeline.Link(specialized)
+		if err == nil {
+			var typed compilerpipeline.TypedProgram
+			typed, err = compilerpipeline.CheckTypes(linked)
+			if err == nil {
+				var validated compilerpipeline.ValidatedProgram
+				validated, err = compilerpipeline.ValidateLowering(typed)
+				if err == nil {
+					compilerpipeline.CheckOwnership(validated)
+				}
+			}
+		}
 	}
 	// Preserve the pre-monomorphization generic index while enriching concrete
 	// function locals with call/try types resolved by semantic analysis.
@@ -247,7 +385,106 @@ func analyze(rawURI, source string) *analysis {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "magma-lsp: semantic analysis failed for %s: %v\n", path, err)
 	}
-	return &analysis{file: file, err: err, docs: docs}
+	return &analysis{file: file, err: err, warnings: state.Warnings, docs: docs, definitions: definitions}
+}
+
+func buildDefinitionIndex(state *types.SharedState) map[string]location {
+	index := map[string]location{}
+	for _, file := range state.Files {
+		if file == nil || file.GlNode == nil {
+			continue
+		}
+		for name, function := range file.GlNode.FuncDefs {
+			if function == nil {
+				continue
+			}
+			token, ok := declarationNameToken(function.Class.NameNode)
+			if !ok {
+				continue
+			}
+			index[file.PackageName+"\x00"+sourceName(name)] = tokenLocation(file.FilePath, token)
+		}
+	}
+	return index
+}
+
+func declarationNameToken(name types.NodeName) (types.Token, bool) {
+	switch node := name.(type) {
+	case *types.NodeNameSingle:
+		return node.Tk, true
+	case *types.NodeNameComposite:
+		if len(node.Tokens) > 0 {
+			return node.Tokens[len(node.Tokens)-1], true
+		}
+	}
+	return types.Token{}, false
+}
+
+func tokenLocation(path string, token types.Token) location {
+	start := position{Line: token.Pos.Line - 1, Character: token.Pos.Col - 1}
+	end := start
+	end.Character += uint32(utf8.RuneCountInString(token.Repr))
+	return location{URI: fileURI(path), Range: rangePosition{Start: start, End: end}}
+}
+
+func fileURI(path string) string {
+	slashed := filepath.ToSlash(path)
+	// A Windows drive belongs in the URL path, not its authority. Without the
+	// leading slash net/url emits file://C:/..., which VS Code interprets as a
+	// forbidden UNC host named "c:".
+	if len(slashed) >= 2 && slashed[1] == ':' {
+		slashed = "/" + slashed
+	}
+	return (&url.URL{Scheme: "file", Path: slashed}).String()
+}
+
+func (a *analysis) definition(pos position) (location, bool) {
+	if a == nil || a.file == nil {
+		return location{}, false
+	}
+	for i, token := range a.file.Tokens {
+		if token.Type != types.TokName || !tokenAt(token, pos) {
+			continue
+		}
+		module := a.file.PackageName
+		name := token.Repr
+		if i >= 2 && a.file.Tokens[i-1].KeywType == types.KwDot {
+			qualifier := a.file.Tokens[i-2].Repr
+			if imported := a.importedPackage(qualifier); imported != "" {
+				module = imported
+			} else {
+				name = qualifier + "." + name
+			}
+		}
+		definition, ok := a.definitions[module+"\x00"+name]
+		return definition, ok
+	}
+	return location{}, false
+}
+
+// blankSourceLine preserves every token position outside the invalid line so
+// hover can use the rest of an editor buffer while an expression is unfinished.
+func blankSourceLine(source string, line uint32) (string, bool) {
+	if line == 0 {
+		return source, false
+	}
+	lines := strings.SplitAfter(source, "\n")
+	index := int(line - 1)
+	if index >= len(lines) {
+		return source, false
+	}
+	ending := ""
+	body := lines[index]
+	if strings.HasSuffix(body, "\n") {
+		ending = "\n"
+		body = strings.TrimSuffix(body, "\n")
+	}
+	if strings.HasSuffix(body, "\r") {
+		ending = "\r" + ending
+		body = strings.TrimSuffix(body, "\r")
+	}
+	lines[index] = strings.Repeat(" ", len(body)) + ending
+	return strings.Join(lines, ""), true
 }
 
 func uriPath(raw string) (string, error) {
@@ -289,8 +526,11 @@ func (a *analysis) hover(pos position) string {
 			return value
 		}
 	}
-	f := hoverFinder{pos: pos, seen: map[uintptr]bool{}, analysis: a, sourceToken: sourceToken}
-	f.walk(reflect.ValueOf(a.file.GlNode))
+	f := hoverFinder{pos: pos, analysis: a, sourceToken: sourceToken}
+	walkAST(a.file.GlNode, func(value any) bool {
+		f.inspect(value)
+		return f.value == ""
+	})
 	if f.value == "" && a.docs != nil {
 		for i, token := range a.file.Tokens {
 			if token.Type == types.TokName && tokenAt(token, pos) {
@@ -401,7 +641,6 @@ func (a *analysis) receiverMemberHover(index int, receiver, member string) strin
 
 type hoverFinder struct {
 	pos         position
-	seen        map[uintptr]bool
 	value       string
 	analysis    *analysis
 	sourceToken *types.Token
@@ -436,59 +675,6 @@ func (f *hoverFinder) nameAt(name types.NodeName) bool {
 	return false
 }
 
-func (f *hoverFinder) walk(v reflect.Value) {
-	if f.value != "" || !v.IsValid() {
-		return
-	}
-	if v.Kind() == reflect.Interface {
-		if !v.IsNil() {
-			f.walk(v.Elem())
-		}
-		return
-	}
-	if v.Kind() == reflect.Pointer {
-		if v.IsNil() || f.seen[v.Pointer()] {
-			return
-		}
-		f.seen[v.Pointer()] = true
-		f.inspect(v.Interface())
-		f.walk(v.Elem())
-		return
-	}
-	switch v.Kind() {
-	case reflect.Struct:
-		if v.CanInterface() {
-			f.inspect(v.Interface())
-			if f.value != "" {
-				return
-			}
-		}
-		t := v.Type()
-		for i := 0; i < v.NumField(); i++ {
-			field := t.Field(i)
-			if field.PkgPath != "" || skipField(field.Name) {
-				continue
-			}
-			f.walk(v.Field(i))
-		}
-	case reflect.Slice, reflect.Array:
-		for i := 0; i < v.Len(); i++ {
-			f.walk(v.Index(i))
-		}
-	case reflect.Map:
-		iter := v.MapRange()
-		for iter.Next() {
-			f.walk(iter.Value())
-		}
-	}
-}
-func skipField(name string) bool {
-	switch name {
-	case "Parent", "Scope", "AssociatedNode", "AssociatedFnDef", "Destructor", "Destructors":
-		return true
-	}
-	return false
-}
 func (f *hoverFinder) inspect(value any) {
 	switch n := value.(type) {
 	case *types.NodeExprName:
@@ -608,22 +794,7 @@ func flattenInternalName(name types.NodeName) string {
 // unique symbol for every specialization; that suffix is never Magma syntax and
 // must not be exposed by editor features.
 func sourceName(name string) string {
-	parts := strings.Split(name, ".")
-	// Package identifiers are made unique internally as <module>_<10 chars>.
-	// Only qualified names can contain a package component; leaving an
-	// unqualified identifier alone avoids changing a legitimate user symbol
-	// that happens to end in the same shape.
-	if len(parts) > 1 {
-		if suffix := strings.LastIndex(parts[0], "_"); suffix >= 0 && len(parts[0])-suffix-1 == 10 {
-			parts[0] = parts[0][:suffix]
-		}
-	}
-	for i, part := range parts {
-		if generic := strings.Index(part, "__g__"); generic >= 0 {
-			parts[i] = part[:generic]
-		}
-	}
-	return strings.Join(parts, ".")
+	return types.SourceName(name)
 }
 func formatFunction(fn *types.NodeFuncDef) string {
 	args := make([]string, 0, len(fn.Class.ArgsNode.Args))
@@ -652,7 +823,7 @@ func formatType(node *types.NodeType) string {
 			out += "[" + strings.Join(a, ", ") + "]"
 		}
 	case *types.NodeTypeAbsolute:
-		out = sourceName(k.AbsoluteName)
+		out = types.DisplayType(node)
 	case *types.NodeTypeCompilerKnown:
 		out = k.Name
 	case *types.NodeTypePointer:

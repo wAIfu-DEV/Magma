@@ -31,6 +31,13 @@ func declarationError(ctx *lcx, name t.NodeName, description string) error {
 }
 
 func declVarInStack(ctx *lcx, v *t.NodeExprVarDef) error {
+	if v.Storage == t.VariableStorageUnresolved {
+		if v.IsGlobal {
+			v.Storage = t.VariableStorageGlobal
+		} else {
+			v.Storage = t.VariableStorageLocal
+		}
+	}
 	n, ok := v.Name.(*t.NodeNameSingle)
 	if !ok {
 		return fmt.Errorf("variable declarations require a simple name")
@@ -41,6 +48,9 @@ func declVarInStack(ctx *lcx, v *t.NodeExprVarDef) error {
 		}
 		if _, exists := scope.DeclFuncs[n.Name]; exists {
 			return declarationError(ctx, v.Name, fmt.Sprintf("variable '%s' conflicts with a function declared in this or an enclosing scope; shadowing is not allowed", n.Name))
+		}
+		if _, exists := scope.DeclStructs[n.Name]; exists {
+			return declarationError(ctx, v.Name, fmt.Sprintf("variable '%s' conflicts with a struct declared in this or an enclosing scope; shadowing is not allowed", n.Name))
 		}
 	}
 	ctx.CurrScope.DeclVars[n.Name] = v
@@ -74,6 +84,9 @@ func declFuncInStack(ctx *lcx, f *t.NodeFuncDef) (*t.Scope, error) {
 		if _, exists := s.DeclFuncs[n.Name]; exists {
 			return nil, declarationError(ctx, f.Class.NameNode, fmt.Sprintf("function '%s' is already declared in this scope", n.Name))
 		}
+		if _, exists := s.DeclStructs[n.Name]; exists {
+			return nil, declarationError(ctx, f.Class.NameNode, fmt.Sprintf("function '%s' conflicts with a struct declared in this scope", n.Name))
+		}
 		s.DeclFuncs[n.Name] = fnScope
 	case *t.NodeNameComposite:
 		name := ""
@@ -96,16 +109,25 @@ func declFuncInStack(ctx *lcx, f *t.NodeFuncDef) (*t.Scope, error) {
 	return newScope, nil
 }
 
-func declStructInStack(ctx *lcx, st *t.NodeStructDef) {
-	// TODO: check existance
+func declStructInStack(ctx *lcx, st *t.NodeStructDef) error {
 	s := ctx.CurrScope
 
 	switch n := st.Class.NameNode.(type) {
 	case *t.NodeNameSingle:
+		if _, exists := s.DeclVars[n.Name]; exists {
+			return declarationError(ctx, st.Class.NameNode, fmt.Sprintf("struct '%s' conflicts with a variable declared in this scope", n.Name))
+		}
+		if _, exists := s.DeclFuncs[n.Name]; exists {
+			return declarationError(ctx, st.Class.NameNode, fmt.Sprintf("struct '%s' conflicts with a function declared in this scope", n.Name))
+		}
+		if _, exists := s.DeclStructs[n.Name]; exists {
+			return declarationError(ctx, st.Class.NameNode, fmt.Sprintf("struct '%s' is already declared in this scope", n.Name))
+		}
 		s.DeclStructs[n.Name] = st
 	case *t.NodeNameComposite:
-		// TODO: Error
+		return declarationError(ctx, st.Class.NameNode, "struct declarations require a simple name")
 	}
+	return nil
 }
 
 func bldExpr(ctx *lcx, expr t.NodeExpr) error {
@@ -218,16 +240,14 @@ func bldBody(ctx *lcx, bdy *t.NodeBody, makeScope bool) error {
 }
 
 func bldFuncDef(ctx *lcx, fnDef *t.NodeFuncDef) error {
-	_, isMemberFunc := fnDef.Class.NameNode.(*t.NodeNameComposite)
 	for i, arg := range fnDef.Class.ArgsNode.Args {
 		definition := &t.NodeExprVarDef{
-			Name:   &t.NodeNameSingle{Tk: arg.Tk, Name: arg.Name},
-			Type:   arg.TypeNode,
-			IrName: "%" + arg.Name + ".addr",
+			Name:    &t.NodeNameSingle{Tk: arg.Tk, Name: arg.Name},
+			Type:    arg.TypeNode,
+			Storage: t.VariableStorageArgument,
 		}
-		if isMemberFunc && i == 0 {
-			definition.IsSsa = true
-			definition.IrName = ""
+		if fnDef.IsMember && i == 0 {
+			definition.Storage = t.VariableStorageSSA
 		}
 		e := declVarInStack(ctx, definition)
 		if e != nil {
@@ -255,7 +275,7 @@ func bldGlDecl(ctx *lcx, glDecl t.NodeGlobalDecl) error {
 		}()
 		return bldFuncDef(ctx, n)
 	case *t.NodeStructDef:
-		declStructInStack(ctx, n)
+		return declStructInStack(ctx, n)
 	case *t.NodeExprVarDef:
 		return declVarInStack(ctx, n)
 	case *t.NodeConstDef:
@@ -290,7 +310,9 @@ func bldGlobal(ctx *lcx, gl *t.NodeGlobal) error {
 				return e
 			}
 		case *t.NodeStructDef:
-			declStructInStack(ctx, n)
+			if e := declStructInStack(ctx, n); e != nil {
+				return e
+			}
 		case *t.NodeExprVarDef:
 			if e := declVarInStack(ctx, n); e != nil {
 				return e

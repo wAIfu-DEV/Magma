@@ -261,7 +261,7 @@ pub printf(format $Format) !void:
 ..
 
 countBytes(impl ptr, bytes str) !u64:
-    ret strings.countBytes(bytes)
+    ret bytes.countBytes()
 ..
 
 BufferSink(
@@ -271,7 +271,7 @@ BufferSink(
 
 writeBuffer(impl ptr, bytes str) !u64:
     sink BufferSink* = impl
-    count := strings.countBytes(bytes)
+    count := bytes.countBytes()
     i u64 = 0
     while i < count:
         sink.out[sink.offset + i] = strings.byteAt(bytes, i)

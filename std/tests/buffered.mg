@@ -11,7 +11,7 @@ use "std:writer" writer
 
 sink(impl ptr, bytes str) !u64:
     total u64* = impl
-    count := strings.countBytes(bytes)
+    count := bytes.countBytes()
     *total = *total + count
     ret count
 ..
@@ -56,9 +56,9 @@ pub main() !void:
         throw errors.failure("buffered reader fill changed")
     ..
     line := try bufferedInput.readLn(a)
-    defer strings.free(a, line)
+    defer line.free(a)
     linePtr u8* = strings.toPtr(line)
-    if linePtr[strings.countBytes(line)] != 0:
+    if linePtr[line.countBytes()] != 0:
         throw errors.failure("buffered line is not null terminated")
     ..
     rawReader := bufferedInput.reader()

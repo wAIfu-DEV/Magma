@@ -51,7 +51,7 @@ func TestCopyBundlesRejectsOutputNameCollision(t *testing.T) {
 }
 
 func TestErrorTraceSlotsOption(t *testing.T) {
-	opts, err := parseArgs([]string{"--error-trace-slots", "2048", "input.mg"})
+	opts, err := parseArgs([]string{"--std", "std", "--error-trace-slots", "2048", "input.mg"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestErrorTraceSlotsOption(t *testing.T) {
 }
 
 func TestErrorTraceSlotsDefault(t *testing.T) {
-	opts, err := parseArgs([]string{"input.mg"})
+	opts, err := parseArgs([]string{"--std", "std", "input.mg"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestErrorTraceSlotsDefault(t *testing.T) {
 
 func TestErrorTraceSlotsValidation(t *testing.T) {
 	for _, value := range []string{"0", "3", "65537"} {
-		_, err := parseArgs([]string{"--error-trace-slots", value, "input.mg"})
+		_, err := parseArgs([]string{"--std", "std", "--error-trace-slots", value, "input.mg"})
 		if err == nil || !strings.Contains(err.Error(), "--error-trace-slots") {
 			t.Errorf("value %s: error = %v", value, err)
 		}
@@ -80,11 +80,20 @@ func TestErrorTraceSlotsValidation(t *testing.T) {
 }
 
 func TestTargetOption(t *testing.T) {
-	opts, err := parseArgs([]string{"--target", "i386", "input.mg"})
+	opts, err := parseArgs([]string{"--std", "std", "--target", "i386", "input.mg"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if opts.target != "i386" {
 		t.Fatalf("target = %q, want i386", opts.target)
+	}
+}
+
+func TestStandardLibraryOptionIsOptional(t *testing.T) {
+	if _, err := parseArgs([]string{"input.mg"}); err != nil {
+		t.Fatalf("parseArgs without --std: %v", err)
+	}
+	if _, err := parseArgs([]string{"--lsp"}); err != nil {
+		t.Fatalf("LSP parseArgs without --std: %v", err)
 	}
 }

@@ -3,12 +3,14 @@ mod file_op_mode
 
 # File open mode flags.
 # @complexity O(1).
+pub const FLAG_READ     u8 = 1
+pub const FLAG_WRITE    u8 = 2
+pub const FLAG_APPEND   u8 = 4
+pub const FLAG_CREATE   u8 = 8
+pub const FLAG_TRUNCATE u8 = 16
+
 pub OpenMode(
-    r bool
-    w bool
-    a bool
-    c bool
-    t bool
+    bits u8
 )
 
 # Returns a copy of the mode with read access enabled.
@@ -17,7 +19,7 @@ pub OpenMode(
 #   openMode := file.mode().read()
 OpenMode.read() OpenMode:
     op OpenMode = *this
-    op.r = true
+    op.bits = op.bits | FLAG_READ
     ret op
 ..
 
@@ -25,7 +27,7 @@ OpenMode.read() OpenMode:
 # @complexity O(1)
 OpenMode.write() OpenMode:
     op OpenMode = *this
-    op.w = true
+    op.bits = op.bits | FLAG_WRITE
     ret op
 ..
 
@@ -34,8 +36,7 @@ OpenMode.write() OpenMode:
 # @complexity O(1)
 OpenMode.append() OpenMode:
     op OpenMode = *this
-    op.a = true
-    op.w = true
+    op.bits = op.bits | FLAG_APPEND | FLAG_WRITE
     ret op
 ..
 
@@ -43,7 +44,7 @@ OpenMode.append() OpenMode:
 # @complexity O(1)
 OpenMode.create() OpenMode:
     op OpenMode = *this
-    op.c = true
+    op.bits = op.bits | FLAG_CREATE
     ret op
 ..
 
@@ -55,7 +56,6 @@ OpenMode.create() OpenMode:
 #   openMode := file.mode().write().create().truncate()
 OpenMode.truncate() OpenMode:
     op OpenMode = *this
-    op.t = true
-    op.w = true
+    op.bits = op.bits | FLAG_TRUNCATE | FLAG_WRITE
     ret op
 ..

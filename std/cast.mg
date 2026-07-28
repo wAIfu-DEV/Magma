@@ -160,6 +160,13 @@ pub u32to64(x u32) u64:
     llvm "ret i64 %c\n"
 ..
 
+# Reinterprets a u32 value as the same-width signed integer. Values above
+# INT32_MAX become negative, matching C's 32-bit two's-complement ABI.
+# @complexity O(1).
+pub u32toi32(x u32) i32:
+    llvm "ret i32 %x\n"
+..
+
 # Zero-extends u16 to u64.
 # @complexity O(1).
 # @example

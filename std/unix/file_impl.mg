@@ -54,7 +54,7 @@ writeOnce(fd i32, next ptr, amount u64) !u64:
 # @returns bytes written
 pub write(handle ptr, bytes str) !u64:
     fd i32 = ptoi32(handle)
-    bound u64 = strings.countBytes(bytes)
+    bound u64 = bytes.countBytes()
 
     if bound == 0:
         ret 0
@@ -186,23 +186,23 @@ pub openFile(a alc.Allocator, path str, openMode fopm.OpenMode) !$ptr:
     flags i32 = 0
     mode i32 = 438  # 0666 in octal
 
-    if openMode.r && openMode.w == false:
+    if (openMode.bits & fopm.FLAG_READ) != 0 && (openMode.bits & fopm.FLAG_WRITE) == 0:
         flags = O_RDONLY
-    elif openMode.w && openMode.r == false:
+    elif (openMode.bits & fopm.FLAG_WRITE) != 0 && (openMode.bits & fopm.FLAG_READ) == 0:
         flags = O_WRONLY
-    elif openMode.r && openMode.w:
+    elif (openMode.bits & fopm.FLAG_READ) != 0 && (openMode.bits & fopm.FLAG_WRITE) != 0:
         flags = O_RDWR
     else:
         throw errors.invalidArgument("invalid open mode")
     ..
 
-    if openMode.c:
+    if (openMode.bits & fopm.FLAG_CREATE) != 0:
         flags = flags | O_CREAT
     ..
-    if openMode.t:
+    if (openMode.bits & fopm.FLAG_TRUNCATE) != 0:
         flags = flags | O_TRUNC
     ..
-    if openMode.a:
+    if (openMode.bits & fopm.FLAG_APPEND) != 0:
         flags = flags | O_APPEND
     ..
 

@@ -32,8 +32,8 @@ func MakeAbs(relative string, importedFromAbs string) (string, error) {
 }
 
 // ResolveImport resolves normal imports relative to their importing file and
-// std: imports relative to the standard library beside the compiler binary.
-func ResolveImport(specifier, importedFromAbs, executablePath string) (string, error) {
+// std: imports relative to the explicitly configured standard-library root.
+func ResolveImport(specifier, importedFromAbs, stdRoot string) (string, error) {
 	if !strings.HasPrefix(specifier, "std:") {
 		return MakeAbs(specifier, importedFromAbs)
 	}
@@ -45,7 +45,6 @@ func ResolveImport(specifier, importedFromAbs, executablePath string) (string, e
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("standard library import '%s' escapes the std directory", specifier)
 	}
-	stdRoot := filepath.Join(filepath.Dir(executablePath), "std")
 	for _, candidate := range withOptionalMagmaExtension(filepath.Join(stdRoot, clean)) {
 		absolute, err := filepath.Abs(candidate)
 		if err != nil {

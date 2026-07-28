@@ -45,13 +45,13 @@ main() !void:
             running = false
         ..
 
-        strings.free(a, choice)
+        choice.free(a)
     ..
 
     cleanupIndex u64 = 0
 
     while cleanupIndex < count:
-        strings.free(a, tasks[cleanupIndex])
+        tasks[cleanupIndex].free(a)
         cleanupIndex = cleanupIndex + 1
     ..
 ..

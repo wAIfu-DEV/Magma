@@ -150,7 +150,7 @@ valueCleanup(val $Value) void:
     ..
     if val.kind == 3:
         value str* = cast.reinterpret[str](addrof val.value)
-        strings.free(val.allocator, *value)
+        val.allocator.free(strings.toPtr(*value))
     elif val.kind == 4:
         value Object** = cast.reinterpret[Object*](addrof val.value)
         if *value != none:
@@ -423,7 +423,7 @@ writeEscaped(w writer.Writer, value str) !void:
     single[0] = 34
     try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(single), 1))
     i u64 = 0
-    bound := strings.countBytes(value)
+    bound := value.countBytes()
     hex str = "0123456789abcdef"
     pair := array u8[2]
     pair[0] = 92
@@ -457,8 +457,8 @@ writeEscaped(w writer.Writer, value str) !void:
             pair[1] = 114
             try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(pair), 2))
         elif byte < 32:
-            escaped[4] = strings.byteAt(hex, cast.u8to64(byte >> 4))
-            escaped[5] = strings.byteAt(hex, cast.u8to64(byte & 15))
+            escaped[4] = strings.byteAt(hex, byte >> 4)
+            escaped[5] = strings.byteAt(hex, byte & 15)
             try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(escaped), 6))
         else:
             one ptr = cast.utop(cast.ptou(strings.toPtr(value)) + i)

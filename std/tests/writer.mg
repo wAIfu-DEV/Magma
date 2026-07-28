@@ -4,7 +4,7 @@ use "std:cast" cast
 use "std:strings" strings
 use "std:writer" writer
 sink(impl ptr, bytes str) !u64:
-    ret strings.countBytes(bytes)
+    ret bytes.countBytes()
 ..
 pub main() !void:
     output := writer.new(none, sink)

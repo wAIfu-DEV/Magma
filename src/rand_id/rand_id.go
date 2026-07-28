@@ -2,8 +2,8 @@ package randid
 
 import (
 	"math/rand"
+	"sync"
 	"time"
-	"unsafe"
 )
 
 // Source - https://stackoverflow.com/a
@@ -17,8 +17,11 @@ const (
 )
 
 var src = rand.NewSource(time.Now().UnixNano())
+var srcMu sync.Mutex
 
 func RandId(n int) string {
+	srcMu.Lock()
+	defer srcMu.Unlock()
 	b := make([]byte, n)
 
 	for i, cache, remain := n-1, src.Int63(), letterIdxMax; i >= 0; {
@@ -33,5 +36,5 @@ func RandId(n int) string {
 		remain--
 	}
 
-	return *(*string)(unsafe.Pointer(&b))
+	return string(b)
 }

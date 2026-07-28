@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -110,7 +109,7 @@ func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath strin
 		fileBytes, err = os.ReadFile(absPath)
 		if err != nil {
 			registerImportResult(shared, absPath, c)
-			return nil, fmt.Errorf("failed to open file")
+			return nil, fmt.Errorf("read source file %q: %w", absPath, err)
 		}
 	}
 
@@ -198,23 +197,11 @@ func DoMain(shared *types.SharedState, filePath string) error {
 }
 
 func findCorePath(shared *types.SharedState) (string, error) {
-	candidates := []string{
-		filepath.Join(filepath.Dir(shared.ExecPath), "std", "core.mg"),
-		filepath.Join(shared.Cwd, "std", "core.mg"),
+	candidate := filepath.Join(shared.StdRoot, "core.mg")
+	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		return filepath.Clean(candidate), nil
 	}
-	if _, source, _, ok := runtime.Caller(0); ok {
-		candidates = append(candidates, filepath.Join(filepath.Dir(source), "..", "..", "std", "core.mg"))
-	}
-	for _, candidate := range candidates {
-		absolute, err := filepath.Abs(candidate)
-		if err != nil {
-			continue
-		}
-		if info, err := os.Stat(absolute); err == nil && !info.IsDir() {
-			return absolute, nil
-		}
-	}
-	return "", fmt.Errorf("failed to locate implicitly imported std/core.mg")
+	return "", fmt.Errorf("standard library core module does not exist at %q", candidate)
 }
 
 func Do(shared *types.SharedState, filePath string, alias string, fromAbs string, fromGl *types.NodeGlobal) error {

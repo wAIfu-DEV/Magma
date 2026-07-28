@@ -6,22 +6,22 @@ use "std:strings" strings
 pub main() !void:
     a allocator.Allocator = heap.allocator()
     copy := try strings.copy(a, "magma")
-    defer strings.free(a, copy)
-    if strings.countBytes(copy) != 5 || strings.compare(copy, "magma") == false:
+    defer copy.free(a)
+    if copy.countBytes() != 5 || strings.compare(copy, "magma") == false:
         throw errors.failure("strings behavior changed")
     ..
     copyPtr u8* = strings.toPtr(copy)
-    if copyPtr[strings.countBytes(copy)] != 0:
+    if copyPtr[copy.countBytes()] != 0:
         throw errors.failure("copied string is not null terminated")
     ..
     empty := try strings.alloc(a, 0)
-    defer strings.free(a, empty)
+    defer empty.free(a)
     emptyPtr u8* = strings.toPtr(empty)
     if *emptyPtr != 0:
         throw errors.failure("empty allocated string is not null terminated")
     ..
     filled := try strings.allocFill(a, 3, 65)
-    defer strings.free(a, filled)
+    defer filled.free(a)
     filledPtr u8* = strings.toPtr(filled)
     if strings.byteAt(filled, 0) != 65 || filledPtr[3] != 0:
         throw errors.failure("filled string is not null terminated")
@@ -50,13 +50,13 @@ pub main() !void:
         throw errors.failure("toCstrNoCopy did not return the borrowed pointer")
     ..
     copiedFromPtr := try strings.fromPtr(a, unterminated, 5)
-    defer strings.free(a, copiedFromPtr)
-    if strings.countBytes(copiedFromPtr) != 5 || strings.toPtr(copiedFromPtr) == unterminated:
+    defer copiedFromPtr.free(a)
+    if copiedFromPtr.countBytes() != 5 || strings.toPtr(copiedFromPtr) == unterminated:
         throw errors.failure("fromPtr did not copy its input")
     ..
     borrowedCstr := strings.fromCstrNoCopy(cstr)
     ownedCstr := try strings.fromCstr(a, cstr)
-    defer strings.free(a, ownedCstr)
+    defer ownedCstr.free(a)
     if strings.compare(borrowedCstr, "magma") == false || strings.compare(ownedCstr, "magma") == false:
         throw errors.failure("C string conversion changed")
     ..
@@ -65,16 +65,16 @@ pub main() !void:
         throw errors.failure("string find changed")
     ..
     sub := try strings.substring(a, "magma", 1, 4)
-    defer strings.free(a, sub)
+    defer sub.free(a)
     if strings.compare(sub, "agm") == false:
         throw errors.failure("substring changed")
     ..
     trimmed := try strings.trim(a, " \t magma \r\n")
-    defer strings.free(a, trimmed)
+    defer trimmed.free(a)
     withoutPrefix := try strings.trimPrefix(a, "std:strings", "std:")
-    defer strings.free(a, withoutPrefix)
+    defer withoutPrefix.free(a)
     withoutSuffix := try strings.trimSuffix(a, "file.mg", ".mg")
-    defer strings.free(a, withoutSuffix)
+    defer withoutSuffix.free(a)
     if strings.compare(trimmed, "magma") == false || strings.compare(withoutPrefix, "strings") == false || strings.compare(withoutSuffix, "file") == false:
         throw errors.failure("string trimming changed")
     ..
@@ -86,8 +86,8 @@ pub main() !void:
     ..
 
     splitPair := try strings.splitOnce(a, "left=right", "=")
-    defer strings.free(a, splitPair.first)
-    defer strings.free(a, splitPair.second)
+    defer splitPair.first.free(a)
+    defer splitPair.second.free(a)
     if strings.compare(splitPair.first, "left") == false || strings.compare(splitPair.second, "right") == false:
         throw errors.failure("splitOnce changed")
     ..
@@ -95,11 +95,11 @@ pub main() !void:
     splitIterator := try strings.splitIter(a, "a,b,c", ",")
     defer splitIterator.free()
     iterFirst := try splitIterator.next()
-    defer strings.free(a, iterFirst)
+    defer iterFirst.free(a)
     iterSecond := try splitIterator.next()
-    defer strings.free(a, iterSecond)
+    defer iterSecond.free(a)
     iterThird := try splitIterator.next()
-    defer strings.free(a, iterThird)
+    defer iterThird.free(a)
     if splitIterator.hasData() || strings.compare(iterFirst, "a") == false || strings.compare(iterSecond, "b") == false || strings.compare(iterThird, "c") == false:
         throw errors.failure("split iterator changed")
     ..

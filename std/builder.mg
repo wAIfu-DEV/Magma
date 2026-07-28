@@ -3,14 +3,18 @@ mod builder
 
 use "std:allocator" alc
 use "std:strings" strings
+use "std:slices" slices
 use "std:memory" mem
 use "std:cast" cast
 use "std:errors" errors
 use "std:footgun" footgun
 
+const FLAG_OWNED u8 = 1
+const FLAG_BYTE u8 = 2
+
 Segment(
     value str
-    owned bool
+    flags u8
 )
 
 # Accumulates borrowed and owned string segments before producing one owned string.
@@ -56,17 +60,37 @@ Builder.ensureCapacity() !void:
 ..
 
 Builder.add(s str, owned bool) !void:
-    byteCount u64 = strings.countBytes(s)
+    byteCount u64 = s.countBytes()
     maxU64 u64 = 0 - 1
     if byteCount > maxU64 - this.totalBytes:
         throw errors.wouldOverflow("builder byte count overflow")
     ..
     try this.ensureCapacity()
     segments Segment* = this.segments
-    segment := Segment(value=s, owned=owned)
+    ownedBits u8 = 0
+
+    if owned:
+        ownedBits = FLAG_OWNED
+    ..
+    segment := Segment(value=s, flags=ownedBits)
     segments[this.count] = segment
     this.count = this.count + 1
     this.totalBytes = this.totalBytes + byteCount
+..
+
+Builder.addByte(b u8) !void:
+    try this.ensureCapacity()
+    segments Segment* = this.segments
+
+    # write the byte directly within the pointer
+    val ptr = none
+    p u8* = cast.reinterpret[u8](addrof val)
+    *p = b
+
+    segment := Segment(value=strings.fromPtrNoCopy(val, 0), flags=FLAG_BYTE)
+    segments[this.count] = segment
+    this.count = this.count + 1
+    this.totalBytes = this.totalBytes + 1
 ..
 
 # Appends a borrowed segment without copying it.
@@ -93,7 +117,7 @@ Builder.appendOwned(s $str) !void:
 # @example
 #   try output.appendCopy(temporaryText)
 Builder.appendCopy(s str) !void:
-    byteCount := strings.countBytes(s)
+    byteCount := s.countBytes()
     if byteCount == 0:
         ret
     ..
@@ -106,7 +130,7 @@ Builder.appendCopy(s str) !void:
     try this.ensureCapacity()
     owned str = try strings.copy(this.allocator, s)
     segments Segment* = this.segments
-    segment := Segment(value=owned, owned=true)
+    segment := Segment(value=owned, flags=FLAG_OWNED)
     segments[this.count] = segment
     this.count = this.count + 1
     this.totalBytes = this.totalBytes + byteCount
@@ -127,9 +151,22 @@ Builder.build() !$str:
     segments Segment* = this.segments
     offset u64 = 0
     i u64 = 0
+
+    byteBuff := array u8[2]
+    byteBuff[1] = 0
+
     while i < this.count:
-        s := segments[i].value
-        byteCount := strings.countBytes(s)
+        seg Segment = segments[i]
+        s := seg.value
+
+        if (seg.flags & FLAG_BYTE) != 0:
+            # unpack byte
+            p := strings.toPtr(s)
+            byteBuff[0] = *(cast.reinterpret[u8](addrof p))
+            s = strings.fromPtrNoCopy(slices.toPtr(byteBuff), 1)
+        ..
+
+        byteCount := s.countBytes()
         mem.copy(strings.toPtr(s), cast.utop(cast.ptou(out) + offset), byteCount)
         offset = offset + byteCount
         i = i + 1
@@ -153,8 +190,8 @@ Builder.releaseCopies() void:
     segments Segment* = this.segments
     i u64 = 0
     while i < this.count:
-        if segments[i].owned:
-            strings.free(this.allocator, segments[i].value)
+        if (segments[i].flags & FLAG_OWNED) != 0:
+            segments[i].value.free(this.allocator)
         ..
         i = i + 1
     ..

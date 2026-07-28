@@ -32,7 +32,7 @@ pub isSeparator(c u8) bool:
 # @example
 #   absolute := path.isAbsolute("/tmp/data")
 pub isAbsolute(path str) bool:
-    n := strings.countBytes(path)
+    n := path.countBytes()
     if n == 0:
         ret false
     ..
@@ -49,7 +49,7 @@ pub isAbsolute(path str) bool:
 # @example
 #   name := try path.base(a, "/tmp/archive.tar")
 pub base(a allocator.Allocator, path str) !$str:
-    n := strings.countBytes(path)
+    n := path.countBytes()
     end := n
     while end > 0 && isSeparator(strings.byteAt(path, end - 1)):
         end = end - 1
@@ -73,8 +73,8 @@ pub base(a allocator.Allocator, path str) !$str:
 #   ext := try path.extension(a, "archive.tar.gz")
 pub extension(a allocator.Allocator, path str) !$str:
     b := try base(a, path)
-    defer strings.free(a, b)
-    n := strings.countBytes(b)
+    defer b.free(a)
+    n := b.countBytes()
     i := n
     while i > 0:
         i = i - 1

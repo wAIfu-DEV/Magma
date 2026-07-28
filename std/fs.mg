@@ -45,7 +45,7 @@ pub writeFile(a alc.Allocator, path str, contents str) !void:
     defer f.close()
     w := try f.writer()
     written := try w.write(contents)
-    if written != strings.countBytes(contents):
+    if written != contents.countBytes():
         throw errors.failure("short file write")
     ..
 ..

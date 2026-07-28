@@ -52,6 +52,9 @@ worker(context Context*) u64:
 
 pub main() !void:
     lock := try mutex.new()
+    defer:
+        try lock.free()
+    ..
     value u64 = 0
     ready := atomic.newU64(0)
     start := atomic.newU64(0)
@@ -74,5 +77,4 @@ pub main() !void:
     if failed.load() != 0 || value != workerCount * incrementsPerWorker:
         throw errors.failure("mutex did not provide mutual exclusion")
     ..
-    try lock.free()
 ..

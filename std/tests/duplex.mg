@@ -4,7 +4,7 @@ use "std:cast" cast
 use "std:errors" errors
 use "std:strings" strings
 write(impl ptr, bytes str) !u64:
-    ret strings.countBytes(bytes)
+    ret bytes.countBytes()
 ..
 read(impl ptr, bytes u8[], count u64) !u64:
     ret 0

@@ -3,7 +3,6 @@ package types
 import (
 	"fmt"
 	"strings"
-	"unsafe"
 )
 
 type NodeT uint8
@@ -26,8 +25,7 @@ func PrintIndent(n int) {
 	for i := range d {
 		p[i] = ' '
 	}
-	s := *(*string)(unsafe.Pointer(&p))
-	fmt.Print(s)
+	fmt.Print(string(p))
 }
 
 type Node interface {
@@ -118,6 +116,9 @@ func (n *NodeTypeNamed) Print(indent int) {
 
 type NodeTypeAbsolute struct {
 	AbsoluteName string
+	// DisplayName preserves source spelling, including generic arguments, after
+	// monomorphization replaces a named type with its backend identity.
+	DisplayName string
 }
 
 type NodeTypeCompilerKnown struct {
@@ -234,7 +235,19 @@ type NodeExprArray struct {
 	Tk       Token
 	ElemType *NodeType
 	Length   NodeExpr
-	InfType  *NodeType
+	// LengthType is the checker-resolved representation consumed by lowering.
+	LengthType *NodeType
+	Entries    []NodeArrayInitEntry
+	InfType    *NodeType
+}
+
+// NodeArrayInitEntry is either positional (Index == nil) or designated.
+// ResolvedIndex is populated by the type checker for initialized arrays.
+type NodeArrayInitEntry struct {
+	Tk            Token
+	Index         NodeExpr
+	Value         NodeExpr
+	ResolvedIndex uint64
 }
 
 func (n *NodeExprArray) GetInferredType() *NodeType { return n.InfType }
@@ -243,6 +256,12 @@ func (n *NodeExprArray) Print(indent int) {
 	fmt.Printf("ExprArray\n")
 	n.ElemType.Print(indent + 1)
 	n.Length.Print(indent + 1)
+	for _, entry := range n.Entries {
+		if entry.Index != nil {
+			entry.Index.Print(indent + 1)
+		}
+		entry.Value.Print(indent + 1)
+	}
 }
 
 func (n *NodeExprLit) GetInferredType() *NodeType {
@@ -275,7 +294,7 @@ type NodeExprName struct {
 	MemberAccesses []*MemberAccess
 
 	AssociatedNode Node
-	IsSsa          bool
+	Storage        VariableStorage
 }
 
 func (n *NodeExprName) GetInferredType() *NodeType {
@@ -372,12 +391,18 @@ type NodeExprSubscript struct {
 	Tk     Token
 	Target NodeExpr
 	Expr   NodeExpr
+	// GenericCandidate retains the alternative parse of `name[...]` until
+	// module symbols are available. Monomorphization clears it after choosing
+	// between generic specialization and runtime subscripting.
+	GenericCandidate []*NodeType
 
 	AssociatedNode Node
 	IsTargetSsa    bool
 
 	BoxType  *NodeType
 	ElemType *NodeType
+	// IndexType is the checker-resolved representation consumed by lowering.
+	IndexType *NodeType
 }
 
 type NodeExprMemberAccess struct {
@@ -428,6 +453,10 @@ type NodeExprBinary struct {
 	Right    NodeExpr
 
 	InfType *NodeType
+	// OperandType is the common semantic type selected for numeric operands.
+	// Comparisons keep a bool InfType while recording their numeric operation
+	// type here, so lowering never has to reconstruct promotion rules.
+	OperandType *NodeType
 }
 
 func (n *NodeExprBinary) GetInferredType() *NodeType {
@@ -453,6 +482,21 @@ type NameTypePair struct {
 	Type *NodeType
 }
 
+// VariableStorage records the resolved representation of a variable before
+// LLVM lowering. It deliberately describes storage semantics, not an emitted
+// LLVM identifier; numeric local names remain private to the backend.
+type VariableStorage uint8
+
+const (
+	VariableStorageUnresolved VariableStorage = iota
+	VariableStorageGlobal
+	VariableStorageArgument
+	VariableStorageLocal
+	VariableStorageSSA
+)
+
+func (s VariableStorage) IsSSA() bool { return s == VariableStorageSSA }
+
 type NodeExprVarDef struct {
 	Name        NodeName
 	Type        *NodeType
@@ -460,10 +504,10 @@ type NodeExprVarDef struct {
 	IsConst     bool
 	AbsName     string
 	RetFlagId   string
-	IsSsa       bool
+	Storage     VariableStorage
 	IsReturned  bool
 	IsGlobal    bool
-	IrName      string
+	IsPublic    bool
 }
 
 func (n *NodeExprVarDef) GetInferredType() *NodeType {
@@ -838,11 +882,13 @@ type NodeFuncDef struct {
 	NoAliasName string
 	DisplayName string
 
-	Deferred []*NodeStmtDefer
-	DeferCnt int
-	HasDefer bool
-
-	IsDestructor   bool
+	IsDestructor bool
+	// IsMember records that argument zero is the compiler-inserted receiver.
+	// Lowering must not infer this semantic fact from the source name shape.
+	IsMember bool
+	// IsEntryPoint records a top-level source function named main. The LLVM
+	// backend still checks that it belongs to the selected main package.
+	IsEntryPoint   bool
 	IsExternal     bool
 	IsPublic       bool
 	ExportName     string
@@ -867,7 +913,10 @@ func (n *NodeFuncDef) Print(indent int) {
 }
 
 type NodeStructDef struct {
-	Class    NodeGenericClass
+	Class NodeGenericClass
+	// AbsName is the resolved LLVM-visible struct symbol. Lowering must consume
+	// this identity rather than reconstructing it from source names and context.
+	AbsName  string
 	IsPublic bool
 }
 

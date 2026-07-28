@@ -16,12 +16,12 @@ pub main() !void:
     a allocator.Allocator = heap.allocator()
     input := reader.new(none, source)
     result := try input.read(a, 1)
-    defer strings.free(a, result)
+    defer result.free(a)
     if strings.compare(result, "A") == false:
         throw errors.failure("reader behavior changed")
     ..
     resultPtr u8* = strings.toPtr(result)
-    if resultPtr[strings.countBytes(result)] != 0:
+    if resultPtr[result.countBytes()] != 0:
         throw errors.failure("read string is not null terminated")
     ..
     buffer := array u8[2]

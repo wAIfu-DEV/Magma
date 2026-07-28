@@ -10,7 +10,7 @@ readNumber(a alc.Allocator, input buffered.Reader, output buffered.Writer, promp
     try output.flush()
 
     text := try input.readLn(a)
-    defer strings.free(a, text)
+    defer text.free(a)
 
     ret try strconv.parseUint(text)
 ..
@@ -36,7 +36,7 @@ main() !void:
     try stdout.flush()
 
     op := try stdin.readLn(a)
-    defer strings.free(a, op)
+    defer op.free(a)
 
     result u64
     if strings.compare(op, "+"):

@@ -49,7 +49,7 @@ write(f File*, bytes str) !u64:
 # @example
 #   output := try handle.writer()
 File.writer() !w.Writer:
-    if this.open == false || this.openMode.w == false:
+    if this.open == false || (this.openMode.bits & fopm.FLAG_WRITE) == 0:
         throw errors.invalidArgument("file not open in write mode")
     ..
     ret w.new(this, write)
@@ -71,7 +71,7 @@ read(f File*, buff u8[], n u64) !u64:
 # @example
 #   input := try handle.reader()
 File.reader() !r.Reader:
-    if this.open == false || this.openMode.r == false:
+    if this.open == false || (this.openMode.bits & fopm.FLAG_READ) == 0:
         throw errors.invalidArgument("file not open in read mode")
     ..
     ret r.new(this, read)
@@ -131,5 +131,5 @@ pub open(a alc.Allocator, path str, openMode fopm.OpenMode) !$File:
 # @example
 #   openMode := file.mode().write().create().truncate()
 pub mode() fopm.OpenMode:
-    ret fopm.OpenMode(r=false, w=false, a=false, c=false, t=false)
+    ret fopm.OpenMode(bits=0)
 ..

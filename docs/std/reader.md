@@ -5,7 +5,7 @@
 ```magma
 input := reader.new(state, readCallback)
 text := try input.read(heap.allocator(), 128)
-defer strings.free(heap.allocator(), text)
+defer text.free(heap.allocator())
 n := try input.readToBuff(buffer, 16)
 ```
 

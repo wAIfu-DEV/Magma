@@ -7,7 +7,7 @@ a := heap.allocator()
 answer := try strconv.parseUint("42")
 enabled := try strconv.parseBool("true")
 text := try strconv.formatUint(a, answer)
-defer strings.free(a, text)
+defer text.free(a)
 ```
 
 Basic string conversions.

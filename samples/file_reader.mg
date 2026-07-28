@@ -26,13 +26,13 @@ main(args str[]) !void:
         stdout.flush()
 
         input := stdin.readLn(a)
-        defer strs.free(a, input)
+        defer input.free(a)
 
         f := try file.open(a, input, file.mode().read())
         defer f.close()
 
         contents := f.reader().read(a, f.count())
-        defer strs.free(a, contents)
+        defer contents.free(a)
 
         out.write(contents)
         out.writeLn("<EOF>")

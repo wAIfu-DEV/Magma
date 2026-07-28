@@ -2,7 +2,6 @@ package lsp
 
 import (
 	"Magma/src/types"
-	"reflect"
 	"sort"
 	"strings"
 	"unicode"
@@ -24,67 +23,166 @@ type completionContext struct {
 	endByte    int
 }
 
+type selectorPart struct {
+	name string
+	call bool
+}
+
 type expressionCompletionContext struct {
 	prefix     string
 	lineOffset int
 	lineEnd    int
 }
 
-func complete(uri, source string, pos position) []completionItem {
+func complete(uri, source string, pos position, stdRoot string) []completionItem {
 	context, ok := completionAt(source, pos)
 	if !ok {
 		expression, expressionOK := expressionCompletionAt(source, pos)
 		if !expressionOK {
 			return []completionItem{}
 		}
-		clean := source[:expression.lineOffset] + source[expression.lineEnd:]
-		result := analyze(uri, clean)
+		analysisSource := sanitizeOtherSelectors(source, int(pos.Line))
+		clean := analysisSource[:expression.lineOffset] + analysisSource[expression.lineEnd:]
+		result := analyze(uri, clean, stdRoot)
 		if result == nil || result.file == nil || result.docs == nil {
 			return []completionItem{}
 		}
 		return result.expressionCompletions(expression.prefix, pos.Line+1)
 	}
+	analysisSource := sanitizeOtherSelectors(source, int(pos.Line))
 	// A selector without a member is intentionally invalid Magma. Removing the
 	// dot makes the preceding program analyzable, allowing normal inference to
 	// determine the receiver type.
 	cleanStart := context.dotByte
 	cleanEnd := context.endByte
-	if strings.TrimSpace(source[context.lineOffset:context.startByte]) == "" {
+	if strings.TrimSpace(analysisSource[context.lineOffset:context.startByte]) == "" || sourceImportsAlias(analysisSource, context.receiver) {
 		cleanStart = context.lineOffset
-		if cleanEnd < len(source) && source[cleanEnd] == '\r' {
+		for cleanEnd < len(analysisSource) && analysisSource[cleanEnd] != '\r' && analysisSource[cleanEnd] != '\n' {
 			cleanEnd++
 		}
-		if cleanEnd < len(source) && source[cleanEnd] == '\n' {
+		if cleanEnd < len(analysisSource) && analysisSource[cleanEnd] == '\r' {
+			cleanEnd++
+		}
+		if cleanEnd < len(analysisSource) && analysisSource[cleanEnd] == '\n' {
 			cleanEnd++
 		}
 	}
-	clean := source[:cleanStart] + source[cleanEnd:]
-	result := analyze(uri, clean)
+	clean := analysisSource[:cleanStart] + analysisSource[cleanEnd:]
+	result := analyze(uri, clean, stdRoot)
 	if result == nil || result.file == nil || result.docs == nil {
 		return []completionItem{}
 	}
-	receiverParts := strings.Split(context.receiver, ".")
-	if len(receiverParts) == 1 {
+	receiverParts, ok := selectorParts(context.receiver)
+	if !ok {
+		return []completionItem{}
+	}
+	if len(receiverParts) == 1 && !receiverParts[0].call {
 		if module := result.importedPackage(context.receiver); module != "" {
 			return result.docs.moduleCompletions(module, context.prefix)
 		}
 	}
-	receiverType := result.docs.completionTypeAt(result.file.PackageName, receiverParts[0], pos.Line+1)
-	if receiverType == nil {
-		receiverType = findValueType(result.file.GlNode, receiverParts[0])
-	}
-	module, owner := completionType(result, receiverType)
-	for _, field := range receiverParts[1:] {
-		if owner == "" {
-			return []completionItem{}
+	var receiverType *types.NodeType
+	partIndex := 1
+	module := result.importedPackage(receiverParts[0].name)
+	owner := ""
+	if module == "" {
+		if receiverParts[0].call {
+			receiverType = result.docs.functionReturns[result.file.PackageName+"\x00"+receiverParts[0].name]
+		} else {
+			receiverType = result.docs.completionTypeAt(result.file.PackageName, receiverParts[0].name, pos.Line+1)
+			if receiverType == nil {
+				receiverType = findValueType(result.file.GlNode, receiverParts[0].name)
+			}
 		}
-		receiverType = result.docs.memberTypes[module+"\x00"+owner+"."+field]
+		module, owner = completionType(result, receiverType)
+	}
+	for ; partIndex < len(receiverParts); partIndex++ {
+		part := receiverParts[partIndex]
+		if part.call {
+			key := module + "\x00" + part.name
+			if owner != "" {
+				key = module + "\x00" + owner + "." + part.name
+			}
+			receiverType = result.docs.functionReturns[key]
+		} else {
+			if owner == "" {
+				return []completionItem{}
+			}
+			receiverType = result.docs.memberTypes[module+"\x00"+owner+"."+part.name]
+		}
 		module, owner = completionType(result, receiverType)
 	}
 	if owner == "" {
 		return []completionItem{}
 	}
 	return result.docs.memberCompletions(module, owner, context.prefix)
+}
+
+func sanitizeOtherSelectors(source string, activeLine int) string {
+	clean := []byte(source)
+	lineStart := 0
+	lineNumber := 0
+	for lineStart < len(clean) {
+		lineEnd := lineStart
+		for lineEnd < len(clean) && clean[lineEnd] != '\r' && clean[lineEnd] != '\n' {
+			lineEnd++
+		}
+		lineText := string(clean[lineStart:lineEnd])
+		if assign := strings.Index(lineText, ":= try "); assign >= 0 && strings.Contains(lineText[:assign], ",") {
+			tryStart := lineStart + assign + len(":= ")
+			for i := tryStart; i < tryStart+len("try "); i++ {
+				clean[i] = ' '
+			}
+		}
+		if lineNumber != activeLine {
+			trimmed := strings.TrimSpace(string(clean[lineStart:lineEnd]))
+			if trimmed == "if" || trimmed == "while" || trimmed == "elif" {
+				for i := lineStart; i < lineEnd; i++ {
+					clean[i] = ' '
+				}
+				lineStart = lineEnd
+				for lineStart < len(clean) && (clean[lineStart] == '\r' || clean[lineStart] == '\n') {
+					lineStart++
+				}
+				lineNumber++
+				continue
+			}
+			contentEnd := lineEnd
+			for contentEnd > lineStart && (clean[contentEnd-1] == ' ' || clean[contentEnd-1] == '\t') {
+				contentEnd--
+			}
+			if contentEnd > lineStart && clean[contentEnd-1] == '.' && (contentEnd-lineStart == 1 || clean[contentEnd-2] != '.') {
+				for i := lineStart; i < lineEnd; i++ {
+					clean[i] = ' '
+				}
+			} else {
+				for i := lineStart; i+1 < lineEnd; i++ {
+					if clean[i] == '.' && clean[i+1] == ')' {
+						clean[i] = ' '
+					}
+				}
+			}
+		}
+		for lineEnd < len(clean) && (clean[lineEnd] == '\r' || clean[lineEnd] == '\n') {
+			lineEnd++
+		}
+		lineStart = lineEnd
+		lineNumber++
+	}
+	return string(clean)
+}
+
+func sourceImportsAlias(source, alias string) bool {
+	if strings.Contains(alias, ".") {
+		return false
+	}
+	for _, line := range strings.Split(source, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) >= 3 && fields[0] == "use" && fields[len(fields)-1] == alias {
+			return true
+		}
+	}
+	return false
 }
 
 func expressionCompletionAt(source string, pos position) (expressionCompletionContext, bool) {
@@ -201,15 +299,26 @@ func completionAt(source string, pos position) (completionContext, bool) {
 		return completionContext{}, false
 	}
 	start := dot
+	depth := 0
 	for start > 0 {
 		r, size := lastRune(before[:start])
-		if !isIdentRune(r) && r != '.' {
+		if r == ')' {
+			depth++
+		} else if r == '(' {
+			if depth == 0 {
+				break
+			}
+			depth--
+		} else if depth == 0 && !isIdentRune(r) && r != '.' {
 			break
 		}
 		start -= size
 	}
 	receiver := before[start:dot]
-	if receiver == "" || !identifierPath(receiver) {
+	if receiver == "" {
+		return completionContext{}, false
+	}
+	if _, ok := selectorParts(receiver); !ok {
 		return completionContext{}, false
 	}
 	return completionContext{receiver: receiver, prefix: prefix, startByte: lineStart + len(before[:start]), dotByte: lineStart + len(before[:dot]), endByte: lineStart + len(before), lineOffset: lineStart}, true
@@ -243,56 +352,35 @@ func identifierPath(value string) bool {
 	return true
 }
 
+func selectorParts(value string) ([]selectorPart, bool) {
+	parts := strings.Split(value, ".")
+	result := make([]selectorPart, 0, len(parts))
+	for _, part := range parts {
+		call := strings.HasSuffix(part, "()")
+		name := part
+		if call {
+			name = strings.TrimSuffix(part, "()")
+		}
+		if name == "" || !identifier(name) {
+			return nil, false
+		}
+		result = append(result, selectorPart{name: name, call: call})
+	}
+	return result, len(result) != 0
+}
+
 func isIdentRune(r rune) bool { return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) }
 
 func findValueType(root any, name string) *types.NodeType {
 	var found *types.NodeType
-	seen := map[uintptr]bool{}
-	var walk func(reflect.Value)
-	walk = func(value reflect.Value) {
-		if found != nil || !value.IsValid() {
-			return
+	walkAST(root, func(value any) bool {
+		variable, ok := value.(*types.NodeExprVarDef)
+		if ok && flattenName(variable.Name) == name {
+			found = variable.Type
+			return false
 		}
-		if value.Kind() == reflect.Interface {
-			if !value.IsNil() {
-				walk(value.Elem())
-			}
-			return
-		}
-		if value.Kind() == reflect.Pointer {
-			if value.IsNil() || seen[value.Pointer()] {
-				return
-			}
-			seen[value.Pointer()] = true
-			if variable, ok := value.Interface().(*types.NodeExprVarDef); ok && flattenName(variable.Name) == name {
-				found = variable.Type
-				return
-			}
-			walk(value.Elem())
-			return
-		}
-		if value.Kind() == reflect.Struct {
-			t := value.Type()
-			for i := 0; i < value.NumField(); i++ {
-				if t.Field(i).PkgPath == "" && !skipField(t.Field(i).Name) {
-					walk(value.Field(i))
-				}
-			}
-			return
-		}
-		switch value.Kind() {
-		case reflect.Slice, reflect.Array:
-			for i := 0; i < value.Len(); i++ {
-				walk(value.Index(i))
-			}
-		case reflect.Map:
-			iter := value.MapRange()
-			for iter.Next() {
-				walk(iter.Value())
-			}
-		}
-	}
-	walk(reflect.ValueOf(root))
+		return true
+	})
 	return found
 }
 

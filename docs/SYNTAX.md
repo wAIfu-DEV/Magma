@@ -191,6 +191,22 @@ bytes := array u8[16]
 names := array str[3]
 ```
 
+Arrays may include an initializer list. Missing elements remain zero-initialized:
+
+```magma
+names := array str[64]("", "test", "some str")
+const defaults := array str[64](
+    0 = "",
+    SOME_CONST = "other value",
+)
+```
+
+Entries may be positional or designated with a compile-time integer index. A
+positional entry uses the cursor position; a designated entry moves the cursor
+to one past its index. Mixing both forms is allowed, but initializing the same
+index twice is an error. Initialized arrays require a compile-time length, and
+unspecified elements retain their zero value.
+
 The length can be any integer expression:
 
 ```magma
@@ -415,7 +431,7 @@ Calls can be statements or expressions:
 
 ```magma
 stdout.flush()
-bytesLen u64 = strings.countBytes(bytes)
+bytesLen u64 = bytes.countBytes()
 ```
 
 The `pub` modifier exports top-level functions and struct types from a module.
@@ -913,6 +929,12 @@ external symbol name:
 ext ext_unix_open open(path u8*, flags i32, mode i32) i32
 ext ext_stdlib_malloc malloc(size u64) ptr
 ```
+
+External calls use the selected target's C ABI. Aggregate arguments and return
+values are lowered to indirect pointers, `byval`/`sret` parameters, or register
+coercions as required by Windows x64, System V AMD64, and AArch64. Source-level
+declarations therefore retain ordinary value semantics; bindings must not
+encode platform-specific hidden pointers themselves.
 
 The syntax is:
 

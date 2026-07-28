@@ -19,9 +19,9 @@ main() !void:
     try stdout.flush()
 
     word := try stdin.readLn(a)
-    defer strings.free(a, word)
+    defer word.free(a)
 
-    count := strings.countBytes(word)
+    count := word.countBytes()
     palindrome bool = true
     i u64 = 0
 

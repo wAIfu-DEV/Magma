@@ -23,6 +23,9 @@ pub main() !void:
     if cast.u32to64(7) != 7 || cast.u16to64(7) != 7 || cast.u8to64(7) != 7:
         throw errors.failure("unsigned widening changed")
     ..
+    if cast.u32toi32(7) != 7:
+        throw errors.failure("same-width signed conversion changed")
+    ..
     if cast.i64to32(-7) != -7 || cast.i64to16(-7) != -7 || cast.i64to8(258) != 2:
         throw errors.failure("signed narrowing changed")
     ..

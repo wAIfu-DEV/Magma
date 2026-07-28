@@ -43,7 +43,7 @@ Reader.read(a alc.Allocator, nBytes u64) !$str:
     buff u8[] = slices.fromPtr(buffPtr, nBytes)
     readCnt u64, readErr error = this.readToBuff(buff, nBytes)
     if readErr.nok():
-        strings.free(a, result)
+        result.free(a)
         throw readErr
     ..
     buffPtr[readCnt] = 0

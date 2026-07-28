@@ -17,7 +17,7 @@ pub main() !void:
     a allocator.Allocator = heap.allocator()
     try fs.writeFile(a, "std_checked_test_fs.tmp", "checked fs")
     contents := try fs.readFile(a, "std_checked_test_fs.tmp")
-    defer strings.free(a, contents)
+    defer contents.free(a)
     if strings.compare(contents, "checked fs") == false:
         throw errors.failure("filesystem behavior changed")
     ..
@@ -28,7 +28,7 @@ pub main() !void:
     try fs.removeFile(a, "std_checked_test_fs.tmp")
     missing str, missingErr error = fs.readFile(a, "std_checked_test_fs.tmp")
     if missingErr.ok():
-        strings.free(a, missing)
+        missing.free(a)
         throw errors.failure("removed file can still be opened")
     ..
 ..

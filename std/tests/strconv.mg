@@ -12,12 +12,12 @@ pub main() !void:
         throw errors.failure("strconv parse changed")
     ..
     formatted := try strconv.formatUint(a, 42)
-    defer strings.free(a, formatted)
+    defer formatted.free(a)
     if strings.compare(formatted, "42") == false:
         throw errors.failure("strconv format changed")
     ..
     formattedPtr u8* = strings.toPtr(formatted)
-    if formattedPtr[strings.countBytes(formatted)] != 0:
+    if formattedPtr[formatted.countBytes()] != 0:
         throw errors.failure("formatted string is not null terminated")
     ..
 ..

@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"Magma/src/types"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,7 +55,7 @@ func TestCompletionReceiverKinds(t *testing.T) {
 				t.Fatal(err)
 			}
 			uri := "file:///" + filepath.ToSlash(path)
-			items := complete(uri, test.source, position{Line: test.line, Character: test.char})
+			items := complete(uri, test.source, position{Line: test.line, Character: test.char}, testStdRoot())
 			labels := make([]string, 0, len(items))
 			for _, item := range items {
 				labels = append(labels, item.Label)
@@ -72,6 +73,34 @@ func TestCompletionReceiverKinds(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFunctionDefinitionNavigation(t *testing.T) {
+	directory := t.TempDir()
+	dependency := filepath.Join(directory, "dependency.mg")
+	dependencySource := "mod dependency\npub open() void:\n..\n"
+	if err := os.WriteFile(dependency, []byte(dependencySource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := "mod main\nuse \"./dependency.mg\" dep\nhelper() void:\n..\nmain() void:\n    helper()\n    dep.open()\n..\n"
+	path := filepath.Join(directory, "main.mg")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := analyze((&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String(), source, testStdRoot())
+
+	local, ok := result.definition(position{Line: 5, Character: 7})
+	if !ok || local.Range.Start != (position{Line: 2, Character: 0}) {
+		t.Fatalf("local function definition = %#v, %v", local, ok)
+	}
+	imported, ok := result.definition(position{Line: 6, Character: 9})
+	if !ok || imported.Range.Start != (position{Line: 1, Character: 4}) || !strings.HasSuffix(imported.URI, "/dependency.mg") {
+		t.Fatalf("imported function definition = %#v, %v", imported, ok)
+	}
+	parsedURI, err := url.Parse(imported.URI)
+	if err != nil || parsedURI.Scheme != "file" || parsedURI.Host != "" {
+		t.Fatalf("definition URI %q has a UNC authority: parsed=%#v err=%v", imported.URI, parsedURI, err)
 	}
 }
 
@@ -107,7 +136,7 @@ func TestExpressionCompletionContextsIncludeGenericScope(t *testing.T) {
 			if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			items := complete("file:///"+filepath.ToSlash(path), source, position{Line: line, Character: character})
+			items := complete("file:///"+filepath.ToSlash(path), source, position{Line: line, Character: character}, testStdRoot())
 			labels := map[string]bool{}
 			for _, item := range items {
 				labels[item.Label] = true
@@ -143,7 +172,7 @@ func TestExpressionCompletionIsDisabledInStructFields(t *testing.T) {
 	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	items := complete("file:///"+filepath.ToSlash(path), source, position{Line: 3, Character: 4})
+	items := complete("file:///"+filepath.ToSlash(path), source, position{Line: 3, Character: 4}, testStdRoot())
 	if len(items) != 0 {
 		t.Fatalf("struct field completion = %#v, want none", items)
 	}
@@ -181,6 +210,82 @@ func TestCompletionAtSelector(t *testing.T) {
 	}
 	if cleaned := source[:cleanStart] + source[cleanEnd:]; cleaned != "mod sample\nmain():\n" {
 		t.Fatalf("cleaned source = %q", cleaned)
+	}
+}
+
+func TestModuleCompletionInDestructuringAssignment(t *testing.T) {
+	directory := t.TempDir()
+	dependency := filepath.Join(directory, "dependency.mg")
+	if err := os.WriteFile(dependency, []byte("mod dependency\npub open() void:\n..\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := "mod completion\nuse \"./dependency.mg\" dep\nmain() void:\n    value, err := dep.\n..\n"
+	path := filepath.Join(directory, "completion.mg")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	items := complete("file:///"+filepath.ToSlash(path), source, position{Line: 3, Character: 22}, testStdRoot())
+	if len(items) != 1 || items[0].Label != "open" {
+		t.Fatalf("module completions = %#v, want open", items)
+	}
+}
+
+func TestModuleCompletionInsideCallArgument(t *testing.T) {
+	directory := t.TempDir()
+	dependency := filepath.Join(directory, "dependency.mg")
+	if err := os.WriteFile(dependency, []byte("mod dependency\npub open() void:\n..\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := "mod completion\nuse \"./dependency.mg\" dep\nmain() void:\n    value, err := dep.open(dep.)\n..\n"
+	path := filepath.Join(directory, "completion.mg")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	items := complete("file:///"+filepath.ToSlash(path), source, position{Line: 3, Character: 31}, testStdRoot())
+	if len(items) != 1 || items[0].Label != "open" {
+		t.Fatalf("module completions = %#v, want open", items)
+	}
+}
+
+func TestCompletionOnModuleFunctionResult(t *testing.T) {
+	directory := t.TempDir()
+	dependency := filepath.Join(directory, "dependency.mg")
+	dependencySource := "mod dependency\npub Mode(value bool)\npub make() Mode:\n    ret Mode(value=false)\n..\npub open() !Mode:\n    ret Mode(value=false)\n..\nMode.enable() Mode:\n    ret *this\n..\n"
+	if err := os.WriteFile(dependency, []byte(dependencySource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := "mod completion\nuse \"./dependency.mg\" dep\nmain() void:\n    dep.make().\n..\n"
+	path := filepath.Join(directory, "completion.mg")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	items := complete("file:///"+filepath.ToSlash(path), source, position{Line: 3, Character: 15}, testStdRoot())
+	labels := map[string]bool{}
+	for _, item := range items {
+		labels[item.Label] = true
+	}
+	if !labels["enable"] || !labels["value"] {
+		t.Fatalf("module function result completions = %#v", items)
+	}
+}
+
+func TestCompletionWithAnotherIncompleteSelector(t *testing.T) {
+	directory := t.TempDir()
+	dependency := filepath.Join(directory, "dependency.mg")
+	dependencySource := "mod dependency\npub Mode(value bool)\npub make() Mode:\n    ret Mode(value=false)\n..\nMode.enable() Mode:\n    ret *this\n..\n"
+	if err := os.WriteFile(dependency, []byte(dependencySource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := "mod completion\nuse \"./dependency.mg\" dep\nmain() void:\n    dep.\n    value, err := try dep.open()\n    dep.make().\n..\n"
+	path := filepath.Join(directory, "completion.mg")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, position := range []position{{Line: 3, Character: 8}, {Line: 5, Character: 15}} {
+		items := complete("file:///"+filepath.ToSlash(path), source, position, testStdRoot())
+		if len(items) == 0 {
+			t.Fatalf("completion at %#v returned no items", position)
+		}
 	}
 }
 
@@ -243,7 +348,7 @@ func TestArgumentAndVariableHoverUseMagmaSyntax(t *testing.T) {
 		Name:     "count",
 		TypeNode: u64Type,
 	}
-	finder := hoverFinder{pos: position{Line: 1, Character: 4}, seen: map[uintptr]bool{}}
+	finder := hoverFinder{pos: position{Line: 1, Character: 4}}
 	finder.inspect(argument)
 	if got, want := finder.value, code("count u64"); got != want {
 		t.Fatalf("argument hover = %q, want %q", got, want)
@@ -252,6 +357,28 @@ func TestArgumentAndVariableHoverUseMagmaSyntax(t *testing.T) {
 	variable := &types.NodeExprVarDef{Name: name("total"), Type: u64Type}
 	if got, want := formatVariable(variable), "total u64"; got != want {
 		t.Fatalf("variable hover = %q, want %q", got, want)
+	}
+}
+
+func TestHoverSurvivesLaterIncompleteMemberExpression(t *testing.T) {
+	directory := t.TempDir()
+	dependency := filepath.Join(directory, "dependency.mg")
+	if err := os.WriteFile(dependency, []byte("mod dependency\n\n# Opens a resource.\npub open() void:\n..\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := "mod main\nuse \"./dependency.mg\" dep\nbefore() void:\n..\nbroken() void:\n    dep.\n..\nafter() void:\n    dep.open()\n..\n"
+	path := filepath.Join(directory, "main.mg")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := analyze((&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String(), source, testStdRoot())
+
+	got := result.hover(position{Line: 8, Character: 8})
+	if !strings.Contains(got, "open() void") || !strings.Contains(got, "Opens a resource.") {
+		t.Fatalf("hover after syntax error = %q, want function signature and documentation", got)
+	}
+	if got := result.hover(position{Line: 7, Character: 2}); !strings.Contains(got, "after() void") {
+		t.Fatalf("declaration hover after syntax error = %q, want after() void", got)
 	}
 }
 

@@ -30,6 +30,6 @@ pub bytes(in u8[]) u64:
 # @example
 #   value := hash.string("magma")
 pub string(in str) u64:
-    data u8[] = slices.fromPtr(strings.toPtr(in), strings.countBytes(in))
+    data u8[] = slices.fromPtr(strings.toPtr(in), in.countBytes())
     ret bytes(data)
 ..

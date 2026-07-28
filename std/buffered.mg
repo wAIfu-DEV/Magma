@@ -93,7 +93,7 @@ Writer.flush() !u64:
 # Internal write implementation for Writer.
 # @complexity O(N) for byte count, amortized O(1) for small writes.
 bufferedWrite(bw Writer*, bytes str) !u64:
-    bytesLen u64 = strings.countBytes(bytes)
+    bytesLen u64 = bytes.countBytes()
     
     if bytesLen == 0:
         ret 0

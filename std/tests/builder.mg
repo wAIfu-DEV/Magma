@@ -22,12 +22,12 @@ pub main() !void:
         throw errors.failure("builder byte count changed")
     ..
     result := try value.build()
-    defer strings.free(a, result)
+    defer result.free(a)
     if strings.compare(result, "checked builder!") == false:
         throw errors.failure("builder behavior changed")
     ..
     resultPtr u8* = strings.toPtr(result)
-    if resultPtr[strings.countBytes(result)] != 0:
+    if resultPtr[result.countBytes()] != 0:
         throw errors.failure("built string is not null terminated")
     ..
     try value.reset()

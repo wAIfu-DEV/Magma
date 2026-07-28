@@ -21,19 +21,19 @@ func TestRelativeImportOptionalExtension(t *testing.T) {
 	dir := t.TempDir()
 	module := filepath.Join(dir, "library.mg")
 	writeTestFile(t, module)
-	got, err := ResolveImport("library", filepath.Join(dir, "main.mg"), filepath.Join(dir, "Magma.exe"))
+	got, err := ResolveImport("library", filepath.Join(dir, "main.mg"), filepath.Join(dir, "std"))
 	if err != nil || got != module {
 		t.Fatalf("ResolveImport = %q, %v; want %q", got, err, module)
 	}
 }
 
-func TestStandardImportBesideExecutable(t *testing.T) {
+func TestStandardImportFromConfiguredRoot(t *testing.T) {
 	dir := t.TempDir()
-	executable := filepath.Join(dir, "Magma.exe")
-	module := filepath.Join(dir, "std", "collections", "array.mg")
+	stdRoot := filepath.Join(dir, "stdlib")
+	module := filepath.Join(stdRoot, "collections", "array.mg")
 	writeTestFile(t, module)
 	for _, specifier := range []string{"std:collections/array", "std:collections/array.mg"} {
-		got, err := ResolveImport(specifier, filepath.Join(dir, "project", "main.mg"), executable)
+		got, err := ResolveImport(specifier, filepath.Join(dir, "project", "main.mg"), stdRoot)
 		if err != nil || got != module {
 			t.Fatalf("%s resolved to %q, %v; want %q", specifier, got, err, module)
 		}
@@ -42,7 +42,7 @@ func TestStandardImportBesideExecutable(t *testing.T) {
 
 func TestStandardImportRejectsTraversal(t *testing.T) {
 	dir := t.TempDir()
-	_, err := ResolveImport("std:../secret", filepath.Join(dir, "main.mg"), filepath.Join(dir, "Magma.exe"))
+	_, err := ResolveImport("std:../secret", filepath.Join(dir, "main.mg"), filepath.Join(dir, "std"))
 	if err == nil || !strings.Contains(err.Error(), "escapes the std directory") {
 		t.Fatalf("traversal error = %v", err)
 	}

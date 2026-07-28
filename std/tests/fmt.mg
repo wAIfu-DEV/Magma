@@ -15,7 +15,7 @@ Capture(
 
 captureWrite(impl ptr, bytes str) !u64:
     capture Capture* = impl
-    count := strings.countBytes(bytes)
+    count := bytes.countBytes()
     i u64 = 0
     while i < count:
         capture.buffer[capture.count + i] = strings.byteAt(bytes, i)

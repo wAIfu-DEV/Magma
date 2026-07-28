@@ -24,7 +24,7 @@ join(a allocator.Allocator, left str, right str) !$str:
     out := try builder.new(a)
     defer out.free()
     try out.appendBorrowed(left)
-    if strings.countBytes(left) > 0 && strings.byteAt(left, strings.countBytes(left) - 1) != 47:
+    if left.countBytes() > 0 && strings.byteAt(left, left.countBytes() - 1) != 47:
         try out.appendBorrowed("/")
     ..
     try out.appendBorrowed(right)
@@ -50,7 +50,7 @@ walkInner(a allocator.Allocator, root str, visit (str, bool) !void) !void:
             if isDirectory:
                 try walkInner(a, child, visit)
             ..
-            strings.free(a, child)
+            child.free(a)
         ..
         entry = ext_readdir(directory)
     ..

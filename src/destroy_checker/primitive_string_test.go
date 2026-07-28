@@ -21,7 +21,7 @@ func checkSource(t *testing.T, source string) []Diagnostic {
 	if err := os.WriteFile(path, []byte(source), 0600); err != nil {
 		t.Fatal(err)
 	}
-	state, err := shared.MakeShared(dir)
+	state, err := shared.MakeShared(dir, filepath.Join("..", "..", "std"))
 	if err != nil {
 		t.Fatal(err)
 	}

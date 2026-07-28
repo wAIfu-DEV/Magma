@@ -23,24 +23,23 @@ pub main(args str[]) !void:
         in.close()
     ..
 
-    io.writeLn("Started program. URL to query.")
+    io.printLn("Started program. URL to query.")
 
     client := try http.new(a, http.defaultOptions())
     defer client.close()
 
     while true:
-        io.write("URL: ")
-        out.flush()
+        io.print("URL: ")
 
         input := try in.readLn(a)
-        defer strs.free(a, input)
+        defer input.free(a)
 
         resp := try client.get(input)
         defer resp.close()
 
         if resp.statusCode() != 200:
             fmt.str(a, "Request failed with code: ").int(resp.statusCode()).print()
-            io.writeLn("")
+            io.printLn("")
             continue
         ..
 
@@ -53,12 +52,12 @@ pub main(args str[]) !void:
             readFuture := try as.read(body, 512)
             chunk := try readFuture.await()
 
-            if strs.countBytes(chunk) == 0:
+            if chunk.countBytes() == 0:
                 res := try bld.build()
-                defer strs.free(a, res)
+                defer res.free(a)
 
-                out.writeLn(res)
-                out.writeLn("<END OF RESPONSE>")
+                io.printLn(res)
+                io.printLn("<END OF RESPONSE>")
                 break
             ..
 

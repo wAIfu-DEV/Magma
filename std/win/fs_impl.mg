@@ -29,7 +29,7 @@ join(a allocator.Allocator, left str, right str) !$str:
     out := try builder.new(a)
     defer out.free()
     try out.appendBorrowed(left)
-    if strings.countBytes(left) > 0 && strings.byteAt(left, strings.countBytes(left) - 1) != 92 && strings.byteAt(left, strings.countBytes(left) - 1) != 47:
+    if left.countBytes() > 0 && strings.byteAt(left, left.countBytes() - 1) != 92 && strings.byteAt(left, left.countBytes() - 1) != 47:
         try out.appendBorrowed("\\")
     ..
     try out.appendBorrowed(right)
@@ -38,7 +38,7 @@ join(a allocator.Allocator, left str, right str) !$str:
 
 walkInner(a allocator.Allocator, root str, visit (str, bool) !void) !void:
     pattern := try join(a, root, "*")
-    defer strings.free(a, pattern)
+    defer pattern.free(a)
     widePattern := try utf8.utf8To16NT(a, pattern)
     defer slices.free(a, widePattern)
 
@@ -69,9 +69,9 @@ walkInner(a allocator.Allocator, root str, visit (str, bool) !void) !void:
             if isDirectory:
                 try walkInner(a, child, visit)
             ..
-            strings.free(a, child)
+            child.free(a)
         ..
-        strings.free(a, name)
+        name.free(a)
         more = ext_FindNextFileW(handle, dataPtr) != 0
     ..
 ..

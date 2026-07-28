@@ -78,7 +78,7 @@ main() !void:
 
         text := try stdin.readLn(a)
         position := try strconv.parseUint(text)
-        strings.free(a, text)
+        text.free(a)
 
         if position >= 1 && position <= 9 && board[position - 1] == 0:
             board[position - 1] = mark

@@ -1,10 +1,61 @@
 package monomorph
 
 import (
+	"reflect"
 	"testing"
 
 	t "Magma/src/types"
 )
+
+func TestCanonicalTypeSignatureAndMangleNestedTypes(test *testing.T) {
+	stringType := &t.NodeType{KindNode: &t.NodeTypeAbsolute{AbsoluteName: "std.String"}}
+	nested := &t.NodeType{KindNode: &t.NodeTypeNamed{
+		NameNode: &t.NodeNameSingle{Name: "Box"},
+		GenericArgs: []*t.NodeType{{KindNode: &t.NodeTypePointer{
+			Kind: (&t.NodeTypeSlice{ElemKind: stringType.KindNode}),
+		}}},
+	}}
+
+	const expected = "N_Box__G__P__S__A_std__String"
+	if got := CanonicalTypeSignature(nested); got != expected {
+		test.Fatalf("canonical signature = %q, want %q", got, expected)
+	}
+	if got := MangleSpecializedName("wrap", []*t.NodeType{nested}); got != "wrap__g__"+expected {
+		test.Fatalf("specialized name = %q", got)
+	}
+}
+
+func TestCloneStructDefPreservesResolvedSymbol(test *testing.T) {
+	original := &t.NodeStructDef{AbsName: "app.Box"}
+	if got := cloneStructDef(original).AbsName; got != original.AbsName {
+		test.Fatalf("cloned struct symbol = %q, want %q", got, original.AbsName)
+	}
+}
+
+func TestSubstituteTypeRewritesNestedFunctionTypeWithoutMutatingTemplate(test *testing.T) {
+	typeParameter := func() *t.NodeType {
+		return &t.NodeType{KindNode: &t.NodeTypeNamed{NameNode: &t.NodeNameSingle{Name: "T"}}}
+	}
+	template := &t.NodeType{Throws: true, KindNode: &t.NodeTypeFunc{
+		Args:    []*t.NodeType{{KindNode: &t.NodeTypeSlice{ElemKind: typeParameter().KindNode}}},
+		RetType: &t.NodeType{KindNode: &t.NodeTypePointer{Kind: typeParameter().KindNode}},
+	}}
+	concrete := &t.NodeType{KindNode: &t.NodeTypeAbsolute{AbsoluteName: "app.Widget"}}
+
+	result := substituteType(template, map[string]*t.NodeType{"T": concrete})
+	if got := CanonicalTypeSignature(result); got != "F__S__A_app__Widget__RET__P__A_app__Widget" {
+		test.Fatalf("substituted signature = %q", got)
+	}
+	if !result.Throws {
+		test.Fatal("substitution discarded the throwing qualifier")
+	}
+	if reflect.DeepEqual(template, result) {
+		test.Fatal("substitution unexpectedly retained the template structure")
+	}
+	if got := CanonicalTypeSignature(template); got != "F__S__N_T__RET__P__N_T" {
+		test.Fatalf("template was mutated: %q", got)
+	}
+}
 
 func TestPruneTemplatesRemovesGenericMemberFromStructDef(test *testing.T) {
 	generic := &t.NodeFuncDef{Class: t.NodeGenericClass{TypeParams: []string{"T"}}}

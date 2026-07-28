@@ -193,7 +193,7 @@ Client.send(request Request, requestBody Body) !$Response:
     response Response
     bodyPresent bool = requestBody.isPresent()
     responseImpl impl_http.Response, sendErr error = impl_http.send(addrof this.impl, request.method, request.url, rawHeaders, requestBody.source, requestBody.length, bodyPresent)
-    strings.free(this.allocator, rawHeaders)
+    rawHeaders.free(this.allocator)
 
     if sendErr.nok():
         drop[Response](response)

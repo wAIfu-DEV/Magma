@@ -12,7 +12,7 @@ use "std:cast" cast
 # @example
 #   value := try strconv.parseUint("184")
 pub parseUint(s str) !u64:
-    n := strings.countBytes(s)
+    n := s.countBytes()
     if n == 0:
         throw errors.invalidArgument("empty unsigned integer")
     ..

@@ -4,20 +4,32 @@ import (
 	"Magma/src/pipeline"
 	"Magma/src/target"
 	"Magma/src/types"
+	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 )
 
-func MakeShared(cwd string) (*types.SharedState, error) {
-	ex, e := os.Executable()
-	if e != nil {
-		return nil, e
+func MakeShared(cwd, stdRoot string) (*types.SharedState, error) {
+	if stdRoot == "" {
+		return nil, fmt.Errorf("standard library path is required")
+	}
+	absStdRoot, err := filepath.Abs(stdRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve standard library path %q: %w", stdRoot, err)
+	}
+	info, err := os.Stat(absStdRoot)
+	if err != nil {
+		return nil, fmt.Errorf("inspect standard library path %q: %w", absStdRoot, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("standard library path %q is not a directory", absStdRoot)
 	}
 
 	return &types.SharedState{
 		Cwd:              cwd,
-		ExecPath:         ex,
+		StdRoot:          filepath.Clean(absStdRoot),
 		MainPckgName:     "",
 		ErrorTraceSlots:  1024,
 		Target:           target.HostFallback(runtime.GOOS, runtime.GOARCH),

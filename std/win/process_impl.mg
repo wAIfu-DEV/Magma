@@ -52,7 +52,7 @@ pub Process(
 
 containsNull(value str) bool:
     i u64 = 0
-    while i < strings.countBytes(value):
+    while i < value.countBytes():
         if strings.byteAt(value, i) == 0:
             ret true
         ..
@@ -68,7 +68,7 @@ appendQuoted(value str, out u8*, offset u64*) void:
     *offset = *offset + 1
     slashes u64 = 0
     i u64 = 0
-    while i < strings.countBytes(value):
+    while i < value.countBytes():
         byte u8 = strings.byteAt(value, i)
         if byte == 92:
             slashes = slashes + 1
@@ -108,10 +108,10 @@ appendQuoted(value str, out u8*, offset u64*) void:
 
 commandLine(a allocator.Allocator, executable str, arguments str[]) !$str:
     count u64 = slices.count(arguments)
-    total u64 = strings.countBytes(executable)
+    total u64 = executable.countBytes()
     i u64 = 0
     while i < count:
-        n u64 = strings.countBytes(arguments[i])
+        n u64 = arguments[i].countBytes()
         if n > (0 - 1 - total):
             throw errors.wouldOverflow("process command line is too large")
         ..
@@ -137,7 +137,7 @@ commandLine(a allocator.Allocator, executable str, arguments str[]) !$str:
 ..
 
 pub spawn(executable str, arguments str[]) !$Process:
-    if strings.countBytes(executable) == 0 || containsNull(executable):
+    if executable.countBytes() == 0 || containsNull(executable):
         throw errors.invalidArgument("process executable is empty or contains a null byte")
     ..
     i u64 = 0
@@ -150,7 +150,7 @@ pub spawn(executable str, arguments str[]) !$Process:
 
     a := heap.allocator()
     line str = try commandLine(a, executable, arguments)
-    defer strings.free(a, line)
+    defer line.free(a)
     
     line16 u16[] = try utf8.utf8To16NT(a, line)
     defer a.free(slices.toPtr(line16))

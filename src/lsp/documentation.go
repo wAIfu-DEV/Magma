@@ -3,7 +3,6 @@ package lsp
 import (
 	"Magma/src/types"
 	"fmt"
-	"reflect"
 	"strings"
 )
 
@@ -161,86 +160,62 @@ func (d *docIndex) indexFunctionValueUsages(module string, aliases map[string]st
 		}
 		d.completionBindings = append(d.completionBindings, completionBinding{module: module, name: argument.Name, valueType: argument.TypeNode, functionLine: functionLine, declarationLine: declarationLine})
 	}
-	seen := map[uintptr]bool{}
-	var walk func(reflect.Value)
-	walk = func(value reflect.Value) {
-		if !value.IsValid() {
-			return
-		}
-		if value.Kind() == reflect.Interface {
-			if !value.IsNil() {
-				walk(value.Elem())
+	walkAST(&function.Body, func(value any) bool {
+		if assignment, ok := value.(*types.NodeExprDestructureAssign); ok && assignment.Call != nil {
+			valueType := assignment.ValueDef.Type
+			if valueType == nil {
+				valueType = d.inferredCompletionType(module, aliases, assignment.Call, bindings)
 			}
-			return
-		}
-		if value.Kind() == reflect.Pointer {
-			if value.IsNil() || seen[value.Pointer()] {
-				return
+			if single, ok := assignment.ValueDef.Name.(*types.NodeNameSingle); ok && valueType != nil {
+				bindings[single.Name] = valueType
+				d.completionBindings = append(d.completionBindings, completionBinding{module: module, name: single.Name, valueType: valueType, functionLine: functionLine, declarationLine: single.Tk.Pos.Line})
+				d.addInferredValueHover(module, single, valueType, false)
 			}
-			seen[value.Pointer()] = true
-			if assignment, ok := value.Interface().(*types.NodeExprVarDefAssign); ok && assignment.VarDef != nil && assignment.AssignExpr != nil {
-				if single, ok := assignment.VarDef.Name.(*types.NodeNameSingle); ok {
-					valueType := assignment.VarDef.Type
-					if valueType == nil {
-						valueType = d.inferredCompletionType(module, aliases, assignment.AssignExpr, bindings)
-					}
-					if valueType != nil {
-						bindings[single.Name] = valueType
-						d.completionBindings = append(d.completionBindings, completionBinding{module: module, name: single.Name, valueType: valueType, functionLine: functionLine, declarationLine: single.Tk.Pos.Line})
-						d.addInferredValueHover(module, single, valueType, assignment.VarDef.IsConst)
+			if single, ok := assignment.ErrDef.Name.(*types.NodeNameSingle); ok && assignment.ErrDef.Type != nil {
+				bindings[single.Name] = assignment.ErrDef.Type
+				d.completionBindings = append(d.completionBindings, completionBinding{module: module, name: single.Name, valueType: assignment.ErrDef.Type, functionLine: functionLine, declarationLine: single.Tk.Pos.Line})
+				d.addInferredValueHover(module, single, assignment.ErrDef.Type, false)
+			}
+		}
+		if assignment, ok := value.(*types.NodeExprVarDefAssign); ok && assignment.VarDef != nil && assignment.AssignExpr != nil {
+			if single, ok := assignment.VarDef.Name.(*types.NodeNameSingle); ok {
+				valueType := assignment.VarDef.Type
+				if valueType == nil {
+					valueType = d.inferredCompletionType(module, aliases, assignment.AssignExpr, bindings)
+				}
+				if valueType != nil {
+					bindings[single.Name] = valueType
+					d.completionBindings = append(d.completionBindings, completionBinding{module: module, name: single.Name, valueType: valueType, functionLine: functionLine, declarationLine: single.Tk.Pos.Line})
+					d.addInferredValueHover(module, single, valueType, assignment.VarDef.IsConst)
+				}
+			}
+		}
+		if variable, ok := value.(*types.NodeExprVarDef); ok {
+			if single, ok := variable.Name.(*types.NodeNameSingle); ok {
+				valueType := completionVariableType(variable)
+				if valueType != nil {
+					bindings[single.Name] = valueType
+					d.completionBindings = append(d.completionBindings, completionBinding{module: module, name: single.Name, valueType: valueType, functionLine: functionLine, declarationLine: single.Tk.Pos.Line})
+					d.addInferredValueHover(module, single, valueType, variable.IsConst)
+				}
+			}
+		}
+		if expression, ok := value.(*types.NodeExprName); ok {
+			switch name := expression.Name.(type) {
+			case *types.NodeNameSingle:
+				if valueType := bindings[name.Name]; valueType != nil {
+					d.valueHovers[scopedTokenPositionKey(module, name.Tk)] = code(name.Name + " " + formatType(valueType))
+				}
+			case *types.NodeNameComposite:
+				if len(name.Parts) != 0 && len(name.Tokens) != 0 {
+					if valueType := bindings[name.Parts[0]]; valueType != nil {
+						d.valueHovers[scopedTokenPositionKey(module, name.Tokens[0])] = code(name.Parts[0] + " " + formatType(valueType))
 					}
 				}
 			}
-			if variable, ok := value.Interface().(*types.NodeExprVarDef); ok {
-				if single, ok := variable.Name.(*types.NodeNameSingle); ok {
-					valueType := completionVariableType(variable)
-					if valueType != nil {
-						bindings[single.Name] = valueType
-						d.completionBindings = append(d.completionBindings, completionBinding{module: module, name: single.Name, valueType: valueType, functionLine: functionLine, declarationLine: single.Tk.Pos.Line})
-						d.addInferredValueHover(module, single, valueType, variable.IsConst)
-					}
-				}
-			}
-			if expression, ok := value.Interface().(*types.NodeExprName); ok {
-				switch name := expression.Name.(type) {
-				case *types.NodeNameSingle:
-					if valueType := bindings[name.Name]; valueType != nil {
-						d.valueHovers[scopedTokenPositionKey(module, name.Tk)] = code(name.Name + " " + formatType(valueType))
-					}
-				case *types.NodeNameComposite:
-					if len(name.Parts) != 0 && len(name.Tokens) != 0 {
-						if valueType := bindings[name.Parts[0]]; valueType != nil {
-							d.valueHovers[scopedTokenPositionKey(module, name.Tokens[0])] = code(name.Parts[0] + " " + formatType(valueType))
-						}
-					}
-				}
-			}
-			walk(value.Elem())
-			return
 		}
-		if value.Kind() == reflect.Struct {
-			valueType := value.Type()
-			for i := 0; i < value.NumField(); i++ {
-				field := valueType.Field(i)
-				if field.PkgPath == "" && !skipField(field.Name) {
-					walk(value.Field(i))
-				}
-			}
-			return
-		}
-		switch value.Kind() {
-		case reflect.Slice, reflect.Array:
-			for i := 0; i < value.Len(); i++ {
-				walk(value.Index(i))
-			}
-		case reflect.Map:
-			iterator := value.MapRange()
-			for iterator.Next() {
-				walk(iterator.Value())
-			}
-		}
-	}
-	walk(reflect.ValueOf(&function.Body))
+		return true
+	})
 }
 
 func (d *docIndex) addInferredValueHover(module string, name *types.NodeNameSingle, valueType *types.NodeType, isConst bool) {
@@ -402,59 +377,17 @@ func scopedTokenPositionKey(module string, token types.Token) string {
 // struct fields, and explicitly typed variables from generic templates that
 // will later be removed from the semantic AST.
 func (d *docIndex) indexValueDeclarations(module string, root any) {
-	seen := map[uintptr]bool{}
-	var walk func(reflect.Value)
-	walk = func(value reflect.Value) {
-		if !value.IsValid() {
-			return
-		}
-		if value.Kind() == reflect.Interface {
-			if !value.IsNil() {
-				walk(value.Elem())
-			}
-			return
-		}
-		if value.Kind() == reflect.Pointer {
-			if value.IsNil() || seen[value.Pointer()] {
-				return
-			}
-			seen[value.Pointer()] = true
-			if variable, ok := value.Interface().(*types.NodeExprVarDef); ok && variable.Type != nil {
-				if single, ok := variable.Name.(*types.NodeNameSingle); ok && single.Tk.Pos.Line != 0 && sourceName(single.Name) == single.Tk.Repr {
-					d.valueHovers[scopedTokenPositionKey(module, single.Tk)] = code(formatVariable(variable))
-				}
-			}
-			walk(value.Elem())
-			return
-		}
-		if value.Kind() == reflect.Struct {
-			if value.CanInterface() {
-				if argument, ok := value.Interface().(types.NodeArg); ok && argument.Tk.Pos.Line != 0 {
-					d.valueHovers[scopedTokenPositionKey(module, argument.Tk)] = code(argument.Name + " " + formatType(argument.TypeNode))
-				}
-			}
-			valueType := value.Type()
-			for i := 0; i < value.NumField(); i++ {
-				field := valueType.Field(i)
-				if field.PkgPath == "" && !skipField(field.Name) {
-					walk(value.Field(i))
-				}
-			}
-			return
-		}
-		switch value.Kind() {
-		case reflect.Slice, reflect.Array:
-			for i := 0; i < value.Len(); i++ {
-				walk(value.Index(i))
-			}
-		case reflect.Map:
-			iterator := value.MapRange()
-			for iterator.Next() {
-				walk(iterator.Value())
+	walkAST(root, func(value any) bool {
+		if variable, ok := value.(*types.NodeExprVarDef); ok && variable.Type != nil {
+			if single, ok := variable.Name.(*types.NodeNameSingle); ok && single.Tk.Pos.Line != 0 && sourceName(single.Name) == single.Tk.Repr {
+				d.valueHovers[scopedTokenPositionKey(module, single.Tk)] = code(formatVariable(variable))
 			}
 		}
-	}
-	walk(reflect.ValueOf(root))
+		if argument, ok := value.(types.NodeArg); ok && argument.Tk.Pos.Line != 0 {
+			d.valueHovers[scopedTokenPositionKey(module, argument.Tk)] = code(argument.Name + " " + formatType(argument.TypeNode))
+		}
+		return true
+	})
 }
 
 func (d *docIndex) addHover(module, name, value string) {

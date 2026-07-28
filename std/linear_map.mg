@@ -125,7 +125,7 @@ LinearMap[T].take(key str) !$T:
     keys str* = this.keys
     values T* = this.values
     taken := claim[T](values[idx])
-    stg.free(this.allocator, keys[idx])
+    keys[idx].free(this.allocator)
     if idx != lastIdx:
         keys[idx] = keys[lastIdx]
         values[idx] = values[lastIdx]
@@ -219,7 +219,7 @@ destr LinearMap[T].free() void:
     keys str* = this.keys
     values T* = this.values
     while i < bound:
-        stg.free(this.allocator, keys[i])
+        keys[i].free(this.allocator)
         i = i + 1
     ..
     if this.cleanup != none:

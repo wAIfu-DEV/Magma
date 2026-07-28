@@ -22,7 +22,7 @@ func checkSource(t *testing.T, source string) (*comp_err.CompilationError, strin
 		t.Fatal(err)
 	}
 
-	state, err := shared.MakeShared(dir)
+	state, err := shared.MakeShared(dir, filepath.Join("..", "..", "std"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,6 +68,73 @@ test() void:
 	}
 	if diagnostic.Token.Pos.Line != 7 {
 		t.Fatalf("diagnostic line = %d, want 7", diagnostic.Token.Pos.Line)
+	}
+}
+
+func TestTypeDiagnosticUsesSourceName(t *testing.T) {
+	_, message := checkSource(t, `mod test
+
+Box[T](value T)
+
+fail(value Box[u64]*) !void:
+    throw value
+..
+`)
+
+	if want := "cannot throw value of type 'Box[u64]*'"; !strings.Contains(message, want) {
+		t.Fatalf("diagnostic = %q, want it to contain %q", message, want)
+	}
+	if strings.Contains(message, "__g__") || strings.Contains(message, "test_") {
+		t.Fatalf("diagnostic exposes an internal type name: %q", message)
+	}
+}
+
+func TestFunctionDeclarationCannotBeAssigned(t *testing.T) {
+	diagnostic, message := checkSource(t, `mod test
+
+identity(value u64) u64:
+    ret value
+..
+
+main() void:
+    identity = identity
+..
+`)
+	if !strings.Contains(message, "cannot assign to function 'identity'") {
+		t.Fatalf("diagnostic = %q, want immutable function declaration error", message)
+	}
+	if diagnostic.Additional == "" {
+		t.Fatal("function assignment diagnostic should explain declaration immutability")
+	}
+}
+
+func TestVoidCannotBeUsedAsVariableType(t *testing.T) {
+	diagnostic, message := checkSource(t, `mod test
+
+main() void:
+    value void
+..
+`)
+	if !strings.Contains(message, "void cannot be used as a variable type") {
+		t.Fatalf("diagnostic = %q, want void value-type rejection", message)
+	}
+	if diagnostic.Token.Repr != "void" || diagnostic.Additional == "" {
+		t.Fatalf("diagnostic should identify and explain void, got token %q and guidance %q", diagnostic.Token.Repr, diagnostic.Additional)
+	}
+}
+
+func TestVoidPointerIsRejectedInFavorOfPtr(t *testing.T) {
+	diagnostic, message := checkSource(t, `mod test
+
+main() void:
+    value void*
+..
+`)
+	if !strings.Contains(message, "void cannot be used as a pointer element type") {
+		t.Fatalf("diagnostic = %q, want void pointer rejection", message)
+	}
+	if !strings.Contains(diagnostic.Additional, "use 'ptr'") {
+		t.Fatalf("diagnostic guidance = %q, want canonical ptr spelling", diagnostic.Additional)
 	}
 }
 
@@ -141,6 +208,41 @@ test() void:
 	}
 	if strings.Contains(message, "__g__") {
 		t.Fatalf("diagnostic exposes a mangled function name: %q", message)
+	}
+}
+
+func TestNamedFunctionArgumentsAreRejected(t *testing.T) {
+	diagnostic, message := checkSource(t, `mod test
+
+consume(value u64) void:
+..
+
+test() void:
+    consume(value=1)
+..
+`)
+
+	if !strings.Contains(message, "named arguments are not supported in function calls") {
+		t.Fatalf("diagnostic = %q, want named-argument rejection", message)
+	}
+	if diagnostic.Additional == "" {
+		t.Fatal("named-argument diagnostic should explain positional syntax")
+	}
+}
+
+func TestVoidReturningCallCannotBeUsedAsValue(t *testing.T) {
+	_, message := checkSource(t, `mod test
+
+work() void:
+..
+
+test() void:
+    value := work()
+..
+`)
+
+	if !strings.Contains(message, "cannot use void-returning call 'work' as a value") {
+		t.Fatalf("diagnostic = %q, want void-value rejection", message)
 	}
 }
 

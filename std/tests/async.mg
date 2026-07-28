@@ -37,17 +37,17 @@ pub main() !void:
 
     result := try pending.await()
     if strings.compare(result, "A") == false:
-        strings.free(a, result)
+        result.free(a)
         try pool.close()
         throw errors.failure("Async.read returned the wrong result")
     ..
-    strings.free(a, result)
+    result.free(a)
 
     failing := reader.new(none, failingSource)
     failed := try as.read(failing, 1)
     failedValue str, failedError error = failed.await()
     if failedError.ok():
-        strings.free(a, failedValue)
+        failedValue.free(a)
         try pool.close()
         throw errors.failure("Async.read did not propagate the worker error")
     ..

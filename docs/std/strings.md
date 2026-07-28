@@ -5,8 +5,8 @@
 ```magma
 a := heap.allocator()
 owned := try strings.copy(a, "magma")
-defer strings.free(a, owned)
-bytes := strings.countBytes(owned) # 5
+defer owned.free(a)
+bytes := owned.countBytes() # 5
 same := strings.compare(owned, "magma")
 ```
 

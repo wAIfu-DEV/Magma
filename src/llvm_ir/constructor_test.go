@@ -7,6 +7,7 @@ import (
 	"Magma/src/monomorph"
 	"Magma/src/pipeline"
 	"Magma/src/shared"
+	magmatarget "Magma/src/target"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -47,15 +48,22 @@ main(args str[]) void:
 }
 
 func compileSource(t *testing.T, source string) (string, error) {
+	return compileSourceTarget(t, source, nil)
+}
+
+func compileSourceTarget(t *testing.T, source string, target *magmatarget.Target) (string, error) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.mg")
 	if err := os.WriteFile(path, []byte(source), 0600); err != nil {
 		t.Fatal(err)
 	}
-	state, err := shared.MakeShared(dir)
+	state, err := shared.MakeShared(dir, filepath.Join("..", "..", "std"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if target != nil {
+		state.Target = *target
 	}
 	err = pipeline.DoMain(state, path)
 	if err = join.JoinCompilationUnits(state, err); err != nil {
@@ -72,6 +80,78 @@ func compileSource(t *testing.T, source string) (string, error) {
 	}
 	ir, err := llvmir.IrWrite(state)
 	return string(ir), err
+}
+
+func TestFunctionDefersKeepReverseExecutionOrderAndLabels(t *testing.T) {
+	ir, err := compileSource(t, `mod main
+
+first() void: ..
+second() void: ..
+third() void: ..
+
+main() void:
+    defer first()
+    defer:
+        second()
+        third()
+    ..
+..
+`)
+	if err != nil {
+		t.Fatalf("compile function defers: %v", err)
+	}
+
+	mainStart := strings.Index(ir, ".main() alwaysinline {")
+	if mainStart < 0 {
+		t.Fatal("main function body was not emitted")
+	}
+	mainEndOffset := strings.Index(ir[mainStart:], "\n}")
+	if mainEndOffset < 0 {
+		t.Fatal("main function body has no closing brace")
+	}
+	mainBody := ir[mainStart : mainStart+mainEndOffset]
+
+	for _, want := range []string{
+		"br label %.defer.0.1",
+		".defer.0.1:",
+		"br label %.defer.0.0",
+		".defer.0.0:",
+		"br label %.defer.0.base",
+		".defer.0.base:",
+	} {
+		if !strings.Contains(mainBody, want) {
+			t.Fatalf("function defer lowering is missing %q:\n%s", want, mainBody)
+		}
+	}
+
+	third := strings.Index(mainBody, ".third()")
+	second := strings.Index(mainBody, ".second()")
+	first := strings.Index(mainBody, ".first()")
+	if third < 0 || second < 0 || first < 0 {
+		t.Fatalf("function defer calls were not all emitted:\n%s", mainBody)
+	}
+	if !(second < third && third < first) {
+		t.Fatalf("function defers changed execution order; want second, third, first:\n%s", mainBody)
+	}
+}
+
+func TestMixedWidthArithmeticUsesWidestRepresentation(t *testing.T) {
+	ir, err := compileSource(t, `mod main
+
+widen(a i16, b i64, c f32, d f64) f64:
+    integer := a + b
+    floating := c + d
+    ret integer + floating
+..
+`)
+	if err != nil {
+		t.Fatalf("compile mixed-width arithmetic: %v", err)
+	}
+	for _, want := range []string{"sext i16", "fpext float", "sitofp i64", "fadd double"} {
+		if !strings.Contains(ir, want) {
+			t.Fatalf("mixed-width lowering is missing %q:\n%s", want, ir)
+		}
+	}
 }
 
 func TestRuntimeArrayExpressionLowersToStackBackedSlice(t *testing.T) {
@@ -94,6 +174,65 @@ make(count u64) void:
 		if !strings.Contains(ir, want) {
 			t.Fatalf("runtime array IR is missing %q", want)
 		}
+	}
+}
+
+func TestConstantArrayInitializerLowersBackingStorage(t *testing.T) {
+	ir, err := compileSource(t, `mod test
+
+const SLOT u64 = 2
+const names := array str[5](
+    "first",
+    SLOT = "third",
+    "fourth",
+)
+const empty := array str[08]
+const namesCopy := names
+
+main() void:
+    ret
+..
+`)
+	if err != nil {
+		t.Fatalf("compile constant array initializer: %v", err)
+	}
+	for _, want := range []string{
+		"private global [5 x %type.str]",
+		"private constant %type.slice",
+		"i64 5 }",
+		"zeroinitializer",
+	} {
+		if !strings.Contains(ir, want) {
+			t.Fatalf("constant array IR is missing %q:\n%s", want, ir)
+		}
+	}
+}
+
+func TestLocalArrayInitializerEmitsElementStores(t *testing.T) {
+	ir, err := compileSource(t, `mod test
+
+main() void:
+    values := array u64[4](1, 2 = 7, 8)
+    ret
+..
+`)
+	if err != nil {
+		t.Fatalf("compile local array initializer: %v", err)
+	}
+	for _, want := range []string{"i64 0", "i64 2", "i64 3", "store i64 7"} {
+		if !strings.Contains(ir, want) {
+			t.Fatalf("local initialized array IR is missing %q:\n%s", want, ir)
+		}
+	}
+}
+
+func TestArrayInitializerRejectsOverlappingIndex(t *testing.T) {
+	_, err := compileSource(t, `mod test
+
+const values := array u64[4](1, 0 = 2)
+`)
+	if err == nil || !strings.Contains(err.Error(), "initialized more than once") {
+		t.Fatalf("expected overlapping array initializer error, got %v", err)
 	}
 }
 

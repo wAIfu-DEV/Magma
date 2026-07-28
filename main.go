@@ -1,18 +1,12 @@
 package main
 
 import (
-	"Magma/src/checker"
 	clangresolver "Magma/src/clang"
 	"Magma/src/comp_err"
+	compilerpipeline "Magma/src/compiler_pipeline"
 	"Magma/src/debug"
-	destroychecker "Magma/src/destroy_checker"
-	ircleaner "Magma/src/ir_cleaner"
-	"Magma/src/join"
-	llvmir "Magma/src/llvm_ir"
 	"Magma/src/lsp"
 	"Magma/src/makeabs"
-	"Magma/src/monomorph"
-	"Magma/src/pipeline"
 	"Magma/src/shared"
 	magmatarget "Magma/src/target"
 	"Magma/src/types"
@@ -41,6 +35,7 @@ options:
   --opt, -O <0-3>         LLVM optimization level (default 3)
   --error-trace-slots <n> trace slots per runtime shard (default 1024)
   --target <triple>       compilation target (default: Clang native target)
+  --std <directory>       override the Magma standard-library directory
   --lsp                   run the Magma language server over stdio
   --clang-version, -cv    print the resolved Clang version and path`
 
@@ -54,6 +49,7 @@ type options struct {
 	errorTraceSlots uint64
 	clangVersion    bool
 	target          string
+	stdRoot         string
 	lsp             bool
 }
 
@@ -75,6 +71,7 @@ func parseArgs(args []string) (options, error) {
 	flags.BoolVar(&opts.clangVersion, "clang-version", false, "print the resolved Clang version")
 	flags.BoolVar(&opts.clangVersion, "cv", false, "print the resolved Clang version")
 	flags.StringVar(&opts.target, "target", "", "target triple or architecture")
+	flags.StringVar(&opts.stdRoot, "std", "", "standard-library directory")
 	flags.BoolVar(&opts.lsp, "lsp", false, "run the language server over stdio")
 	if err := flags.Parse(args); err != nil {
 		return options{}, err
@@ -128,8 +125,15 @@ func wrappedMain() error {
 		return err
 	}
 	debug.SetEnabled(opts.debug)
+	if opts.stdRoot == "" {
+		executable, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("locate compiler executable for standard-library discovery: %w", err)
+		}
+		opts.stdRoot = filepath.Join(filepath.Dir(executable), "std")
+	}
 	if opts.lsp {
-		return lsp.Serve(os.Stdin, os.Stdout)
+		return lsp.Serve(os.Stdin, os.Stdout, opts.stdRoot)
 	}
 	if opts.version {
 		fmt.Printf("Magma %s\n", compilerVersion())
@@ -172,63 +176,42 @@ func wrappedMain() error {
 		return e
 	}
 
-	s, e := shared.MakeShared(cwd)
+	s, e := shared.MakeShared(cwd, opts.stdRoot)
 	if e != nil {
 		return e
 	}
 	s.ErrorTraceSlots = opts.errorTraceSlots
 	s.Target = target
 
-	// actual meat of the program, multithreaded per file
-	// 1. lexing/tokenization
-	// 2. parsing to AST
-	// 3. scope info gathering
-	if e = pipeline.DoMain(s, absPath); e != nil {
-		if !comp_err.Print(e) {
-			fmt.Printf("fatal error in file '%s': %s\n", absPath, e.Error())
-		}
-	}
-
-	// wait for other compilation unit goroutines
-	if e = join.JoinCompilationUnits(s, e); e != nil {
-		os.Exit(1)
-	}
-	mainFile := s.Files[absPath]
-	if mainFile != nil && mainFile.ModuleName != "main" {
-		return comp_err.CompilationErrorToken(
-			mainFile,
-			&types.Token{
-				Pos:  types.FilePos{Line: 1, Col: 5},
-				Repr: mainFile.ModuleName,
-			},
-			fmt.Sprintf("main file must declare module 'main', not '%s'", mainFile.ModuleName),
-			"the root compilation unit must start with: `mod main`",
-		)
-	}
-
-	if e = monomorph.Run(s); e != nil {
-		return e
-	}
-
-	// check/resolve name->node
-	if e = checker.CheckLinks(s); e != nil {
-		return e
-	}
-
-	// check/resolve types
-	if e = checker.TypeChecker(s); e != nil {
-		return e
-	}
-
-	destroychecker.Run(s)
-
-	// write LLVM intermediate repr
-	irStr, e := llvmir.IrWrite(s)
+	parsed, e := compilerpipeline.Parse(s, absPath)
 	if e != nil {
 		return e
 	}
+	if e = compilerpipeline.RequireMainModule(parsed, absPath); e != nil {
+		return e
+	}
+	specialized, e := compilerpipeline.Specialize(parsed)
+	if e != nil {
+		return e
+	}
+	linked, e := compilerpipeline.Link(specialized)
+	if e != nil {
+		return e
+	}
+	typed, e := compilerpipeline.CheckTypes(linked)
+	if e != nil {
+		return e
+	}
+	validated, e := compilerpipeline.ValidateLowering(typed)
+	if e != nil {
+		return e
+	}
+	ready := compilerpipeline.CheckOwnership(validated)
+	for i := range s.Warnings {
+		comp_err.FprintDiagnostic(os.Stderr, &s.Warnings[i])
+	}
 
-	irStr, e = ircleaner.CleanIr(irStr)
+	irStr, e := compilerpipeline.Lower(ready)
 	if e != nil {
 		return e
 	}
@@ -422,9 +405,7 @@ func main() {
 			fmt.Println(usage)
 			return
 		}
-		if !comp_err.Print(err) {
-			fmt.Printf("uncaught fatal error: %s\n", err.Error())
-		}
+		comp_err.Print(err)
 		os.Exit(1)
 	}
 }

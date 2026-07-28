@@ -25,11 +25,13 @@ the standard raylib color palette. See `samples/raylib_window.mg`.
 
 - `Color(r u8, g u8, b u8, a u8)` is an RGBA color.
 - `Vector2(x f32, y f32)` and `Rectangle(x f32, y f32, width f32, height f32)` mirror the corresponding raylib value types.
+- `Texture`, `Image`, `GlyphInfo`, and `Font` mirror raylib 5.5's font-related value types.
 
 ## API surface
 
 - Window: `initWindow`, `closeWindow`, `windowShouldClose`, `isWindowReady`, `isWindowFullscreen`, `isWindowHidden`, `isWindowMinimized`, `isWindowMaximized`, `isWindowFocused`, `isWindowResized`, `setWindowState`, `clearWindowState`, `toggleFullscreen`, `maximizeWindow`, `minimizeWindow`, `restoreWindow`, `setWindowSize`, `screenWidth`, `screenHeight`, `renderWidth`, and `renderHeight`.
 - Timing and drawing: `setTargetFPS`, `frameTime`, `time`, `fps`, `beginDrawing`, `endDrawing`, `clearBackground`, `drawPixel`, `drawLine`, `drawCircle`, `drawRectangle`, `drawRectangleLines`, `drawTextC`, `drawText`, `drawFPS`, `measureTextC`, and `measureText`.
+- Fonts: `fontDefault`, `loadFont`, `loadFontEx`, `loadFontFromImage`, `loadFontFromMemory`, `isFontValid`, `unloadFont`, `exportFontAsCode`, `drawTextExC`, `drawTextEx`, `drawTextPro`, `drawTextCodepoint`, `drawTextCodepoints`, `setTextLineSpacing`, `measureTextExC`, `measureTextEx`, `glyphIndex`, `glyphInfo`, and `glyphAtlasRectangle`.
 - Keyboard: `isKeyPressed`, `isKeyPressedRepeat`, `isKeyDown`, `isKeyReleased`, `isKeyUp`, `keyPressed`, `charPressed`, and `setExitKey`. Constants: `keySpace`, `keyEscape`, `keyEnter`, `keyTab`, `keyBackspace`, `keyInsert`, `keyDelete`, `keyRight`, `keyLeft`, `keyDown`, `keyUp`, `keyHome`, `keyEnd`, `keyF1` through `keyF12`, `keyLeftShift`, `keyLeftControl`, `keyLeftAlt`, `keyRightShift`, `keyRightControl`, `keyRightAlt`, `keyA`, `keyD`, `keyS`, and `keyW`.
 - Mouse and cursor: `isMouseButtonPressed`, `isMouseButtonDown`, `isMouseButtonReleased`, `isMouseButtonUp`, `mouseX`, `mouseY`, `setMousePosition`, `mouseWheelMove`, `showCursor`, `hideCursor`, `isCursorHidden`, `enableCursor`, `disableCursor`, and `isCursorOnScreen`. Constants: `mouseButtonLeft`, `mouseButtonRight`, `mouseButtonMiddle`, `mouseButtonSide`, `mouseButtonExtra`, `mouseButtonForward`, and `mouseButtonBack`.
 - Configuration: `flagVsyncHint`, `flagFullscreenMode`, `flagWindowResizable`, `flagWindowUndecorated`, `flagWindowHidden`, `flagWindowMinimized`, `flagWindowMaximized`, `flagWindowUnfocused`, `flagWindowTopmost`, `flagWindowAlwaysRun`, `flagWindowTransparent`, `flagWindowHighDpi`, `flagWindowMousePassthrough`, `flagBorderlessWindowedMode`, `flagMsaa4xHint`, and `flagInterlacedHint`.
@@ -39,6 +41,9 @@ Functions ending in `C` take an existing null-terminated UTF-8 pointer and are
 appropriate for drawing loops. The `str` wrappers allocate a temporary C string
 and are intended for setup or occasional calls.
 
-Texture, image, audio, model, and functions passing larger C structs are not
-yet exposed. They require explicit C ABI lowering support in Magma; declaring
-them directly as ordinary Magma struct calls would be unsafe on Windows x64.
+Font-related structs use ordinary Raylib 5.5 declarations. Magma's C ABI
+lowering maps aggregate arguments and returns to the selected target's native
+calling convention, including Windows x64 indirect values, System V AMD64
+`byval`/`sret` values and register classes, and AArch64 indirect values. Other
+texture, image, audio, and model APIs can use the same declarations as their
+bindings are expanded.

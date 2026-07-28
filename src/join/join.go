@@ -3,16 +3,20 @@ package join
 import (
 	"Magma/src/comp_err"
 	"Magma/src/types"
-	"errors"
-	"fmt"
+	"sort"
 )
 
 func JoinCompilationUnits(shared *types.SharedState, e error) error {
 	shared.WaitGroup.Wait()
 
-	e2 := e
-
-	for k, v := range shared.ImportedFiles {
+	errs := []error{e}
+	paths := make([]string, 0, len(shared.ImportedFiles))
+	for path := range shared.ImportedFiles {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		v := shared.ImportedFiles[path]
 		err := <-v
 		if err != nil {
 			// The main compilation unit publishes the same error returned by
@@ -20,11 +24,8 @@ func JoinCompilationUnits(shared *types.SharedState, e error) error {
 			if err == e {
 				continue
 			}
-			e2 = errors.Join(e2, err)
-			if !comp_err.Print(err) {
-				fmt.Printf("fatal error in file '%s': %s\n", k, err.Error())
-			}
+			errs = append(errs, err)
 		}
 	}
-	return e2
+	return comp_err.Join(errs...)
 }

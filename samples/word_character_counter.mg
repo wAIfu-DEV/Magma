@@ -19,9 +19,9 @@ main() !void:
     try stdout.flush()
 
     text := try stdin.readLn(a)
-    defer strings.free(a, text)
+    defer text.free(a)
 
-    chars := strings.countBytes(text)
+    chars := text.countBytes()
     words u64 = 0
     inside bool = false
     i u64 = 0

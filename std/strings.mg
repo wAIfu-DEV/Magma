@@ -10,20 +10,8 @@ use "std:pair"      pair
 
 const gl_nullTerm u8 = 0 
 
-# Returns size in bytes of string, for UTF8 strings codepoint (UTF8 character) count may be
-# different from byte size.
-# @complexity O(1) regardless of size.
-# @param s input string
-# @returns size in bytes of string
-# @example
-#   byteCount := strings.countBytes("Magma")
-pub countBytes(s str) u64:
-    llvm "  %l0 = extractvalue %type.str %s, 1\n"
-    llvm "  ret i64 %l0\n"
-..
-
 # Returns the pointer to the underlying data of the string (u8 array).
-# Allocating string APIs provide a null byte at countBytes(s); borrowed views
+# Allocating string APIs provide a null byte at s.countBytes(); borrowed views
 # are not necessarily terminated at their logical end.
 # @param s input string
 # @complexity O(1)
@@ -37,7 +25,7 @@ pub toPtr(s str) u8*:
 
 # Allocates an owned, uninitialized string with size bytes plus a null terminator.
 # @complexity O(1), excluding allocator cost
-# @ownership Release with strings.free using the same allocator.
+# @ownership Release with str.free using the same allocator.
 # @example
 #   text := try strings.alloc(a, 32)
 pub alloc(a alc.Allocator, size u64) !$str:
@@ -51,7 +39,7 @@ pub alloc(a alc.Allocator, size u64) !$str:
 
 # Allocates an owned string and initializes every byte to fill.
 # @complexity O(N)
-# @ownership Release with strings.free using the same allocator.
+# @ownership Release with str.free using the same allocator.
 # @example
 #   padding := try strings.allocFill(a, 8, 32)
 pub allocFill(a alc.Allocator, size u64, fill u8) !$str:
@@ -68,19 +56,6 @@ pub allocFill(a alc.Allocator, size u64, fill u8) !$str:
 
     p[size] = 0
     ret fromPtrNoCopy(p, size)
-..
-
-# Frees a allocated string using the provided allocator.
-# Only use if the string is a owned $str from a function taking an Allocator
-# as parameter.
-# Allocator should be the exact same that the string was allocated with.
-# @param a allocator
-# @param s owned string to release
-# @complexity O(1), excluding allocator cost
-# @example
-#   strings.free(a, text)
-pub free(a alc.Allocator, s $str) void:
-    s.free(a)
 ..
 
 # Returns a str from a pointer and a length in bytes.
@@ -143,7 +118,7 @@ pub fromPtr(a alc.Allocator, p ptr, byteCount u64) !$str:
 # @example
 #   owned := try strings.copy(a, borrowed)
 pub copy(a alc.Allocator, s str) !$str:
-    byteCount u64 = countBytes(s)
+    byteCount u64 = s.countBytes()
     if byteCount == 0 - 1:
         throw err.wouldOverflow("string allocation size overflow")
     ..
@@ -163,6 +138,42 @@ pub copy(a alc.Allocator, s str) !$str:
 
     strData[byteCount] = 0
     ret fromPtrNoCopy(strData, byteCount)
+..
+
+# Returns an owned ASCII-lowercase copy of s. Bytes outside A-Z are unchanged.
+# @complexity O(N)
+# @ownership Release the returned string with the same allocator.
+# @example
+#   lower := try strings.toLower(a, "Hello")
+pub toLower(a alc.Allocator, s str) !$str:
+    result $str = try copy(a, s)
+    data u8* = toPtr(result)
+    i u64 = 0
+    while i < result.countBytes():
+        if data[i] >= 65 && data[i] <= 90:
+            data[i] = data[i] + 32
+        ..
+        i = i + 1
+    ..
+    ret result
+..
+
+# Returns an owned ASCII-uppercase copy of s. Bytes outside a-z are unchanged.
+# @complexity O(N)
+# @ownership Release the returned string with the same allocator.
+# @example
+#   upper := try strings.toUpper(a, "Hello")
+pub toUpper(a alc.Allocator, s str) !$str:
+    result $str = try copy(a, s)
+    data u8* = toPtr(result)
+    i u64 = 0
+    while i < result.countBytes():
+        if data[i] >= 97 && data[i] <= 122:
+            data[i] = data[i] - 32
+        ..
+        i = i + 1
+    ..
+    ret result
 ..
 
 # Returns the byte at position idx in string, prefer utf8.Utf8Iter for UTF8-aware
@@ -188,7 +199,7 @@ pub byteAt(s str, idx u64) u8:
 # @example
 #   cText := try strings.toCstr(a, text)
 pub toCstr(a alc.Allocator, s str) !$u8*:
-    size u64 = countBytes(s)
+    size u64 = s.countBytes()
     if size == 0 - 1:
         throw err.wouldOverflow("C string allocation size overflow")
     ..
@@ -302,9 +313,9 @@ pub fromCstr(a alc.Allocator, cstr u8*) !$str:
 # @example
 #   same := strings.compare("magma", candidate)
 pub compare(a str, b str) bool:
-    aLen u64 = countBytes(a)
+    aLen u64 = a.countBytes()
 
-    if aLen != countBytes(b):
+    if aLen != b.countBytes():
         ret false
     ..
     ret mem.compare(toPtr(a), toPtr(b), aLen)
@@ -315,7 +326,7 @@ pub compare(a str, b str) bool:
 # @example
 #   index := try strings.findByte(text, 10)
 pub findByte(s str, value u8) !u64:
-    size := countBytes(s)
+    size := s.countBytes()
     data := toPtr(s)
     index u64 = 0
     while index < size:
@@ -328,8 +339,8 @@ pub findByte(s str, value u8) !u64:
 ..
 
 matchesAt(source str, needle str, offset u64) bool:
-    sourceSize := countBytes(source)
-    needleSize := countBytes(needle)
+    sourceSize := source.countBytes()
+    needleSize := needle.countBytes()
     if offset > sourceSize || needleSize > sourceSize - offset:
         ret false
     ..
@@ -350,8 +361,8 @@ matchesAt(source str, needle str, offset u64) bool:
 # @example
 #   index := try strings.find(text, "needle")
 pub find(s str, needle str) !u64:
-    sourceSize := countBytes(s)
-    needleSize := countBytes(needle)
+    sourceSize := s.countBytes()
+    needleSize := needle.countBytes()
     if needleSize == 0:
         ret 0
     ..
@@ -375,7 +386,7 @@ pub find(s str, needle str) !u64:
 # @example
 #   part := try strings.substring(a, text, 0, 5)
 pub substring(a alc.Allocator, s str, start u64, end u64) !$str:
-    size := countBytes(s)
+    size := s.countBytes()
     if start > end || end > size:
         throw err.outOfBounds("substring bounds are invalid")
     ..
@@ -393,7 +404,7 @@ isTrimByte(value u8) bool:
 #   clean := try strings.trim(a, "  magma  ")
 pub trim(a alc.Allocator, s str) !$str:
     start u64 = 0
-    end := countBytes(s)
+    end := s.countBytes()
     data := toPtr(s)
     while start < end && isTrimByte(data[start]):
         start = start + 1
@@ -409,9 +420,9 @@ pub trim(a alc.Allocator, s str) !$str:
 # @example
 #   value := try strings.trimPrefix(a, text, "prefix-")
 pub trimPrefix(a alc.Allocator, s str, prefix str) !$str:
-    prefixSize := countBytes(prefix)
+    prefixSize := prefix.countBytes()
     if matchesAt(s, prefix, 0):
-        ret try substring(a, s, prefixSize, countBytes(s))
+        ret try substring(a, s, prefixSize, s.countBytes())
     ..
     ret try copy(a, s)
 ..
@@ -421,8 +432,8 @@ pub trimPrefix(a alc.Allocator, s str, prefix str) !$str:
 # @example
 #   value := try strings.trimSuffix(a, text, ".mg")
 pub trimSuffix(a alc.Allocator, s str, suffix str) !$str:
-    sourceSize := countBytes(s)
-    suffixSize := countBytes(suffix)
+    sourceSize := s.countBytes()
+    suffixSize := suffix.countBytes()
     if suffixSize <= sourceSize && matchesAt(s, suffix, sourceSize - suffixSize):
         ret try substring(a, s, 0, sourceSize - suffixSize)
     ..
@@ -459,7 +470,7 @@ Split.get(index u64) !str:
 destr Split.free() void:
     index u64 = 0
     while index < this.size:
-        free(this.allocator, this.items[index])
+        this.items[index].free(this.allocator)
         index = index + 1
     ..
     if this.items != none:
@@ -470,11 +481,11 @@ destr Split.free() void:
 ..
 
 countParts(s str, separator str) !u64:
-    separatorSize := countBytes(separator)
+    separatorSize := separator.countBytes()
     if separatorSize == 0:
         throw err.invalidArgument("split separator cannot be empty")
     ..
-    sourceSize := countBytes(s)
+    sourceSize := s.countBytes()
     count u64 = 1
     position u64 = 0
     while position + separatorSize <= sourceSize:
@@ -500,8 +511,8 @@ pub split(a alc.Allocator, s str, separator str) !$Split:
         throw err.wouldOverflow("split result is too large")
     ..
     items str* = try a.allocT[str](partCount)
-    separatorSize := countBytes(separator)
-    sourceSize := countBytes(s)
+    separatorSize := separator.countBytes()
+    sourceSize := s.countBytes()
     partStart u64 = 0
     position u64 = 0
     made u64 = 0
@@ -512,7 +523,7 @@ pub split(a alc.Allocator, s str, separator str) !$Split:
             if itemError.nok():
                 cleanup u64 = 0
                 while cleanup < made:
-                    free(a, items[cleanup])
+                    items[cleanup].free(a)
                     cleanup = cleanup + 1
                 ..
                 a.free(items)
@@ -531,7 +542,7 @@ pub split(a alc.Allocator, s str, separator str) !$Split:
     if lastError.nok():
         cleanup u64 = 0
         while cleanup < made:
-            free(a, items[cleanup])
+            items[cleanup].free(a)
             cleanup = cleanup + 1
         ..
         a.free(items)
@@ -557,13 +568,13 @@ pub SplitIterator(
 # @example
 #   iterator := try strings.splitIter(a, "a,b,c", ",")
 pub splitIter(a alc.Allocator, s str, separator str) !$SplitIterator:
-    if countBytes(separator) == 0:
+    if separator.countBytes() == 0:
         throw err.invalidArgument("split separator cannot be empty")
     ..
     sourceCopy := try copy(a, s)
     separatorCopy $str, separatorError error = copy(a, separator)
     if separatorError.nok():
-        free(a, sourceCopy)
+        sourceCopy.free(a)
         throw separatorError
     ..
     ret SplitIterator(source=sourceCopy, separator=separatorCopy, position=0, finished=false, allocator=a)
@@ -583,8 +594,8 @@ SplitIterator.next() !$str:
     if this.finished:
         throw err.outOfBounds("split iterator is exhausted")
     ..
-    sourceSize := countBytes(this.source)
-    separatorSize := countBytes(this.separator)
+    sourceSize := this.source.countBytes()
+    separatorSize := this.separator.countBytes()
     start := this.position
     position := start
     while position + separatorSize <= sourceSize:
@@ -602,8 +613,8 @@ SplitIterator.next() !$str:
 # Releases the iterator's copied source and separator strings.
 # @complexity O(1), excluding allocator cost
 destr SplitIterator.free() void:
-    free(this.allocator, this.source)
-    free(this.allocator, this.separator)
+    this.source.free(this.allocator)
+    this.separator.free(this.allocator)
 ..
 
 # Splits at the first separator and allocates both halves independently.
@@ -612,15 +623,15 @@ destr SplitIterator.free() void:
 # @example
 #   pair := try strings.splitOnce(a, "name=value", "=")
 pub splitOnce(a alc.Allocator, s str, separator str) !$pair.Pair[str, str]:
-    if countBytes(separator) == 0:
+    if separator.countBytes() == 0:
         throw err.invalidArgument("split separator cannot be empty")
     ..
     position := try find(s, separator)
     first := try substring(a, s, 0, position)
-    secondStart := position + countBytes(separator)
-    second $str, secondError error = substring(a, s, secondStart, countBytes(s))
+    secondStart := position + separator.countBytes()
+    second $str, secondError error = substring(a, s, secondStart, s.countBytes())
     if secondError.nok():
-        free(a, first)
+        first.free(a)
         throw secondError
     ..
     result := pair.new[str, str](first, second)

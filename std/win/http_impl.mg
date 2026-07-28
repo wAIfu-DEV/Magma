@@ -76,7 +76,7 @@ pub openClient(a alc.Allocator, userAgent str, connectMs u32, sendMs u32, receiv
         throw fail("WinHttpOpen failed")
     ..
 
-    ok u32 = ext_WinHttpSetTimeouts(session, 0, connectMs, sendMs, receiveMs)
+    ok u32 = ext_WinHttpSetTimeouts(session, 0, cast.u32toi32(connectMs), cast.u32toi32(sendMs), cast.u32toi32(receiveMs))
     if ok == 0:
         ext_WinHttpCloseHandle(session)
         throw fail("WinHttpSetTimeouts failed")
@@ -289,7 +289,7 @@ pub Client.send(method str, url str, headers str, source reader.Reader, bodyLeng
         throw fail("WinHttpOpenRequest failed")
     ..
 
-    if strings.countBytes(headers) > 0:
+    if headers.countBytes() > 0:
         added bool, addHeadersErr error = addHeaders(this.allocator, request, headers)
         if addHeadersErr.nok():
             ext_WinHttpCloseHandle(request)
@@ -400,7 +400,7 @@ destr Response.close() void:
     if this.open:
         ext_WinHttpCloseHandle(this.request)
         ext_WinHttpCloseHandle(this.connection)
-        strings.free(this.allocator, this.rawHeaders)
+        this.rawHeaders.free(this.allocator)
         this.open = false
         this.eof = true
         this.request = none

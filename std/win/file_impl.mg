@@ -49,7 +49,7 @@ writeOnce(handle ptr, next ptr, amount u32) !u64:
 # @param bytes string to write
 # @returns bytes written
 pub write(handle ptr, bytes str) !u64:
-   bound u64 = strings.countBytes(bytes)
+   bound u64 = bytes.countBytes()
 
    if bound == 0:
       ret 0
@@ -220,26 +220,26 @@ pub openFile(a alc.Allocator, path str, openMode fopm.OpenMode) !$ptr:
    access_mode u32
    open_mode i32
 
-   if openMode.a:
+   if (openMode.bits & fopm.FLAG_APPEND) != 0:
       access_mode = APPEND
-      if openMode.r:
+      if (openMode.bits & fopm.FLAG_READ) != 0:
          access_mode = access_mode | READ
       ..
-   elif openMode.r && openMode.w:
+   elif (openMode.bits & fopm.FLAG_READ) != 0 && (openMode.bits & fopm.FLAG_WRITE) != 0:
       access_mode = READ | WRITE
-   elif openMode.r:
+   elif (openMode.bits & fopm.FLAG_READ) != 0:
       access_mode = READ
-   elif openMode.w:
+   elif (openMode.bits & fopm.FLAG_WRITE) != 0:
       access_mode = WRITE
    else:
       throw errors.invalidArgument("invalid open mode")
    ..
 
-   if openMode.c && openMode.t:
+   if (openMode.bits & fopm.FLAG_CREATE) != 0 && (openMode.bits & fopm.FLAG_TRUNCATE) != 0:
       open_mode = CREATE_ALWAYS
-   elif openMode.c:
+   elif (openMode.bits & fopm.FLAG_CREATE) != 0:
       open_mode = OPEN_ALWAYS
-   elif openMode.t:
+   elif (openMode.bits & fopm.FLAG_TRUNCATE) != 0:
       open_mode = TRUNCATE_EXISTING
    else:
       open_mode = OPEN_EXISTING

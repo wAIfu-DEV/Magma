@@ -6,7 +6,7 @@
 a := heap.allocator()
 try fs.writeFile(a, "message.txt", "hello")
 contents := try fs.readFile(a, "message.txt")
-defer strings.free(a, contents)
+defer contents.free(a)
 ```
 
 Whole-file convenience operations.

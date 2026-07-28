@@ -28,7 +28,7 @@ main() !void:
 
         text := try stdin.readLn(a)
         guess := try strconv.parseUint(text)
-        strings.free(a, text)
+        text.free(a)
 
         if guess < answer:
             try out.writeLn("Too low.")

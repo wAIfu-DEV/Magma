@@ -38,7 +38,7 @@ ConstWriter.write(bytes str) !u64:
 
 constWriterWriteRemaining(cw ConstWriter*, bytes str, firstWritten u64) !u64:
     total u64 = firstWritten
-    bound u64 = strings.countBytes(bytes)
+    bound u64 = bytes.countBytes()
     base ptr = strings.toPtr(bytes)
     while total < bound:
         remaining u64 = bound - total
@@ -61,7 +61,7 @@ constWriterWriteRemaining(cw ConstWriter*, bytes str, firstWritten u64) !u64:
 #   try output.writeAll("complete payload")
 ConstWriter.writeAll(bytes str) !u64:
     firstWritten u64 = try this.write(bytes)
-    if firstWritten == strings.countBytes(bytes):
+    if firstWritten == bytes.countBytes():
         ret firstWritten
     ..
     ret try constWriterWriteRemaining(this, bytes, firstWritten)
@@ -118,12 +118,12 @@ Writer.writeAll(bytes str) !u64:
     firstWritten u64 = try this.fn_write(this.impl, bytes)
 
     # Happy path, mean and lean
-    if firstWritten == strings.countBytes(bytes):
+    if firstWritten == bytes.countBytes():
         ret firstWritten
     ..
 
     total u64 = firstWritten
-    bound u64 = strings.countBytes(bytes)
+    bound u64 = bytes.countBytes()
     base ptr = strings.toPtr(bytes)
 
     while total < bound:
@@ -169,7 +169,7 @@ Writer.writeBool(b bool) !u64:
 
 # Converts a digit 0-9 to its ASCII character.
 # @complexity O(1).
-digitToChar(i i16) u8:
+digitToChar(i u16) u8:
     if i > 9:
         ret 0
     ..
@@ -201,7 +201,7 @@ Writer.writeInt64(num i64) !u64:
 
     while n != 0:
         idx = idx - 1
-        d i16 = cast.u64to16(n % 10)
+        d u16 = cast.u64to16(n % 10)
         buf[idx] = digitToChar(d)
         n = n / 10
     ..
@@ -236,7 +236,7 @@ Writer.writeUint64(num u64) !u64:
 
     while n != 0:
         idx = idx - 1
-        d i16 = cast.u64to16(n % 10)
+        d u16 = cast.u64to16(n % 10)
         buf[idx] = digitToChar(d)
         n = n / 10
     ..

@@ -167,7 +167,7 @@ if try pending.isDone():
 ..
 
 contents := try pending.await()
-defer strings.free(a, contents)
+defer contents.free(a)
 ```
 
 `isDone()` polls without consuming the future. `await()` waits efficiently,
@@ -212,15 +212,15 @@ Build the compiler, then compile and run the hello-world sample:
 
 ```powershell
 go build
-.\Magma.exe --emit exe --out hello.exe samples\hello_world.mg
+.\Magma.exe --std .\std --emit exe --out hello.exe samples\hello_world.mg
 .\hello.exe
 ```
 
 The compiler can also stop at LLVM IR or an object file:
 
 ```powershell
-.\Magma.exe --emit llvm --out hello.ll samples\hello_world.mg
-.\Magma.exe --emit object --out hello.obj samples\hello_world.mg
+.\Magma.exe --std .\std --emit llvm --out hello.ll samples\hello_world.mg
+.\Magma.exe --std .\std --emit object --out hello.obj samples\hello_world.mg
 ```
 
 On Windows, `BUILD&RUN_TESTS.bat` builds the compiler, compiles the language test
@@ -237,12 +237,18 @@ usage: magma [options] <input-file>
   --emit, -e <kind>       emit llvm, object, or exe
   --opt, -O <0-3>         select the LLVM optimization level
   --error-trace-slots <n> trace slots per runtime shard (default 1024)
+  --std <directory>       override the Magma standard-library directory
+  --lsp                   run the language server over standard I/O
   --clang-version, -cv    print the resolved Clang version and path
 ```
 
 Executable output and optimization level 3 are the current defaults. Magma
 searches `MAGMA_CLANG`, `PATH`, common LLVM installations, and Visual Studio LLVM
 directories when resolving Clang.
+
+By default, the compiler uses the `std` directory beside `Magma.exe`. Pass
+`--std` to override that location, including for language-server launches, for
+example `Magma.exe --std C:\path\to\Magma\std --lsp`.
 
 Error traces use 64 fixed runtime shards. `--error-trace-slots` accepts a power
 of two from 1 through 65536 and controls the slots in each shard. Increasing it

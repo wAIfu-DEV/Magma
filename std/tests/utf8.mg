@@ -31,13 +31,13 @@ pub main() !void:
     if slices.count(wideNt) != 1 || wideNtPtr[0] != 65 || wideNtPtr[1] != 0:
         throw errors.failure("null-terminated UTF-16 conversion changed")
     ..
-    if try utf8.utf16to8size(wide) != strings.countBytes("hé"):
+    if try utf8.utf16to8size(wide) != "hé".countBytes():
         throw errors.failure("UTF-16 size calculation changed")
     ..
     roundTrip := try utf8.utf16to8(a, wide)
-    defer strings.free(a, roundTrip)
+    defer roundTrip.free(a)
     roundTripPtr u8* = strings.toPtr(roundTrip)
-    if roundTripPtr[strings.countBytes(roundTrip)] != 0:
+    if roundTripPtr[roundTrip.countBytes()] != 0:
         throw errors.failure("UTF-8 result is not null terminated")
     ..
 ..

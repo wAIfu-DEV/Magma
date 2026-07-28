@@ -256,7 +256,7 @@ HashMap[T].take(key str) !$T:
     values T* = valuesPtr[T](this)
     states u8* = statesPtr[T](this)
     taken := claim[T](values[idx])
-    strings.free(this.allocator, keys[idx])
+    keys[idx].free(this.allocator)
     states[idx] = 2
     this.length = this.length - 1
     ret taken
@@ -281,7 +281,7 @@ destr HashMap[T].free() void:
     i u64 = 0
     while i < this.capacity:
         if states[i] == 1:
-            strings.free(this.allocator, keys[i])
+            keys[i].free(this.allocator)
         ..
         i = i + 1
     ..

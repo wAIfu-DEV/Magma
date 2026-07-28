@@ -25,8 +25,12 @@ func (*StructDef) Print(int) {
 }
 
 type MemberAccess struct {
-	Type    *NodeType
-	FieldNb int
+	// OwnerType is the type of the expression immediately before this field
+	// access. Type is the field's actual result type. Keeping both prevents
+	// later stages from having to reconstruct pointer transitions in a chain.
+	OwnerType *NodeType
+	Type      *NodeType
+	FieldNb   int
 
 	PtrDeref    bool
 	ResultIsPtr bool
@@ -50,7 +54,7 @@ type FileCtx struct {
 
 type SharedState struct {
 	Cwd          string
-	ExecPath     string
+	StdRoot      string
 	MainPckgName string
 	// ErrorTraceSlots is the number of reusable trace nodes in each runtime
 	// shard. It is a power of two so generated code can mask instead of divide.
@@ -82,7 +86,44 @@ type SharedState struct {
 
 	PipelineFunc func(shared *SharedState, filePath string, alias string, fromAbs string, fromGl *NodeGlobal) <-chan error
 	WaitGroup    sync.WaitGroup
+
+	// Warnings are non-fatal semantic diagnostics collected after parsing.
+	Warnings []Diagnostic
 }
+
+type DiagnosticSeverity uint8
+
+const (
+	SeverityError DiagnosticSeverity = iota
+	SeverityWarning
+)
+
+// Diagnostic is the compiler's transport-neutral source diagnostic. Rendering
+// for the command line and editor protocols belongs to their respective
+// adapters, not to compiler passes.
+type Diagnostic struct {
+	Severity DiagnosticSeverity
+	Stage    string
+	Ctx      *FileCtx
+	FilePath string
+	Token    Token
+	Message  string
+	// ShortDesc is the legacy name for Message. Constructors keep both set.
+	ShortDesc  string
+	Additional string
+	Cause      error
+}
+
+func (d *Diagnostic) Error() string {
+	if d.Message != "" {
+		return d.Message
+	}
+	return d.ShortDesc
+}
+func (d *Diagnostic) Unwrap() error { return d.Cause }
+
+// Warning remains an alias while older consumers migrate to Diagnostic.
+type Warning = Diagnostic
 
 type Scope struct {
 	Name       NodeName

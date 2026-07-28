@@ -136,7 +136,7 @@ buffer := array u8[64]
 
 ```magma
 a := heap.allocator()
-bound := strings.countBytes(value)
+bound := value.countBytes()
 ```
 
 An uninitialized declaration is not undefined storage: the examples depend on

@@ -43,6 +43,44 @@ pub Rectangle(
     height f32
 )
 
+# GPU texture metadata used by Font atlases.
+pub Texture(
+    id u32
+    width i32
+    height i32
+    mipmaps i32
+    format i32
+)
+
+# CPU image metadata. The data pointer is owned by raylib when returned by a
+# raylib loading function.
+pub Image(
+    data ptr
+    width i32
+    height i32
+    mipmaps i32
+    format i32
+)
+
+# Metrics and source image for one Unicode glyph.
+pub GlyphInfo(
+    value i32
+    offsetX i32
+    offsetY i32
+    advanceX i32
+    image Image
+)
+
+# Raylib font handle and atlas metadata.
+pub Font(
+    baseSize i32
+    glyphCount i32
+    glyphPadding i32
+    texture Texture
+    recs Rectangle*
+    glyphs GlyphInfo*
+)
+
 ext ext_InitWindow InitWindow(width c.int, height c.int, title u8*) void
 ext ext_CloseWindow CloseWindow() void
 ext ext_WindowShouldClose WindowShouldClose() bool
@@ -81,6 +119,24 @@ ext ext_DrawRectangleLines DrawRectangleLines(x c.int, y c.int, width c.int, hei
 ext ext_DrawText DrawText(text u8*, x c.int, y c.int, fontSize c.int, packedColor c.unsigned_int) void
 ext ext_DrawFPS DrawFPS(x c.int, y c.int) void
 ext ext_MeasureText MeasureText(text u8*, fontSize c.int) c.int
+
+ext ext_GetFontDefault GetFontDefault() Font
+ext ext_LoadFont LoadFont(fileName u8*) Font
+ext ext_LoadFontEx LoadFontEx(fileName u8*, fontSize c.int, codepoints i32*, codepointCount c.int) Font
+ext ext_LoadFontFromImage LoadFontFromImage(image Image, key Color, firstChar c.int) Font
+ext ext_LoadFontFromMemory LoadFontFromMemory(fileType u8*, fileData u8*, dataSize c.int, fontSize c.int, codepoints i32*, codepointCount c.int) Font
+ext ext_IsFontValid IsFontValid(font Font) bool
+ext ext_UnloadFont UnloadFont(font Font) void
+ext ext_ExportFontAsCode ExportFontAsCode(font Font, fileName u8*) bool
+ext ext_DrawTextEx DrawTextEx(font Font, text u8*, position Vector2, fontSize f32, spacing f32, tint Color) void
+ext ext_DrawTextPro DrawTextPro(font Font, text u8*, position Vector2, origin Vector2, rotation f32, fontSize f32, spacing f32, tint Color) void
+ext ext_DrawTextCodepoint DrawTextCodepoint(font Font, codepoint c.int, position Vector2, fontSize f32, tint Color) void
+ext ext_DrawTextCodepoints DrawTextCodepoints(font Font, codepoints i32*, codepointCount c.int, position Vector2, fontSize f32, spacing f32, tint Color) void
+ext ext_SetTextLineSpacing SetTextLineSpacing(spacing c.int) void
+ext ext_MeasureTextEx MeasureTextEx(font Font, text u8*, fontSize f32, spacing f32) Vector2
+ext ext_GetGlyphIndex GetGlyphIndex(font Font, codepoint c.int) c.int
+ext ext_GetGlyphInfo GetGlyphInfo(font Font, codepoint c.int) GlyphInfo
+ext ext_GetGlyphAtlasRec GetGlyphAtlasRec(font Font, codepoint c.int) Rectangle
 
 ext ext_IsKeyPressed IsKeyPressed(key c.int) bool
 ext ext_IsKeyPressedRepeat IsKeyPressedRepeat(key c.int) bool
@@ -422,6 +478,109 @@ pub measureText(text str, fontSize i32) i32:
     textC u8* = strings.toCstrNoCopy(text)
     width i32 = ext_MeasureText(textC, fontSize)
     ret width
+..
+
+# Returns raylib's default borrowed font. Do not pass it to unloadFont().
+pub fontDefault() Font:
+    ret ext_GetFontDefault()
+..
+
+# Loads a font file and uploads its atlas to the GPU.
+pub loadFont(fileName str) Font:
+    fileNameC u8* = strings.toCstrNoCopy(fileName)
+    ret ext_LoadFont(fileNameC)
+..
+
+# Loads a font at a requested pixel height and optional Unicode codepoint set.
+# Pass none and zero to load raylib's default character set.
+pub loadFontEx(fileName str, fontSize i32, codepoints i32*, codepointCount i32) Font:
+    fileNameC u8* = strings.toCstrNoCopy(fileName)
+    ret ext_LoadFontEx(fileNameC, fontSize, codepoints, codepointCount)
+..
+
+# Loads a font from an image using the supplied key color.
+pub loadFontFromImage(image Image, key Color, firstChar i32) Font:
+    ret ext_LoadFontFromImage(image, key, firstChar)
+..
+
+# Loads a font from an encoded in-memory file buffer.
+pub loadFontFromMemory(fileType str, fileData u8*, dataSize i32, fontSize i32, codepoints i32*, codepointCount i32) Font:
+    fileTypeC u8* = strings.toCstrNoCopy(fileType)
+    ret ext_LoadFontFromMemory(fileTypeC, fileData, dataSize, fontSize, codepoints, codepointCount)
+..
+
+# Reports whether CPU-side font data is valid. GPU texture validity is not checked.
+pub isFontValid(font Font) bool:
+    ret ext_IsFontValid(font)
+..
+
+# Releases a loaded font and its GPU atlas. Never unload fontDefault().
+pub unloadFont(font Font) void:
+    ext_UnloadFont(font)
+..
+
+# Exports a loaded font as a C source file.
+pub exportFontAsCode(font Font, fileName str) bool:
+    fileNameC u8* = strings.toCstrNoCopy(fileName)
+    ret ext_ExportFontAsCode(font, fileNameC)
+..
+
+# Draws existing null-terminated UTF-8 text with a custom font.
+pub drawTextExC(font Font, text u8*, position Vector2, fontSize f32, spacing f32, tint Color) void:
+    ext_DrawTextEx(font, text, position, fontSize, spacing, tint)
+..
+
+# Draws a Magma UTF-8 string with a custom font.
+pub drawTextEx(font Font, text str, position Vector2, fontSize f32, spacing f32, tint Color) void:
+    textC u8* = strings.toCstrNoCopy(text)
+    ext_DrawTextEx(font, textC, position, fontSize, spacing, tint)
+..
+
+# Draws custom-font text around an origin with rotation in degrees.
+pub drawTextPro(font Font, text str, position Vector2, origin Vector2, rotation f32, fontSize f32, spacing f32, tint Color) void:
+    textC u8* = strings.toCstrNoCopy(text)
+    ext_DrawTextPro(font, textC, position, origin, rotation, fontSize, spacing, tint)
+..
+
+# Draws one Unicode codepoint with a custom font.
+pub drawTextCodepoint(font Font, codepoint i32, position Vector2, fontSize f32, tint Color) void:
+    ext_DrawTextCodepoint(font, codepoint, position, fontSize, tint)
+..
+
+# Draws an array of Unicode codepoints with a custom font.
+pub drawTextCodepoints(font Font, codepoints i32*, codepointCount i32, position Vector2, fontSize f32, spacing f32, tint Color) void:
+    ext_DrawTextCodepoints(font, codepoints, codepointCount, position, fontSize, spacing, tint)
+..
+
+# Sets extra vertical pixel spacing between lines containing line breaks.
+pub setTextLineSpacing(spacing i32) void:
+    ext_SetTextLineSpacing(spacing)
+..
+
+# Measures existing null-terminated UTF-8 text with a custom font.
+pub measureTextExC(font Font, text u8*, fontSize f32, spacing f32) Vector2:
+    ret ext_MeasureTextEx(font, text, fontSize, spacing)
+..
+
+# Returns the logical width and height of custom-font text.
+pub measureTextEx(font Font, text str, fontSize f32, spacing f32) Vector2:
+    textC u8* = strings.toCstrNoCopy(text)
+    ret ext_MeasureTextEx(font, textC, fontSize, spacing)
+..
+
+# Returns a font's glyph index for a Unicode codepoint, falling back to '?'.
+pub glyphIndex(font Font, codepoint i32) i32:
+    ret ext_GetGlyphIndex(font, codepoint)
+..
+
+# Returns metrics and bitmap metadata for a Unicode codepoint.
+pub glyphInfo(font Font, codepoint i32) GlyphInfo:
+    ret ext_GetGlyphInfo(font, codepoint)
+..
+
+# Returns the glyph's source rectangle within the font atlas.
+pub glyphAtlasRectangle(font Font, codepoint i32) Rectangle:
+    ret ext_GetGlyphAtlasRec(font, codepoint)
 ..
 
 # Reports whether key transitioned from up to down during the current frame.
