@@ -24,5 +24,6 @@ Explicit primitive and pointer conversions. These operations do not allocate or 
 - `pub itof(x i64) f64`, `pub utof(x u64) f64`, `pub ftoi(x f64) i64`, and `pub ftou(x f64) u64` convert between integers and `f64`.
 - `pub i32to64(x i32) i64`, `pub i16to64(x i16) i64`, and `pub i8to64(x i8) i64` sign-extend.
 - `pub u32to64(x u32) u64`, `pub u16to64(x u16) u64`, and `pub u8to64(x u8) u64` zero-extend.
+- `pub u32toi32(x u32) i32` preserves the low 32-bit pattern as a signed value.
 - `pub i64to32(x i64) i32`, `pub i64to16(x i64) i16`, and `pub i64to8(x i64) i8` truncate high bits.
 - `pub u64to32(x u64) u32`, `pub u64to16(x u64) u16`, and `pub u64to8(x u64) u8` truncate high bits.

@@ -13,5 +13,8 @@ Whole-file convenience operations.
 
 - `pub readFile(a alc.Allocator, path str) !$str` opens and reads the complete file into an owned string, then closes the file. The caller frees the result with the same allocator.
 - `pub writeFile(a alc.Allocator, path str, contents str) !void` creates or truncates a file, writes all `contents`, and closes it.
+- `pub removeFile(a alc.Allocator, path str) !void` removes a file.
+- `pub walk(a alc.Allocator, root str, visit (str, bool) !void) !void` walks a
+  directory tree and calls `visit(path, isDirectory)` for each entry.
 
 Both functions propagate allocation, open, I/O, and close errors.

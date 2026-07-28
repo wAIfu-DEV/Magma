@@ -11,6 +11,8 @@ try output.writer().writeLn("hello")
 Standard process-stream adapters.
 
 - `pub stdout(a alc.Allocator) !$buffered.Writer` creates an owned buffered standard-output writer; close or flush it.
+- `pub stdoutConst() writer.ConstWriter*` returns the process-wide constant
+  stdout adapter used by `print` and `printLn`.
 - `pub stdoutUnbuffered() writer.Writer` returns an unbuffered standard-output writer.
 - `pub print(bytes str) !u64` writes bytes to standard output through the constant global writer.
 - `pub printLn(bytes str) !u64` writes bytes followed by a newline through the constant global writer.

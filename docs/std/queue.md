@@ -14,7 +14,8 @@ An allocator-backed generic FIFO queue.
 
 ## Type
 
-`Queue[T](allocator alc.Allocator, array arr.Array[T])` owns a double-ended backing array.
+`Queue[T](allocator alc.Allocator, array arr.Array[T], cleanup ($T) void)` owns a
+double-ended backing array and retains its cleanup callback.
 
 ## API
 

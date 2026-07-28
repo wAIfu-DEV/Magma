@@ -1,61 +1,35 @@
 # Magma
 
-Magma is a compact, statically typed systems programming language built around
-explicit control, practical error handling, and native compilation through
-LLVM. It combines low-level facilities—pointers, manual allocation, external
-symbols, and inline LLVM—with modern conveniences such as generics, methods,
-deferred cleanup, and typed error propagation.
+Magma is a statically typed systems programming language. Its compiler is
+written in Go, emits LLVM IR, and invokes Clang to produce object files and
+executables.
 
-The compiler is written in Go and can emit LLVM IR, object files, or native
-executables. Magma is under active development, but already supports a
-substantial standard library and sample applications ranging from command-line
-tools to HTTP, threading, and graphics.
+The language includes pointers, manual allocation, external symbols, inline
+LLVM, generics, methods, deferred statements, and typed error propagation. The
+standard library is implemented in Magma under [`std/`](std/).
 
-## Why Magma?
-
-- **Native by default.** Magma lowers to LLVM and uses Clang to produce optimized
-  object files and executables.
-- **Errors are visible in the type system.** Throwing functions use `!T`, while
-  `try` makes propagation concise and explicit.
-- **Cleanup stays close to acquisition.** `defer` runs on normal returns, errors,
-  and other scope exits.
-- **Abstractions remain lightweight.** Generics are monomorphized, methods use
-  value-oriented structs, and function pointers support vtable-style interfaces.
-- **Systems programming is first-class.** Pointers, slices, stack-backed arrays, raw
-  memory operations, external functions, and inline LLVM are directly available.
-- **Portability is designed in.** Platform directives and Windows/Unix standard
-  library backends keep platform-specific code behind shared APIs.
-- **Ownership intent can be expressed.** Transfer annotations and a warning-only
-  destroy checker catch common resource-management mistakes without hiding
-  allocation or destruction.
-
-## A First Program
+## Hello World
 
 ```magma
 mod main
 
-use "../std/heap.mg" heap
 use "../std/io.mg" io
 
 pub main(args str[]) !void:
-    a := heap.allocator()
-
-    out := try io.stdout(a)
-    defer out.close()
-
-    try out.writeLn("Hello, World!")
+    io.printLn("Hello, World!")
 ..
 ```
 
 Magma uses `:` to open a block and `..` to close it. Declarations place the name
-before the type, `:=` provides local type inference, and `!void` declares that
-`main` may return an error.
+before the type, `:=` infers the type of a local variable, and `!void` indicates
+that a function can return an error.
 
-## Language Highlights
+## Language Features
 
-### Explicit, composable error handling
+### Error handling
 
-Failure is part of a function's signature:
+Throwing functions prefix their return type with `!`. The `try` expression
+returns a successful value or propagates the error to the caller:
 
 ```magma
 readByte() !u8:
@@ -68,21 +42,19 @@ load() !void:
 ..
 ```
 
-`try` unwraps a successful result and propagates an error. Callers that need to
-recover can handle both results directly:
+A caller can instead receive the value and error separately:
 
 ```magma
 value u8, err error = readByte()
 if err.nok():
-    # recover or propagate with `throw err`
+    throw err
 ..
 ```
 
-### Predictable resource management
+### Deferred statements and ownership annotations
 
-`defer` registers cleanup at the point where a resource is acquired. Deferred
-work runs in last-in, first-out order on every scope exit, including error
-propagation:
+`defer` registers a statement to run when its scope exits. Multiple deferred
+statements in a scope run in last-in, first-out order.
 
 ```magma
 f := try file.open(a, path, file.mode().read())
@@ -90,14 +62,14 @@ defer f.close()
 ```
 
 The `$T` annotation marks ownership transfer in parameters and return values.
-For destructible structs, Magma's flow analysis warns about leaks, double
-consumption, consuming borrowed values, discarded owned results, and use after
-transfer. See [Ownership and Destruction](docs/OWNERSHIP.md) for the model and
-its current limits.
+The compiler's destroy checker emits warnings for tracked ownership violations.
+Its behavior and limits are documented in
+[Ownership and Destruction](docs/OWNERSHIP.md).
 
 ### Generics and methods
 
-Magma supports generic structs, functions, and receiver methods:
+Magma supports generic structs, functions, and receiver methods. Generic
+definitions are specialized by the compiler for the types used by a program.
 
 ```magma
 Pair[A, B](
@@ -113,19 +85,14 @@ swap[A, B](p Pair[A, B]) Pair[B, A]:
 ..
 ```
 
-Generics are monomorphized by the compiler, providing reusable abstractions
-without requiring a runtime generic representation.
+### Native interoperation
 
-### Direct access to the machine
+The language supports typed pointers, raw `ptr`, slices, stack-backed array
+expressions, `sizeof`, address and dereference operations, external function
+declarations, and inline LLVM.
 
-The language includes typed pointers, raw `ptr`, slices, stack-backed array expressions,
-`sizeof`, address and dereference operations, and external function declarations.
-When a primitive cannot yet be expressed in Magma itself, inline LLVM provides a
-deliberate escape hatch.
-
-Top-level non-throwing functions can also be exposed to C using
-`@export_name`. The compiler preserves the ordinary mangled Magma definition and
-emits a forwarding wrapper with the requested native symbol:
+The `@export_name` directive adds a native forwarding symbol for a top-level,
+non-generic, non-throwing function. The default ABI is C.
 
 ```magma
 @export_name("magma_add")
@@ -134,81 +101,39 @@ add(a i32, b i32) i32:
 ..
 ```
 
-The ABI defaults to C. Export names must be unique within the compilation, and
-generic, member, and throwing functions cannot currently be exported.
+### Futures
 
-### Asynchronous work with futures
-
-Magma provides asynchronous work through the standard library rather than
-language-level `async` and `await` keywords. Library operations submit work to a
-reusable `thread_pool.ThreadPool` and return a typed `future.Future[T]` that
-publishes either a value or an error. The opt-in `async.Async` context bundles
-a borrowed pool and allocator so synchronous I/O modules remain lightweight:
-
-```magma
-use "../std/file.mg" file
-use "../std/heap.mg" heap
-use "../std/strings.mg" strings
-use "../std/thread_pool.mg" thread_pool
-use "../std/async.mg" async
-
-a := heap.allocator()
-pool := try thread_pool.newDefault(a)
-defer pool.close()
-as := async.new(pool, a)
-
-f := try file.open(a, "data.txt", file.mode().read())
-defer f.close()
-
-pending := try as.read(f.reader(), f.count())
-
-if try pending.isDone():
-    # The non-blocking poll is optional.
-..
-
-contents := try pending.await()
-defer contents.free(a)
-```
-
-`isDone()` polls without consuming the future. `await()` waits efficiently,
-returns the result or propagates the worker's error, and consumes the future, so
-each future may be awaited only once. The allocator, pool, and resources
-referenced by the copied context must remain valid until the work completes.
-Avoid awaiting work from the same fully occupied pool, which can deadlock through
-worker starvation.
-
-The lower-level `future.new` constructor is primarily intended for implementing
-asynchronous library APIs. See [Asynchronous work with futures](docs/FEATURES.md#8-asynchronous-work-with-futures)
-and the [`std/future` reference](docs/std/future.md) for its API and the complete
-lifetime model.
+Asynchronous standard-library operations use `thread_pool.ThreadPool` and
+`future.Future[T]`; the language does not define `async` or `await` keywords.
+`Future.isDone()` polls a future, and `Future.await()` waits for and consumes it.
+See [Asynchronous work with futures](docs/FEATURES.md#8-asynchronous-work-with-futures)
+and the [`future` reference](docs/std/future.md).
 
 ## Standard Library
 
-The standard library in [`std/`](std/) demonstrates that Magma's small core can
-support practical, reusable components:
+The [`std/`](std/) directory contains modules for:
 
-- allocators, platform heaps, memory operations, and explicit casts;
-- files, paths, readers, writers, buffered streams, and duplex streams;
-- arrays, lists, queues, maps, builders, sorting, and searching;
-- strings, byte utilities, UTF-8 helpers, and numeric conversion;
-- JSON values and serialization;
-- CPU core discovery, native threads, mutexes, wake primitives, worker pools,
-  and typed futures;
-- Windows streaming HTTP through WinHTTP;
-- Windows raylib 5.5 bindings for windows, drawing, and input.
+- allocation, memory operations, casts, and atomics;
+- files, paths, processes, readers, writers, and buffered streams;
+- arrays, lists, queues, maps, sorting, and searching;
+- strings, bytes, UTF-8, formatting, and numeric conversion;
+- JSON serialization;
+- threads, mutexes, wake primitives, worker pools, and futures;
+- HTTP and raylib bindings.
 
-Platform implementations live under `std/win/` and `std/unix/` and are selected
-with `@platform(...)` directives.
+Platform implementations are selected with `@platform(...)` directives and are
+stored under [`std/win/`](std/win/) and [`std/unix/`](std/unix/). Individual
+module documentation records any narrower platform support.
 
 ## Build and Run
 
 ### Requirements
 
 - [Go](https://go.dev/) 1.24.6 or later
-- [Clang/LLVM](https://llvm.org/) available on `PATH`, or configured through the
-  `MAGMA_CLANG` environment variable
+- [Clang/LLVM](https://llvm.org/) on `PATH`, or a Clang executable specified by
+  the `MAGMA_CLANG` environment variable
 
-Build the compiler, then compile and run the hello-world sample:
+Build the compiler and compile the included hello-world sample:
 
 ```powershell
 go build
@@ -216,15 +141,16 @@ go build
 .\hello.exe
 ```
 
-The compiler can also stop at LLVM IR or an object file:
+The compiler can also emit LLVM IR or an object file:
 
 ```powershell
 .\Magma.exe --std .\std --emit llvm --out hello.ll samples\hello_world.mg
 .\Magma.exe --std .\std --emit object --out hello.obj samples\hello_world.mg
 ```
 
-On Windows, `BUILD&RUN_TESTS.bat` builds the compiler, compiles the language test
-suite, and runs it. `BUILD_SAMPLE.bat` builds and runs the raylib sample.
+On Windows, `RUN_TESTS.bat` builds the compiler, compiles the compiler test
+suite, and compiles and runs the standard-library tests. `BUILD_SAMPLE.bat`
+builds the compiler and compiles and runs `samples/args_echo.mg`.
 
 ### Compiler options
 
@@ -237,64 +163,43 @@ usage: magma [options] <input-file>
   --emit, -e <kind>       emit llvm, object, or exe
   --opt, -O <0-3>         select the LLVM optimization level
   --error-trace-slots <n> trace slots per runtime shard (default 1024)
+  --target <triple>       set the compilation target
   --std <directory>       override the Magma standard-library directory
   --lsp                   run the language server over standard I/O
   --clang-version, -cv    print the resolved Clang version and path
 ```
 
-Executable output and optimization level 3 are the current defaults. Magma
-searches `MAGMA_CLANG`, `PATH`, common LLVM installations, and Visual Studio LLVM
-directories when resolving Clang.
+Executable output and optimization level 3 are the defaults. The compiler
+accepts `llvm`, `object`, and `exe` as output kinds. If `--out` is omitted, the
+output name depends on the selected kind and target platform.
 
-By default, the compiler uses the `std` directory beside `Magma.exe`. Pass
-`--std` to override that location, including for language-server launches, for
-example `Magma.exe --std C:\path\to\Magma\std --lsp`.
+By default, the compiler uses the `std` directory beside the compiler
+executable. Pass `--std` to use another directory:
 
-Error traces use 64 fixed runtime shards. `--error-trace-slots` accepts a power
-of two from 1 through 65536 and controls the slots in each shard. Increasing it
-retains diagnostics longer at the cost of proportional static storage.
+```powershell
+.\Magma.exe --std C:\path\to\Magma\std --lsp
+```
 
-## Explore the Project
+`--error-trace-slots` accepts a power of two from 1 through 65536. The compiler
+uses 64 runtime trace shards, each with the configured number of slots.
 
-- [`docs/SYNTAX.md`](docs/SYNTAX.md) — complete syntax guide and language details
-- [`docs/OWNERSHIP.md`](docs/OWNERSHIP.md) — ownership, destruction, and analysis
-- [`docs/std/`](docs/std/) — standard library reference
-- [`samples/`](samples/) — focused examples and complete console applications
-- [`src/`](src/) — compiler implementation
+## Documentation and Source
 
-The sample suite includes FizzBuzz, a calculator, file readers, a contact book,
-a to-do list, an expense tracker, Tic-Tac-Toe, HTTP, thread-pool benchmarks, and
-a raylib program.
+- [`docs/SYNTAX.md`](docs/SYNTAX.md) - language syntax
+- [`docs/FEATURES.md`](docs/FEATURES.md) - language and library features
+- [`docs/OWNERSHIP.md`](docs/OWNERSHIP.md) - ownership and destruction analysis
+- [`docs/std/`](docs/std/) - standard-library reference
+- [`samples/`](samples/) - example programs
+- [`src/`](src/) - compiler implementation
 
-## Compiler Architecture
+The compiler pipeline parses source modules, gathers scope information, checks
+links and types, runs ownership analysis, specializes generics, lowers the
+program to LLVM IR, and cleans the generated IR before native compilation.
 
-The frontend tokenizes and parses source files concurrently, gathers scope
-information, performs link and type checking, checks ownership and destruction,
-monomorphizes generics, and lowers the result to LLVM IR. An IR cleanup pass
-prepares the output before Clang performs optimization and native code
-generation.
-
-Key packages include:
+Relevant packages include:
 
 - `src/tokenizer` and `src/parser` for syntax;
 - `src/checker` and `src/destroy_checker` for static analysis;
 - `src/monomorph` for generic specialization;
 - `src/llvm_ir` and `src/ir_cleaner` for LLVM output;
-- `src/clang` for toolchain discovery and native compilation.
-
-## Project Status
-
-Magma is an early-stage language and compiler. It is suitable for exploration,
-language development, and experimental native programs, but it does not yet
-promise production-grade safety or stability. In particular:
-
-- ownership diagnostics are warning-only and currently track direct locals, not
-  aliases, fields, indexed storage, pointers, or partial moves;
-- bounds checks, null checks, and general memory safety are not provided;
-- static checking is still being expanded, and some invalid programs may reach
-  LLVM before being rejected;
-- `while` is currently the primary loop construct; `for` loops are planned;
-- inline LLVM is intentionally powerful and lies outside normal type checking.
-
-Current implementation work is tracked in [`TODO.md`](TODO.md). Contributions,
-experiments, and feedback are welcome as the language evolves.
+- `src/clang` for Clang discovery and invocation.

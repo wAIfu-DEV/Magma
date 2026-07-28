@@ -16,3 +16,4 @@ Low-level operations on raw byte regions. Callers must provide valid pointers an
 - `pub compare(a ptr, b ptr, n u64) bool` reports byte-for-byte equality.
 - `pub set(in ptr, n u64, with u8) void` fills a region with one byte value.
 - `pub zero(in ptr, n u64) void` fills a region with zero.
+- `pub zeroValue[T]() T` returns a zero-initialized value of `T`.

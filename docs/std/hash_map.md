@@ -14,7 +14,10 @@ An allocator-backed, open-addressed map from borrowed string keys to values of `
 
 ## Type
 
-`HashMap[T]` stores its allocator, key and value arrays, slot states, capacity, and logical length. Keys are copied and owned by the map; values are not copied or recursively freed.
+`HashMap[T](allocator alc.Allocator, storage ptr, capacity u64, length u64,
+cleanup ($T) void)` stores keys, values, and slot states in one allocation.
+Keys are copied; values are moved in and released through `cleanup` when
+replaced, deleted, or left at `free()`.
 
 ## API
 

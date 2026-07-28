@@ -3,7 +3,7 @@
 ## Example
 
 ```magma
-object := try json.newObject(heap.allocator(), cleanupValue)
+object := try json.newObject(heap.allocator())
 defer object.free()
 try object.set("answer", json.numberInt(42))
 value := try object.get("answer")
@@ -14,24 +14,31 @@ In-memory JSON values and serialization. This module constructs and writes JSON;
 
 ## Types
 
-- `Value(value u128, kind u8)` stores a tagged null, boolean, float, integer, borrowed string, object pointer, or array pointer.
-- `Object(entries linear_map.LinearMap[Value])` maps string keys to values. Keys are copied by the underlying linear map; values are shallow/borrowed.
-- `Array(allocator alc.Allocator, values arr.Array[Value])` stores shallow values.
+- `Value(value u128, kind u8, owned bool, allocator alc.Allocator)` stores a
+  tagged payload plus the ownership metadata needed to release owned strings or
+  containers.
+- `Object(entries linear_map.LinearMap[Value])` owns copied keys and uses the
+  JSON value destructor for owned values.
+- `Array(allocator alc.Allocator, values arr.Array[Value])` owns values marked
+  as owned.
 
 ## Value creation and access
 
-- `pub null() Value`, `pub boolean(value bool) Value`, `pub numberFloat(value f64) Value`, and `pub numberInt(value i64) Value` construct scalar values.
-- `pub string(value str) Value` constructs a value borrowing `value`.
-- `pub object(value Object*) Value` and `pub array(value Array*) Value` borrow container pointers.
+- `pub null() Value`, `pub bool(value bool) Value`, `pub numberFloat(value f64) Value`, and `pub numberInt(value i64) Value` construct scalar values.
+- `stringBorrowed`, `objectBorrowed`, and `arrayBorrowed` construct borrowed
+  values. `stringOwned`, `objectOwned`, and `arrayOwned` transfer ownership.
+  `stringCopy(a, value) !$Value` allocates an owned copy.
+- `Value.borrowed() Value` returns a non-owning view of any value.
 - `Value.asNull() !ptr`, `asBool() !bool`, `asFloat() !f64`, `asInt() !i64`, `asString() !str`, `asObject() !Object*`, and `asArray() !Array*` return the payload or `invalidType` when the tag differs.
 
 ## Containers
 
-- `pub newObject(a alc.Allocator, cleanup ($Value) void) !$Object` and `pub newArray(a alc.Allocator, cleanup ($Value) void) !$Array` allocate empty containers and configure value cleanup.
+- `pub newObject(a alc.Allocator) !$Object` and `pub newArray(a alc.Allocator) !$Array` allocate empty containers with JSON value cleanup configured internally.
 - `Object.set(key str, value $Value) !void`, `get(key str) !Value`, `delete(key str) !void`, `take(key str) !$Value`, and `count() u64` manage entries. `set` takes the value; `take` transfers a removed value without cleanup.
-- `Object.free() void` is a `destr` method that frees copied keys and map storage, not nested values.
-- `Array.append(value $Value) !void` takes and appends a value; `count() u64` returns its count.
-- `Array.free() void` is a `destr` method that frees array storage, not nested values.
+- `Object.free() void` frees copied keys, owned values, and map storage.
+- `Array.append(value $Value) !void` appends a value; `count() u64` returns its
+  count and `get(index u64) !Value` borrows an indexed value.
+- `Array.free() void` frees owned values and array storage.
 
 ## Serialization
 

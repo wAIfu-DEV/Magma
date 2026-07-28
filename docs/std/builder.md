@@ -21,7 +21,8 @@ Builds a string from borrowed or copied segments while avoiding repeated concate
 
 - `pub new(a alc.Allocator) !$Builder` creates an empty builder.
 - `Builder.appendBorrowed(s str) !void` appends a borrowed string. It must remain valid until the builder is built, reset, or freed.
-- `Builder.appendOwned(s str) !void` transfers an owned string allocated by the builder's allocator into the builder.
+- `Builder.addByte(b u8) !void` appends one byte as an owned segment.
+- `Builder.appendOwned(s $str) !void` transfers an owned string allocated by the builder's allocator into the builder.
 - `Builder.appendCopy(s str) !void` copies and owns the appended string.
 - `Builder.build() !$str` allocates and returns the concatenated string. The caller owns the result.
 - `Builder.byteCount() u64` returns the combined byte count.

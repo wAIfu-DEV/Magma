@@ -371,8 +371,10 @@ const count u64 = 4
 const table := VTable(fn_call=callback)
 ```
 
-Constant initializers currently support literals, function/global addresses,
-and nested struct constructors. Mutation checks are not implemented yet.
+Constant initializers support literals, references to other constants and
+functions, global addresses, initialized arrays, and nested struct constructors.
+General constant expressions such as `1 + 2` are rejected. Constants are
+immutable, including through field and indexed assignments.
 
 ## Functions
 
@@ -601,7 +603,7 @@ myVar := tb.makeBucket[u8](33, 4)
 nested := tc.wrapPair[u8, u16](11, 22)
 ```
 
-When inference is insufficient or clarity matters, pass explicit type arguments:
+Type arguments may be passed explicitly:
 
 ```magma
 ta.pairOf[T, U](left, right)
@@ -672,7 +674,7 @@ if openMode.read && openMode.write == false:
 outPtr[i] = u32to16((v >> 10) + 55296)
 ```
 
-Use parentheses to make complex expressions explicit:
+Parentheses can group complex expressions:
 
 ```magma
 if (exp == EXP_MASK) && (frac != 0):
@@ -741,9 +743,9 @@ while i < n:
 ..
 ```
 
-Indexed for loops are planned but currently WIP, prefer using this rather explicit syntax for the moment:
+Magma has no `for` statement. Indexed iteration can use a `while` loop:
 
-```
+```magma
 i u64 = 0
 while i < n:
     defer i = i + 1
@@ -764,12 +766,14 @@ retErr() !void:
 ..
 ```
 
-`throw expr` conditionally returns the error if it is non-OK. Throwing OK is a
-no-op:
+`throw expr` accepts an `error` or a `str`. Throwing a string constructs a
+failure with that message. Throwing an error conditionally returns it when it is
+non-OK; throwing an OK error is a no-op:
 
 ```magma
 throw errors.ok()
 throw errors.invalidArgument("invalid open mode")
+throw "invalid open mode"
 ```
 
 `try expr` evaluates a throwing expression and automatically rethrows on error:
@@ -819,7 +823,7 @@ The value and error types can be inferred together:
 value, err := someThrowingCall()
 ```
 
-The value is valid when the error is OK. On error, the value is zero initialized, never rely on the value without checking for error status first.
+The value is valid when the error is OK. On error, the value is zero initialized.
 
 ## Defer
 
@@ -845,7 +849,7 @@ defer:
 
 Deferred blocks cannot contain nested `defer` statements.
 
-`defer` is useful for resource cleanup around throwing code:
+`defer` can perform resource cleanup around throwing code:
 
 ```magma
 path_cstr u8* = try strings.toCstr(a, path)
@@ -983,8 +987,6 @@ across imported modules, and ignored for LLVM and object emission. Selecting a
 static `.lib` later uses the same `link` declaration; the referenced library
 artifact determines the linkage kind.
 
-Declaration of external functions from within Magma is planned but currently WIP.
-
 ## Inline LLVM
 
 Inline LLVM is written with `llvm` followed by a string literal:
@@ -1007,7 +1009,8 @@ pub ptou(x ptr) u64:
 The string contents are passed through as LLVM text; Magma syntax checking does
 not validate LLVM correctness.
 
-Inline LLVM is the platform-agnostic equivalent to C's inline assembly, it can be used for very low level operations but give no guarantee that generated executable will feature the written code as-is. Inline LLVM is not exempt from being modified or tampered with during optimization passes.
+Inline LLVM provides direct access to LLVM IR. Optimization passes may transform
+the injected IR before executable emission.
 
 ## Memory and Low-Level Idioms
 
@@ -1070,8 +1073,7 @@ count = count + 1 # comment
 
 String escapes are interpreted by the tokenizer. Unknown escape sequences do not
 currently produce a tokenizer error; the backslash is dropped and the escaped
-character is kept. For example, `"\q"` is tokenized as `"q"`. Prefer the
-documented escape set.
+character is kept. For example, `"\q"` is tokenized as `"q"`.
 
 Decimal number tokenization is permissive before later lowering. A leading `-`
 is part of the number literal only when it is immediately followed by a digit;
@@ -1130,14 +1132,20 @@ Argument lists for declarations and struct fields accept commas or newlines as
 separators. Empty function calls and empty declaration argument lists are valid,
 but empty generic parameter or argument lists are not.
 
-Subscript expressions currently require a name-like target after link checking.
-Simple forms such as `items[i]` are supported; subscripting an arbitrary call or
-grouped expression is not expected to work reliably.
+Subscript is a general postfix expression. Its target may be a name, member,
+call, grouped expression, or another postfix expression, provided type checking
+resolves it to a pointer, slice, or initialized-array value:
+
+```magma
+first := makeSlice()[0]
+nested := matrix[row][column]
+grouped := (values)[index]
+```
 
 ### Scope and Name Resolution
 
 Functions and nested `if`, `elif`, `else`, and `while` bodies have lexical local
-scopes. Magma deliberately forbids shadowing: a variable, parameter, global, or
+scopes. Magma forbids shadowing: a variable, parameter, global, or
 function declaration cannot reuse a visible variable or function name.
 Duplicate declarations in the same scope are also rejected. Separate sibling
 scopes may reuse a local name because neither declaration is visible from the
@@ -1168,11 +1176,11 @@ argument. Method calls subtract that implicit argument from the call-site arity.
 Bitwise operators `&`, `|`, and `^` accept integer operands. They also accept
 `bool` when both sides are `bool`. Shift operators require integer operands.
 
-The current checker performs limited assignment compatibility checks. It infers
-types and validates some operator families, but it does not yet enforce every
-possible mismatch between declared variable types, return expressions, and
-assignment expressions. Use explicit casts from `std/cast.mg` when narrowing,
-widening, or converting pointer/integer/float values.
+The checker validates initializer, assignment, call-argument, and return-value
+compatibility as well as operator families. Numeric types are mutually
+compatible, and pointer types use permissive pointer compatibility; narrowing
+or representation-changing conversions may produce warnings. Explicit casts
+are available in `std/cast.mg`.
 
 Numeric literals initially infer as `i64`; string literals infer as `str`; bool
 literals infer as `bool`. Contextual lowering may still produce the declared
@@ -1185,17 +1193,16 @@ counts, `ptr` is pointer-sized, and `str`/`slice` are two-word runtime structs.
 
 If a function body reaches the end without an explicit `ret`, codegen emits a
 zero value for the declared return type. For throwing return types this is an OK
-error plus a zero value when the return type has a value. Prefer explicit
-returns for clarity.
+error plus a zero value when the return type has a value.
 
 `throw err` checks `err.code`. If the code is zero, execution continues. If the
 code is nonzero, the current function returns through the throwing return path.
-Throwing from a non-throwing function is not a useful pattern; throwing functions
-should have a `!` return type.
+`throw "message"` constructs and returns a failure. The checker rejects `throw`
+inside a non-throwing function.
 
-`try call()` only supports throwing function calls in practice. On non-OK error
-it rethrows from the current function; on OK it yields the call value. `try` is
-intended for use inside throwing functions.
+`try call()` requires a throwing call. On non-OK error it rethrows from the
+current function; on OK it yields the call value. The checker rejects `try`
+inside a non-throwing function.
 
 Deferred statements run when control leaves their current function or nested
 body through `ret`, `throw`, normal fallthrough, `break`, or `continue`.
@@ -1207,18 +1214,19 @@ loop body.
 
 ### Globals and Initialization
 
-Mutable global variables are emitted as zero-initialized storage. General
-top-level initializer syntax is not supported; use restricted `const`
-initializers for LLVM constants:
+Mutable global variables are emitted as thread-local storage. An omitted
+initializer produces zero initialization; an initializer may use the same
+restricted LLVM-compatible forms as a constant:
 
 ```magma
 counter u64        # valid global, zero-initialized
-counter u64 = 1    # not the supported global form
+limit u64 = 10     # valid restricted initializer
 const counter_value u64 = 1
 ```
 
-Mutable global state is used in parts of `std/` for low-level platform calls.
-Because globals lower to storage, updates are visible across calls.
+Updates are visible across calls on the same thread. Each thread has its own
+instance, so use explicitly shared storage plus synchronization for cross-thread
+state.
 
 ### Compiler Directives
 

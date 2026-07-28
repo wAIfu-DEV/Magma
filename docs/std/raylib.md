@@ -3,7 +3,7 @@
 ## Example
 
 ```magma
-try raylib.initWindow(heap.allocator(), 800, 450, "Magma")
+raylib.initWindow(800, 450, "Magma")
 defer raylib.closeWindow()
 raylib.setTargetFPS(60)
 while raylib.windowShouldClose() == false:
@@ -19,7 +19,7 @@ The import library is linked automatically, and the `bundle` declaration copies
 
 The initial surface includes window management, timing, drawing basic 2D
 shapes and text, keyboard input, mouse input, config flags, key constants, and
-the standard raylib color palette. See `samples/raylib_window.mg`.
+the standard raylib color palette. See `samples/raylib_test.mg`.
 
 ## Types
 

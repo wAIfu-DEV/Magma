@@ -30,6 +30,10 @@ Both worker limits and `queueCapacity` must be greater than zero, and
 `maxWorkers` must not be less than `minWorkers`. A zero `spinCount` disables
 spinning.
 
+`newDefault(a) !$ThreadPool` uses the logical core count as its baseline,
+permits worker growth, starts with a 256-task queue, and selects a small
+core-count-derived spin budget.
+
 Worker bookkeeping starts at `minWorkers` slots and doubles only when those
 slots are occupied, capped by `maxWorkers`. Contexts are allocated separately,
 so this growth does not relocate context pointers held by running workers.
@@ -71,16 +75,8 @@ Workers needed for a burst retire when the queue drains, leaving only the
 baseline workers to use the configured spin phase. A conservative spin budget is
 still advisable for mostly idle workloads.
 
-The included `samples/thread_pool_spinner_benchmark.mg` uses one worker and a
-budget of 4,096 pauses. On the development machine, submissions arriving up to
-50 microseconds after the previous task reached their callback in roughly
-0.7-0.9 microseconds. At a 100-microsecond gap the spin budget had expired and
-latency returned to roughly 22 microseconds, matching the normal parked pool.
-These figures illustrate the cutoff and are not platform guarantees.
-
 Use the normal pool for mostly idle or latency-insensitive work. Consider the
 spinning pool when tasks arrive frequently enough that avoiding native wakeups
 is worth the extra CPU usage.
 
-Other relevant samples are `samples/thread_pool_creation_benchmark.mg` and
-`samples/thread_pool_idle_benchmark.mg`.
+See `samples/thread_pool_benchmark.mg` for the maintained pool example.

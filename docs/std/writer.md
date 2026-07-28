@@ -13,7 +13,9 @@ A type-erased byte-output interface with formatting helpers.
 
 ## Type
 
-`Writer(impl ptr, fn_write (ptr, str) !u64)` pairs adapter state with a write callback. The state and callback must remain valid for the writer's lifetime.
+`Writer(impl ptr, fn_write (ptr, str) !u64)` pairs mutable adapter state with a
+write callback. `Vtable(fn_write ...)` and `ConstWriter(impl ptr, vtable
+Vtable*)` provide an immutable-vtable form suitable for global adapters.
 
 ## API
 
@@ -25,5 +27,8 @@ A type-erased byte-output interface with formatting helpers.
 - `Writer.writeInt64(num i64) !u64` writes signed decimal, including the minimum `i64` value.
 - `Writer.writeUint64(num u64) !u64` writes unsigned decimal.
 - `Writer.writeFloat64(flt f64, precision u64) !u64` writes fixed-point decimal with `precision` fractional digits and handles NaN and infinities.
+- `ConstWriter.write`, `writeAll`, and `writeLn` have the same partial-write
+  guarantees. `ConstWriter.toWriter() Writer` returns a borrowed mutable-form
+  interface using the same implementation and callback.
 
 `digitToChar(i i16) u8` is an internal decimal formatting helper.

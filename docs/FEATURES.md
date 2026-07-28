@@ -9,16 +9,14 @@ error-trace, and concurrency behavior that cannot be established from examples
 alone. Consequently, this is a description of the current implemented language,
 not a proposal for a future version.
 
-The corpus presents Magma as a small, statically typed systems language. Its
-surface syntax combines name-before-type declarations, explicit error
-propagation, generic containers, receiver methods, and deliberately exposed
-pointer operations. It compiles through LLVM and permits inline LLVM when the
-language itself cannot express an operation.
+Magma is statically typed. Its surface syntax includes name-before-type
+declarations, error propagation, generic containers, receiver methods, and
+pointer operations. It compiles through LLVM and supports inline LLVM.
 
-## 1. Overall character
+## 1. Feature overview
 
-Magma is expression-oriented enough for calls, arithmetic, member access, and
-inference to compose naturally, but its control-flow constructs are statements.
+Calls, arithmetic, member access, and inference are expressions. Control-flow
+constructs are statements.
 It has no classes, traits, exceptions, pattern matching, lambdas, or `for` loop
 in the observed corpus. Instead, abstraction is built from:
 
@@ -29,10 +27,6 @@ in the observed corpus. Instead, abstraction is built from:
 - throwing function signatures and a first-class `error` value;
 - pointers, slices, stack-backed arrays, raw memory routines, external symbols, and
   inline LLVM.
-
-This produces a recognizable design: high-level conveniences are supplied where
-they do not hide allocation or failure, while memory management and platform
-interoperation remain explicit.
 
 ## 2. Lexical and structural syntax
 
@@ -89,7 +83,7 @@ while i < bound:
 ..
 ```
 
-The explicit terminator makes nested control flow unambiguous without braces.
+Nested control flow uses explicit terminators rather than braces.
 Empty bodies are legal and occur in the tests, especially as an assertion idiom:
 
 ```magma
@@ -169,10 +163,11 @@ const EMPTY := Value(kind=0, payload=0)
 ```
 
 Constant initializers are restricted to LLVM-compatible literals, constant and
-function references, global addresses, and struct aggregates; Magma does not
-perform general compile-time evaluation. Globals use the same `name Type` form
-at module scope. Uninitialized globals are zeroed, while initialized globals
-accept the same restricted constant forms.
+function references, global addresses, initialized arrays, and struct
+aggregates; Magma does not perform general compile-time evaluation. Globals use
+the same `name Type` form at module scope and accept the same restricted
+initializers. They lower as thread-local storage: omitted initializers are zeroed,
+and each thread has a separate instance.
 
 `:=` is declaration syntax, not general assignment. Its left side is a simple
 new name, so field or indexed inference such as `obj.field := x` is not part of
@@ -346,7 +341,7 @@ Allocator(impl ptr, vtable AllocatorVTable*)
 Together, an opaque implementation pointer and function-pointer fields form a
 manually built interface or vtable. `Allocator` points to a shared immutable
 `AllocatorVTable` and `DuplexVTable`; `Reader` and `Writer` embed their single function pointer.
-This gives Magma dynamic dispatch and dependency inversion without
+Calls through these function-pointer fields provide dynamic dispatch without
 language-level interfaces.
 
 ### 4.5 Generics
@@ -410,8 +405,7 @@ Assignment is right-associative; ordinary arithmetic and logical operators are
 left-associative. Parentheses are used extensively where bit-level expressions
 mix shifts, masks, and comparisons.
 
-`sizeof Type` yields the byte size of a type and is fundamental to generic
-allocation:
+`sizeof Type` yields the byte size of a type and is used in generic allocation:
 
 ```magma
 ret try this.vtable.fn_alloc(this.impl, count * sizeof T)
@@ -419,8 +413,7 @@ ret try this.vtable.fn_alloc(this.impl, count * sizeof T)
 
 There is no general cast operator. Numeric conversions and pointer/integer
 reinterpretations are named library functions, many implemented through inline
-LLVM. This makes conversions easy to find but places some type-system work in
-the standard library.
+LLVM.
 
 ## 6. Control flow
 
@@ -453,7 +446,7 @@ while i < n:
 ```
 
 `break` and `continue` operate on the nearest loop. There is no `for`, range
-syntax, `switch`, or `match`, so indexed traversal is deliberately explicit.
+syntax, `switch`, or `match`. Indexed traversal in the corpus uses `while`.
 
 ### 6.3 Deferred execution
 
@@ -472,9 +465,6 @@ The examples use it for allocations and file/stream handles. Deferred work is
 scope-aware and runs on normal or abnormal exits, including returns, throws,
 loop control, and body fallthrough. Defers execute last-in-first-out within their
 scope. A deferred body cannot contain another `defer`.
-
-This is one of the language's strongest safety conveniences: cleanup remains
-explicit, but is colocated with acquisition and participates in error exits.
 
 ## 7. Error model
 
@@ -502,9 +492,10 @@ line str = try reader.readLn(a)
 try writer.writeAll(line)
 ```
 
-`throw expr` evaluates an `error`. A nonzero error code exits the current
-function; an OK error continues. This conditional behavior permits `throw
-errors.ok()` without failure, although normal code does not need that idiom.
+`throw expr` accepts an `error` or string. A string becomes a failure with that
+message. A nonzero error code exits the current function; an OK error continues.
+This permits `throw errors.ok()` without failure, although normal code does not
+need that idiom. The checker rejects `throw` in a non-throwing function.
 
 ### 7.3 Manual error handling
 
@@ -523,7 +514,7 @@ Both binding types can instead be inferred from the throwing call:
 count, countErr := file.count()
 ```
 
-This gives callers a choice between concise propagation and explicit recovery.
+Callers can use propagation or explicit recovery.
 The destructuring form is narrow: it declares exactly a value and an `error`,
 and the right side must be a throwing function call. A failed value result is
 zero-initialized and must not be used before checking the error.
@@ -621,8 +612,8 @@ joins every worker, and releases the pool; it must not race with new submissions
 ### 8.2 Creating and awaiting a future
 
 `future.new[T, Context]` takes an allocator, pool, throwing task function, and
-context value. The context is copied into private work storage, so it is useful
-for packaging several task inputs in one struct:
+context value. The context is copied into private work storage. Several task
+inputs can be packaged in one struct:
 
 ```magma
 ReadTask(source reader.Reader, allocator allocator.Allocator, count u64)
@@ -759,8 +750,8 @@ pub ptou(x ptr) u64:
 ```
 
 It implements casts, descriptor construction, aggregate extraction, and memory
-intrinsics that are absent from the core syntax. It is a powerful escape hatch,
-but its strings are not type-checked against surrounding Magma code. Invalid or
+intrinsics that are absent from the core syntax. Its strings are not type-checked
+against surrounding Magma code. Invalid or
 mismatched IR is deferred to LLVM and can compromise optimizer assumptions.
 
 ### 9.5 Memory model in practice
@@ -777,14 +768,12 @@ next ptr = cast.utop(cast.ptou(base) + offset)
 
 There are no bounds checks, null checks, general lifetime or alias checks,
 data-race rules, or protection against writing string literal storage. The
-warning-only ownership analysis is intentionally local and incomplete. Fixed
-arrays are zeroed, but pointer validity remains the programmer's responsibility.
-Magma should therefore be classified as memory-unsafe in its current form.
+warning-only ownership analysis is local and does not cover all values. Fixed
+arrays are zeroed, but pointer validity is not checked.
 
-## 10. Standard-library feature picture
+## 10. Standard-library features
 
-The language is small, but the corpus demonstrates that it can support a useful
-systems library:
+The corpus contains the following standard-library functionality:
 
 - allocation and platform heap wrappers;
 - raw copy, move, compare, and fill operations;
@@ -802,70 +791,37 @@ systems library:
 - time and path operations with Windows/Unix backends;
 - a manually tagged JSON value model and serializer.
 
-The samples further exercise benchmarking, file reading, JSON output, error
+The samples exercise benchmarking, file reading, JSON output, error
 destructuring, partial-write handling, overlapping memory moves, container
-consistency, integer edge cases, and Unicode conversion. This is meaningful
-evidence that function pointers, generics, explicit errors, and low-level memory
-operations compose beyond toy programs.
+consistency, integer edge cases, and Unicode conversion.
 
-## 11. Important implementation limitations
+## 11. Implementation limits
 
-Several restrictions matter when reading or writing present-day Magma:
+The current implementation has the following restrictions:
 
 1. **No automatic memory safety.** `$` drives warning-only checking for direct
    destructible locals and transfers into struct constructors; pointers,
    aliases, field and indexed state, aggregate contents, and partial moves
    remain unchecked.
-2. **Incomplete static checking.** Some invalid assignments, returns, casts, or
-   throwing-call uses can survive farther into lowering than a mature language
-   would permit.
-3. **Restricted initialized globals.** Mutable module storage is zeroed; `const`
-   supports LLVM-compatible literals, addresses, and struct aggregates rather
-   than general compile-time evaluation.
+2. **Permissive compatibility rules.** Initializers, assignments, arguments,
+   returns, and operator families are checked, but numeric types are broadly
+   compatible and pointer compatibility is permissive. Some
+   narrowing or representation-changing conversions are warnings rather than
+   errors.
+3. **Restricted thread-local globals.** Mutable module storage is per-thread and
+   accepts only LLVM-compatible initializers. `const` supports literals,
+   references, initialized arrays, addresses, and struct aggregates rather than
+   general compile-time evaluation.
 4. **Restricted destructuring.** Only the two-result throwing-call form is
    supported.
 5. **Type-directed subscripting.** Postfix indexing can target general
    expressions, including calls and grouped expressions, but the resulting
    target must have a pointer, slice, or fixed-array type.
-6. **No high-level sum types or interfaces.** Libraries manually encode tags,
+6. **No built-in sum types or interfaces.** Libraries manually encode tags,
    payload storage, and vtables.
 7. **No `for`, `switch`, closures, or inference-heavy generic constraints.**
-   The language favors a small set of explicit constructs.
-8. **Inline LLVM crosses the type boundary.** It is essential to current library
-   implementation but outside the normal safety and portability guarantees.
+8. **Inline LLVM is not type-checked by Magma.** LLVM validates and transforms
+   the injected IR.
 9. **Implicit fallthrough returns exist.** The backend can synthesize a zero
     result (and OK error for throwing functions) when execution reaches a
-    function end. Explicit `ret` is clearer for value-returning functions.
-
-These are not merely theoretical concerns: the standard library contains
-workarounds such as local copies before `addrof`, explicit integer casts, manual
-null tests via pointer-to-integer conversion, and careful error cleanup.
-
-## 12. Design assessment
-
-Magma's syntax is internally coherent. Name-before-type declarations work
-uniformly for fields, parameters, locals, globals, and destructured results.
-Square brackets consistently denote generic arguments or element shapes, while
-postfix `*` and `[]` keep low-level type composition compact, while
-`array T[N]` creates explicit local backing storage. The
-colon/`..` block form is unusual but easy to scan and independent of indentation.
-
-The error system is the most distinctive high-level feature. `!T`, `try`,
-`throw`, and explicit `(value, error)` handling make failure visible without the
-verbosity of manually checking every call. Because throwing behavior is also
-present in function-pointer types, it composes with the library's interface
-pattern.
-
-The central tradeoff is that a small core pushes substantial responsibility into
-conventions and library code. Interfaces are vtable structs, variants are tagged
-raw storage, and conversions are LLVM-backed functions. Ownership annotations
-receive useful warning-only checking, but remain deliberately short of a general
-lifetime or memory-safety proof. Correctness still depends heavily on disciplined
-library implementation.
-
-In summary, the observed language is already capable of practical low-level
-programs and reusable generic libraries. It is best understood as an early,
-LLVM-oriented systems language with explicit allocation and errors—not as a
-memory-safe language or a feature-complete general-purpose platform. Its syntax
-is compact and learnable; its current risks lie less in surface complexity than
-in incomplete enforcement beneath that surface.
+    function end.

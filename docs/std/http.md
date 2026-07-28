@@ -18,9 +18,10 @@ supports Windows only.
 - `Header(name str, value str)` is a borrowed request-header pair.
 - `Request(method str, url str, headers Header[])` describes a request; its strings and header slice are borrowed for the duration of `send`.
 - `Body(source reader.Reader, length u64)` describes an optional streaming request body. A null reader callback represents absence; `Body.isPresent()` queries it.
-- `Options(connectTimeoutMs u64, sendTimeoutMs u64, receiveTimeoutMs u64, decompress bool)` configures a client.
-- `Client(allocator alc.Allocator, impl ptr)` owns the platform session.
-- `Response(impl ptr)` owns response handles and headers.
+- `Options(userAgent str, connectTimeoutMs u32, sendTimeoutMs u32,
+  receiveTimeoutMs u32, automaticDecompression bool)` configures a client.
+- `Client(impl impl_http.Client, allocator alc.Allocator)` owns the platform session.
+- `Response(impl impl_http.Response)` owns response handles and headers.
 
 ## Request bodies
 

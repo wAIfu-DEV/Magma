@@ -11,8 +11,8 @@ reachable through it must remain valid until the entry function finishes.
 
 A thread is consumed by `Thread.join() !void`, which waits for completion and
 releases its native resources. Detached threads are deliberately not exposed:
-safe detached state reclamation will require the planned atomic or
-reference-counted synchronization layer.
+use `std/thread_pool` and `std/future` when work needs scheduler-managed state
+and completion.
 
 `Thread.isFinished() !bool` performs a non-blocking status check. A `true`
 result means the entry function has returned, but the thread remains joinable
@@ -27,7 +27,7 @@ consumed and must not be used afterwards.
 
 `join()` establishes the synchronization point needed to read memory written by
 the worker. Concurrent access before joining still requires synchronization;
-this module does not yet provide mutexes or atomics.
+use `std/atomic`, `std/mutex`, `std/spinlock`, or `std/wake` as appropriate.
 
 ```magma
 use "../std/thread.mg" thread

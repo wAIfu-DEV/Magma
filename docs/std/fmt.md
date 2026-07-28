@@ -27,6 +27,8 @@ operation reports that error before writing any output.
 - `Format.float(value f64, precision u64) $Format` appends a fixed-point value.
 - `destr Format.writeTo(out writer.Writer) !u64` writes and consumes the format.
 - `destr Format.print() !u64` writes to standard output and consumes the format.
+- `pub printf(format $Format) !void` prints and consumes a format while
+  discarding the byte count.
 - `destr Format.toStr(a alc.Allocator) !$str` returns an owned string and consumes the format.
 - `destr Format.free() void` discards an unrendered format.
 

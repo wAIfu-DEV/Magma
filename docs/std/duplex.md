@@ -3,7 +3,7 @@
 ## Example
 
 ```magma
-const streamVTable := duplex.DuplexVTable(
+const streamVTable := duplex.Vtable(
     fn_write=writeCallback,
     fn_read=readCallback,
 )
@@ -16,13 +16,13 @@ Combines read and write callbacks over one implementation pointer.
 
 ## Type
 
-`DuplexVTable(fn_write (ptr, str) !u64, fn_read (ptr, u8[], u64) !u64)` stores callbacks shared by implementations.
+`Vtable(fn_write (ptr, str) !u64, fn_read (ptr, u8[], u64) !u64)` stores callbacks shared by implementations.
 
-`Duplex(impl ptr, vtable DuplexVTable*)` stores adapter state and a pointer to that shared table. It occupies 16 bytes on 64-bit targets.
+`Duplex(impl ptr, vtable Vtable*)` stores adapter state and a pointer to that shared table. It occupies 16 bytes on 64-bit targets.
 
 ## API
 
-- `pub new(impl ptr, vtable DuplexVTable*) Duplex` constructs the adapter.
+- `pub new(impl ptr, vtable Vtable*) Duplex` constructs the adapter.
 - `Duplex.writer() wr.Writer` returns a writer interface using `fn_write`.
 - `Duplex.reader() rd.Reader` returns a reader interface using `fn_read`.
 
