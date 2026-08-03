@@ -3,7 +3,6 @@ mod file_impl_unix
 
 
 use "std:c" c
-use "std:file"      file
 use "std:allocator" alc
 use "std:slices"    slices
 use "std:strings"   strings

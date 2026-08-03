@@ -31,4 +31,45 @@ pub main() !void:
         missing.free(a)
         throw errors.failure("removed file can still be opened")
     ..
+
+    root := "std_phase5_fs_test"
+    nested := "std_phase5_fs_test/a/b"
+    try fs.makeDirs(a, nested)
+    try fs.writeFile(a, "std_phase5_fs_test/a/b/source.bin", "phase five")
+    info := try fs.metadata(a, "std_phase5_fs_test/a/b/source.bin")
+    if info.kind().isFile() == false || info.size() != 10:
+        throw errors.failure("file metadata changed")
+    ..
+    directory := try fs.openDir(a, nested)
+    entryFound bool = false
+    entries := directory.iterator()
+    while entries.hasData():
+        entry := try entries.next()
+        if strings.compare(entry.name(), "source.bin"):
+            entryFound = true
+        ..
+    ..
+    try directory.close()
+    if entryFound == false:
+        throw errors.failure("directory iteration missed a file")
+    ..
+    try fs.copyFile(a, "std_phase5_fs_test/a/b/source.bin", "std_phase5_fs_test/copy.bin")
+    try fs.rename(a, "std_phase5_fs_test/copy.bin", "std_phase5_fs_test/renamed.bin")
+    try fs.writeFile(a, "std_phase5_fs_test/replacement.bin", "replacement")
+    try fs.replace(a, "std_phase5_fs_test/replacement.bin", "std_phase5_fs_test/renamed.bin")
+    replacement := try fs.readFile(a, "std_phase5_fs_test/renamed.bin")
+    defer replacement.free(a)
+    if strings.compare(replacement, "replacement") == false:
+        throw errors.failure("atomic replacement changed")
+    ..
+    current := try fs.currentDir(a)
+    defer current.free(a)
+    temporary := try fs.temporaryDir(a)
+    defer temporary.free(a)
+    canonical := try fs.canonicalize(a, root)
+    defer canonical.free(a)
+    if current.countBytes() == 0 || temporary.countBytes() == 0 || canonical.countBytes() == 0:
+        throw errors.failure("system directory query returned an empty path")
+    ..
+    try fs.removeTree(a, root)
 ..

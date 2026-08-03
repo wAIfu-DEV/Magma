@@ -61,6 +61,7 @@ const (
 	KwCmpNeq
 	KwTry
 	KwDefer
+	KwOnError
 	KwCmpLt
 	KwCmpGt
 	KwCmpLtEq
@@ -123,6 +124,7 @@ var KwTypeToRepr []string = []string{
 	KwCmpNeq:     "!=",
 	KwTry:        "try",
 	KwDefer:      "defer",
+	KwOnError:    "onerror",
 	KwCmpLt:      "<",
 	KwCmpGt:      ">",
 	KwCmpLtEq:    "<=",
@@ -185,6 +187,7 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"!=":       KwCmpNeq,
 	"try":      KwTry,
 	"defer":    KwDefer,
+	"onerror":  KwOnError,
 	"<":        KwCmpLt,
 	">":        KwCmpGt,
 	"<=":       KwCmpLtEq,

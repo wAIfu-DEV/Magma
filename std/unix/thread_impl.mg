@@ -48,6 +48,7 @@ pub spawn(entry (ptr) u64, context ptr) !$Thread:
     ..
 
     launch Launch* = try heap.alloc(sizeof Launch)
+    onerror heap.free(launch)
     launch.entry = entry
     launch.context = context
     launch.completed = 0
@@ -55,7 +56,6 @@ pub spawn(entry (ptr) u64, context ptr) !$Thread:
     handle u64 = 0
     code i32 = ext_pthread_create(addrof handle, none, threadMain, launch)
     if code != 0:
-        heap.free(launch)
         throw errors.native(cast.u64to32(cast.itou(cast.i32to64(code))), "pthread_create failed")
     ..
     ret Thread(handle=handle, launch=launch)

@@ -297,7 +297,9 @@ func (a *analyzer) expression(out *flow, expr types.NodeExpr) {
 	switch node := expr.(type) {
 	case *types.NodeExprVarDef:
 		if a.destructible(node.Type) {
-			out.states[node] = stateLive
+			// A declaration without an initializer contains only the type's zero
+			// value. It does not acquire ownership until a later owned assignment.
+			out.states[node] = stateBorrowed
 			a.addLocal(out, node)
 		}
 	case *types.NodeExprVarDefAssign:
@@ -464,7 +466,7 @@ func mergeFlows(left, right flow) flow {
 
 func (a *analyzer) checkExit(out *flow) {
 	exit := cloneFlow(*out)
-	a.unwindTo(&exit, 0)
+	a.unwindTo(&exit, 0, false)
 	for variable, state := range exit.states {
 		if state == stateLive || state == stateMaybeConsumed || state == stateConditional {
 			a.warn(variableToken(variable), fmt.Sprintf("destructible value '%s' is not consumed on every exit path", variableName(variable)))
@@ -480,12 +482,14 @@ func (a *analyzer) runDeferred(out *flow, deferred *types.NodeStmtDefer) {
 	}
 }
 
-func (a *analyzer) unwindScope(out *flow, checkLocals bool) {
+func (a *analyzer) unwindScope(out *flow, checkLocals bool, failing bool) {
 	index := len(out.scopes) - 1
 	scope := out.scopes[index]
 	out.scopes = out.scopes[:index]
 	for i := len(scope.deferred) - 1; i >= 0; i-- {
-		a.runDeferred(out, scope.deferred[i])
+		if !scope.deferred[i].OnError || failing {
+			a.runDeferred(out, scope.deferred[i])
+		}
 	}
 	for variable := range scope.locals {
 		state := out.states[variable]
@@ -498,15 +502,15 @@ func (a *analyzer) unwindScope(out *flow, checkLocals bool) {
 	}
 }
 
-func (a *analyzer) unwindTo(out *flow, depth int) {
+func (a *analyzer) unwindTo(out *flow, depth int, failing bool) {
 	for len(out.scopes) > depth {
-		a.unwindScope(out, true)
+		a.unwindScope(out, true, failing)
 	}
 }
 
 func (a *analyzer) unwindTryFailure(out *flow) {
 	for len(out.scopes) > 0 {
-		a.unwindScope(out, false)
+		a.unwindScope(out, false, true)
 	}
 }
 
@@ -606,12 +610,12 @@ func (a *analyzer) statement(out *flow, statement types.NodeStatement) {
 		} else {
 			a.borrowExpr(out, node.Expression)
 		}
-		a.unwindTo(out, 0)
+		a.unwindTo(out, 0, false)
 		a.checkExit(out)
 		out.terminated = true
 	case *types.NodeStmtThrow:
 		a.borrowExpr(out, node.Expression)
-		a.unwindTo(out, 0)
+		a.unwindTo(out, 0, true)
 		a.checkExit(out)
 		out.terminated = true
 	case *types.NodeStmtIf:
@@ -651,7 +655,7 @@ func (a *analyzer) statement(out *flow, statement types.NodeStatement) {
 	case *types.NodeStmtBreak:
 		if len(a.loopBreaks) != 0 {
 			index := len(a.loopBreaks) - 1
-			a.unwindTo(out, a.loopDepths[index])
+			a.unwindTo(out, a.loopDepths[index], false)
 			exit := cloneFlow(*out)
 			exit.terminated = false
 			a.loopBreaks[index] = append(a.loopBreaks[index], exit)
@@ -660,7 +664,7 @@ func (a *analyzer) statement(out *flow, statement types.NodeStatement) {
 	case *types.NodeStmtContinue:
 		if len(a.loopNext) != 0 {
 			index := len(a.loopNext) - 1
-			a.unwindTo(out, a.loopDepths[index])
+			a.unwindTo(out, a.loopDepths[index], false)
 			next := cloneFlow(*out)
 			next.terminated = false
 			a.loopNext[index] = append(a.loopNext[index], next)
@@ -680,7 +684,7 @@ func (a *analyzer) body(out *flow, body *types.NodeBody) {
 		a.statement(out, statement)
 	}
 	if len(out.scopes) > depth {
-		a.unwindTo(out, depth)
+		a.unwindTo(out, depth, false)
 	}
 }
 
@@ -707,7 +711,7 @@ func (a *analyzer) function(function *types.NodeFuncDef) {
 	}
 	a.body(&out, &function.Body)
 	if !out.terminated {
-		a.unwindTo(&out, 0)
+		a.unwindTo(&out, 0, false)
 		a.checkExit(&out)
 	}
 }

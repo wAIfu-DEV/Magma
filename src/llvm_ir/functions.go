@@ -43,10 +43,12 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 	}
 
 	irWrite(&cpy, "  %.defer.ret = alloca i1\n")
+	irWrite(&cpy, "  %.defer.err = alloca i1\n")
 	irWrite(&cpy, "  %.defer.brk = alloca i1\n")
 	irWrite(&cpy, "  %.defer.cont = alloca i1\n")
 
 	irWrite(&cpy, "  store i1 0, ptr %.defer.ret\n")
+	irWrite(&cpy, "  store i1 0, ptr %.defer.err\n")
 	irWrite(&cpy, "  store i1 0, ptr %.defer.brk\n")
 	irWrite(&cpy, "  store i1 0, ptr %.defer.cont\n")
 
@@ -87,12 +89,20 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 		irWritef(&cpy, ".defer.%d.%d:\n", ctx.CurrNestedScopeIdx, revIdx)
 
 		def := deferred[revIdx]
+		var onErrorAfter SsaName
+		if def.OnError {
+			pending := irSsaLocal(&cpy)
+			run := irSsaName(&cpy)
+			onErrorAfter = irSsaName(&cpy)
+			irWritef(&cpy, "  %s = load i1, ptr %%.defer.err\n", pending.Repr)
+			irWritef(&cpy, "  br i1 %s, label %%%s, label %%%s\n", pending.Repr, run.Repr, onErrorAfter.Repr)
+			irWritef(&cpy, "%s:\n", run.Repr)
+		}
 		if !def.IsBody {
 			_, e := irExpression(&cpy, nil, def.Expression, false)
 			if e != nil {
 				return e
 			}
-			continue
 		} else {
 			for _, stmt := range def.Body.Statements {
 				switch stmt.(type) {
@@ -105,7 +115,10 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 					return e
 				}
 			}
-			continue
+		}
+		if def.OnError {
+			irWritef(&cpy, "  br label %%%s\n", onErrorAfter.Repr)
+			irWritef(&cpy, "%s:\n", onErrorAfter.Repr)
 		}
 	}
 

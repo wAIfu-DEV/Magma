@@ -40,6 +40,13 @@ runExecTest() !void:
     if code != 7:
         throw errors.failure("exec returned the wrong exit code")
     ..
+    envArgs := array str[2]
+    envArgs[0] = "/d"
+    envArgs[1] = "/c if %MAGMA_CHILD_ENV%==yes (exit 0) else exit 9"
+    environment := array str[1]
+    environment[0] = "MAGMA_CHILD_ENV=yes"
+    child := try process.spawnWithEnv("cmd.exe", envArgs, environment)
+    if try child.await() != 0: throw errors.failure("replacement child environment was not installed") ..
 ..
 
 @platform("windows")
@@ -93,6 +100,13 @@ runExecTest() !void:
     if code != 7:
         throw errors.failure("exec returned the wrong exit code")
     ..
+    envArgs := array str[2]
+    envArgs[0] = "-c"
+    envArgs[1] = "test \"$MAGMA_CHILD_ENV\" = yes"
+    environment := array str[1]
+    environment[0] = "MAGMA_CHILD_ENV=yes"
+    child := try process.spawnWithEnv("/bin/sh", envArgs, environment)
+    if try child.await() != 0: throw errors.failure("replacement child environment was not installed") ..
 ..
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")

@@ -11,6 +11,7 @@ use "std:cast" cast
 
 ext ext_unix_fork fork() c.int
 ext ext_unix_execvp execvp(file u8*, arguments ptr) c.int
+ext ext_unix_execve execve(file u8*, arguments ptr, environment ptr) c.int
 ext ext_unix_waitpid waitpid(pid c.int, status c.int*, options c.int) c.int
 ext ext_unix_kill kill(pid c.int, signal c.int) c.int
 ext ext_unix_exit _exit(status c.int) void
@@ -67,6 +68,7 @@ pub spawn(executable str, arguments str[]) !$Process:
     a := heap.allocator()
     argv u8** = try a.allocT[u8*](count + 2)
     initialized u64 = 0
+    onerror freeArguments(argv, initialized)
     executableCopy u8* = try strings.toCstr(a, executable)
     argv[0] = executableCopy
     initialized = 1
@@ -74,7 +76,6 @@ pub spawn(executable str, arguments str[]) !$Process:
     while i < count:
         copied u8*, copyError error = strings.toCstr(a, arguments[i])
         if copyError.nok():
-            freeArguments(argv, initialized)
             throw copyError
         ..
         argv[i + 1] = copied
@@ -92,6 +93,47 @@ pub spawn(executable str, arguments str[]) !$Process:
     if pid < 0:
         throw errors.failure("fork failed")
     ..
+    ret Process(pid=pid, finished=false, exitCode=0)
+..
+
+pub spawnWithEnv(executable str, arguments str[], environment str[]) !$Process:
+    if executable.countBytes() == 0 || containsNull(executable):
+        throw errors.invalidArgument("process executable is empty or contains a null byte")
+    ..
+    a := heap.allocator()
+    count := slices.count(arguments)
+    argv := try a.allocT[u8*](count + 2)
+    initialized u64 = 0
+    onerror freeArguments(argv, initialized)
+    executableCopy := try strings.toCstr(a, executable)
+    argv[0] = executableCopy
+    initialized = 1
+    i u64 = 0
+    while i < count:
+        argv[i + 1] = try strings.toCstr(a, arguments[i])
+        initialized = initialized + 1
+        i = i + 1
+    ..
+    argv[count + 1] = none
+    environmentCount := slices.count(environment)
+    envp := try a.allocT[u8*](environmentCount + 1)
+    envInitialized u64 = 0
+    onerror freeArguments(envp, envInitialized)
+    i = 0
+    while i < environmentCount:
+        envp[i] = try strings.toCstr(a, environment[i])
+        envInitialized = envInitialized + 1
+        i = i + 1
+    ..
+    envp[environmentCount] = none
+    pid := ext_unix_fork()
+    if pid == 0:
+        ext_unix_execve(executableCopy, argv, envp)
+        ext_unix_exit(127)
+    ..
+    freeArguments(argv, initialized)
+    freeArguments(envp, envInitialized)
+    if pid < 0: throw errors.failure("fork failed") ..
     ret Process(pid=pid, finished=false, exitCode=0)
 ..
 

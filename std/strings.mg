@@ -516,19 +516,18 @@ pub split(a alc.Allocator, s str, separator str) !$Split:
     partStart u64 = 0
     position u64 = 0
     made u64 = 0
+    onerror:
+        cleanup u64 = 0
+        while cleanup < made:
+            items[cleanup].free(a)
+            cleanup = cleanup + 1
+        ..
+        a.free(items)
+    ..
 
     while position + separatorSize <= sourceSize:
         if matchesAt(s, separator, position):
-            item $str, itemError error = substring(a, s, partStart, position)
-            if itemError.nok():
-                cleanup u64 = 0
-                while cleanup < made:
-                    items[cleanup].free(a)
-                    cleanup = cleanup + 1
-                ..
-                a.free(items)
-                throw itemError
-            ..
+            item $str = try substring(a, s, partStart, position)
             items[made] = item
             made = made + 1
             position = position + separatorSize
@@ -538,16 +537,7 @@ pub split(a alc.Allocator, s str, separator str) !$Split:
         ..
     ..
 
-    last $str, lastError error = substring(a, s, partStart, sourceSize)
-    if lastError.nok():
-        cleanup u64 = 0
-        while cleanup < made:
-            items[cleanup].free(a)
-            cleanup = cleanup + 1
-        ..
-        a.free(items)
-        throw lastError
-    ..
+    last $str = try substring(a, s, partStart, sourceSize)
     items[made] = last
     ret Split(items=items, size=partCount, allocator=a)
 ..
@@ -572,11 +562,8 @@ pub splitIter(a alc.Allocator, s str, separator str) !$SplitIterator:
         throw err.invalidArgument("split separator cannot be empty")
     ..
     sourceCopy := try copy(a, s)
-    separatorCopy $str, separatorError error = copy(a, separator)
-    if separatorError.nok():
-        sourceCopy.free(a)
-        throw separatorError
-    ..
+    onerror sourceCopy.free(a)
+    separatorCopy $str = try copy(a, separator)
     ret SplitIterator(source=sourceCopy, separator=separatorCopy, position=0, finished=false, allocator=a)
 ..
 
@@ -628,12 +615,9 @@ pub splitOnce(a alc.Allocator, s str, separator str) !$pair.Pair[str, str]:
     ..
     position := try find(s, separator)
     first := try substring(a, s, 0, position)
+    onerror first.free(a)
     secondStart := position + separator.countBytes()
-    second $str, secondError error = substring(a, s, secondStart, s.countBytes())
-    if secondError.nok():
-        first.free(a)
-        throw secondError
-    ..
+    second $str = try substring(a, s, secondStart, s.countBytes())
     result := pair.new[str, str](first, second)
     footgun.drop[str](first)
     footgun.drop[str](second)

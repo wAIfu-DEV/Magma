@@ -303,15 +303,13 @@ destr Format.toStr(a alc.Allocator) !$str:
         release(this)
         throw allocErr
     ..
+    onerror result.free(a)
 
     sink := BufferSink(out=strings.toPtr(result), offset=0)
     out := writer.new(addrof sink, writeBuffer)
     ignored u64, writeErr error = writeParts(this, out)
     release(this)
-    if writeErr.nok():
-        result.free(a)
-        throw writeErr
-    ..
+    if writeErr.nok(): throw writeErr ..
     ret result
 ..
 

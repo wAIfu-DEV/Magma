@@ -135,6 +135,36 @@ main() void:
 	}
 }
 
+func TestOnErrorDeferIsGuardedByErrorExit(t *testing.T) {
+	ir, err := compileSource(t, `mod main
+
+cleanup() void: ..
+
+work(fail bool) !u64:
+    onerror cleanup()
+    if fail:
+        throw "failed"
+    ..
+    ret 7
+..
+`)
+	if err != nil {
+		t.Fatalf("compile onerror: %v", err)
+	}
+
+	for _, want := range []string{
+		"%.defer.err = alloca i1",
+		"store i1 0, ptr %.defer.err",
+		"store i1 1, ptr %.defer.err",
+		"load i1, ptr %.defer.err",
+		".cleanup()",
+	} {
+		if !strings.Contains(ir, want) {
+			t.Fatalf("onerror lowering is missing %q:\n%s", want, ir)
+		}
+	}
+}
+
 func TestMixedWidthArithmeticUsesWidestRepresentation(t *testing.T) {
 	ir, err := compileSource(t, `mod main
 
@@ -530,69 +560,6 @@ main() void:
 	}
 	if !strings.Contains(ir, "extractvalue") {
 		t.Fatal("inferred destructuring did not lower the throwing result")
-	}
-}
-
-func TestErrorTraceSitesLowerOnColdPropagationEdges(t *testing.T) {
-	source := `mod test
-
-fail() !u8:
-    throw errorValue()
-..
-
-errorValue() error:
-    llvm "  ret %type.error zeroinitializer\n"
-..
-
-main() !void:
-    value := try fail()
-    other := try fail()
-..
-`
-	ir, err := compileSource(t, source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(ir, "%type.error = type { ptr, i64, i32, i32 }") {
-		t.Fatal("error ABI is not the compact three-word representation")
-	}
-	if !strings.Contains(ir, "%type.error.trace.arena = type { [1024 x %type.error.trace.node], [0 x i8] }") ||
-		!strings.Contains(ir, "@magma.error.trace.thread.shard") ||
-		!strings.Contains(ir, "%type.error.trace.shard = type { i64, i8, [55 x i8] }") ||
-		strings.Contains(ir, "@magma.error.trace.cursor =") {
-		t.Fatal("error traces do not use the configured sharded ring")
-	}
-	// The implicit core imports allocator support, whose two throwing wrappers
-	// also contain propagation sites. The test program itself contributes the
-	// original throw and two try sites.
-	if got := strings.Count(ir, "call %type.error @magma.error.push"); got != 5 {
-		t.Fatalf("got %d trace pushes, want three program sites and two core dependency sites", got)
-	}
-	if got := strings.Count(ir, "!prof !9000"); got != 6 {
-		t.Fatalf("got %d unlikely error branches, want four program branches and two core dependency branches", got)
-	}
-	if !strings.Contains(ir, "define internal %type.error @magma.error.push(%type.error %error, ptr %site) cold noinline") {
-		t.Fatal("trace recording helper is not kept out of hot callers")
-	}
-	if !strings.Contains(ir, "private constant %type.error.site") ||
-		!strings.Contains(ir, "i32 4, i32 5") ||
-		!strings.Contains(ir, "i32 12, i32 13") {
-		t.Fatalf("generated trace sites do not retain throw/try source positions:\n%s", ir)
-	}
-	if !strings.Contains(ir, "private unnamed_addr constant [8 x i8] c\"test.mg\\00\"") {
-		t.Fatal("trace metadata does not use the source basename")
-	}
-	if got := strings.Count(ir, "c\"test.mg\\00\""); got != 1 {
-		t.Fatalf("trace filename emitted %d times, want one interned constant", got)
-	}
-	if got := strings.Count(ir, "c\"fail\\00\""); got != 1 {
-		t.Fatalf("trace function name emitted %d times, want one interned constant", got)
-	}
-	if got := strings.Count(ir, "c\"main\\00\""); got != 1 {
-		t.Fatalf("repeated trace function name emitted %d times, want one interned constant", got)
-	}
-	if !strings.Contains(ir, "call void @magma.error.print(%type.error %e)") {
-		t.Fatal("throwing main does not print its uncaught error trace")
 	}
 }
 

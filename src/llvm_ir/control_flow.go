@@ -227,6 +227,7 @@ func irThrowSsa(ctx *IrCtx, errSsa SsaName, fnDef *t.NodeFuncDef, pos t.FilePos)
 	}
 
 	irWrite(ctx, "  store i1 1, ptr %.defer.ret\n")
+	irWrite(ctx, "  store i1 1, ptr %.defer.err\n")
 
 	irWrite(ctx, "  store ")
 	e := irThrowingType(ctx, fnDef.ReturnType)
@@ -479,12 +480,20 @@ func irBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef, isLoopBody b
 		irWritef(&cpy, ".defer.%d.%d:\n", cpy.CurrNestedScopeIdx, revIdx)
 
 		def := deferred[revIdx]
+		var onErrorAfter SsaName
+		if def.OnError {
+			pending := irSsaLocal(&cpy)
+			run := irSsaName(&cpy)
+			onErrorAfter = irSsaName(&cpy)
+			irWritef(&cpy, "  %s = load i1, ptr %%.defer.err\n", pending.Repr)
+			irWritef(&cpy, "  br i1 %s, label %%%s, label %%%s\n", pending.Repr, run.Repr, onErrorAfter.Repr)
+			irWritef(&cpy, "%s:\n", run.Repr)
+		}
 		if !def.IsBody {
 			_, e := irExpression(&cpy, nil, def.Expression, false)
 			if e != nil {
 				return e
 			}
-			continue
 		} else {
 			for _, stmt := range def.Body.Statements {
 				e := irStatement(&cpy, stmt, fnDef)
@@ -492,7 +501,10 @@ func irBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef, isLoopBody b
 					return e
 				}
 			}
-			continue
+		}
+		if def.OnError {
+			irWritef(&cpy, "  br label %%%s\n", onErrorAfter.Repr)
+			irWritef(&cpy, "%s:\n", onErrorAfter.Repr)
 		}
 	}
 

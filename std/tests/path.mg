@@ -14,6 +14,14 @@ pub main() !void:
         if path.isAbsolute("C:\\tmp") == false:
             throw errors.failure("absolute Windows path was not recognized")
         ..
+        if path.isAbsolute("C:tmp"):
+            throw errors.failure("drive-relative Windows path treated as absolute")
+        ..
+        unc := try path.normalize(a, "\\\\server\\share\\folder\\..")
+        defer unc.free(a)
+        if strings.compare(unc, "\\\\server\\share") == false:
+            throw errors.failure("UNC normalization changed its root")
+        ..
     elif path.isAbsolute("/tmp") == false:
         throw errors.failure("absolute Unix path was not recognized")
     ..
@@ -31,5 +39,43 @@ pub main() !void:
     defer noExtension.free(a)
     if noExtension.countBytes() != 0 || *strings.toPtr(noExtension) != 0:
         throw errors.failure("empty path extension is not null terminated")
+    ..
+
+    parts := array str[3]
+    parts[0] = "one"
+    parts[1] = "two"
+    parts[2] = ".."
+    joined := try path.join(a, parts)
+    defer joined.free(a)
+    if strings.compare(joined, "one") == false:
+        throw errors.failure("path join did not normalize components")
+    ..
+    normalized := try path.normalize(a, "one//./two/../three")
+    defer normalized.free(a)
+    expected str = "one/three"
+    if separator == 92:
+        expected = "one\\three"
+    ..
+    if strings.compare(normalized, expected) == false:
+        throw errors.failure("path normalization changed")
+    ..
+    parent := try path.parent(a, "one/two/file.txt")
+    defer parent.free(a)
+    expectedParent str = "one/two"
+    if separator == 92:
+        expectedParent = "one\\two"
+    ..
+    if strings.compare(parent, expectedParent) == false:
+        throw errors.failure("path parent changed")
+    ..
+    stem := try path.stem(a, "archive.tar.gz")
+    defer stem.free(a)
+    if strings.compare(stem, "archive.tar") == false:
+        throw errors.failure("path stem changed")
+    ..
+    changed := try path.changeExtension(a, "archive.tar.gz", "zip")
+    defer changed.free(a)
+    if strings.compare(changed, "archive.tar.zip") == false:
+        throw errors.failure("path extension replacement changed")
     ..
 ..

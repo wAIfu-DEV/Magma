@@ -10,6 +10,9 @@ use "std:slices" slices
 use "std:utf8" utf8
 use "std:errors" errors
 use "std:cast" cast
+use "std:memory" memory
+use "std:checked" checked
+use "std:utf16" utf16
 
 ext ext_win32_CreateProcessW CreateProcessW(applicationName c.unsigned_short*, commandLineValue c.unsigned_short*, processAttributes ptr, threadAttributes ptr, inheritHandles c.unsigned_int, creationFlags c.unsigned_int, environment ptr, currentDirectory c.unsigned_short*, startupInfo ptr, processInformation ptr) c.unsigned_int
 ext ext_win32_WaitForSingleObject WaitForSingleObject(handle ptr, milliseconds c.unsigned_int) c.unsigned_int
@@ -164,11 +167,58 @@ pub spawn(executable str, arguments str[]) !$Process:
     if ok == 0:
         throw errors.native(ext_win32_GetLastError(), "CreateProcessW failed")
     ..
+    onerror ext_win32_CloseHandle(information.process)
     if ext_win32_CloseHandle(information.thread) == 0:
         code u32 = ext_win32_GetLastError()
-        ext_win32_CloseHandle(information.process)
         throw errors.native(code, "CloseHandle failed for process thread")
     ..
+    ret Process(handle=information.process)
+..
+
+environmentBlock(a allocator.Allocator, entries str[]) !$u16*:
+    count := slices.count(entries)
+    total u64 = 1
+    i u64 = 0
+    while i < count:
+        total = try checked.uAdd(total, try utf16.fromUtf8Size(entries[i]))
+        total = try checked.uAdd(total, 1)
+        i = i + 1
+    ..
+    block := try a.allocT[u16](total)
+    offset u64 = 0
+    onerror a.free(block)
+    i = 0
+    while i < count:
+        encoded u16[] = try utf8.utf8To16(a, entries[i])
+        units := slices.count(encoded)
+        memory.copy(slices.toPtr(encoded), addrof block[offset], units * sizeof u16)
+        a.free(slices.toPtr(encoded))
+        offset = offset + units
+        block[offset] = 0
+        offset = offset + 1
+        i = i + 1
+    ..
+    block[offset] = 0
+    ret block
+..
+
+pub spawnWithEnv(executable str, arguments str[], environment str[]) !$Process:
+    if executable.countBytes() == 0 || containsNull(executable):
+        throw errors.invalidArgument("process executable is empty or contains a null byte")
+    ..
+    a := heap.allocator()
+    line := try commandLine(a, executable, arguments)
+    defer line.free(a)
+    line16 := try utf8.utf8To16NT(a, line)
+    defer a.free(slices.toPtr(line16))
+    block := try environmentBlock(a, environment)
+    defer a.free(block)
+    startup StartupInfo
+    startup.cb = cast.u64to32(sizeof StartupInfo)
+    information ProcessInformation
+    ok := ext_win32_CreateProcessW(none, slices.toPtr(line16), none, none, 1, 0x400, block, none, addrof startup, addrof information)
+    if ok == 0: throw errors.native(ext_win32_GetLastError(), "CreateProcessW failed") ..
+    ext_win32_CloseHandle(information.thread)
     ret Process(handle=information.process)
 ..
 

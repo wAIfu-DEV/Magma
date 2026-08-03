@@ -7,15 +7,15 @@ mod raylib
 use "std:c" c
 # Requires raylib.dll beside executable
 @platform("windows")
-link "../vendor/raylib/win/raylibdll.lib"
+link "vendor/raylib/win/raylibdll.lib"
 @platform("windows")
-bundle "../vendor/raylib/win/raylib.dll"
+bundle "vendor/raylib/win/raylib.dll"
 
 @platform("linux", "freebsd", "netbsd", "openbsd")
-link "../vendor/raylib/linux/raylib.so" 
+link "vendor/raylib/linux/raylib.so" 
 
 @platform("darwin")
-link "../vendor/raylib/mac/raylib.dylib" 
+link "vendor/raylib/mac/raylib.dylib" 
 
 use "std:allocator" alc
 use "std:strings"   strings

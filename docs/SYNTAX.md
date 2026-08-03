@@ -849,6 +849,24 @@ defer:
 
 Deferred blocks cannot contain nested `defer` statements.
 
+`onerror` registers cleanup that runs only when control leaves its scope by
+throwing or propagating an error. It does not run on a successful return,
+fallthrough, `break`, or `continue`. Error cleanups share the normal deferred
+LIFO ordering and support both expressions and blocks:
+
+```magma
+resource := try acquire()
+onerror resource.free()
+ret resource
+```
+
+```magma
+onerror:
+    first.free()
+    second.free()
+..
+```
+
 `defer` can perform resource cleanup around throwing code:
 
 ```magma
@@ -959,7 +977,7 @@ External declarations have no body.
 Native libraries required by external declarations are declared at top level:
 
 ```magma
-link "./vendor/raylib/lib/raylib.lib"
+link "./std/vendor/raylib/lib/raylib.lib"
 link "winhttp"
 ```
 
@@ -977,9 +995,9 @@ the generated executable after a successful link:
 
 ```magma
 @platform("windows")
-link "./vendor/raylib/raylibdll.lib"
+link "./std/vendor/raylib/raylibdll.lib"
 @platform("windows")
-bundle "./vendor/raylib/raylib.dll"
+bundle "./std/vendor/raylib/raylib.dll"
 ```
 
 Bundle paths are resolved relative to the declaring Magma file, deduplicated

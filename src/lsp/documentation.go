@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	magmatypes "Magma/src/magma_types"
 	"Magma/src/types"
 	"fmt"
 	"strings"
@@ -36,10 +37,12 @@ type docIndex struct {
 	// Members are part of their receiver's public surface even though Magma does
 	// not spell `pub` on each method or field.
 	completionVisible  map[string]bool
+	completionKinds    map[string]int
 	completionBindings []completionBinding
 	memberTypes        map[string]*types.NodeType
 	expressionSymbols  map[string]map[string]completionItem
 	functionReturns    map[string]*types.NodeType
+	primitiveModules   map[string]string
 }
 
 // completionBinding is captured from the source AST before monomorphization.
@@ -54,7 +57,7 @@ type completionBinding struct {
 }
 
 func buildDocIndex(state *types.SharedState) *docIndex {
-	index := &docIndex{byNode: map[any]string{}, modules: map[string]string{}, symbols: map[string]string{}, hoverSymbols: map[string]string{}, hoverByName: map[string]string{}, valueHovers: map[string]string{}, completionVisible: map[string]bool{}, memberTypes: map[string]*types.NodeType{}, expressionSymbols: map[string]map[string]completionItem{}, functionReturns: map[string]*types.NodeType{}}
+	index := &docIndex{byNode: map[any]string{}, modules: map[string]string{}, symbols: map[string]string{}, hoverSymbols: map[string]string{}, hoverByName: map[string]string{}, valueHovers: map[string]string{}, completionVisible: map[string]bool{}, completionKinds: map[string]int{}, memberTypes: map[string]*types.NodeType{}, expressionSymbols: map[string]map[string]completionItem{}, functionReturns: map[string]*types.NodeType{}, primitiveModules: map[string]string{}}
 	for _, file := range state.Files {
 		if file == nil || file.GlNode == nil {
 			continue
@@ -63,6 +66,9 @@ func buildDocIndex(state *types.SharedState) *docIndex {
 		if text := module.markdown(); text != "" {
 			index.modules[file.PackageName] = text
 		}
+		for primitive := range file.GlNode.PrimitiveMethods {
+			index.primitiveModules[primitive] = file.PackageName
+		}
 		for _, declaration := range file.GlNode.Declarations {
 			switch node := declaration.(type) {
 			case *types.NodeFuncDef:
@@ -70,6 +76,7 @@ func buildDocIndex(state *types.SharedState) *docIndex {
 				docs := index.add(file, name, nameLine(node.Class.NameNode), node, byLine)
 				index.addHover(file.PackageName, name, joinHover(code(formatFunction(node)), docs))
 				index.completionVisible[file.PackageName+"\x00"+name] = node.IsPublic || strings.Contains(name, ".")
+				index.completionKinds[file.PackageName+"\x00"+name] = 3
 				index.functionReturns[file.PackageName+"\x00"+name] = node.ReturnType
 				if !strings.Contains(name, ".") {
 					index.addExpressionSymbol(file.PackageName, completionItem{Label: name, Kind: 3, Detail: formatFunction(node), Documentation: markdownContent(index.hoverSymbols[file.PackageName+"\x00"+name])})
@@ -77,12 +84,20 @@ func buildDocIndex(state *types.SharedState) *docIndex {
 			case *types.NodeExprVarDef:
 				name := flattenName(node.Name)
 				detail := formatVariable(node)
-				index.addExpressionSymbol(file.PackageName, completionItem{Label: name, Kind: 6, Detail: detail, Documentation: markdownContent(code(detail))})
+				docs := index.add(file, name, nameLine(node.Name), node, byLine)
+				index.addHover(file.PackageName, name, joinHover(code(detail), docs))
+				index.completionVisible[file.PackageName+"\x00"+name] = node.IsPublic
+				index.completionKinds[file.PackageName+"\x00"+name] = 6
+				index.addExpressionSymbol(file.PackageName, completionItem{Label: name, Kind: 6, Detail: detail, Documentation: markdownContent(index.hoverSymbols[file.PackageName+"\x00"+name])})
 			case *types.NodeConstDef:
 				if node.VarDef != nil {
 					name := flattenName(node.VarDef.Name)
 					detail := formatVariable(node.VarDef)
-					index.addExpressionSymbol(file.PackageName, completionItem{Label: name, Kind: 21, Detail: detail, Documentation: markdownContent(code(detail))})
+					docs := index.add(file, name, nameLine(node.VarDef.Name), node, byLine)
+					index.addHover(file.PackageName, name, joinHover(code(detail), docs))
+					index.completionVisible[file.PackageName+"\x00"+name] = node.VarDef.IsPublic
+					index.completionKinds[file.PackageName+"\x00"+name] = 21
+					index.addExpressionSymbol(file.PackageName, completionItem{Label: name, Kind: 21, Detail: detail, Documentation: markdownContent(index.hoverSymbols[file.PackageName+"\x00"+name])})
 				}
 			case *types.NodeStructDef:
 				name := flattenName(node.Class.NameNode)
@@ -268,7 +283,7 @@ func (d *docIndex) inferredCompletionType(module string, aliases map[string]stri
 				if imported := aliases[first]; imported != "" {
 					return d.functionReturns[imported+"\x00"+member]
 				}
-				ownerModule, owner := completionTypeIdentity(module, aliases, bindings[first])
+				ownerModule, owner := d.completionTypeIdentity(module, aliases, bindings[first])
 				if owner != "" {
 					return d.functionReturns[ownerModule+"\x00"+owner+"."+member]
 				}
@@ -280,15 +295,18 @@ func (d *docIndex) inferredCompletionType(module string, aliases map[string]stri
 	return nil
 }
 
-func completionTypeIdentity(module string, aliases map[string]string, node *types.NodeType) (string, string) {
+func (d *docIndex) completionTypeIdentity(module string, aliases map[string]string, node *types.NodeType) (string, string) {
 	if node == nil {
 		return "", ""
 	}
+	if primitive := completionPrimitiveType(node); primitive != "" {
+		return d.primitiveModules[primitive], primitive
+	}
 	switch kind := node.KindNode.(type) {
 	case *types.NodeTypePointer:
-		return completionTypeIdentity(module, aliases, &types.NodeType{KindNode: kind.Kind})
+		return d.completionTypeIdentity(module, aliases, &types.NodeType{KindNode: kind.Kind})
 	case *types.NodeTypeRfc:
-		return completionTypeIdentity(module, aliases, &types.NodeType{KindNode: kind.Kind})
+		return d.completionTypeIdentity(module, aliases, &types.NodeType{KindNode: kind.Kind})
 	case *types.NodeTypeAbsolute:
 		parts := strings.Split(kind.AbsoluteName, ".")
 		if len(parts) == 1 {
@@ -307,6 +325,27 @@ func completionTypeIdentity(module string, aliases map[string]string, node *type
 		return ownerModule, documentationSymbolName(parts[len(parts)-1])
 	}
 	return "", ""
+}
+
+func completionPrimitiveType(node *types.NodeType) string {
+	if node == nil {
+		return ""
+	}
+	if _, ok := node.KindNode.(*types.NodeTypeSlice); ok {
+		return "slice"
+	}
+	named, ok := node.KindNode.(*types.NodeTypeNamed)
+	if !ok {
+		return ""
+	}
+	single, ok := named.NameNode.(*types.NodeNameSingle)
+	if !ok {
+		return ""
+	}
+	if _, ok := magmatypes.BasicTypes[single.Name]; ok {
+		return single.Name
+	}
+	return ""
 }
 
 func completionVariableType(variable *types.NodeExprVarDef) *types.NodeType {

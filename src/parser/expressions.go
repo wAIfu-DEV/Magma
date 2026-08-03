@@ -1000,9 +1000,9 @@ func parseDestructureAssignAfterComma(ctx *ParseCtx, commaTk t.Token, left t.Nod
 }
 
 func parseDefer(ctx *ParseCtx, tk t.Token) (*t.NodeStmtDefer, error) {
-	consume(ctx) // consume defer
+	consume(ctx) // consume defer/onerror
 
-	n := &t.NodeStmtDefer{}
+	n := &t.NodeStmtDefer{OnError: tk.KeywType == t.KwOnError}
 
 	next, e := peek(ctx)
 	if e != nil {
@@ -1012,7 +1012,7 @@ func parseDefer(ctx *ParseCtx, tk t.Token) (*t.NodeStmtDefer, error) {
 	if next.KeywType == t.KwColon {
 		n.IsBody = true
 
-		body, e := parseBody(ctx, next)
+		body, e := parseDeferBody(ctx, next)
 		if e != nil {
 			return nil, e
 		}

@@ -40,4 +40,27 @@ pub main() !void:
     if roundTripPtr[roundTrip.countBytes()] != 0:
         throw errors.failure("UTF-8 result is not null terminated")
     ..
+    encoded := array u8[4]
+    encodedView u8[] = slices.fromPtr(slices.toPtr(encoded), 4)
+    if try utf8.encode(0x1F625, encodedView) != 4:
+        throw errors.failure("supplementary UTF-8 encoding changed")
+    ..
+    decoded := try utf8.decode(encodedView)
+    if decoded.value != 0x1F625 || decoded.width != 4:
+        throw errors.failure("supplementary UTF-8 decoding changed")
+    ..
+    decoder := utf8.newDecoder()
+    firstChunk u8[] = slices.fromPtr(slices.toPtr(encoded), 2)
+    scalars := array u32[1]
+    scalarView u32[] = slices.fromPtr(slices.toPtr(scalars), 1)
+    firstResult := try decoder.push(firstChunk, scalarView)
+    if firstResult.needsInput == false || firstResult.written != 0:
+        throw errors.failure("incremental UTF-8 decoder did not retain partial input")
+    ..
+    secondChunk u8[] = slices.fromPtr(addrof encoded[2], 2)
+    secondResult := try decoder.push(secondChunk, scalarView)
+    try decoder.finish()
+    if secondResult.written != 1 || scalars[0] != 0x1F625:
+        throw errors.failure("incremental UTF-8 decoding changed")
+    ..
 ..

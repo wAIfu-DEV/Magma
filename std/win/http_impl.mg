@@ -75,10 +75,10 @@ pub openClient(a alc.Allocator, userAgent str, connectMs u32, sendMs u32, receiv
     if session == none:
         throw fail("WinHttpOpen failed")
     ..
+    onerror ext_WinHttpCloseHandle(session)
 
     ok u32 = ext_WinHttpSetTimeouts(session, 0, cast.u32toi32(connectMs), cast.u32toi32(sendMs), cast.u32toi32(receiveMs))
     if ok == 0:
-        ext_WinHttpCloseHandle(session)
         throw fail("WinHttpSetTimeouts failed")
     ..
 
@@ -86,7 +86,6 @@ pub openClient(a alc.Allocator, userAgent str, connectMs u32, sendMs u32, receiv
         decompression u32 = 3
         ok = ext_WinHttpSetOption(session, 118, addrof decompression, 4)
         if ok == 0:
-            ext_WinHttpCloseHandle(session)
             throw fail("WinHttpSetOption decompression failed")
         ..
     ..
@@ -146,13 +145,12 @@ makeObjectName(a alc.Allocator, parts URLComponents*) !$u16[]:
 
 addHeaders(a alc.Allocator, request ptr, headers str) !bool:
     headers16 u16[] = try utf8.utf8To16(a, headers)
+    defer slices.free(a, headers16)
     total u64 = slices.count(headers16)
     if total > 0xFFFFFFFF:
-        slices.free(a, headers16)
         throw errors.wouldOverflow("HTTP header is too large")
     ..
     ok u32 = ext_WinHttpAddRequestHeaders(request, slices.toPtr(headers16), cast.u64to32(total), 0xA0000000)
-    slices.free(a, headers16)
     if ok == 0:
         throw fail("WinHttpAddRequestHeaders failed")
     ..
@@ -206,9 +204,9 @@ queryRawHeaders(a alc.Allocator, request ptr) !$str:
         throw fail("WinHttpQueryHeaders size failed")
     ..
     wide u16* = try a.alloc(cast.u32to64(byteCount))
+    defer a.free(wide)
     ok u32 = ext_WinHttpQueryHeaders(request, 22, none, wide, addrof byteCount, none)
     if ok == 0:
-        a.free(wide)
         throw fail("WinHttpQueryHeaders failed")
     ..
     units u64 = cast.u32to64(byteCount) / sizeof u16
@@ -217,7 +215,6 @@ queryRawHeaders(a alc.Allocator, request ptr) !$str:
     ..
     view u16[] = slices.fromPtr(wide, units)
     result str = try utf8.utf16to8(a, view)
-    a.free(wide)
     ret result
 ..
 
@@ -230,6 +227,7 @@ pub Client.send(method str, url str, headers str, source reader.Reader, bodyLeng
     ..
 
     url16 u16[] = try utf8.utf8To16NT(this.allocator, url)
+    defer slices.free(this.allocator, url16)
     parts := URLComponents(
         structSize=cast.u64to32(sizeof URLComponents),
         scheme=none,
@@ -250,28 +248,26 @@ pub Client.send(method str, url str, headers str, source reader.Reader, bodyLeng
 
     ok u32 = ext_WinHttpCrackUrl(slices.toPtr(url16), 0, 0, addrof parts)
     if ok == 0:
-        slices.free(this.allocator, url16)
         throw fail("WinHttpCrackUrl failed")
     ..
     
     if parts.schemeKind != 1 && parts.schemeKind != 2:
-        slices.free(this.allocator, url16)
         throw errors.invalidArgument("HTTP URL must use http or https")
     ..
 
     host u16[] = try copyWideNT(this.allocator, parts.host, cast.u32to64(parts.hostLength))
+    defer slices.free(this.allocator, host)
     object u16[] = try makeObjectName(this.allocator, addrof parts)
+    defer slices.free(this.allocator, object)
     verb u16[] = try utf8.utf8To16NT(this.allocator, method)
+    defer slices.free(this.allocator, verb)
     serverPort u16 = parts.port
     connection ptr = ext_WinHttpConnect(this.session, slices.toPtr(host), serverPort, 0)
 
     if connection == none:
-        slices.free(this.allocator, verb)
-        slices.free(this.allocator, object)
-        slices.free(this.allocator, host)
-        slices.free(this.allocator, url16)
         throw fail("WinHttpConnect failed")
     ..
+    onerror ext_WinHttpCloseHandle(connection)
 
     flags u32 = 0
     if parts.schemeKind == 2:
@@ -279,21 +275,15 @@ pub Client.send(method str, url str, headers str, source reader.Reader, bodyLeng
     ..
 
     request ptr = ext_WinHttpOpenRequest(connection, slices.toPtr(verb), slices.toPtr(object), none, none, none, flags)
-    slices.free(this.allocator, verb)
-    slices.free(this.allocator, object)
-    slices.free(this.allocator, host)
-    slices.free(this.allocator, url16)
 
     if request == none:
-        ext_WinHttpCloseHandle(connection)
         throw fail("WinHttpOpenRequest failed")
     ..
+    onerror ext_WinHttpCloseHandle(request)
 
     if headers.countBytes() > 0:
         added bool, addHeadersErr error = addHeaders(this.allocator, request, headers)
         if addHeadersErr.nok():
-            ext_WinHttpCloseHandle(request)
-            ext_WinHttpCloseHandle(connection)
             throw addHeadersErr
         ..
     ..
@@ -305,38 +295,28 @@ pub Client.send(method str, url str, headers str, source reader.Reader, bodyLeng
 
     ok = ext_WinHttpSendRequest(request, none, 0, none, 0, total, 0)
     if ok == 0:
-        ext_WinHttpCloseHandle(request)
-        ext_WinHttpCloseHandle(connection)
         throw fail("WinHttpSendRequest failed")
     ..
 
     if hasBody:
         writtenBody u64, bodyErr error = writeBody(request, source, bodyLength)
         if bodyErr.nok():
-            ext_WinHttpCloseHandle(request)
-            ext_WinHttpCloseHandle(connection)
             throw bodyErr
         ..
     ..
 
     ok = ext_WinHttpReceiveResponse(request, none)
     if ok == 0:
-        ext_WinHttpCloseHandle(request)
-        ext_WinHttpCloseHandle(connection)
         throw fail("WinHttpReceiveResponse failed")
     ..
 
     status u16, statusErr error = queryStatus(request)
     if statusErr.nok():
-        ext_WinHttpCloseHandle(request)
-        ext_WinHttpCloseHandle(connection)
         throw statusErr
     ..
 
     raw str, headerErr error = queryRawHeaders(this.allocator, request)
     if headerErr.nok():
-        ext_WinHttpCloseHandle(request)
-        ext_WinHttpCloseHandle(connection)
         throw headerErr
     ..
 

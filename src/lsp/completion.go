@@ -55,7 +55,8 @@ func complete(uri, source string, pos position, stdRoot string) []completionItem
 	// determine the receiver type.
 	cleanStart := context.dotByte
 	cleanEnd := context.endByte
-	if strings.TrimSpace(analysisSource[context.lineOffset:context.startByte]) == "" || sourceImportsAlias(analysisSource, context.receiver) {
+	replacement := ""
+	if strings.TrimSpace(analysisSource[context.lineOffset:context.startByte]) == "" {
 		cleanStart = context.lineOffset
 		for cleanEnd < len(analysisSource) && analysisSource[cleanEnd] != '\r' && analysisSource[cleanEnd] != '\n' {
 			cleanEnd++
@@ -66,8 +67,15 @@ func complete(uri, source string, pos position, stdRoot string) []completionItem
 		if cleanEnd < len(analysisSource) && analysisSource[cleanEnd] == '\n' {
 			cleanEnd++
 		}
+	} else if sourceImportsAlias(analysisSource, context.receiver) {
+		// A module alias is not itself a value, so merely removing the dot still
+		// fails semantic analysis. Replace only the unfinished selector with a
+		// harmless expression; deleting its entire line can orphan nested block
+		// bodies when completion occurs in an if/while header.
+		cleanStart = context.startByte
+		replacement = "0"
 	}
-	clean := analysisSource[:cleanStart] + analysisSource[cleanEnd:]
+	clean := analysisSource[:cleanStart] + replacement + analysisSource[cleanEnd:]
 	result := analyze(uri, clean, stdRoot)
 	if result == nil || result.file == nil || result.docs == nil {
 		return []completionItem{}
@@ -388,6 +396,9 @@ func completionType(a *analysis, node *types.NodeType) (string, string) {
 	if node == nil {
 		return "", ""
 	}
+	if primitive := completionPrimitiveType(node); primitive != "" {
+		return a.docs.primitiveModules[primitive], primitive
+	}
 	switch kind := node.KindNode.(type) {
 	case *types.NodeTypePointer:
 		return completionType(a, &types.NodeType{KindNode: kind.Kind})
@@ -438,6 +449,9 @@ func (d *docIndex) completions(keyPrefix, forbiddenDotPrefix, typedPrefix string
 		}
 		seen[name] = true
 		kind := 3
+		if declaredKind := d.completionKinds[key]; declaredKind != 0 {
+			kind = declaredKind
+		}
 		if forbiddenDotPrefix != "" && !strings.Contains(firstCodeLine(hover), "(") {
 			kind = 5
 		}

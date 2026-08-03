@@ -8,6 +8,8 @@ use "std:strings"   strings
 use "std:slices"    slices
 use "std:cast"      cast
 use "std:allocator" alc
+use "std:unicode"   unicode
+use "std:checked"   checked
 
 # Iterator over a UTF-8 byte range.
 # @complexity O(1) for iterator operations.
@@ -19,6 +21,105 @@ pub Utf8Iterator(
 # A decoded Unicode codepoint and its UTF-8 width in bytes.
 # @complexity O(1).
 pub Codepoint(value u32, width u8)
+
+# Progress from an incremental decode operation.
+pub DecodeResult(consumed u64, written u64, needsInput bool, needsOutput bool)
+
+# Incremental UTF-8 decoder. pending stores at most one packed scalar sequence.
+pub Decoder(pending u32, pendingCount u8, pendingWidth u8)
+
+# Creates an empty incremental UTF-8 decoder.
+pub newDecoder() Decoder:
+    ret Decoder(pending=0, pendingCount=0, pendingWidth=0)
+..
+
+sequenceWidth(first u8) u8:
+    if (first & 0x80) == 0:
+        ret 1
+    elif (first & 0xE0) == 0xC0:
+        ret 2
+    elif (first & 0xF0) == 0xE0:
+        ret 3
+    elif (first & 0xF8) == 0xF0:
+        ret 4
+    ..
+    ret 0
+..
+
+Decoder.appendPending(byte u8) void:
+    shift u32 = cast.u64to32(cast.u8to64(this.pendingCount) * 8)
+    this.pending = this.pending | (u8to32(byte) << shift)
+    this.pendingCount = this.pendingCount + 1
+..
+
+Decoder.emitPending(output u32[], written u64*) !void:
+    bytes := array u8[4]
+    i u64 = 0
+    while i < cast.u8to64(this.pendingCount):
+        shift u32 = cast.u64to32(i * 8)
+        bytes[i] = u32to8((this.pending >> shift) & 0xFF)
+        i = i + 1
+    ..
+    view u8[] = slices.fromPtr(slices.toPtr(bytes), cast.u8to64(this.pendingCount))
+    cp, e := decode(view)
+    this.pending = 0
+    this.pendingCount = 0
+    this.pendingWidth = 0
+    if e.nok():
+        throw e
+    ..
+    output[*written] = cp.value
+    *written = *written + 1
+..
+
+# Decodes complete scalars from a chunk into caller-provided u32 storage.
+# Incomplete trailing input is retained by the decoder.
+pub Decoder.push(input u8[], output u32[]) !DecodeResult:
+    consumed u64 = 0
+    written u64 = 0
+    inputCount := slices.count(input)
+    outputCount := slices.count(output)
+
+    while true:
+        if this.pendingCount != 0:
+            while this.pendingCount < this.pendingWidth && consumed < inputCount:
+                this.appendPending(input[consumed])
+                consumed = consumed + 1
+            ..
+            if this.pendingCount < this.pendingWidth:
+                ret DecodeResult(consumed=consumed, written=written, needsInput=true, needsOutput=false)
+            ..
+            if written >= outputCount:
+                ret DecodeResult(consumed=consumed, written=written, needsInput=false, needsOutput=true)
+            ..
+            try this.emitPending(output, addrof written)
+            continue
+        ..
+
+        if consumed >= inputCount:
+            ret DecodeResult(consumed=consumed, written=written, needsInput=false, needsOutput=false)
+        ..
+        if written >= outputCount:
+            ret DecodeResult(consumed=consumed, written=written, needsInput=false, needsOutput=true)
+        ..
+        width := sequenceWidth(input[consumed])
+        if width == 0:
+            throw errors.failure("invalid UTF-8 leading byte")
+        ..
+        this.pendingWidth = width
+        while this.pendingCount < width && consumed < inputCount:
+            this.appendPending(input[consumed])
+            consumed = consumed + 1
+        ..
+    ..
+..
+
+# Verifies that no incomplete scalar remains at end of input.
+pub Decoder.finish() !void:
+    if this.pendingCount != 0:
+        throw errors.failure("incomplete UTF-8 sequence at end of input")
+    ..
+..
 
 # Converts an 8-bit value to u32.
 # @complexity O(1).
@@ -162,21 +263,10 @@ decodeFirst(start u8*, end u8*) Codepoint:
         if codepoint < 128 || codepoint > 2047:
             ret outCp
         ..
-        # Check for overlong: C0 and C1 prefixes are illegal
-        if first == 192 && (start[1] & 224) == 128:
-            ret outCp  # Overlong encoding of < 0x80
-        ..
-        if first == 193 && (start[1] & 224) == 128:
-            ret outCp  # Overlong encoding of < 0x80
-        ..
     elif width == 3:
         # Three bytes: must be in range U+0800 to U+FFFF
         if codepoint < 2048 || codepoint > 65535:
             ret outCp
-        ..
-        # Check for overlong: E0 prefix with second byte starting with less than 0xA0
-        if first == 224 && (start[1] & 224) < 160:
-            ret outCp  # Overlong encoding of < 0x800
         ..
         # Check for surrogate pairs (U+D800 to U+DFFF)
         if codepoint >= 55296 && codepoint <= 57343:
@@ -187,20 +277,42 @@ decodeFirst(start u8*, end u8*) Codepoint:
         if codepoint < 65536 || codepoint > 1114111:
             ret outCp
         ..
-        # Check for overlong: F0 prefix with second byte starting with less than 0x90
-        if first == 240 && (start[1] & 224) < 144:
-            ret outCp  # Overlong encoding of < 0x10000
-        ..
-        # Check for too large: beyond U+10FFFF
-        if codepoint > 1114111:
-            ret outCp
-        ..
     else:
         ret outCp
     ..
 
     # If we get here, validation passed
     ret Codepoint(value=codepoint, width=width)
+..
+
+# Decodes the first scalar from a byte slice.
+# @throws failure when the input is empty or begins with invalid UTF-8
+# @complexity O(1)
+pub decode(bytes u8[]) !Codepoint:
+    count := slices.count(bytes)
+    if count == 0:
+        throw errors.failure("cannot decode empty UTF-8 input")
+    ..
+    start u8* = slices.toPtr(bytes)
+    end u8* = cast.utop(cast.ptou(start) + count)
+    cp := decodeFirst(start, end)
+    if cp.width == 0:
+        throw errors.failure("invalid UTF-8 sequence")
+    ..
+    ret cp
+..
+
+# Reports whether a string is entirely valid UTF-8.
+# @complexity O(N)
+pub validate(s str) bool:
+    it := iterator(s)
+    while it.hasData():
+        cp, e := it.next()
+        if e.nok():
+            ret false
+        ..
+    ..
+    ret true
 ..
 
 # Returns the number of UTF-16 code units needed to encode a UTF-8 string.
@@ -238,12 +350,9 @@ pub utf8To16(a alc.Allocator, s str) !$u16[]:
     if elemCount == 0:
         ret slices.fromPtr(none, 0)
     ..
-    maxU64 u64 = 0 - 1
-    if elemCount > maxU64 / sizeof u16:
-        throw errors.wouldOverflow("utf16 allocation size overflow")
-    ..
-    outSize u64 = elemCount * sizeof u16
+    outSize u64 = try checked.byteCount[u16](elemCount)
     outPtr u16* = try a.alloc(outSize)
+    onerror a.free(outPtr)
 
     i u64 = 0
     while it.hasData():
@@ -283,12 +392,10 @@ pub utf8To16NT(a alc.Allocator, s str) !$u16[]:
     it Utf8Iterator = iterator(s)
 
     elemCount u64 = try utf8to16size(s)
-    maxU64 u64 = 0 - 1
-    if elemCount > (maxU64 - sizeof u16) / sizeof u16:
-        throw errors.wouldOverflow("utf16 allocation size overflow")
-    ..
-    outSize u64 = elemCount * sizeof u16
-    outPtr u16* = try a.alloc(outSize + sizeof u16)
+    allocationCount := try checked.uAdd(elemCount, 1)
+    outSize u64 = try checked.byteCount[u16](allocationCount)
+    outPtr u16* = try a.alloc(outSize)
+    onerror a.free(outPtr)
     
     outPtr[elemCount] = 0
 
@@ -343,6 +450,28 @@ encodeUtf8(cp u32, out u8*) !u64:
         throw errors.failure("invalid unicode codepoint")
     ..
     ret 0
+..
+
+# Returns the UTF-8 width of a Unicode scalar.
+# @throws invalidArgument when cp is not a scalar value
+# @complexity O(1)
+pub encodedSize(cp u32) !u64:
+    if unicode.isScalar(cp) == false:
+        throw errors.invalidArgument("invalid Unicode scalar value")
+    ..
+    ret codepointUtf8Size(cp)
+..
+
+# Encodes one Unicode scalar into caller-provided storage.
+# @returns number of bytes written
+# @throws invalidArgument for an invalid scalar or undersized output
+# @complexity O(1)
+pub encode(cp u32, output u8[]) !u64:
+    needed := try encodedSize(cp)
+    if slices.count(output) < needed:
+        throw errors.invalidArgument("UTF-8 output buffer is too small")
+    ..
+    ret try encodeUtf8(cp, slices.toPtr(output))
 ..
 
 # Returns the number of UTF-8 bytes needed to encode a UTF-16 slice.
@@ -477,6 +606,7 @@ pub utf16to8(a alc.Allocator, in u16[]) !$str:
     ..
 
     result str = try strings.alloc(a, outSize)
+    onerror result.free(a)
     outPtr u8* = strings.toPtr(result)
     writePtr u8* = outPtr
     i u64 = 0

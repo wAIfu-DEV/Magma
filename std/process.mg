@@ -37,6 +37,13 @@ pub spawn(executable str, arguments str[]) !$Process:
     ret Process(impl=child)
 ..
 
+# Starts a process with a complete replacement environment. Each entry uses
+# native name=value form. An empty slice creates an empty child environment.
+pub spawnWithEnv(executable str, arguments str[], environment str[]) !$Process:
+    child := try impl_process.spawnWithEnv(executable, arguments, environment)
+    ret Process(impl=child)
+..
+
 # Returns true when the child has exited. This does not release the Process;
 # await must still be called afterwards.
 # @example
@@ -87,5 +94,6 @@ runExecTask(task SpawnTask*) !u32:
 #   pending := try process.execAsync(pool, a, "tool", arguments)
 pub execAsync(pool thread_pool.ThreadPool, a allocator.Allocator, executable str, arguments str[]) !$future.Future[u32]:
     task := SpawnTask(executable=executable, arguments=arguments)
-    ret try future.new[u32, SpawnTask](a, pool, runExecTask, task)
+    scheduler := pool.executor()
+    ret try future.new[u32, SpawnTask](a, scheduler, runExecTask, task)
 ..

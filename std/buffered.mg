@@ -364,15 +364,11 @@ Reader.reader() reader.Reader:
 ..
 
 resizeLineBuffer(a alc.Allocator, old u8*, newCapacity u64) !$u8*:
+    onerror a.free(old)
     if newCapacity == 0 - 1:
-        a.free(old)
         throw errors.wouldOverflow("line buffer capacity overflow")
     ..
-    resized u8*, resizeErr error = a.realloc(old, newCapacity + 1)
-    if resizeErr.nok():
-        a.free(old)
-        throw resizeErr
-    ..
+    resized u8* = try a.realloc(old, newCapacity + 1)
     ret resized
 ..
 
@@ -394,6 +390,7 @@ Reader.readLn(a alc.Allocator) !$str:
     defer footgun.drop[str](line)
 
     lineBuffer u8* = strings.toPtr(line)
+    onerror a.free(lineBuffer)
     lineLen u64 = 0
     dstPtr ptr = none
     newCapacity u64 = 0
@@ -402,7 +399,6 @@ Reader.readLn(a alc.Allocator) !$str:
         # Check if we need more buffer space
         if lineLen >= capacity:
             if capacity > (0 - 1) / 2:
-                a.free(lineBuffer)
                 throw errors.wouldOverflow("line buffer capacity overflow")
             ..
             newCapacity = capacity * 2
@@ -484,19 +480,13 @@ Reader.readLn(a alc.Allocator) !$str:
                 lineBuffer[lineLen] = 0
                 ret strings.fromPtrNoCopy(lineBuffer, lineLen)
             ..
-            a.free(lineBuffer)
             throw errors.endOfFile("end of file")
         ..
         
-        filled bool, fillErr error = this.fillBuffer()
-        if fillErr.nok():
-            a.free(lineBuffer)
-            throw fillErr
-        ..
+        try this.fillBuffer()
     ..
     
     # Should never reach here
-    a.free(lineBuffer)
     throw errors.failure("unexpected error in readLn")
 ..
 

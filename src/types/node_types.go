@@ -765,11 +765,16 @@ type NodeStmtDefer struct {
 	Expression NodeExpr
 	Body       NodeBody
 	IsBody     bool
+	OnError    bool
 }
 
 func (n *NodeStmtDefer) Print(indent int) {
 	PrintIndent(indent)
-	fmt.Printf("StmtDefer\n")
+	if n.OnError {
+		fmt.Printf("StmtOnError\n")
+	} else {
+		fmt.Printf("StmtDefer\n")
+	}
 	if n.IsBody {
 		n.Body.Print(indent + 1)
 	} else {

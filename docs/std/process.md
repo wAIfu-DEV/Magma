@@ -12,3 +12,8 @@ reported as 128 plus the signal number.
 `exec` combines spawn and await. `execAsync(pool, a, executable, arguments)`
 returns `future.Future[u32]`; its strings and slice are borrowed and must remain
 valid until the future is awaited.
+
+`spawnWithEnv(executable, arguments, environment)` replaces the child's entire
+environment with `name=value` entries. It does not merge with or mutate the
+parent environment. On Unix this calls `execve`, so `executable` must be an
+explicit path; ordinary `spawn` retains PATH lookup through `execvp`.

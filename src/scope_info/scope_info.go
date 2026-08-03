@@ -234,6 +234,14 @@ func bldBody(ctx *lcx, bdy *t.NodeBody, makeScope bool) error {
 			if e != nil {
 				return e
 			}
+		case *t.NodeStmtDefer:
+			if n.IsBody {
+				if e := bldBody(ctx, &n.Body, true); e != nil {
+					return e
+				}
+			} else if e := bldExpr(ctx, n.Expression); e != nil {
+				return e
+			}
 		}
 	}
 	return nil

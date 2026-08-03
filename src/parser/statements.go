@@ -92,7 +92,7 @@ func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
 		return parseStmtIf(ctx, tk)
 	case t.KwWhile:
 		return parseStmtWhile(ctx, tk)
-	case t.KwDefer:
+	case t.KwDefer, t.KwOnError:
 		n, e := parseDefer(ctx, tk)
 		if e != nil {
 			return nil, e
@@ -174,11 +174,11 @@ func parseDeferBody(ctx *ParseCtx, tk t.Token) (t.NodeBody, error) {
 			return n, nil
 		}
 
-		if tk.KeywType == t.KwDefer {
+		if tk.KeywType == t.KwDefer || tk.KeywType == t.KwOnError {
 			return n, comp_err.CompilationErrorToken(
 				ctx.Fctx,
 				&tk,
-				"syntax error: cannot nest defer statements",
+				"syntax error: cannot nest deferred statements",
 				"",
 			)
 		}

@@ -39,12 +39,8 @@ claim[T](claimed $T) $T:
 #   map := try linear_map.new[Value](a, freeValue)
 pub new[T](a alc.Allocator, cleanup ($T) void) !$LinearMap[T]:
     keys str* = try a.allocT[str](8)
-    valuesRaw T*, valuesErr error = a.allocT[T](8)
-    if valuesErr.nok():
-        a.free(keys)
-        throw valuesErr
-    ..
-    values T* = valuesRaw
+    onerror a.free(keys)
+    values T* = try a.allocT[T](8)
     ret LinearMap[T](
         allocator=a,
         keys=keys,
@@ -88,12 +84,8 @@ LinearMap[T].grow() !void:
         newCapacity = 65535
     ..
     newKeys str* = try this.allocator.allocT[str](newCapacity)
-    newValuesRaw T*, valuesErr error = this.allocator.allocT[T](newCapacity)
-    if valuesErr.nok():
-        this.allocator.free(newKeys)
-        throw valuesErr
-    ..
-    newValues T* = newValuesRaw
+    onerror this.allocator.free(newKeys)
+    newValues T* = try this.allocator.allocT[T](newCapacity)
     count := cast.u16to64(this.countValue)
     mem.copy(this.keys, newKeys, count * sizeof str)
     mem.copy(this.values, newValues, count * sizeof T)
@@ -177,6 +169,7 @@ LinearMap[T].valuesView() T[]:
 # @example
 #   try map.set("name", value)
 LinearMap[T].set(key str, item $T) !void:
+    onerror release[T](this.cleanup, item)
     idx u64, e error = this.indexOf(key)
     if e.ok():
         existingValues T* = this.values
@@ -185,17 +178,9 @@ LinearMap[T].set(key str, item $T) !void:
         ret
     ..
     if this.countValue == this.capacity:
-        grown bool, growErr error = growForInsert[T](this)
-        if growErr.nok():
-            release[T](this.cleanup, item)
-            throw growErr
-        ..
+        try growForInsert[T](this)
     ..
-    ownedKey str, copyErr error = stg.copy(this.allocator, key)
-    if copyErr.nok():
-        release[T](this.cleanup, item)
-        throw copyErr
-    ..
+    ownedKey str = try stg.copy(this.allocator, key)
     insertAt := cast.u16to64(this.countValue)
     keys str* = this.keys
     values T* = this.values

@@ -38,14 +38,11 @@ Reader.read(a alc.Allocator, nBytes u64) !$str:
         ret try strings.alloc(a, 0)
     ..
     result str = try strings.alloc(a, nBytes)
+    onerror result.free(a)
 
     buffPtr u8* = strings.toPtr(result)
     buff u8[] = slices.fromPtr(buffPtr, nBytes)
-    readCnt u64, readErr error = this.readToBuff(buff, nBytes)
-    if readErr.nok():
-        result.free(a)
-        throw readErr
-    ..
+    readCnt u64 = try this.readToBuff(buff, nBytes)
     buffPtr[readCnt] = 0
 
     # Compiler warning suppression

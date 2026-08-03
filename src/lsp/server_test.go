@@ -102,6 +102,14 @@ func TestFunctionDefinitionNavigation(t *testing.T) {
 	if err != nil || parsedURI.Scheme != "file" || parsedURI.Host != "" {
 		t.Fatalf("definition URI %q has a UNC authority: parsed=%#v err=%v", imported.URI, parsedURI, err)
 	}
+	moduleAlias, ok := result.definition(position{Line: 6, Character: 5})
+	if !ok || moduleAlias.Range.Start != (position{Line: 0, Character: 4}) || !strings.HasSuffix(moduleAlias.URI, "/dependency.mg") {
+		t.Fatalf("module alias usage definition = %#v, %v", moduleAlias, ok)
+	}
+	declaredAlias, ok := result.definition(position{Line: 1, Character: 23})
+	if !ok || declaredAlias.Range.Start != (position{Line: 0, Character: 4}) || !strings.HasSuffix(declaredAlias.URI, "/dependency.mg") {
+		t.Fatalf("module alias declaration definition = %#v, %v", declaredAlias, ok)
+	}
 }
 
 func TestExpressionCompletionContextsIncludeGenericScope(t *testing.T) {

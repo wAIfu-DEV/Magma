@@ -12,6 +12,7 @@ use "std:errors"    err
 use "std:memory"    mem
 use "std:iterator"  iter
 use "std:footgun"   fg
+use "std:checked"   checked
 # Padding is biased for append-first workloads
 const DEFAULT_PAD_LEFT u64 = 2
 const DEFAULT_PAD_RIGHT u64 = 6
@@ -35,19 +36,11 @@ pub Array[T](
 )
 
 byteSize[T](count u64) !u64:
-    maxU64 u64 = 0 - 1
-    if sizeof T != 0 && count > maxU64 / sizeof T:
-        throw err.wouldOverflow("Array byte size overflow.")
-    ..
-    ret count * sizeof T
+    ret try checked.byteCount[T](count)
 ..
 
 addSize(a u64, b u64) !u64:
-    result u64 = a + b
-    if result < a:
-        throw err.wouldOverflow("Array allocation size overflow.")
-    ..
-    ret result
+    ret try checked.uAdd(a, b)
 ..
 
 growCapacity(capacity u64) !u64:
@@ -307,6 +300,13 @@ Array[T].take(index u64) !$T:
 # @throws outOfBounds when index is outside the accessible range
 # @complexity O(1), plus cleanup cost
 Array[T].set(index u64, value $T, cleanup ($T) void) !void:
+    onerror:
+        if cleanup != none:
+            cleanup(value)
+        else:
+            fg.drop[T](value)
+        ..
+    ..
     if index >= this.state.size:
         throw err.outOfBounds("index is out of bounds")
     ..

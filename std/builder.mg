@@ -8,6 +8,7 @@ use "std:memory" mem
 use "std:cast" cast
 use "std:errors" errors
 use "std:footgun" footgun
+use "std:checked" checked
 
 const FLAG_OWNED u8 = 1
 const FLAG_BYTE u8 = 2
@@ -45,14 +46,7 @@ Builder.ensureCapacity() !void:
     if this.count < this.capacity:
         ret
     ..
-    maxU64 u64 = 0 - 1
-    if this.capacity > maxU64 / 2:
-        throw errors.wouldOverflow("builder capacity overflow")
-    ..
-    newCapacity u64 = this.capacity * 2
-    if sizeof Segment != 0 && newCapacity > maxU64 / sizeof Segment:
-        throw errors.wouldOverflow("builder allocation size overflow")
-    ..
+    newCapacity := try checked.uMul(this.capacity, 2)
     segmentPtr Segment* = cast.reinterpret[Segment](this.segments)
     newSegments Segment* = try this.allocator.reallocT[Segment](segmentPtr, newCapacity)
     this.segments = newSegments
@@ -61,10 +55,7 @@ Builder.ensureCapacity() !void:
 
 Builder.add(s str, owned bool) !void:
     byteCount u64 = s.countBytes()
-    maxU64 u64 = 0 - 1
-    if byteCount > maxU64 - this.totalBytes:
-        throw errors.wouldOverflow("builder byte count overflow")
-    ..
+    newTotal := try checked.uAdd(this.totalBytes, byteCount)
     try this.ensureCapacity()
     segments Segment* = this.segments
     ownedBits u8 = 0
@@ -75,7 +66,7 @@ Builder.add(s str, owned bool) !void:
     segment := Segment(value=s, flags=ownedBits)
     segments[this.count] = segment
     this.count = this.count + 1
-    this.totalBytes = this.totalBytes + byteCount
+    this.totalBytes = newTotal
 ..
 
 Builder.addByte(b u8) !void:
@@ -121,10 +112,7 @@ Builder.appendCopy(s str) !void:
     if byteCount == 0:
         ret
     ..
-    maxU64 u64 = 0 - 1
-    if byteCount > maxU64 - this.totalBytes:
-        throw errors.wouldOverflow("builder byte count overflow")
-    ..
+    newTotal := try checked.uAdd(this.totalBytes, byteCount)
     # Reserve the segment first so allocation of the owned bytes is the final
     # fallible operation before committing the segment.
     try this.ensureCapacity()
@@ -133,7 +121,7 @@ Builder.appendCopy(s str) !void:
     segment := Segment(value=owned, flags=FLAG_OWNED)
     segments[this.count] = segment
     this.count = this.count + 1
-    this.totalBytes = this.totalBytes + byteCount
+    this.totalBytes = newTotal
 ..
 
 # Concatenates all segments into a newly allocated owned string.

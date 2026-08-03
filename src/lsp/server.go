@@ -394,6 +394,12 @@ func buildDefinitionIndex(state *types.SharedState) map[string]location {
 		if file == nil || file.GlNode == nil {
 			continue
 		}
+		for i, token := range file.Tokens {
+			if token.KeywType == types.KwModule && i+1 < len(file.Tokens) && file.Tokens[i+1].Type == types.TokName {
+				index[file.PackageName+"\x00"] = tokenLocation(file.FilePath, file.Tokens[i+1])
+				break
+			}
+		}
 		for name, function := range file.GlNode.FuncDefs {
 			if function == nil {
 				continue
@@ -448,6 +454,10 @@ func (a *analysis) definition(pos position) (location, bool) {
 		}
 		module := a.file.PackageName
 		name := token.Repr
+		if imported := a.importedPackage(name); imported != "" {
+			definition, ok := a.definitions[imported+"\x00"]
+			return definition, ok
+		}
 		if i >= 2 && a.file.Tokens[i-1].KeywType == types.KwDot {
 			qualifier := a.file.Tokens[i-2].Repr
 			if imported := a.importedPackage(qualifier); imported != "" {

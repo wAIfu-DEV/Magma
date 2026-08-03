@@ -46,5 +46,6 @@ runReadTask(task ReaderReadTask*) !$str:
 #   contents := try pending.await()
 Async.read(source reader.Reader, nBytes u64) !$future.Future[str]:
     task := ReaderReadTask(source=source, allocator=this.allocator, count=nBytes)
-    ret try future.new[str, ReaderReadTask](this.allocator, this.pool, runReadTask, task)
+    scheduler := this.pool.executor()
+    ret try future.new[str, ReaderReadTask](this.allocator, scheduler, runReadTask, task)
 ..

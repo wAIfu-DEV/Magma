@@ -1,0 +1,29 @@
+mod main
+
+use "std:arena_alloc" arena_alloc
+use "std:errors" errors
+use "std:heap" heap
+
+pub main() !void:
+    arena := try arena_alloc.new(heap.allocator(), 1024)
+    defer arena.free()
+    a := arena.allocator()
+
+    first := try a.alloc(32)
+    first[0] = 41
+    first = try a.realloc(first, 64)
+    if first[0] != 41 || arena.used() == 0:
+        throw errors.failure("arena realloc did not preserve data")
+    ..
+
+    a.free(first)
+    arena.reset()
+    if arena.used() != 0:
+        throw errors.failure("arena reset did not release allocations")
+    ..
+
+    second := try a.alloc(32)
+    if second == none:
+        throw errors.failure("arena allocation after reset failed")
+    ..
+..

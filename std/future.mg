@@ -4,7 +4,7 @@ mod future
 use "std:allocator" alc
 use "std:cast" cast
 use "std:errors" errors
-use "std:thread_pool" thread_pool
+use "std:executor" executor
 use "std:time" time
 
 @platform("windows")
@@ -86,23 +86,26 @@ taskMain[T, Context](raw ptr) u64:
     ret 0
 ..
 
-submitWork[T, Context](pool thread_pool.ThreadPool, work Work[T, Context]*) !bool:
-    try pool.submit(taskMain[T, Context], work)
+submitWork[T, Context](scheduler executor.Executor, work Work[T, Context]*) !bool:
+    try scheduler.submit[Work[T, Context]](taskMain[T, Context], work)
     ret true
 ..
 
 # Future backend using atomic publication and a platform completion wait.
 # @complexity O(1) to allocate and submit
 # @param a allocator for task and result state
-# @param pool pool that executes entry
+# @param scheduler executor that runs entry
 # @param entry function producing the result
 # @param context context copied into task storage
 # @returns owned active future
-# @ownership pool and a must remain valid until await completes.
+# @ownership scheduler is borrowed for submission; its implementation and a
+# must remain valid until await completes.
 # @example
-#   pending := try future.new[u64, Work](a, pool, run, work)
-pub new[T, Context](a alc.Allocator, pool thread_pool.ThreadPool, entry (Context*) !T, context Context) !$Future[T]:
+#   scheduler := pool.executor()
+#   pending := try future.new[u64, Work](a, scheduler, run, work)
+pub new[T, Context](a alc.Allocator, scheduler executor.Executor, entry (Context*) !T, context Context) !$Future[T]:
     work Work[T, Context]* = try a.allocT[Work[T, Context]](1)
+    onerror a.free(work)
     state State[T]* = addrof work.state
     state.allocator = a
     state.failure = errors.ok()
@@ -111,19 +114,11 @@ pub new[T, Context](a alc.Allocator, pool thread_pool.ThreadPool, entry (Context
     work.entry = entry
     work.context = context
 
-    waiter address_wait.Wait, waiterErr error = address_wait.new()
-    if waiterErr.nok():
-        a.free(work)
-        throw waiterErr
-    ..
+    waiter address_wait.Wait = try address_wait.new()
     state.waiter = waiter
+    onerror address_wait.free(addrof state.waiter)
 
-    submitted bool, submitErr error = submitWork[T, Context](pool, work)
-    if submitErr.nok():
-        address_wait.free(addrof state.waiter)
-        a.free(work)
-        throw submitErr
-    ..
+    try submitWork[T, Context](scheduler, work)
     ret Future[T](state=state)
 ..
 

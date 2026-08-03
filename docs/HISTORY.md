@@ -600,93 +600,164 @@ On December 9th 2025, I posted the first Magma commit to the repo.
 Here is the syntax I proposed at the time:
 
 ```
-mod main
+# Language syntax for Magma lang
 
-use errors
-use io
-use heap
-use gc
+# first statement in file should be module name declaration
+# other files in the project will be able to import it using "link main"
+# mind you, main should not be imported by any files.
+module main
 
-# comment line
-# second comment line
+# imports linked module and adds the module to the global scope of this file
+link io
+link error
 
-# global var defintion
-my_var u64 = 0
+# This is a line comment
 
-# global const defintion
-MY_CONST u64 : 0
+SOME_CONST :: 5 # defines a compile-time constant
 
-# function defintion
-myFunc(first_arg u64, second_arg f32) !bool:
+returnsFive() i64:
+    return 5
+..
 
-    if first_arg == 0:
-        io.printLn("first branch")
-        throw errors.invalidArgument()
-    elif second_arg < 0.0:
-        io.printLn("second branch")
-        throw errors.invalidArgument()
-    else:
-        io.printLn("third branch")
-    ..
+# func definition
+funcName(arg0: i64, arg1: i64) !i64:
 
-    for i u64 = 0..first_arg:
-        io.printUint(i)
-    ..
-    ret true
+    # indentation is not significant, but newlines are.
+
+    val, err := failingFunc(arg = returnsFive())
+    throw err # throw conditionally returns err if not OK
+              # requires ! prefix on return type
+
+    val, throw := failingFunc(arg0) # or throw the error directly (syntax sugar)
+                                    # this is trying to fix the Go error model
+                                    # while keeping the best of it.
+
+
+    #val: io.SomeType = 0 # TODO: handle composite names in types
+    io.printLn(val)
+
+    some_math := (5 + 2 * 5) # should be 15
+    return some_math
+..
+
+failingFunc(arg: i64) !i64:
+    throw error.genericFailed()
+    return 0
 ..
 
 # struct definition
-MyStruct(
-    first_field u64,
-    second_field f32,
-    third_field str,
+StructName(
+    field0: f64,
+    field1: u32,
 )
 
-# struct member func defintion
-MyStruct.memberFunc() void:
-    this.third_field = "some str value"
-    this.first_field = this.third_field.count
+# members can be defined only in the same file as struct def
+StructName.doSomething() void:
+    this.field1 = true # this refers to struct ptr
 ..
 
-allocs() !void:
-    on_heap *MyStruct = try heap.alloc(sizeof(MyStruct))
-    defer heap.free(on_heap)
+# underlying error type representation
+# subject to change, but from testing this is the most sensible one,
+# and bridges the gap with Exceptions.
+Error(
+    message: str,   # optional more descriptive error message
+    trace: str[5],  # throw will "secretly" push call site data (func name, line) to this array.
+                    # error printing or panics will print this trace.
+                    # this means more overhead, but only on the error path, not the valid one.
+    traceIdx: u8,
+    code: u8,
+)
+
+wrongValue(field0: f64) bool:
+    if field0 == 0.0:
+        return true
+    else:
+        return false
+    ..
 ..
 
-pub main(args str[]) !void:
-
-    # auto-throw on error
-    ret_val bool = try myFunc(0, 0.0)
-
-    # handle error, equivalent to previous
-    ret_val2 bool, e err = myFunc(0, 0.0)
-    if e.code != errors.ok().code:
-        throw e
+# struct constructor (not intrinsic)
+makeStruct(field0: f64) !StructName:
+    if wrongValue(field0):
+        throw error.invalidParameter()
     ..
+    some_value: u32 = 0
 
-    my_struct MyStruct = MyStruct(first_field=0, second_field=5.0) # rest is 0-init
-
-    # defered statements will be registered and executed on return
-    defer my_struct.third_field = ""
-
-    # defer multiple statements
-    defer:
-        my_struct.third_field = ""
-        io.printLn("end of main")
-    ..
-
-    my_ptr *MyStruct = &my_struct
-    my_ptr.second_field = 50.0
-
-    # at this point my_struct.first_field == 50
-
-    my_ptr.memberFunc()
-
-    for i u64 = 0..args.count:
-        io.printLn(args[i])
-    ..
-    ret
+    return StructName(
+        field0 = field0,
+        field1 = some_value,
+    )
 ..
+
+structConsumer() !void:
+    my_struct, throw := makeStruct(field0=someValue)
+
+    my_struct.field0 = 54
+    my_struct.doSomething()
+..
+
+arrays() !void:
+    my_arr := byte[15](fill=0) # stack array definition with utility arguments
+
+    arrSize := my_arr.count # arrays have count field unlike C arrays which
+                            # are basically pointers.
+                            # I assume those arrays will be implemented using a fat pointer
+
+    # unsafe/fast access
+    val := my_arr[0]
+    
+    # safer bound checked access
+    val2, ok := my_arr[arrSize+1]
+    if !ok:
+        throw error.outOfBounds() # this will be thrown
+    ..
+
+    throw error.ok() # this is useless, but with code of 0 (OK) error will not be propagated
+                     # and control flow will move past this throw
+
+    # throw is essentially syntax sugar for:
+    # if err.code != 0:
+    #     if err.traceIdx < err.trace.count:
+    #         err.trace[err.traceIdx] = "file:XX.X ln:XX;col:XX fn:XXX()" # debug info added at compile time
+    #         err.traceIdx += 1
+    #     ..
+    #     return (<0 initialized ret type>, err)
+    # ..
+..
+
+
+# main function definition
+main(args: str[]) !void:
+
+    ret1: bool = wrongValue(0.0)
+    #ret0: i64, err: Error = funcName(0, 0)
+
+    val: i32 = 5
+    val = 2 # reassignment
+
+    my_ptr: *i32 = &val # similar to C pointers, however they cannot be 0 initialized,
+                        # or else the compiler screams at you.
+                        # This should make safe code faster since we won't have to check for null ptr.
+    
+    my_struct := StructName()
+    struct_ptr := &my_struct # address of operator
+    # struct_ptr := &StructName() # short hand for previous
+                                  # this creates a pointer to a temporary stack alloc var
+                                  # pointer is invalid once underlying temp falls out of scope
+    
+    struct_ptr.field0 = 54 # . is equivalent to -> operator in C
+                           # this will mutate my_struct
+    
+    struct_cpy := *struct_ptr # ptr deref that is not assigned to will always return a copy
+    *struct_ptr = struct_cpy  # ptr deref that is assigned to will mutate underlying memory
+
+    for i := 0...args.count:
+        io.printLn("arg:", args[i])
+    ..
+
+    return
+..
+
 ```
 
 Most of the features showcased here made it to the current

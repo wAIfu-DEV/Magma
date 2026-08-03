@@ -9,6 +9,8 @@ pub const ERR_END_OF_FILE u32 = 4
 pub const ERR_WOULD_OVERFLOW u32 = 5
 pub const ERR_INVALID_TYPE u32 = 6
 pub const ERR_OUT_OF_BOUNDS u32 = 7
+pub const ERR_NOT_FOUND u32 = 8
+pub const ERR_CANCELLED u32 = 9
 
 # A cursor over an error's bounded propagation trace. The newest propagation
 # site is returned first. Ring reuse can truncate an old cursor; accessors stay
@@ -160,6 +162,10 @@ pub toStr(e error) str:
         ret "invalid type"
     elif c == ERR_OUT_OF_BOUNDS:
         ret "out of bounds"
+    elif c == ERR_NOT_FOUND:
+        ret "not found"
+    elif c == ERR_CANCELLED:
+        ret "cancelled"
     ..
     ret "unknown error"
 ..
@@ -279,4 +285,14 @@ pub invalidType(msg str) error:
 #   ret errors.outOfBounds("index exceeds length")
 pub outOfBounds(msg str) error:
     ret makeErr(ERR_OUT_OF_BOUNDS, msg)
+..
+
+pub notFound(msg str) error:
+    ret makeErr(ERR_NOT_FOUND, msg)
+..
+
+# Returns an error indicating that an operation was cancelled before producing
+# a result. Cancellation is distinct from native or unexpected failure.
+pub cancelled(msg str) error:
+    ret makeErr(ERR_CANCELLED, msg)
 ..

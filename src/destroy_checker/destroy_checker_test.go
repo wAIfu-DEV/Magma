@@ -410,3 +410,68 @@ func TestThrowUnwindsNestedBlockDefer(t *testing.T) {
 		t.Fatal("throw did not terminate the flow")
 	}
 }
+
+func TestThrowRunsOnErrorCleanup(t *testing.T) {
+	a, resourceType := fixture()
+	value := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "value"}, Type: resourceType}
+	out := flow{states: map[*types.NodeExprVarDef]State{}, deferred: map[*types.NodeExprVarDef]bool{}, scopes: []deferScope{{locals: map[*types.NodeExprVarDef]bool{}}}}
+	body := types.NodeBody{Statements: []types.NodeStatement{
+		&types.NodeStmtExpr{Expression: &types.NodeExprVarDefAssign{VarDef: value, AssignExpr: callReturning(resourceType, true)}},
+		&types.NodeStmtDefer{Expression: destructorCall(value), OnError: true},
+		&types.NodeStmtThrow{Expression: &types.NodeExprLit{Value: "failure"}},
+	}}
+
+	a.body(&out, &body)
+
+	if len(a.diagnostics) != 0 {
+		t.Fatalf("onerror cleanup produced diagnostics on throw: %+v", a.diagnostics)
+	}
+}
+
+func TestOnErrorCleanupDoesNotRunOnSuccess(t *testing.T) {
+	a, resourceType := fixture()
+	value := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "value"}, Type: resourceType}
+	out := flow{states: map[*types.NodeExprVarDef]State{}, deferred: map[*types.NodeExprVarDef]bool{}}
+	body := types.NodeBody{Statements: []types.NodeStatement{
+		&types.NodeStmtExpr{Expression: &types.NodeExprVarDefAssign{VarDef: value, AssignExpr: callReturning(resourceType, true)}},
+		&types.NodeStmtDefer{Expression: destructorCall(value), OnError: true},
+	}}
+
+	a.body(&out, &body)
+
+	if len(a.diagnostics) != 1 || !strings.Contains(a.diagnostics[0].Message, "not consumed") {
+		t.Fatalf("diagnostics = %+v, want successful-exit ownership warning", a.diagnostics)
+	}
+}
+
+func TestOnErrorCleanupAllowsSuccessfulReturnTransfer(t *testing.T) {
+	a, resourceType := fixture()
+	ownedType := *resourceType
+	ownedType.Owned = true
+	value := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "value"}, Type: resourceType}
+	out := flow{states: map[*types.NodeExprVarDef]State{}, deferred: map[*types.NodeExprVarDef]bool{}, scopes: []deferScope{{locals: map[*types.NodeExprVarDef]bool{}}}}
+	body := types.NodeBody{Statements: []types.NodeStatement{
+		&types.NodeStmtExpr{Expression: &types.NodeExprVarDefAssign{VarDef: value, AssignExpr: callReturning(resourceType, true)}},
+		&types.NodeStmtDefer{Expression: destructorCall(value), OnError: true},
+		&types.NodeStmtRet{Expression: name(value), OwnerFuncType: &ownedType},
+	}}
+
+	a.body(&out, &body)
+
+	if len(a.diagnostics) != 0 {
+		t.Fatalf("successful return with onerror cleanup produced diagnostics: %+v", a.diagnostics)
+	}
+}
+
+func TestUninitializedDestructibleStartsAsZeroValue(t *testing.T) {
+	a, resourceType := fixture()
+	value := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "value"}, Type: resourceType}
+	out := flow{states: map[*types.NodeExprVarDef]State{}, deferred: map[*types.NodeExprVarDef]bool{}, scopes: []deferScope{{locals: map[*types.NodeExprVarDef]bool{}}}}
+
+	a.expression(&out, value)
+	a.unwindTo(&out, 0, false)
+
+	if len(a.diagnostics) != 0 {
+		t.Fatalf("zero-valued declaration produced diagnostics: %+v", a.diagnostics)
+	}
+}

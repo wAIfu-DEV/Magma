@@ -225,6 +225,7 @@ func cloneStmt(in t.NodeStatement) t.NodeStatement {
 			Expression: cloneExpr(n.Expression),
 			Body:       cloneBody(&n.Body),
 			IsBody:     n.IsBody,
+			OnError:    n.OnError,
 		}
 	}
 	return nil

@@ -23,8 +23,11 @@ pub main() !void:
     if errors.isNative(native) == false || errors.nativeCode(native) != 123:
         throw errors.failure("native error behavior changed")
     ..
-    if errors.failure("").code() != 1 || errors.outOfMemory("").code() != 3 || errors.endOfFile("").code() != 4 || errors.wouldOverflow("").code() != 5 || errors.invalidType("").code() != 6 || errors.outOfBounds("").code() != 7:
+    if errors.failure("").code() != 1 || errors.outOfMemory("").code() != 3 || errors.endOfFile("").code() != 4 || errors.wouldOverflow("").code() != 5 || errors.invalidType("").code() != 6 || errors.outOfBounds("").code() != 7 || errors.notFound("").code() != 8 || errors.cancelled("").code() != 9:
         throw errors.failure("standard error codes changed")
+    ..
+    if strings.compare(errors.toStr(errors.cancelled("")), "cancelled") == false:
+        throw errors.failure("cancelled error category string changed")
     ..
 
     ignored u8, traced error = tracedFailure()

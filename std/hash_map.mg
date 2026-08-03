@@ -7,6 +7,7 @@ use "std:strings" strings
 use "std:errors" errors
 use "std:memory" memory
 use "std:cast" cast
+use "std:checked" checked
 
 # Owning string-keyed hash map using open addressing. Keys are copied; values
 # are moved into the map and released through cleanup when replaced or removed.
@@ -40,19 +41,9 @@ statesAt[T](storage ptr, capacity u64) u8*:
 ..
 
 storageSize[T](capacity u64) !u64:
-    maxU64 u64 = 0 - 1
-    if sizeof str != 0 && capacity > maxU64 / sizeof str:
-        throw errors.wouldOverflow("hash map storage size overflow")
-    ..
-    keysBytes := capacity * sizeof str
-    if sizeof T != 0 && capacity > (maxU64 - keysBytes) / sizeof T:
-        throw errors.wouldOverflow("hash map storage size overflow")
-    ..
-    valuesBytes := capacity * sizeof T
-    if capacity > maxU64 - keysBytes - valuesBytes:
-        throw errors.wouldOverflow("hash map storage size overflow")
-    ..
-    ret keysBytes + valuesBytes + capacity
+    keysBytes := try checked.byteCount[str](capacity)
+    valuesBytes := try checked.byteCount[T](capacity)
+    ret try checked.uAdd(try checked.uAdd(keysBytes, valuesBytes), capacity)
 ..
 
 release[T](cleanup ($T) void, value $T) void:
@@ -173,18 +164,14 @@ resizeForInsert[T](map HashMap[T]*, newCapacity u64) !bool:
 # @example
 #   try users.set("alice", user)
 HashMap[T].set(key str, item $T) !void:
+    onerror release[T](this.cleanup, item)
     # Keep the load factor below 75%. Besides maintaining probe performance,
     # rebuilding also discards tombstones left by delete().
     if (this.length + 1) * 4 >= this.capacity * 3:
         if this.capacity > 9223372036854775807:
-            release[T](this.cleanup, item)
             throw errors.wouldOverflow("hash map capacity overflow")
         ..
-        resized bool, resizeErr error = resizeForInsert[T](this, this.capacity * 2)
-        if resizeErr.nok():
-            release[T](this.cleanup, item)
-            throw resizeErr
-        ..
+        try resizeForInsert[T](this, this.capacity * 2)
     ..
 
     keys str* = keysPtr[T](this)
@@ -205,11 +192,7 @@ HashMap[T].set(key str, item $T) !void:
             if firstDeleted != this.capacity:
                 idx = firstDeleted
             ..
-            ownedKey str, copyErr error = strings.copy(this.allocator, key)
-            if copyErr.nok():
-                release[T](this.cleanup, item)
-                throw copyErr
-            ..
+            ownedKey str = try strings.copy(this.allocator, key)
             keys[idx] = ownedKey
             values[idx] = item
             states[idx] = 1
@@ -219,18 +202,13 @@ HashMap[T].set(key str, item $T) !void:
         i = i + 1
     ..
     if firstDeleted != this.capacity:
-        fallbackKey str, fallbackErr error = strings.copy(this.allocator, key)
-        if fallbackErr.nok():
-            release[T](this.cleanup, item)
-            throw fallbackErr
-        ..
+        fallbackKey str = try strings.copy(this.allocator, key)
         keys[firstDeleted] = fallbackKey
         values[firstDeleted] = item
         states[firstDeleted] = 1
         this.length = this.length + 1
         ret
     ..
-    release[T](this.cleanup, item)
     throw errors.wouldOverflow("hash map is full")
 ..
 

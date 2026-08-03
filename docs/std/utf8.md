@@ -11,6 +11,13 @@ wide := try utf8.utf8To16(heap.allocator(), "hé")
 
 Validated UTF-8 iteration plus UTF-8/UTF-16 conversion.
 
+Single-scalar operations are `decode(bytes)`, `encode(cp, output)`, and
+`encodedSize(cp)`. `validate(text)` performs allocation-free validation.
+
+For chunked input, `newDecoder()` creates bounded state. `Decoder.push` writes
+Unicode scalar values to a caller-provided `u32[]` and returns consumed/written
+counts plus input/output requirements. Call `finish()` at end of input.
+
 ## Types
 
 - `Utf8Iterator(start ptr, end ptr)` is a borrowed cursor over a string. The source string must remain valid.

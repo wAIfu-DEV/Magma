@@ -14,7 +14,8 @@ pub main() !void:
     a allocator.Allocator = heap.allocator()
     pool := try thread_pool.new(a, 1, 1, 8, 1)
 
-    direct := try future.new[u64, u64](a, pool, doubleValue, 21)
+    scheduler := pool.executor()
+    direct := try future.new[u64, u64](a, scheduler, doubleValue, 21)
     if try direct.await() != 42:
         try pool.close()
         throw errors.failure("direct Future returned the wrong value")

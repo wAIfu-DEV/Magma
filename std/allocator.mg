@@ -3,6 +3,7 @@ mod allocator
 # Allocations must be released through the same allocator that created them.
 
 use "std:errors" errors
+use "std:checked" checked
 
 # Function table shared by allocator handles whose implementation and vtable
 # lifetimes are managed externally.
@@ -42,7 +43,7 @@ Allocator.alloc(byteCount u64) !$u8*:
 #   values := try a.allocT[u64](16)
 #   a.free(values)
 Allocator.allocT[T](count u64) !$T*:
-    ret try this.vtable.fn_alloc(this.impl, count * sizeof T)
+    ret try this.vtable.fn_alloc(this.impl, try checked.byteCount[T](count))
 ..
 
 # Reallocates a block of byteCount bytes.
@@ -66,7 +67,7 @@ Allocator.realloc(block u8*, byteCount u64) !$u8*:
 # @throws outOfMemory when the block cannot be resized
 # @ownership The returned pointer replaces block and remains owned by the caller.
 Allocator.reallocT[T](block T*, count u64) !$T*:
-    ret try this.vtable.fn_realloc(this.impl, block, count * sizeof T)
+    ret try this.vtable.fn_realloc(this.impl, block, try checked.byteCount[T](count))
 ..
 
 # Frees a previously allocated block.

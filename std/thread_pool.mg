@@ -4,6 +4,7 @@ mod thread_pool
 use "std:allocator" alc
 use "std:cast" cast
 use "std:errors" errors
+use "std:executor" executor
 use "std:memory" mem
 use "std:mutex" mutex
 use "std:spinlock" spinlock
@@ -67,6 +68,27 @@ pub ThreadPool(
     state State*
 )
 
+executorSubmit(raw ptr, entry ptr, context ptr) !void:
+    pool ThreadPool* = raw
+    try pool.submit(entry, context)
+..
+
+executorFree(raw ptr) void:
+    ret
+..
+
+const executorVtable := executor.Vtable(
+    submit = executorSubmit
+    free = executorFree
+)
+
+# Returns a borrowed, type-erased scheduling view of this pool.
+# @ownership The pool must outlive the executor and all submitted tasks.
+# @complexity O(1)
+ThreadPool.executor() executor.Executor:
+    ret executor.Executor(impl=this, vtable=addrof executorVtable)
+..
+
 # Makes ownership transfers into the heap-backed State explicit to the
 # destructor checker. It cannot infer a move through a raw-pointer assignment.
 claim[T](claimed $T) $T:
@@ -80,13 +102,10 @@ releaseIdle(value $wake.Wake) void:
 spawnWorkerInto(state State*, index u64) !bool:
     destination thread.Thread* = workerAt(state, index)
     context WorkerContext* = try state.allocator.allocT[WorkerContext](1)
+    onerror state.allocator.free(context)
     context.state = state
     context.index = index
-    worker thread.Thread, workerErr error = thread.new[WorkerContext](workerMain, context)
-    if workerErr.nok():
-        state.allocator.free(context)
-        throw workerErr
-    ..
+    worker thread.Thread = try thread.new[WorkerContext](workerMain, context)
     *destination = claim[thread.Thread](worker)
     *workerContextAt(state, index) = context
     state.workerStates[index] = 1
@@ -147,21 +166,12 @@ growWorkerStorage(state State*) !bool:
         ..
     ..
 
-    newWorkers thread.Thread*, workersErr error = state.allocator.allocT[thread.Thread](newCapacity)
-    if workersErr.nok():
-        throw workersErr
-    ..
-    newContexts WorkerContext**, contextsErr error = state.allocator.allocT[WorkerContext*](newCapacity)
-    if contextsErr.nok():
-        state.allocator.free(newWorkers)
-        throw contextsErr
-    ..
-    newStates u8*, statesErr error = state.allocator.allocT[u8](newCapacity)
-    if statesErr.nok():
-        state.allocator.free(newContexts)
-        state.allocator.free(newWorkers)
-        throw statesErr
-    ..
+    newWorkers thread.Thread* = try state.allocator.allocT[thread.Thread](newCapacity)
+    onerror state.allocator.free(newWorkers)
+    newContexts WorkerContext** = try state.allocator.allocT[WorkerContext*](newCapacity)
+    onerror state.allocator.free(newContexts)
+    newStates u8* = try state.allocator.allocT[u8](newCapacity)
+    onerror state.allocator.free(newStates)
     mem.zero(newWorkers, newCapacity * sizeof thread.Thread)
     mem.zero(newContexts, newCapacity * sizeof WorkerContext*)
     mem.zero(newStates, newCapacity)
@@ -377,56 +387,30 @@ newConfigured(a alc.Allocator, minWorkers u64, maxWorkers u64, queueCapacity u64
         throw errors.invalidArgument("thread pool sizes or limits are invalid")
     ..
     state State* = try a.allocT[State](1)
+    onerror a.free(state)
+
     mem.zero(state, sizeof State)
-    tasks Task*, tasksErr error = a.allocT[Task](queueCapacity)
-    if tasksErr.nok():
-        a.free(state)
-        throw tasksErr
-    ..
-    workers thread.Thread*, workersErr error = a.allocT[thread.Thread](minWorkers)
-    if workersErr.nok():
-        a.free(tasks)
-        a.free(state)
-        throw workersErr
-    ..
-    workerContexts WorkerContext**, contextsErr error = a.allocT[WorkerContext*](minWorkers)
-    if contextsErr.nok():
-        a.free(workers)
-        a.free(tasks)
-        a.free(state)
-        throw contextsErr
-    ..
-    workerStates u8*, statesErr error = a.allocT[u8](minWorkers)
-    if statesErr.nok():
-        a.free(workerContexts)
-        a.free(workers)
-        a.free(tasks)
-        a.free(state)
-        throw statesErr
-    ..
+    tasks Task* = try a.allocT[Task](queueCapacity)
+    onerror a.free(tasks)
+
+    workers thread.Thread* = try a.allocT[thread.Thread](minWorkers)
+    onerror a.free(workers)
+
+    workerContexts WorkerContext** = try a.allocT[WorkerContext*](minWorkers)
+    onerror a.free(workerContexts)
+
+    workerStates u8* = try a.allocT[u8](minWorkers)
+    onerror a.free(workerStates)
+
     mem.zero(workers, minWorkers * sizeof thread.Thread)
     mem.zero(workerContexts, minWorkers * sizeof WorkerContext*)
     mem.zero(workerStates, minWorkers)
+
     lock := spinlock.new()
-    work generation_wait.Wait, workErr error = generation_wait.new()
-    if workErr.nok():
-        a.free(workerStates)
-        a.free(workerContexts)
-        a.free(workers)
-        a.free(tasks)
-        a.free(state)
-        throw workErr
-    ..
-    idle wake.Wake, idleErr error = wake.new(wake.condition())
-    if idleErr.nok():
-        generation_wait.free(addrof work)
-        a.free(workerStates)
-        a.free(workerContexts)
-        a.free(workers)
-        a.free(tasks)
-        a.free(state)
-        throw idleErr
-    ..
+    work generation_wait.Wait = try generation_wait.new()
+    onerror generation_wait.free(addrof work)
+    
+    idle wake.Wake = try wake.new(wake.condition())
     state.allocator = a
     state.workers = workers
     state.workerContexts = workerContexts
@@ -440,28 +424,22 @@ newConfigured(a alc.Allocator, minWorkers u64, maxWorkers u64, queueCapacity u64
     state.lock = lock
     state.work = work
     state.idle = claim[wake.Wake](idle)
+    onerror state.idle.free()
 
     i u64 = 0
-    while i < minWorkers:
-        spawned bool, spawnErr error = spawnWorkerInto(state, i)
-        if spawnErr.nok():
-            state.stopping = true
-            generation_wait.wakeAll(addrof state.work, addrof state.workGeneration, i)
-            j u64 = 0
-            while j < i:
-                workerAt(state, j).join()
-                a.free(*workerContextAt(state, j))
-                j = j + 1
-            ..
-            state.idle.free()
-            generation_wait.free(addrof state.work)
-            a.free(workerStates)
-            a.free(workerContexts)
-            a.free(workers)
-            a.free(tasks)
-            a.free(state)
-            throw spawnErr
+    onerror:
+        state.stopping = true
+        generation_wait.wakeAll(addrof state.work, addrof state.workGeneration, i)
+        j u64 = 0
+        while j < i:
+            workerAt(state, j).join()
+            a.free(*workerContextAt(state, j))
+            j = j + 1
         ..
+    ..
+
+    while i < minWorkers:
+        try spawnWorkerInto(state, i)
         i = i + 1
     ..
     ret ThreadPool(state=state)
@@ -510,32 +488,21 @@ ThreadPool.submit(entry (ptr) u64, context ptr) !void:
     ..
     state State* = this.state
     state.lock.lock()
-    if state.fatalError.nok():
-        failure error = state.fatalError
-        state.lock.unlock()
-        throw failure
-    ..
+    onerror state.lock.unlock()
+    throw state.fatalError
     if state.stopping:
-        state.lock.unlock()
         throw errors.failure("thread pool is stopping")
     ..
     if state.count == state.capacity:
         grown bool, growErr error = growQueue(state)
-        if growErr.nok():
-            state.lock.unlock()
-            throw growErr
-        ..
+        throw growErr
     ..
     # Queueing this task would consume more workers than are currently idle.
     # Grow by one, up to the configured maximum. Repeated submissions during a
     # burst therefore ramp the pool up without creating surplus threads.
     idleWorkers u64 = state.activeWorkers - state.busyWorkers
     if state.count + 1 > idleWorkers && state.activeWorkers < state.maxWorkers:
-        grownWorkers bool, workerErr error = growWorkers(state)
-        if workerErr.nok():
-            state.lock.unlock()
-            throw workerErr
-        ..
+        try growWorkers(state)
     ..
     *taskAt(state, state.tail) = Task(entry=entry, context=context)
     state.tail = (state.tail + 1) % state.capacity
@@ -563,11 +530,8 @@ ThreadPool.wait() !void:
     waiting bool = true
     while waiting:
         state.lock.lock()
-        if state.fatalError.nok():
-            failure error = state.fatalError
-            state.lock.unlock()
-            throw failure
-        ..
+        onerror state.lock.unlock()
+        throw state.fatalError
         waiting = state.pending != 0
         if waiting:
             state.idleWaiters = state.idleWaiters + 1
@@ -578,9 +542,7 @@ ThreadPool.wait() !void:
             state.lock.lock()
             state.idleWaiters = state.idleWaiters - 1
             state.lock.unlock()
-            if waitErr.nok():
-                throw waitErr
-            ..
+            throw waitErr
         ..
     ..
 ..
