@@ -167,8 +167,8 @@ func clImportedVariable(c *ctx, source *t.NodeExprName, parsed parsedName, lvalu
 		return false, false, nil, nil, nil
 	}
 
-	moduleName := c.GlobalNode.ImportAlias[parsed.First]
-	if moduleName == "" {
+	moduleName, consumed, resolveErr := resolveModuleName(c, parsed)
+	if resolveErr != nil {
 		return false, false, nil, nil, nil
 	}
 	module := c.ModuleBundle.Modules[moduleName]
@@ -176,7 +176,12 @@ func clImportedVariable(c *ctx, source *t.NodeExprName, parsed parsedName, lvalu
 		return false, false, nil, nil, nil
 	}
 
-	rootName := parsed.Parts[0]
+	allParts := append([]string{parsed.First}, parsed.Parts...)
+	if consumed >= len(allParts) {
+		return false, false, nil, nil, nil
+	}
+	rootName := allParts[consumed]
+	remaining := allParts[consumed+1:]
 	for _, declaration := range module.Declarations {
 		var candidate *t.NodeExprVarDef
 		switch node := declaration.(type) {
@@ -196,11 +201,11 @@ func clImportedVariable(c *ctx, source *t.NodeExprName, parsed parsedName, lvalu
 			return false, false, nil, nil, &privateSymbolError{kind: kind, module: parsed.First, name: rootName}
 		}
 
-		if len(parsed.Parts) == 1 {
+		if len(remaining) == 0 {
 			return true, false, candidate, nil, nil
 		}
-		members := parsedName{First: rootName, Parts: parsed.Parts[1:], HasParts: true}
-		lastFunc, memberAccesses, chainErr := clVarNameChainValidAtOffset(c, c.CurrScope, source, &members, rootName, candidate.Type, lvalue, 1)
+		members := parsedName{First: rootName, Parts: remaining, HasParts: true}
+		lastFunc, memberAccesses, chainErr := clVarNameChainValidAtOffset(c, c.CurrScope, source, &members, rootName, candidate.Type, lvalue, consumed+1)
 		if chainErr != nil {
 			return false, false, nil, nil, chainErr
 		}

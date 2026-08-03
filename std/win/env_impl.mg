@@ -1,5 +1,6 @@
 mod env_impl_win
 use "std:allocator" allocator
+use "std:win/types" win
 use "std:heap" heap
 use "std:utf8" utf8
 use "std:utf16" utf16
@@ -8,11 +9,11 @@ use "std:errors" errors
 use "std:c" c
 use "std:array" array
 
-ext ext_GetEnvironmentVariableW GetEnvironmentVariableW(name u16*, value u16*, size u32) u32
-ext ext_SetEnvironmentVariableW SetEnvironmentVariableW(name u16*, value u16*) u32
-ext ext_GetLastError GetLastError() u32
-ext ext_GetEnvironmentStringsW GetEnvironmentStringsW() u16*
-ext ext_FreeEnvironmentStringsW FreeEnvironmentStringsW(block u16*) u32
+ext ext_GetEnvironmentVariableW GetEnvironmentVariableW(name win.LPCWSTR, value win.LPWSTR, size win.DWORD) win.DWORD
+ext ext_SetEnvironmentVariableW SetEnvironmentVariableW(name win.LPCWSTR, value win.LPCWSTR) win.BOOL
+ext ext_GetLastError GetLastError() win.DWORD
+ext ext_GetEnvironmentStringsW GetEnvironmentStringsW() win.LPWSTR
+ext ext_FreeEnvironmentStringsW FreeEnvironmentStringsW(block win.LPWSTR) win.BOOL
 
 pub Variables(
     allocator allocator.Allocator

@@ -15,3 +15,8 @@ spaces as `+`; use `decodeForm` for the inverse behavior.
 
 Decoding returns bytes. UTF-8 validation is deliberately separate. Invalid or
 truncated percent escapes are rejected.
+
+For caller-provided storage, `encodeTo(text, output, policy)`,
+`decodeTo(text, output)`, and `decodeFormTo(text, output)` return the number of
+bytes written. `encodedSize(text, policy)` and `decodedSize(text)` calculate
+the required capacity while performing the same policy or escape validation.

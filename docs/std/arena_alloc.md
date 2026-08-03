@@ -10,3 +10,6 @@ the returned interface borrows it.
 
 `Arena.free()` releases owned backing storage. It does not free storage supplied
 through `fromBuffer`.
+
+`Arena.used()` returns the number of bytes consumed since construction or the
+last reset. `Arena.capacity()` returns total backing-storage capacity.

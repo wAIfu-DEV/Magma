@@ -34,14 +34,15 @@ func clGetStructDefFromModule(c *ctx, name parsedName) (*t.StructDef, error) {
 	}
 
 	moduleAlias := name.First
-	structName := name.Parts[0]
-
-	// resolve alias
-	moduleName, ok := c.GlobalNode.ImportAlias[moduleAlias]
-
-	if !ok {
+	moduleName, consumed, resolveErr := resolveModuleName(c, name)
+	if resolveErr != nil {
 		return nil, &lookupError{kind: "module alias", moduleAlias: moduleAlias}
 	}
+	parts := append([]string{name.First}, name.Parts...)
+	if consumed >= len(parts) {
+		return nil, &lookupError{kind: "struct", moduleAlias: moduleAlias}
+	}
+	structName := parts[consumed]
 
 	moduleGlNode := c.ModuleBundle.Modules[moduleName]
 
@@ -109,18 +110,18 @@ func clFindTypeAlias(c *ctx, nameNode t.NodeName) (*t.TypeAlias, *t.NodeGlobal, 
 		alias := c.GlobalNode.TypeAliases[n.Name]
 		return alias, c.GlobalNode, nil
 	case *t.NodeNameComposite:
-		if len(n.Parts) != 2 {
+		if len(n.Parts) < 2 {
 			return nil, nil, nil
 		}
-		moduleName, ok := c.GlobalNode.ImportAlias[n.Parts[0]]
-		if !ok {
+		moduleName, consumed, err := t.ResolveModulePrefix(c.ModuleBundle.Modules, c.GlobalNode, n.Parts)
+		if err != nil || consumed >= len(n.Parts) {
 			return nil, nil, nil
 		}
 		owner := c.ModuleBundle.Modules[moduleName]
 		if owner == nil {
 			return nil, nil, nil
 		}
-		alias := owner.TypeAliases[n.Parts[1]]
+		alias := owner.TypeAliases[n.Parts[consumed]]
 		if alias == nil {
 			return nil, nil, nil
 		}
@@ -262,12 +263,8 @@ func clGetFuncDefFromModule(c *ctx, name parsedName) (*t.NodeFuncDef, error) {
 	}
 
 	moduleAlias := name.First
-	fnName := name.Parts[0]
-
-	// resolve alias
-	moduleName, ok := c.GlobalNode.ImportAlias[moduleAlias]
-
-	if !ok {
+	moduleName, consumed, resolveErr := resolveModuleName(c, name)
+	if resolveErr != nil {
 		// Might be member func
 		fullName := name.First + "." + strings.Join(name.Parts, ".")
 		memberFunc, ok := c.GlobalNode.FuncDefs[fullName]
@@ -277,6 +274,11 @@ func clGetFuncDefFromModule(c *ctx, name parsedName) (*t.NodeFuncDef, error) {
 
 		return nil, &lookupError{kind: "module alias", moduleAlias: moduleAlias}
 	}
+	parts := append([]string{name.First}, name.Parts...)
+	if consumed >= len(parts) {
+		return nil, &lookupError{kind: "function", moduleAlias: moduleAlias}
+	}
+	fnName := parts[consumed]
 
 	moduleGlNode, ok := c.ModuleBundle.Modules[moduleName]
 

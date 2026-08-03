@@ -1,5 +1,6 @@
 # Paths are relative to the repository root. Use / as the separator.
 # Blank lines and lines beginning with # are ignored.
+.github/*
 .git/*
 .gocache/*
 .agents/*
@@ -9,3 +10,9 @@ out/*
 out.exe
 out*.ll
 magma-*.zip
+WIP.md
+.gitattributes
+.gitignore
+RELEASE.bat
+RELEASE_IGNORE.txt
+Magma.exe~

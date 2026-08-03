@@ -100,8 +100,8 @@ func parseArgs(args []string) (options, error) {
 	if opts.opt < 0 || opts.opt > 3 {
 		return options{}, fmt.Errorf("invalid --opt value %d (expected 0 through 3)", opts.opt)
 	}
-	if opts.errorTraceSlots == 0 || opts.errorTraceSlots > 65536 || opts.errorTraceSlots&(opts.errorTraceSlots-1) != 0 {
-		return options{}, fmt.Errorf("invalid --error-trace-slots value %d (expected a power of two from 1 through 65536)", opts.errorTraceSlots)
+	if opts.errorTraceSlots == 0 || opts.errorTraceSlots > 1024 || opts.errorTraceSlots&(opts.errorTraceSlots-1) != 0 {
+		return options{}, fmt.Errorf("invalid --error-trace-slots value %d (expected a power of two from 1 through 1024)", opts.errorTraceSlots)
 	}
 	opts.inputFile = flags.Arg(0)
 	return opts, nil

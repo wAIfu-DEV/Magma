@@ -763,8 +763,21 @@ main() void:
 	if err != nil {
 		t.Fatalf("compile string throw: %v", err)
 	}
-	if !strings.Contains(ir, "insertvalue %type.error") || !strings.Contains(ir, "i32 1, 2") {
+	if !strings.Contains(ir, "insertvalue %type.error") || !strings.Contains(ir, "i32 1, 1") {
 		t.Fatalf("expected string throw to build error code 1, got:\n%s", ir)
+	}
+	for _, want := range []string{
+		"icmp ugt i64",
+		"select i1",
+		"i64 65535",
+		"trunc i64",
+		"to i16",
+		"insertvalue %type.error",
+		"i16",
+	} {
+		if !strings.Contains(ir, want) {
+			t.Fatalf("expected string throw to saturate its message length using %q, got:\n%s", want, ir)
+		}
 	}
 }
 

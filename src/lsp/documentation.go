@@ -36,13 +36,14 @@ type docIndex struct {
 	// completionVisible distinguishes exported module declarations from members.
 	// Members are part of their receiver's public surface even though Magma does
 	// not spell `pub` on each method or field.
-	completionVisible  map[string]bool
-	completionKinds    map[string]int
-	completionBindings []completionBinding
-	memberTypes        map[string]*types.NodeType
-	expressionSymbols  map[string]map[string]completionItem
-	functionReturns    map[string]*types.NodeType
-	primitiveModules   map[string]string
+	completionVisible   map[string]bool
+	completionKinds     map[string]int
+	completionBindings  []completionBinding
+	memberTypes         map[string]*types.NodeType
+	expressionSymbols   map[string]map[string]completionItem
+	functionReturns     map[string]*types.NodeType
+	primitiveModules    map[string]string
+	publicModuleAliases map[string]map[string]string
 }
 
 // completionBinding is captured from the source AST before monomorphization.
@@ -57,12 +58,22 @@ type completionBinding struct {
 }
 
 func buildDocIndex(state *types.SharedState) *docIndex {
-	index := &docIndex{byNode: map[any]string{}, modules: map[string]string{}, symbols: map[string]string{}, hoverSymbols: map[string]string{}, hoverByName: map[string]string{}, valueHovers: map[string]string{}, completionVisible: map[string]bool{}, completionKinds: map[string]int{}, memberTypes: map[string]*types.NodeType{}, expressionSymbols: map[string]map[string]completionItem{}, functionReturns: map[string]*types.NodeType{}, primitiveModules: map[string]string{}}
+	index := &docIndex{byNode: map[any]string{}, modules: map[string]string{}, symbols: map[string]string{}, hoverSymbols: map[string]string{}, hoverByName: map[string]string{}, valueHovers: map[string]string{}, completionVisible: map[string]bool{}, completionKinds: map[string]int{}, memberTypes: map[string]*types.NodeType{}, expressionSymbols: map[string]map[string]completionItem{}, functionReturns: map[string]*types.NodeType{}, primitiveModules: map[string]string{}, publicModuleAliases: map[string]map[string]string{}}
 	for _, file := range state.Files {
 		if file == nil || file.GlNode == nil {
 			continue
 		}
 		byLine, module := parseDocumentation(string(file.Content))
+		for alias := range file.GlNode.PublicImportAlias {
+			target := file.GlNode.ImportAlias[alias]
+			if target == "" {
+				continue
+			}
+			if index.publicModuleAliases[file.PackageName] == nil {
+				index.publicModuleAliases[file.PackageName] = map[string]string{}
+			}
+			index.publicModuleAliases[file.PackageName][alias] = target
+		}
 		if text := module.markdown(); text != "" {
 			index.modules[file.PackageName] = text
 		}

@@ -22,6 +22,14 @@ counts plus input/output requirements. Call `finish()` at end of input.
 
 - `Utf8Iterator(start ptr, end ptr)` is a borrowed cursor over a string. The source string must remain valid.
 - `Codepoint(value u32, width u8)` contains a Unicode scalar value and its encoded UTF-8 width.
+- `DecodeResult(consumed u64, written u64, needsInput bool, needsOutput bool)`
+  reports incremental decoder progress.
+- `Decoder(pending u32, pendingCount u8, pendingWidth u8)` stores at most one
+  incomplete scalar sequence and owns no allocation.
+
+`Decoder.appendPending(byte)` and `Decoder.emitPending(output, written)` are
+low-level public state helpers used by `push`. Normal incremental consumers
+should call `push` and `finish` instead.
 
 ## Iteration
 

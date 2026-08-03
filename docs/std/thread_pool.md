@@ -57,6 +57,11 @@ rather than blocking the submitting thread.
 pending work, stops and joins all workers, and releases the pool. It consumes
 the pool.
 
+`executor()` returns a borrowed `std/executor.Executor` view. This permits APIs
+that accept a type-erased scheduler to submit typed contexts to the pool. The
+pool must remain alive and open until all work submitted through the view has
+completed; freeing the borrowed view does not close the pool.
+
 ```magma
 pool := try thread_pool.new(a, 2, 8, 256, 0)
 try pool.submit(doWork, context)

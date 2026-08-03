@@ -5,9 +5,10 @@ declare void @llvm.memset.p0i8.i64(ptr, i8, i64, i32, i1)
 declare i64 @strlen(ptr nocapture readonly) nounwind
 declare i32 @printf(ptr, ...)
 
-; Error traces use a bounded, reusable 64-way sharded ring. Handles carry the
-; shard and allocation ticket so readers can detect reuse instead of following
-; stale or partially-published nodes.
+; Error traces use a bounded, reusable 64-way sharded ring. The 16-bit handle
+; stores a 6-bit shard and 10-bit slot. Handle zero is reserved for no trace;
+; the otherwise corresponding physical slot is skipped. Cursors add a bounded
+; step count so reused parent links can never make traversal loop forever.
 @magma.error.trace.next.shard = internal global i64 0, align 8
 @magma.error.trace.thread.shard = internal thread_local global i64 -1, align 8
 @magma.error.trace.shards = internal global [64 x %type.error.trace.shard] zeroinitializer, align 64
@@ -59,50 +60,53 @@ record:
     %sequence.field = getelementptr %type.error.trace.node, ptr %node, i32 0, i32 0
     %parent.field = getelementptr %type.error.trace.node, ptr %node, i32 0, i32 1
     %site.field = getelementptr %type.error.trace.node, ptr %node, i32 0, i32 2
-    %published = shl i64 %ticket, 1
-    %writing = or i64 %published, 1
-    store atomic i64 %writing, ptr %sequence.field release, align 8
-    %parent = extractvalue %type.error %error, 1
-    store atomic i64 %parent, ptr %parent.field monotonic, align 8
+    %writing = atomicrmw add ptr %sequence.field, i32 1 acq_rel
+    %parent = extractvalue %type.error %error, 2
+    store atomic i16 %parent, ptr %parent.field monotonic, align 2
     store atomic ptr %site, ptr %site.field monotonic, align 8
-    store atomic i64 %published, ptr %sequence.field release, align 8
-    %encoded = add i64 %ticket, 1
-    %shifted = shl i64 %encoded, 6
-    %handle = or i64 %shifted, %shard
+    %published = atomicrmw add ptr %sequence.field, i32 1 release
+    %shifted = shl i64 %slot, 6
+    %raw = or i64 %shifted, %shard
+    %encoded = add i64 %raw, 1
+    %handle = trunc i64 %encoded to i16
+    %reserved = icmp eq i16 %handle, 0
+    br i1 %reserved, label %record, label %release
+
+release:
     store atomic i8 0, ptr %lock release, align 1
-    %traced = insertvalue %type.error %error, i64 %handle, 1
+    %traced = insertvalue %type.error %error, i16 %handle, 2
     ret %type.error %traced
 }
 
-define internal %type.error.trace.snapshot @magma.error.trace.load(i64 %handle) cold noinline {
+define internal %type.error.trace.snapshot @magma.error.trace.load(i16 %handle) cold noinline {
 entry:
-    %empty = icmp eq i64 %handle, 0
+    %empty = icmp eq i16 %handle, 0
     br i1 %empty, label %return.empty, label %lookup
 
 lookup:
-    %shard = and i64 %handle, 63
-    %encoded = lshr i64 %handle, 6
-    %ticket = sub i64 %encoded, 1
-    %slot = and i64 %ticket, {{TRACE_MASK}}
+    %wide = zext i16 %handle to i64
+    %raw = sub i64 %wide, 1
+    %shard = and i64 %raw, 63
+    %slot = lshr i64 %raw, 6
     %node = getelementptr [64 x %type.error.trace.arena], ptr @magma.error.trace.nodes, i64 0, i64 %shard, i32 0, i64 %slot
     %sequence.field = getelementptr %type.error.trace.node, ptr %node, i32 0, i32 0
     %parent.field = getelementptr %type.error.trace.node, ptr %node, i32 0, i32 1
     %site.field = getelementptr %type.error.trace.node, ptr %node, i32 0, i32 2
-    %expected = shl i64 %ticket, 1
-    %sequence.before = load atomic i64, ptr %sequence.field acquire, align 8
-    %valid.before = icmp eq i64 %sequence.before, %expected
+    %sequence.before = load atomic i32, ptr %sequence.field acquire, align 4
+    %writing = and i32 %sequence.before, 1
+    %valid.before = icmp eq i32 %writing, 0
     br i1 %valid.before, label %read, label %return.truncated
 
 read:
-    %parent = load atomic i64, ptr %parent.field monotonic, align 8
+    %parent = load atomic i16, ptr %parent.field monotonic, align 2
     %site = load atomic ptr, ptr %site.field monotonic, align 8
-    %sequence.after = load atomic i64, ptr %sequence.field acquire, align 8
-    %valid.after = icmp eq i64 %sequence.after, %expected
+    %sequence.after = load atomic i32, ptr %sequence.field acquire, align 4
+    %valid.after = icmp eq i32 %sequence.after, %sequence.before
     br i1 %valid.after, label %return.value, label %return.truncated
 
 return.value:
-    %v0 = insertvalue %type.error.trace.snapshot zeroinitializer, i64 %parent, 0
-    %v1 = insertvalue %type.error.trace.snapshot %v0, ptr %site, 1
+    %v0 = insertvalue %type.error.trace.snapshot zeroinitializer, ptr %site, 0
+    %v1 = insertvalue %type.error.trace.snapshot %v0, i16 %parent, 1
     ret %type.error.trace.snapshot %v1
 
 return.empty:
@@ -115,38 +119,47 @@ return.truncated:
 
 define internal i64 @magma.error.trace(%type.error %error) cold noinline {
 entry:
-    %handle = extractvalue %type.error %error, 1
-    ret i64 %handle
+    %handle = extractvalue %type.error %error, 2
+    %cursor = zext i16 %handle to i64
+    ret i64 %cursor
 }
 
-define internal i32 @magma.error.trace.status(i64 %handle) cold noinline {
+define internal i32 @magma.error.trace.status(i64 %cursor) cold noinline {
 entry:
-    %empty = icmp eq i64 %handle, 0
-    br i1 %empty, label %return.empty, label %check
-
-check:
-    %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i64 %handle)
-    %truncated = extractvalue %type.error.trace.snapshot %snapshot, 2
-    %status = select i1 %truncated, i32 2, i32 0
+    %truncated.bits = and i64 %cursor, 4294967296
+    %truncated = icmp ne i64 %truncated.bits, 0
+    %handle = trunc i64 %cursor to i16
+    %empty = icmp eq i16 %handle, 0
+    %empty.status = select i1 %empty, i32 1, i32 0
+    %status = select i1 %truncated, i32 2, i32 %empty.status
     ret i32 %status
-
-return.empty:
-    ret i32 1
 }
 
-define internal i64 @magma.error.trace.next(i64 %handle) cold noinline {
+define internal i64 @magma.error.trace.next(i64 %cursor) cold noinline {
 entry:
-    %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i64 %handle)
+    %handle = trunc i64 %cursor to i16
+    %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i16 %handle)
     %truncated = extractvalue %type.error.trace.snapshot %snapshot, 2
-    %parent = extractvalue %type.error.trace.snapshot %snapshot, 0
-    %next = select i1 %truncated, i64 1, i64 %parent
+    %parent = extractvalue %type.error.trace.snapshot %snapshot, 1
+    %count.shifted = lshr i64 %cursor, 16
+    %count = and i64 %count.shifted, 65535
+    %next.count = add i64 %count, 1
+    %at.limit = icmp uge i64 %next.count, {{TRACE_SLOTS}}
+    %has.parent = icmp ne i16 %parent, 0
+    %exhausted = and i1 %at.limit, %has.parent
+    %invalid = or i1 %truncated, %exhausted
+    %wide.parent = zext i16 %parent to i64
+    %packed.count = shl i64 %next.count, 16
+    %packed = or i64 %packed.count, %wide.parent
+    %next = select i1 %invalid, i64 4294967296, i64 %packed
     ret i64 %next
 }
 
-define internal %type.str @magma.error.trace.function(i64 %handle) cold noinline {
+define internal %type.str @magma.error.trace.function(i64 %cursor) cold noinline {
 entry:
-    %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i64 %handle)
-    %site = extractvalue %type.error.trace.snapshot %snapshot, 1
+    %handle = trunc i64 %cursor to i16
+    %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i16 %handle)
+    %site = extractvalue %type.error.trace.snapshot %snapshot, 0
     %valid = icmp ne ptr %site, null
     br i1 %valid, label %read, label %invalid
 
@@ -162,10 +175,11 @@ invalid:
     ret %type.str zeroinitializer
 }
 
-define internal %type.str @magma.error.trace.file(i64 %handle) cold noinline {
+define internal %type.str @magma.error.trace.file(i64 %cursor) cold noinline {
 entry:
-    %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i64 %handle)
-    %site = extractvalue %type.error.trace.snapshot %snapshot, 1
+    %handle = trunc i64 %cursor to i16
+    %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i16 %handle)
+    %site = extractvalue %type.error.trace.snapshot %snapshot, 0
     %valid = icmp ne ptr %site, null
     br i1 %valid, label %read, label %invalid
 
@@ -181,10 +195,11 @@ invalid:
     ret %type.str zeroinitializer
 }
 
-define internal i32 @magma.error.trace.line(i64 %handle) cold noinline {
+define internal i32 @magma.error.trace.line(i64 %cursor) cold noinline {
 entry:
-    %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i64 %handle)
-    %site = extractvalue %type.error.trace.snapshot %snapshot, 1
+    %handle = trunc i64 %cursor to i16
+    %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i16 %handle)
+    %site = extractvalue %type.error.trace.snapshot %snapshot, 0
     %valid = icmp ne ptr %site, null
     br i1 %valid, label %read, label %invalid
 
@@ -197,10 +212,11 @@ invalid:
     ret i32 0
 }
 
-define internal i32 @magma.error.trace.column(i64 %handle) cold noinline {
+define internal i32 @magma.error.trace.column(i64 %cursor) cold noinline {
 entry:
-    %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i64 %handle)
-    %site = extractvalue %type.error.trace.snapshot %snapshot, 1
+    %handle = trunc i64 %cursor to i16
+    %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i16 %handle)
+    %site = extractvalue %type.error.trace.snapshot %snapshot, 0
     %valid = icmp ne ptr %site, null
     br i1 %valid, label %read, label %invalid
 
@@ -215,18 +231,19 @@ invalid:
 
 define internal void @magma.error.printTrace(%type.error %error) cold noinline {
 entry:
-    %head = extractvalue %type.error %error, 1
+    %head = extractvalue %type.error %error, 2
     br label %loop
 
 loop:
-    %handle = phi i64 [ %head, %entry ], [ %parent, %body ]
-    %done = icmp eq i64 %handle, 0
+    %handle = phi i16 [ %head, %entry ], [ %parent, %body ]
+    %count = phi i64 [ 0, %entry ], [ %next.count, %body ]
+    %done = icmp eq i16 %handle, 0
     br i1 %done, label %finish, label %load
 
 load:
-    %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i64 %handle)
-    %parent = extractvalue %type.error.trace.snapshot %snapshot, 0
-    %site = extractvalue %type.error.trace.snapshot %snapshot, 1
+    %snapshot = call %type.error.trace.snapshot @magma.error.trace.load(i16 %handle)
+    %parent = extractvalue %type.error.trace.snapshot %snapshot, 1
+    %site = extractvalue %type.error.trace.snapshot %snapshot, 0
     %truncated = extractvalue %type.error.trace.snapshot %snapshot, 2
     br i1 %truncated, label %warn, label %body
 
@@ -240,7 +257,11 @@ body:
     %line = load i32, ptr %line.field
     %column = load i32, ptr %column.field
     call i32 (ptr, ...) @printf(ptr @magma.error.trace.fmt, ptr %function, ptr %file, i32 %line, i32 %column)
-    br label %loop
+    %next.count = add i64 %count, 1
+    %has.parent = icmp ne i16 %parent, 0
+    %at.limit = icmp uge i64 %next.count, {{TRACE_SLOTS}}
+    %exhausted = and i1 %has.parent, %at.limit
+    br i1 %exhausted, label %warn, label %loop
 
 warn:
     call i32 (ptr, ...) @printf(ptr @magma.error.trace.truncated)
@@ -253,9 +274,10 @@ finish:
 define internal void @magma.error.print(%type.error %error) cold noinline {
 entry:
     %message = extractvalue %type.error %error, 0
-    %code = extractvalue %type.error %error, 2
+    %code = extractvalue %type.error %error, 1
     %length = extractvalue %type.error %error, 3
-    call i32 (ptr, ...) @printf(ptr @magma.error.fmt, i32 %code, i32 %length, ptr %message)
+    %length32 = zext i16 %length to i32
+    call i32 (ptr, ...) @printf(ptr @magma.error.fmt, i32 %code, i32 %length32, ptr %message)
     call void @magma.error.printTrace(%type.error %error)
     ret void
 }

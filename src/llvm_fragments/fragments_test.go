@@ -6,15 +6,19 @@ import (
 )
 
 func TestRenderUtilsConfiguresTraceRing(t *testing.T) {
-	ir, err := RenderUtils(2048)
+	ir, err := RenderUtils(1024)
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(ir)
 	for _, want := range []string{
-		"%type.error.trace.arena = type { [2048 x %type.error.trace.node], [0 x i8] }",
-		"and i64 %ticket, 2047",
-		"--error-trace-slots=2048",
+		"%type.error.trace.arena = type { [1024 x %type.error.trace.node], [0 x i8] }",
+		"and i64 %ticket, 1023",
+		"%handle = trunc i64 %encoded to i16",
+		"%reserved = icmp eq i16 %handle, 0",
+		"%at.limit = icmp uge i64 %next.count, 1024",
+		"select i1 %invalid, i64 4294967296",
+		"--error-trace-slots=1024",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("rendered runtime does not contain %q", want)
@@ -59,7 +63,7 @@ func TestRuntimeDefinitionsHaveInternalLinkage(t *testing.T) {
 }
 
 func TestRenderUtilsRejectsInvalidTraceSlots(t *testing.T) {
-	for _, slots := range []uint64{0, 3, 65537} {
+	for _, slots := range []uint64{0, 3, 2048} {
 		if _, err := RenderUtils(slots); err == nil {
 			t.Errorf("RenderUtils(%d) succeeded", slots)
 		}

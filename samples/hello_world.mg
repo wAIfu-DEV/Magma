@@ -1,8 +1,7 @@
 mod main
 
-use "../std/io.mg" io
+use "std:io" io
 
 pub main(args str[]) !void:
-    io.printLn("Hello, World!")
+    try io.printLn("Hello, World!")
 ..
-

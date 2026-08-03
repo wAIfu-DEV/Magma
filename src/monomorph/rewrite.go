@@ -21,7 +21,7 @@ func (m *monoCtx) rewriteType(module string, gl *t.NodeGlobal, tp *t.NodeType) e
 			// Concrete user types substituted into a generic retain the spelling
 			// from the call site. Qualify them before the specialized declaration
 			// is moved into the generic's module.
-			targetModule, baseName, e := resolveQualifiedName(module, gl, n.NameNode)
+			targetModule, baseName, e := resolveQualifiedName(m.modules, module, gl, n.NameNode)
 			if e == nil {
 				if target := m.modules[targetModule]; target != nil {
 					if definition, ok := target.StructDefs[baseName]; ok {
@@ -38,7 +38,7 @@ func (m *monoCtx) rewriteType(module string, gl *t.NodeGlobal, tp *t.NodeType) e
 			return nil
 		}
 
-		targetModule, baseName, e := resolveQualifiedName(module, gl, n.NameNode)
+		targetModule, baseName, e := resolveQualifiedName(m.modules, module, gl, n.NameNode)
 		if e != nil {
 			return e
 		}
@@ -101,7 +101,7 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 		if len(n.GenericArgs) == 0 {
 			return nil
 		}
-		targetModule, baseName, e := resolveQualifiedName(module, gl, n.Name)
+		targetModule, baseName, e := resolveQualifiedName(m.modules, module, gl, n.Name)
 		if e != nil {
 			return e
 		}
@@ -196,7 +196,7 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 					return nil
 				}
 			}
-			targetModule, baseName, e := resolveQualifiedName(module, gl, nameExpr.Name)
+			targetModule, baseName, e := resolveQualifiedName(m.modules, module, gl, nameExpr.Name)
 			if e != nil {
 				return e
 			}
@@ -213,9 +213,11 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 			if len(tokens) > 2 {
 				tokens = []t.Token{tokens[0], tokens[len(tokens)-1]}
 			}
-			nameExpr.Name = &t.NodeNameComposite{Tokens: tokens, Parts: []string{nm.Parts[0], specName}}
+			parts := append([]string{}, nm.Parts...)
+			parts[len(parts)-1] = specName
+			nameExpr.Name = &t.NodeNameComposite{Tokens: tokens, Parts: parts}
 		case *t.NodeNameSingle:
-			targetModule, baseName, e := resolveQualifiedName(module, gl, nameExpr.Name)
+			targetModule, baseName, e := resolveQualifiedName(m.modules, module, gl, nameExpr.Name)
 			if e != nil {
 				return e
 			}

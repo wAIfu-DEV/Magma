@@ -43,6 +43,72 @@ func checkModules(t *testing.T, library, main string) error {
 	return err
 }
 
+func checkModuleSet(t *testing.T, files map[string]string) error {
+	t.Helper()
+	dir := t.TempDir()
+	for name, source := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(source), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mainPath := filepath.Join(dir, "main.mg")
+	state, err := shared.MakeShared(dir, filepath.Join("..", "..", "std"))
+	if err == nil {
+		err = pipeline.DoMain(state, mainPath)
+	}
+	if err == nil {
+		err = join.JoinCompilationUnits(state, nil)
+	}
+	if err == nil {
+		err = monomorph.Run(state)
+	}
+	if err == nil {
+		err = checker.CheckLinks(state)
+	}
+	if err == nil {
+		err = checker.TypeChecker(state)
+	}
+	return err
+}
+
+func TestPublicUseReexportsModuleNamespace(t *testing.T) {
+	err := checkModuleSet(t, map[string]string{
+		"heap.mg": `mod heap
+pub Allocator(value u64)
+pub allocator() Allocator:
+    ret Allocator(value=7)
+..
+pub identity[T](value T) T:
+    ret value
+..
+`,
+		"library.mg": `mod library
+pub use "heap.mg" heap
+`,
+		"main.mg": `mod main
+use "library.mg" lib
+main() void:
+    value lib.heap.Allocator = lib.heap.allocator()
+    generic u64 = lib.heap.identity[u64](9)
+..
+`,
+	})
+	if err != nil {
+		t.Fatalf("public module re-export failed: %v", err)
+	}
+}
+
+func TestPrivateUseDoesNotReexportModuleNamespace(t *testing.T) {
+	err := checkModuleSet(t, map[string]string{
+		"heap.mg":    "mod heap\npub allocator() void:\n..\n",
+		"library.mg": "mod library\nuse \"heap.mg\" heap\n",
+		"main.mg":    "mod main\nuse \"library.mg\" lib\nmain() void:\n    lib.heap.allocator()\n..\n",
+	})
+	if err == nil {
+		t.Fatal("private use unexpectedly exposed a nested module")
+	}
+}
+
 const visibilityLibrary = `mod library
 
 pub Public(value u64)

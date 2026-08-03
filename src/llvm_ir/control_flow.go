@@ -199,7 +199,7 @@ func irThrowSsa(ctx *IrCtx, errSsa SsaName, fnDef *t.NodeFuncDef, pos t.FilePos)
 	neqLabel := irSsaName(ctx)
 
 	// get error code field
-	irWritef(ctx, "  %s = extractvalue %%type.error %s, 2\n", fieldSsa.Repr, errSsa.Repr)
+	irWritef(ctx, "  %s = extractvalue %%type.error %s, 1\n", fieldSsa.Repr, errSsa.Repr)
 
 	// if errcode != 0
 	irWritef(ctx, "  %s = icmp ne i32 %s, 0\n", compSsa.Repr, fieldSsa.Repr)
@@ -209,7 +209,7 @@ func irThrowSsa(ctx *IrCtx, errSsa SsaName, fnDef *t.NodeFuncDef, pos t.FilePos)
 	irWritef(ctx, "%s:\n", neqLabel.Repr)
 
 	// Add source metadata only on the failing edge. The runtime uses bounded
-	// static storage, so this cannot allocate or invalidate an older trace.
+	// static storage and retains recent propagation sites without allocating.
 	site := irErrorSite(ctx, pos)
 	tracedErrSsa := irSsaLocal(ctx)
 	irWritef(ctx, "  %s = call %%type.error @magma.error.push(%%type.error %s, ptr %s)\n",
@@ -251,16 +251,20 @@ func irStmtThrow(ctx *IrCtx, stmtThrow *t.NodeStmtThrow, fnDef *t.NodeFuncDef) e
 		}
 		message := irSsaLocal(ctx)
 		length64 := irSsaLocal(ctx)
-		length32 := irSsaLocal(ctx)
+		lengthBounded := irSsaLocal(ctx)
+		lengthTooLong := irSsaLocal(ctx)
+		length16 := irSsaLocal(ctx)
 		errorMessage := irSsaLocal(ctx)
 		errorCode := irSsaLocal(ctx)
 		errorValue := irSsaLocal(ctx)
 		irWritef(ctx, "  %s = extractvalue %%type.str %s, 0\n", message.Repr, strSsa.Repr)
 		irWritef(ctx, "  %s = extractvalue %%type.str %s, 1\n", length64.Repr, strSsa.Repr)
-		irWritef(ctx, "  %s = trunc i64 %s to i32\n", length32.Repr, length64.Repr)
+		irWritef(ctx, "  %s = icmp ugt i64 %s, 65535\n", lengthTooLong.Repr, length64.Repr)
+		irWritef(ctx, "  %s = select i1 %s, i64 65535, i64 %s\n", lengthBounded.Repr, lengthTooLong.Repr, length64.Repr)
+		irWritef(ctx, "  %s = trunc i64 %s to i16\n", length16.Repr, lengthBounded.Repr)
 		irWritef(ctx, "  %s = insertvalue %%type.error zeroinitializer, ptr %s, 0\n", errorMessage.Repr, message.Repr)
-		irWritef(ctx, "  %s = insertvalue %%type.error %s, i32 1, 2\n", errorCode.Repr, errorMessage.Repr)
-		irWritef(ctx, "  %s = insertvalue %%type.error %s, i32 %s, 3\n", errorValue.Repr, errorCode.Repr, length32.Repr)
+		irWritef(ctx, "  %s = insertvalue %%type.error %s, i32 1, 1\n", errorCode.Repr, errorMessage.Repr)
+		irWritef(ctx, "  %s = insertvalue %%type.error %s, i16 %s, 3\n", errorValue.Repr, errorCode.Repr, length16.Repr)
 		return irThrowSsa(ctx, errorValue, fnDef, stmtThrow.Pos)
 	}
 	exprSsa, e := irExpression(ctx, stmtThrow.Expression.GetInferredType(), stmtThrow.Expression, false)

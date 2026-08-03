@@ -122,7 +122,7 @@ func (m *monoCtx) resolveCandidateExpr(module string, gl *t.NodeGlobal, expr t.N
 }
 
 func (m *monoCtx) isGenericFunctionName(module string, gl *t.NodeGlobal, name t.NodeName) bool {
-	targetModule, baseName, err := resolveQualifiedName(module, gl, name)
+	targetModule, baseName, err := resolveQualifiedName(m.modules, module, gl, name)
 	if err != nil {
 		return false
 	}

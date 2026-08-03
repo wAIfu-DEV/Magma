@@ -13,8 +13,8 @@ pub const ERR_NOT_FOUND u32 = 8
 pub const ERR_CANCELLED u32 = 9
 
 # A cursor over an error's bounded propagation trace. The newest propagation
-# site is returned first. Ring reuse can truncate an old cursor; accessors stay
-# safe and isTruncated reports that condition.
+# site is returned first. Traversal is bounded because ring reuse may replace
+# old parent links; accessors stay safe and isTruncated reports that bound.
 pub Trace(
     handle u64
 )
@@ -44,8 +44,8 @@ pub Trace.isEmpty() bool:
     ret traceStatus(this.handle) != 0
 ..
 
-# Returns true when part of the trace was overwritten in bounded diagnostic
-# storage. Check the terminal cursor after iteration.
+# Returns true when traversal reached its safety bound or observed a node being
+# replaced concurrently. Check the terminal cursor after iteration.
 # @complexity O(1)
 pub Trace.isTruncated() bool:
     ret traceStatus(this.handle) == 2
@@ -170,15 +170,18 @@ pub toStr(e error) str:
     ret "unknown error"
 ..
 
-# Creates an error value from a code and message.
+# Creates an error value from a code and message. Messages longer than 65,535
+# bytes retain their first 65,535 bytes.
 # @complexity O(1).
 makeErr(errorCode u32, msg str) error:
 	llvm "  %mp = extractvalue %type.str %msg, 0\n"
 	llvm "  %ml64 = extractvalue %type.str %msg, 1\n"
-	llvm "  %ml = trunc i64 %ml64 to i32\n"
+	llvm "  %too.long = icmp ugt i64 %ml64, 65535\n"
+	llvm "  %bounded = select i1 %too.long, i64 65535, i64 %ml64\n"
+	llvm "  %ml = trunc i64 %bounded to i16\n"
 	llvm "  %e0 = insertvalue %type.error zeroinitializer, ptr %mp, 0\n"
-	llvm "  %e1 = insertvalue %type.error %e0, i32 %errorCode, 2\n"
-	llvm "  %e2 = insertvalue %type.error %e1, i32 %ml, 3\n"
+	llvm "  %e1 = insertvalue %type.error %e0, i32 %errorCode, 1\n"
+	llvm "  %e2 = insertvalue %type.error %e1, i16 %ml, 3\n"
 	llvm "  ret %type.error %e2\n"
 ..
 

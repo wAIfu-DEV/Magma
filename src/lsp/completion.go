@@ -2,16 +2,31 @@ package lsp
 
 import (
 	"Magma/src/types"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unicode"
 )
 
 type completionItem struct {
-	Label         string         `json:"label"`
-	Kind          int            `json:"kind,omitempty"`
-	Detail        string         `json:"detail,omitempty"`
-	Documentation map[string]any `json:"documentation,omitempty"`
+	Label         string              `json:"label"`
+	Kind          int                 `json:"kind,omitempty"`
+	Detail        string              `json:"detail,omitempty"`
+	FilterText    string              `json:"filterText,omitempty"`
+	SortText      string              `json:"sortText,omitempty"`
+	Documentation map[string]any      `json:"documentation,omitempty"`
+	TextEdit      *completionTextEdit `json:"textEdit,omitempty"`
+}
+
+type completionList struct {
+	IsIncomplete bool             `json:"isIncomplete"`
+	Items        []completionItem `json:"items"`
+}
+
+type completionTextEdit struct {
+	Range   rangePosition `json:"range"`
+	NewText string        `json:"newText"`
 }
 
 type completionContext struct {
@@ -35,6 +50,9 @@ type expressionCompletionContext struct {
 }
 
 func complete(uri, source string, pos position, stdRoot string) []completionItem {
+	if context, ok := usePathCompletionAt(source, pos); ok {
+		return usePathCompletions(uri, context, stdRoot)
+	}
 	context, ok := completionAt(source, pos)
 	if !ok {
 		expression, expressionOK := expressionCompletionAt(source, pos)
@@ -106,6 +124,12 @@ func complete(uri, source string, pos position, stdRoot string) []completionItem
 	}
 	for ; partIndex < len(receiverParts); partIndex++ {
 		part := receiverParts[partIndex]
+		if owner == "" && !part.call {
+			if target := result.docs.publicModuleAlias(module, part.name); target != "" {
+				module = target
+				continue
+			}
+		}
 		if part.call {
 			key := module + "\x00" + part.name
 			if owner != "" {
@@ -121,9 +145,133 @@ func complete(uri, source string, pos position, stdRoot string) []completionItem
 		module, owner = completionType(result, receiverType)
 	}
 	if owner == "" {
-		return []completionItem{}
+		return result.docs.moduleCompletions(module, context.prefix)
 	}
 	return result.docs.memberCompletions(module, owner, context.prefix)
+}
+
+type usePathCompletionContext struct {
+	specifier string
+	replace   rangePosition
+}
+
+func usePathCompletionAt(source string, pos position) (usePathCompletionContext, bool) {
+	lines := strings.SplitAfter(source, "\n")
+	if int(pos.Line) >= len(lines) {
+		return usePathCompletionContext{}, false
+	}
+	line := strings.TrimSuffix(strings.TrimSuffix(lines[pos.Line], "\n"), "\r")
+	runes := []rune(line)
+	if int(pos.Character) > len(runes) {
+		return usePathCompletionContext{}, false
+	}
+	before := string(runes[:pos.Character])
+	trimmed := strings.TrimLeft(before, " \t")
+	if strings.HasPrefix(trimmed, "pub ") {
+		trimmed = strings.TrimLeft(strings.TrimPrefix(trimmed, "pub "), " \t")
+	}
+	if !strings.HasPrefix(trimmed, "use") {
+		return usePathCompletionContext{}, false
+	}
+	afterUse := strings.TrimPrefix(trimmed, "use")
+	if afterUse == "" || (afterUse[0] != ' ' && afterUse[0] != '\t') {
+		return usePathCompletionContext{}, false
+	}
+	afterUse = strings.TrimLeft(afterUse, " \t")
+	if !strings.HasPrefix(afterUse, "\"") {
+		return usePathCompletionContext{}, false
+	}
+	specifier := strings.TrimPrefix(afterUse, "\"")
+	if strings.Contains(specifier, "\"") {
+		return usePathCompletionContext{}, false
+	}
+	separator := strings.LastIndexAny(specifier, "/\\")
+	if strings.HasPrefix(specifier, "std:") && separator < len("std:")-1 {
+		separator = len("std:") - 1
+	}
+	prefixRunes := []rune(specifier[separator+1:])
+	start := pos.Character - uint32(len(prefixRunes))
+	return usePathCompletionContext{
+		specifier: strings.ReplaceAll(specifier, "\\", "/"),
+		replace:   rangePosition{Start: position{Line: pos.Line, Character: start}, End: pos},
+	}, true
+}
+
+func usePathCompletions(uri string, context usePathCompletionContext, stdRoot string) []completionItem {
+	documentPath, err := uriPath(uri)
+	if err != nil {
+		return []completionItem{}
+	}
+	root := filepath.Dir(documentPath)
+	pathPart := context.specifier
+	stdProtocol := false
+	if strings.HasPrefix(pathPart, "std:") {
+		stdProtocol = true
+		root = stdRoot
+		pathPart = strings.TrimPrefix(pathPart, "std:")
+	} else if strings.Contains(pathPart, ":") || filepath.IsAbs(filepath.FromSlash(pathPart)) {
+		return []completionItem{}
+	}
+	directoryPart, prefix := pathPart, ""
+	if slash := strings.LastIndex(pathPart, "/"); slash >= 0 {
+		directoryPart, prefix = pathPart[:slash], pathPart[slash+1:]
+	} else {
+		directoryPart, prefix = "", pathPart
+	}
+	root, err = filepath.Abs(root)
+	if err != nil {
+		return []completionItem{}
+	}
+	directory := filepath.Clean(filepath.Join(root, filepath.FromSlash(directoryPart)))
+	if stdProtocol {
+		relative, relErr := filepath.Rel(root, directory)
+		if relErr != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return []completionItem{}
+		}
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return []completionItem{}
+	}
+	items := make([]completionItem, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		kind := 19 // CompletionItemKind.Folder
+		if entry.IsDir() {
+			name += "/"
+		} else {
+			if strings.ToLower(filepath.Ext(name)) != ".mg" {
+				continue
+			}
+			name = strings.TrimSuffix(name, filepath.Ext(name))
+			kind = 9 // CompletionItemKind.Module
+		}
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		items = append(items, completionItem{
+			Label: name, Kind: kind,
+			Detail:     "import path",
+			FilterText: context.specifier[:len(context.specifier)-len(prefix)] + name,
+			SortText:   "1:" + name,
+			TextEdit:   &completionTextEdit{Range: context.replace, NewText: name},
+		})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Label < items[j].Label })
+	if context.specifier == "" {
+		items = append([]completionItem{{
+			Label:      "std:",
+			Kind:       19,
+			Detail:     "standard library",
+			FilterText: "std:",
+			SortText:   "0:std:",
+			TextEdit:   &completionTextEdit{Range: context.replace, NewText: "std:"},
+		}}, items...)
+	}
+	return items
 }
 
 func sanitizeOtherSelectors(source string, activeLine int) string {
@@ -426,7 +574,26 @@ func completionType(a *analysis, node *types.NodeType) (string, string) {
 }
 
 func (d *docIndex) moduleCompletions(module, prefix string) []completionItem {
-	return d.completions(module+"\x00", "", prefix)
+	items := d.completions(module+"\x00", "", prefix)
+	seen := map[string]bool{}
+	for _, item := range items {
+		seen[item.Label] = true
+	}
+	for alias := range d.publicModuleAliases[module] {
+		if seen[alias] || !strings.HasPrefix(alias, prefix) {
+			continue
+		}
+		items = append(items, completionItem{Label: alias, Kind: 9, Detail: "module " + alias})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Label < items[j].Label })
+	return items
+}
+
+func (d *docIndex) publicModuleAlias(module, alias string) string {
+	if d == nil {
+		return ""
+	}
+	return d.publicModuleAliases[module][alias]
 }
 
 func (d *docIndex) memberCompletions(module, owner, prefix string) []completionItem {

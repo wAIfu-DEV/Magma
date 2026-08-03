@@ -4,21 +4,46 @@ This document describes the Magma syntax.
 
 ## Source Files
 
-A Magma file is a module. The first meaningful line normally declares the module:
+A Magma file is a module. Its first line must declare the module:
 
 ```magma
 mod main
 ```
 
-Module names are simple identifiers. Files in the standard library use names such
-as `io`, `file` and `heap_impl_win`
+Module names are simple identifiers beginning with a letter and continuing with
+letters, digits, or underscores. The root file passed to the command-line
+compiler must declare `mod main`; imported files declare their own module names.
+An end-of-line comment may follow the declaration, but blank or comment-only
+lines may not precede it.
 
-Imports use `use`, a string path, and a local alias:
+Imports use `use`, a string path, and a mandatory local alias. Standard-library
+modules should use the canonical `std:` prefix:
 
 ```magma
-use "../std/io.mg" io
-use "allocator.mg" alc
+use "std:io" io
+use "std:allocator" alc
 ```
+
+`std:x` resolves `x` from the standard-library directory associated with the
+compiler. The `.mg` extension is optional. Paths without `std:` resolve relative
+to the importing file and are intended for project-local modules:
+
+```magma
+use "models/user" user
+use "../shared/config.mg" config
+```
+
+An imported module can be exposed as part of the current module's public
+namespace with `pub use`:
+
+```magma
+pub use "std:heap" heap
+```
+
+If this module is imported as `lib`, clients can access public declarations in
+the re-exported module through `lib.heap`, for example
+`lib.heap.allocator()`. Re-exporting a module does not expose private
+declarations from that module.
 
 The alias is the name used from the importing file:
 
@@ -120,7 +145,7 @@ pub alias c_size_t = u64
 Public aliases can be imported and qualified like other exported declarations:
 
 ```magma
-use "c.mg" c
+use "std:c" c
 
 ext malloc(size c.c_size_t) ptr
 ```
@@ -128,8 +153,8 @@ ext malloc(size c.c_size_t) ptr
 Internal library code may use `@compiler_known_type("name")` as an alias target
 when the compiler supplies a concrete type for the selected target.
 
-Standard-library imports use `std:`, resolved from the `std` directory beside
-the compiler executable. The `.mg` extension is optional on all imports.
+The standard-library root normally comes from the `std` directory beside the
+compiler executable and can be overridden by the compiler's `--std` option.
 
 Basic built-in types include:
 
@@ -363,12 +388,20 @@ out writer.Writer
 gl_heap ptr
 ```
 
+Prefix a global with `pub` to make it accessible through an importing module's
+alias. Public globals retain their mutability and thread-local storage behavior:
+
+```magma
+pub requestCount u64
+```
+
 Mutable globals remain zero-initialized. Immutable globals support explicit or
 inferred types:
 
 ```magma
 const count u64 = 4
 const table := VTable(fn_call=callback)
+pub const DEFAULT_CAPACITY u64 = 64
 ```
 
 Constant initializers support literals, references to other constants and
@@ -436,9 +469,10 @@ stdout.flush()
 bytesLen u64 = bytes.countBytes()
 ```
 
-The `pub` modifier exports top-level functions and struct types from a module.
-Without it, those declarations can be used only inside their defining module.
-Methods of a public struct are public by default:
+The `pub` modifier exports top-level functions, structs, aliases, constants,
+globals, and imported namespaces from a module. Without it, declarations can
+be used only inside their defining module. Methods of a public struct are
+public by default:
 
 ```magma
 pub open(a alc.Allocator, path str, openMode fopm.OpenMode) !$File:
@@ -596,14 +630,16 @@ tb.Bucket[ta.Pair[T, U]]
 tb.Bucket[ta.Pair[u8, u16]]
 ```
 
-Generic function calls can sometimes be inferred from assignment context:
+Generic arguments are explicit; Magma does not infer them from assignment or
+argument context. An inferred local can still receive a specialized call's
+result type:
 
 ```magma
 myVar := tb.makeBucket[u8](33, 4)
 nested := tc.wrapPair[u8, u16](11, 22)
 ```
 
-Type arguments may be passed explicitly:
+The same explicit syntax applies to imported functions and generic methods:
 
 ```magma
 ta.pairOf[T, U](left, right)
@@ -756,7 +792,9 @@ while i < n:
 
 ## Errors
 
-Magma has a first-class `error` type and throwing return types.
+Magma has a first-class `error` type and throwing return types. On 64-bit
+targets an error occupies 16 bytes, and its diagnostic message retains at most
+65,535 bytes.
 
 A function whose return type is prefixed with `!` can throw:
 
@@ -882,15 +920,16 @@ and `export_name`.
 
 ```magma
 @platform("windows")
-use "win/file_impl.mg" impl_file
+use "std:win/file_impl" impl_file
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "unix/file_impl.mg" impl_file
+use "std:unix/file_impl" impl_file
 ```
 
-`@platform(...)` applies to the next top-level declaration or import. If the
-current compiler platform does not match one of the string arguments, that next
-declaration is pruned.
+`@platform(...)` applies to exactly the next top-level item, including a normal
+declaration, import, external declaration, `link`, `bundle`, or inline LLVM
+item. If the selected target OS does not match one of the string arguments,
+that item is pruned.
 
 Directive arguments must be literal constants: strings, numbers, or booleans.
 
@@ -977,7 +1016,7 @@ External declarations have no body.
 Native libraries required by external declarations are declared at top level:
 
 ```magma
-link "./std/vendor/raylib/lib/raylib.lib"
+link "vendor/raylib/win/raylibdll.lib"
 link "winhttp"
 ```
 
@@ -995,9 +1034,9 @@ the generated executable after a successful link:
 
 ```magma
 @platform("windows")
-link "./std/vendor/raylib/raylibdll.lib"
+link "vendor/raylib/win/raylibdll.lib"
 @platform("windows")
-bundle "./std/vendor/raylib/raylib.dll"
+bundle "vendor/raylib/win/raylib.dll"
 ```
 
 Bundle paths are resolved relative to the declaring Magma file, deduplicated
@@ -1198,7 +1237,7 @@ The checker validates initializer, assignment, call-argument, and return-value
 compatibility as well as operator families. Numeric types are mutually
 compatible, and pointer types use permissive pointer compatibility; narrowing
 or representation-changing conversions may produce warnings. Explicit casts
-are available in `std/cast.mg`.
+are available through `use "std:cast" cast`.
 
 Numeric literals initially infer as `i64`; string literals infer as `str`; bool
 literals infer as `bool`. Contextual lowering may still produce the declared
@@ -1227,8 +1266,8 @@ body through `ret`, `throw`, normal fallthrough, `break`, or `continue`.
 Defers execute in last-in-first-out order for the scope where they were
 registered. A `defer:` body cannot contain another `defer`.
 
-`break` and `continue` parse anywhere, but code generation rejects them outside a
-loop body.
+`break` and `continue` are statements, but type checking rejects them outside a
+`while` loop.
 
 ### Globals and Initialization
 
@@ -1301,7 +1340,7 @@ The standard library generally follows these conventions:
 ```magma
 mod module_name
 
-use "path.mg" alias
+use "std:allocator" alc
 
 StructName(
     field Type

@@ -952,7 +952,8 @@ func (n *NodeStructDef) Print(indent int) {
 type NodeGlobal struct {
 	Declarations []NodeGlobalDecl
 
-	ImportAlias map[string]string
+	ImportAlias       map[string]string
+	PublicImportAlias map[string]bool
 
 	StructDefs           map[string]*StructDef
 	TypeAliases          map[string]*TypeAlias

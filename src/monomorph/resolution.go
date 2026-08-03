@@ -44,7 +44,7 @@ func cloneEnv(in map[string]*t.NodeType) map[string]*t.NodeType {
 	return out
 }
 
-func resolveQualifiedName(module string, gl *t.NodeGlobal, name t.NodeName) (string, string, error) {
+func resolveQualifiedName(modules map[string]*t.NodeGlobal, module string, gl *t.NodeGlobal, name t.NodeName) (string, string, error) {
 	switch n := name.(type) {
 	case *t.NodeNameSingle:
 		return module, n.Name, nil
@@ -52,11 +52,14 @@ func resolveQualifiedName(module string, gl *t.NodeGlobal, name t.NodeName) (str
 		if len(n.Parts) < 2 {
 			return "", "", fmt.Errorf("invalid composite name")
 		}
-		targetModule, ok := gl.ImportAlias[n.Parts[0]]
-		if !ok {
-			return "", "", fmt.Errorf("unknown module alias '%s'", n.Parts[0])
+		targetModule, consumed, err := t.ResolveModulePrefix(modules, gl, n.Parts)
+		if err != nil || consumed >= len(n.Parts) {
+			if err != nil {
+				return "", "", err
+			}
+			return "", "", fmt.Errorf("qualified name has no symbol")
 		}
-		return targetModule, n.Parts[1], nil
+		return targetModule, n.Parts[consumed], nil
 	}
 	return "", "", fmt.Errorf("invalid name node")
 }
@@ -124,12 +127,11 @@ func (m *monoCtx) getStructDefFromType(currModule string, currGl *t.NodeGlobal, 
 			if len(nn.Parts) < 2 {
 				return nil, "", "", fmt.Errorf("invalid composite name")
 			}
-			alias := nn.Parts[0]
-			name := nn.Parts[1]
-			module, ok := currGl.ImportAlias[alias]
-			if !ok {
-				return nil, "", "", fmt.Errorf("unknown module alias '%s'", alias)
+			module, consumed, err := t.ResolveModulePrefix(m.modules, currGl, nn.Parts)
+			if err != nil || consumed >= len(nn.Parts) {
+				return nil, "", "", fmt.Errorf("cannot resolve qualified type '%v'", nn.Parts)
 			}
+			name := nn.Parts[consumed]
 			gl := m.modules[module]
 			if gl == nil {
 				return nil, "", "", fmt.Errorf("missing module '%s'", module)

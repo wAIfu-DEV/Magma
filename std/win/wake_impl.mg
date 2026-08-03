@@ -2,7 +2,7 @@ mod wake_impl_win
 # Windows wait-and-notify backend used by the portable wake module.
 
 
-use "std:c" c
+use "std:win/types" win
 use "std:cast" cast
 use "std:errors" errors
 
@@ -17,15 +17,15 @@ pub Wake(
     semaphore ptr
 )
 
-ext ext_win32_CreateSemaphoreW CreateSemaphoreW(attributes ptr, initialCount c.int, maximumCount c.int, name ptr) ptr
-ext ext_win32_ReleaseSemaphore ReleaseSemaphore(semaphore ptr, releaseCount c.int, previousCount ptr) c.int
-ext ext_win32_WaitForSingleObject WaitForSingleObject(handle ptr, milliseconds c.unsigned_int) c.unsigned_int
-ext ext_win32_CloseHandle CloseHandle(handle ptr) c.unsigned_int
-ext ext_win32_GetLastError GetLastError() c.unsigned_int
-ext ext_win32_AcquireSRWLockExclusive AcquireSRWLockExclusive(lock ptr) void
-ext ext_win32_ReleaseSRWLockExclusive ReleaseSRWLockExclusive(lock ptr) void
-ext ext_win32_SleepConditionVariableSRW SleepConditionVariableSRW(conditionVariable ptr, lock ptr, milliseconds c.unsigned_int, flags c.unsigned_int) c.int
-ext ext_win32_WakeConditionVariable WakeConditionVariable(conditionVariable ptr) void
+ext ext_win32_CreateSemaphoreW CreateSemaphoreW(attributes win.LPVOID, initialCount win.LONG, maximumCount win.LONG, name win.LPCWSTR) win.HANDLE
+ext ext_win32_ReleaseSemaphore ReleaseSemaphore(semaphore win.HANDLE, releaseCount win.LONG, previousCount win.LONG*) win.BOOL
+ext ext_win32_WaitForSingleObject WaitForSingleObject(handle win.HANDLE, milliseconds win.DWORD) win.DWORD
+ext ext_win32_CloseHandle CloseHandle(handle win.HANDLE) win.BOOL
+ext ext_win32_GetLastError GetLastError() win.DWORD
+ext ext_win32_AcquireSRWLockExclusive AcquireSRWLockExclusive(lock win.PVOID) void
+ext ext_win32_ReleaseSRWLockExclusive ReleaseSRWLockExclusive(lock win.PVOID) void
+ext ext_win32_SleepConditionVariableSRW SleepConditionVariableSRW(conditionVariable win.PVOID, lock win.PVOID, milliseconds win.DWORD, flags win.ULONG) win.BOOL
+ext ext_win32_WakeConditionVariable WakeConditionVariable(conditionVariable win.PVOID) void
 
 pub new(strategy u8) !$Wake:
     value := Wake(strategy=strategy, lock=none, conditionVariable=none, count=0, semaphore=none)

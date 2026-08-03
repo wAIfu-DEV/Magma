@@ -17,12 +17,6 @@ use "std:win/http_impl" impl_http
 # HTTP is intentionally Windows-only until the standard library has portable
 # TCP and TLS stream abstractions on which the non-Windows client can be built.
 
-drop[T](value $T) void:
-    abandoned := array T[1]
-    abandoned[0] = value
-    ret
-..
-
 # One HTTP request header. Names and values are borrowed for the duration of
 # Client.send.
 pub Header(
@@ -196,7 +190,6 @@ Client.send(request Request, requestBody Body) !$Response:
     rawHeaders.free(this.allocator)
 
     if sendErr.nok():
-        drop[Response](response)
         throw sendErr
     ..
     response.impl = responseImpl

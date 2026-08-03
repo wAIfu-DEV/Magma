@@ -17,6 +17,12 @@ defer result.free()
 positionals := result.positionals()
 ```
 
+Typed scalar registration methods are `boolean`, `string`, `unsigned`, and
+`integer`. Repeated-value methods are `strings`, `unsigneds`, and `integers`.
+`Parser.add(name, short, help, kind, destination)` is the lower-level public
+registration primitive used by those typed methods; prefer a typed method
+unless implementing a compatible option kind.
+
 Long options accept `--name=value` or `--name value`; short valued options use
 `-n value` or `-nvalue`. Boolean short options may be clustered as `-vq`.
 `--` ends option parsing. Scalar duplicates, unknown options,

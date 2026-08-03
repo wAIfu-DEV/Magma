@@ -2,16 +2,16 @@ mod heap_impl_win
 # Windows process-heap backend used by the portable heap module.
 
 
-use "std:c" c
+use "std:win/types" win
 use "std:allocator" a
 use "std:errors"    e
 use "std:cast"      cast
 use "std:memory"    mem
 # Windows heap API
-ext ext_win32_GetProcessHeap GetProcessHeap() ptr
-ext ext_win32_HeapAlloc      HeapAlloc(hHeap ptr, dwFlags c.unsigned_int, dwBytes c.size_t) ptr
-ext ext_win32_HeapReAlloc    HeapReAlloc(hHeap ptr, dwFlags c.unsigned_int, lpMem ptr, dwBytes c.size_t) ptr
-ext ext_win32_HeapFree       HeapFree(hHeap ptr, dwFlags c.unsigned_int, lpMem ptr) c.unsigned_int
+ext ext_win32_GetProcessHeap GetProcessHeap() win.HANDLE
+ext ext_win32_HeapAlloc      HeapAlloc(hHeap win.HANDLE, dwFlags win.DWORD, dwBytes win.SIZE_T) win.LPVOID
+ext ext_win32_HeapReAlloc    HeapReAlloc(hHeap win.HANDLE, dwFlags win.DWORD, lpMem win.LPVOID, dwBytes win.SIZE_T) win.LPVOID
+ext ext_win32_HeapFree       HeapFree(hHeap win.HANDLE, dwFlags win.DWORD, lpMem win.LPVOID) win.BOOL
 
 # Heap handle caching for performance
 gl_heap ptr
@@ -69,7 +69,7 @@ heapFree(impl ptr, in u8*) void:
     ..
 
     heap ptr = getHeap()
-    ok u32 = ext_win32_HeapFree(heap, 0, in)
+    ok win.BOOL = ext_win32_HeapFree(heap, 0, in)
     if ok == 0:
         ret
     ..

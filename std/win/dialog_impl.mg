@@ -4,7 +4,7 @@ mod dialog_impl_win
 
 use "std:allocator" allocator
 use "std:builder" builder
-use "std:c" c
+use "std:win/types" win
 use "std:cast" cast
 use "std:errors" errors
 use "std:slices" slices
@@ -20,11 +20,11 @@ llvm "@magma.filedialog.iid.open = private constant { i32, i16, i16, [8 x i8] } 
 llvm "@magma.filedialog.iid.save = private constant { i32, i16, i16, [8 x i8] } { i32 -2068001501, i16 24542, i16 19675, [8 x i8] [i8 -82, i8 -92, i8 -81, i8 100, i8 -72, i8 61, i8 120, i8 -85] }\n"
 llvm "@magma.filedialog.iid.shellitem = private constant { i32, i16, i16, [8 x i8] } { i32 1132621086, i16 -6376, i16 17134, [8 x i8] [i8 -68, i8 85, i8 -95, i8 -30, i8 97, i8 -61, i8 123, i8 -2] }\n"
 
-ext ext_CoInitializeEx CoInitializeEx(reserved ptr, flags u32) i32
+ext ext_CoInitializeEx CoInitializeEx(reserved win.LPVOID, flags win.DWORD) win.HRESULT
 ext ext_CoUninitialize CoUninitialize() void
-ext ext_CoCreateInstance CoCreateInstance(classId ptr, outer ptr, context u32, interfaceId ptr, result ptr*) i32
-ext ext_CoTaskMemFree CoTaskMemFree(value ptr) void
-ext ext_SHCreateItemFromParsingName SHCreateItemFromParsingName(path u16*, context ptr, interfaceId ptr, result ptr*) i32
+ext ext_CoCreateInstance CoCreateInstance(classId win.LPCVOID, outer win.LPVOID, context win.DWORD, interfaceId win.LPCVOID, result win.LPVOID*) win.HRESULT
+ext ext_CoTaskMemFree CoTaskMemFree(value win.LPVOID) void
+ext ext_SHCreateItemFromParsingName SHCreateItemFromParsingName(path win.LPCWSTR, context win.LPVOID, interfaceId win.LPCVOID, result win.LPVOID*) win.HRESULT
 
 guidOpenClass() ptr:
     llvm "ret ptr @magma.filedialog.clsid.open\n"

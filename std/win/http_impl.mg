@@ -2,7 +2,7 @@ mod http_impl_win
 # Windows HTTP backend used by the portable http module.
 
 
-use "std:c" c
+use "std:win/types" win
 link "winhttp"
 
 use "std:allocator" alc
@@ -13,21 +13,21 @@ use "std:utf8"      utf8
 use "std:cast"      cast
 use "std:errors"    errors
 
-ext ext_WinHttpOpen               WinHttpOpen(agent c.unsigned_short*, accessType c.unsigned_int, proxy c.unsigned_short*, bypass c.unsigned_short*, flags c.unsigned_int) ptr
-ext ext_WinHttpConnect            WinHttpConnect(session ptr, server c.unsigned_short*, port c.unsigned_short, reserved c.unsigned_int) ptr
-ext ext_WinHttpOpenRequest        WinHttpOpenRequest(connect ptr, verb c.unsigned_short*, object c.unsigned_short*, version c.unsigned_short*, referer c.unsigned_short*, acceptTypes ptr, flags c.unsigned_int) ptr
-ext ext_WinHttpAddRequestHeaders  WinHttpAddRequestHeaders(request ptr, headers c.unsigned_short*, length c.unsigned_int, modifiers c.unsigned_int) c.unsigned_int
-ext ext_WinHttpSendRequest        WinHttpSendRequest(request ptr, headers c.unsigned_short*, headerLength c.unsigned_int, optional ptr, optionalLength c.unsigned_int, totalLength c.unsigned_int, context c.uintptr_t) c.unsigned_int
-ext ext_WinHttpWriteData          WinHttpWriteData(request ptr, buffer ptr, bytes c.unsigned_int, written c.unsigned_int*) c.unsigned_int
-ext ext_WinHttpReceiveResponse    WinHttpReceiveResponse(request ptr, reserved ptr) c.unsigned_int
-ext ext_WinHttpQueryHeaders       WinHttpQueryHeaders(request ptr, infoLevel c.unsigned_int, name c.unsigned_short*, buffer ptr, bufferLength c.unsigned_int*, index c.unsigned_int*) c.unsigned_int
-ext ext_WinHttpQueryDataAvailable WinHttpQueryDataAvailable(request ptr, available c.unsigned_int*) c.unsigned_int
-ext ext_WinHttpReadData           WinHttpReadData(request ptr, buffer ptr, bytes c.unsigned_int, read c.unsigned_int*) c.unsigned_int
-ext ext_WinHttpSetTimeouts        WinHttpSetTimeouts(session ptr, resolve c.int, connect c.int, sendTimeout c.int, receive c.int) c.unsigned_int
-ext ext_WinHttpSetOption          WinHttpSetOption(handle ptr, option c.unsigned_int, buffer ptr, length c.unsigned_int) c.unsigned_int
-ext ext_WinHttpCloseHandle        WinHttpCloseHandle(handle ptr) c.unsigned_int
-ext ext_WinHttpCrackUrl           WinHttpCrackUrl(url c.unsigned_short*, length c.unsigned_int, flags c.unsigned_int, components ptr) c.unsigned_int
-ext ext_GetLastError              GetLastError() c.unsigned_int
+ext ext_WinHttpOpen               WinHttpOpen(agent win.LPCWSTR, accessType win.DWORD, proxy win.LPCWSTR, bypass win.LPCWSTR, flags win.DWORD) win.HANDLE
+ext ext_WinHttpConnect            WinHttpConnect(session win.HANDLE, server win.LPCWSTR, port win.INTERNET_PORT, reserved win.DWORD) win.HANDLE
+ext ext_WinHttpOpenRequest        WinHttpOpenRequest(connect win.HANDLE, verb win.LPCWSTR, object win.LPCWSTR, version win.LPCWSTR, referer win.LPCWSTR, acceptTypes win.LPCWSTR*, flags win.DWORD) win.HANDLE
+ext ext_WinHttpAddRequestHeaders  WinHttpAddRequestHeaders(request win.HANDLE, headers win.LPCWSTR, length win.DWORD, modifiers win.DWORD) win.BOOL
+ext ext_WinHttpSendRequest        WinHttpSendRequest(request win.HANDLE, headers win.LPCWSTR, headerLength win.DWORD, optional win.LPVOID, optionalLength win.DWORD, totalLength win.DWORD, context win.DWORD_PTR) win.BOOL
+ext ext_WinHttpWriteData          WinHttpWriteData(request win.HANDLE, buffer win.LPCVOID, bytes win.DWORD, written win.DWORD*) win.BOOL
+ext ext_WinHttpReceiveResponse    WinHttpReceiveResponse(request win.HANDLE, reserved win.LPVOID) win.BOOL
+ext ext_WinHttpQueryHeaders       WinHttpQueryHeaders(request win.HANDLE, infoLevel win.DWORD, name win.LPCWSTR, buffer win.LPVOID, bufferLength win.DWORD*, index win.DWORD*) win.BOOL
+ext ext_WinHttpQueryDataAvailable WinHttpQueryDataAvailable(request win.HANDLE, available win.DWORD*) win.BOOL
+ext ext_WinHttpReadData           WinHttpReadData(request win.HANDLE, buffer win.LPVOID, bytes win.DWORD, read win.DWORD*) win.BOOL
+ext ext_WinHttpSetTimeouts        WinHttpSetTimeouts(session win.HANDLE, resolve win.INT, connect win.INT, sendTimeout win.INT, receive win.INT) win.BOOL
+ext ext_WinHttpSetOption          WinHttpSetOption(handle win.HANDLE, option win.DWORD, buffer win.LPVOID, length win.DWORD) win.BOOL
+ext ext_WinHttpCloseHandle        WinHttpCloseHandle(handle win.HANDLE) win.BOOL
+ext ext_WinHttpCrackUrl           WinHttpCrackUrl(url win.LPCWSTR, length win.DWORD, flags win.DWORD, components win.LPVOID) win.BOOL
+ext ext_GetLastError              GetLastError() win.DWORD
 
 URLComponents(
     structSize u32
@@ -77,7 +77,7 @@ pub openClient(a alc.Allocator, userAgent str, connectMs u32, sendMs u32, receiv
     ..
     onerror ext_WinHttpCloseHandle(session)
 
-    ok u32 = ext_WinHttpSetTimeouts(session, 0, cast.u32toi32(connectMs), cast.u32toi32(sendMs), cast.u32toi32(receiveMs))
+    ok win.BOOL = ext_WinHttpSetTimeouts(session, 0, cast.u32toi32(connectMs), cast.u32toi32(sendMs), cast.u32toi32(receiveMs))
     if ok == 0:
         throw fail("WinHttpSetTimeouts failed")
     ..
@@ -150,7 +150,7 @@ addHeaders(a alc.Allocator, request ptr, headers str) !bool:
     if total > 0xFFFFFFFF:
         throw errors.wouldOverflow("HTTP header is too large")
     ..
-    ok u32 = ext_WinHttpAddRequestHeaders(request, slices.toPtr(headers16), cast.u64to32(total), 0xA0000000)
+    ok win.BOOL = ext_WinHttpAddRequestHeaders(request, slices.toPtr(headers16), cast.u64to32(total), 0xA0000000)
     if ok == 0:
         throw fail("WinHttpAddRequestHeaders failed")
     ..
@@ -173,7 +173,7 @@ writeBody(request ptr, source reader.Reader, length u64) !u64:
         while offset < count:
             written u32 = 0
             next ptr = cast.utop(cast.ptou(slices.toPtr(buffer)) + offset)
-            ok u32 = ext_WinHttpWriteData(request, next, cast.u64to32(count - offset), addrof written)
+            ok win.BOOL = ext_WinHttpWriteData(request, next, cast.u64to32(count - offset), addrof written)
             if ok == 0:
                 throw fail("WinHttpWriteData failed")
             ..
@@ -190,7 +190,7 @@ writeBody(request ptr, source reader.Reader, length u64) !u64:
 queryStatus(request ptr) !u16:
     status u32 = 0
     size u32 = 4
-    ok u32 = ext_WinHttpQueryHeaders(request, 0x20000013, none, addrof status, addrof size, none)
+    ok win.BOOL = ext_WinHttpQueryHeaders(request, 0x20000013, none, addrof status, addrof size, none)
     if ok == 0:
         throw fail("WinHttpQueryHeaders status failed")
     ..
@@ -205,7 +205,7 @@ queryRawHeaders(a alc.Allocator, request ptr) !$str:
     ..
     wide u16* = try a.alloc(cast.u32to64(byteCount))
     defer a.free(wide)
-    ok u32 = ext_WinHttpQueryHeaders(request, 22, none, wide, addrof byteCount, none)
+    ok win.BOOL = ext_WinHttpQueryHeaders(request, 22, none, wide, addrof byteCount, none)
     if ok == 0:
         throw fail("WinHttpQueryHeaders failed")
     ..
@@ -246,7 +246,7 @@ pub Client.send(method str, url str, headers str, source reader.Reader, bodyLeng
         extraLength=0xFFFFFFFF,
     )
 
-    ok u32 = ext_WinHttpCrackUrl(slices.toPtr(url16), 0, 0, addrof parts)
+    ok win.BOOL = ext_WinHttpCrackUrl(slices.toPtr(url16), 0, 0, addrof parts)
     if ok == 0:
         throw fail("WinHttpCrackUrl failed")
     ..
@@ -347,7 +347,7 @@ readResponse(response Response*, buffer u8[], count u64) !u64:
         wanted = 0xFFFFFFFF
     ..
     available u32 = 0
-    ok u32 = ext_WinHttpQueryDataAvailable(response.request, addrof available)
+    ok win.BOOL = ext_WinHttpQueryDataAvailable(response.request, addrof available)
     if ok == 0:
         throw fail("WinHttpQueryDataAvailable failed")
     ..

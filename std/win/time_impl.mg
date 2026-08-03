@@ -2,16 +2,16 @@ mod time_impl_win
 # Windows clock backend used by the portable time module.
 
 
-use "std:c" c
+use "std:win/types" win
 use "std:errors" err
 use "std:cast" cast
 
-ext ext_win32_QueryPerformanceCounter        QueryPerformanceCounter(value c.long_long*) c.int
-ext ext_win32_QueryPerformanceFrequency      QueryPerformanceFrequency(value c.long_long*) c.int
+ext ext_win32_QueryPerformanceCounter        QueryPerformanceCounter(value win.LONGLONG*) win.BOOL
+ext ext_win32_QueryPerformanceFrequency      QueryPerformanceFrequency(value win.LONGLONG*) win.BOOL
 ext ext_win32_GetSystemTimePreciseAsFileTime GetSystemTimePreciseAsFileTime(value FileTime*) void
-ext ext_win32_Sleep                          Sleep(dwMilliseconds c.unsigned_int) void
-ext ext_win32_GetCurrentProcess              GetCurrentProcess() ptr
-ext ext_win32_GetProcessTimes                GetProcessTimes(process ptr, creation FileTime*, exit FileTime*, kernel FileTime*, user FileTime*) c.int
+ext ext_win32_Sleep                          Sleep(dwMilliseconds win.DWORD) void
+ext ext_win32_GetCurrentProcess              GetCurrentProcess() win.HANDLE
+ext ext_win32_GetProcessTimes                GetProcessTimes(process win.HANDLE, creation FileTime*, exit FileTime*, kernel FileTime*, user FileTime*) win.BOOL
 
 FileTime(
     lowDateTime u32,

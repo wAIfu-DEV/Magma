@@ -322,7 +322,7 @@ finish:
 			irWritef(ctx, "  %%r = call { %%type.error } @%s.main()\n", ctx.fCtx.MainPckgName)
 		}
 		irWrite(ctx, "  %e = extractvalue { %type.error } %r, 0\n")
-		irWrite(ctx, "  %ecd = extractvalue %type.error %e, 2\n")
+		irWrite(ctx, "  %ecd = extractvalue %type.error %e, 1\n")
 		irWrite(ctx, "  %isnz = icmp ne i32 %ecd, 0\n")
 		irWrite(ctx, "  br i1 %isnz, label %enz, label %ez, !prof !9000\n")
 		irWrite(ctx, "enz:\n")

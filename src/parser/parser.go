@@ -14,8 +14,9 @@ func parseGlobal(ctx *ParseCtx) (*t.NodeGlobal, error) {
 		PrimitiveMethods:     map[string]map[string]*t.NodeFuncDef{},
 		PrimitiveDestructors: map[string][]*t.NodeFuncDef{},
 
-		Declarations: []t.NodeGlobalDecl{},
-		ImportAlias:  map[string]string{},
+		Declarations:      []t.NodeGlobalDecl{},
+		ImportAlias:       map[string]string{},
+		PublicImportAlias: map[string]bool{},
 	}
 	ctx.GlobalNode = n
 

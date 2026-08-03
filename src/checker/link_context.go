@@ -41,6 +41,11 @@ type privateSymbolError struct {
 	name   string
 }
 
+func resolveModuleName(c *ctx, name parsedName) (string, int, error) {
+	parts := append([]string{name.First}, name.Parts...)
+	return t.ResolveModulePrefix(c.ModuleBundle.Modules, c.GlobalNode, parts)
+}
+
 func (e *privateSymbolError) Error() string {
 	return fmt.Sprintf("%s '%s.%s' is private and cannot be used from another module", e.kind, e.module, e.name)
 }

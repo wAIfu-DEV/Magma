@@ -32,23 +32,34 @@ in the observed corpus. Instead, abstraction is built from:
 
 ### 2.1 Files, modules, and imports
 
-A source file normally begins with one module declaration:
+A source file must begin on its first line with one module declaration:
 
 ```magma
 mod json
 ```
 
-An import gives a relative path and a mandatory local alias:
+The command-line compiler additionally requires its root source file to declare
+`mod main`. Imported files retain their own module names.
+
+An import gives a module path and a mandatory local alias. Standard-library
+imports canonically use `std:`; project imports are relative to the importing
+file:
 
 ```magma
-use "allocator.mg" alc
-use "../std/io.mg" io
+use "std:allocator" alc
+use "std:io" io
+use "models/user" user
 ```
 
 Imported declarations are qualified through that alias, for example
-`alc.Allocator` or `io.stdout(a)`. There is no evidence of wildcard imports,
-selective imports, or hierarchical module declarations. Paths describe source
-files; aliases provide the namespace visible to the importer.
+`alc.Allocator` or `io.stdout(a)`. The `.mg` extension is optional. `std:x`
+resolves from the compiler's standard-library root; other paths resolve from
+the importing source file. There are no wildcard or selective imports, and
+aliases provide the namespace visible to the importer.
+
+`pub use` re-exports an imported module namespace. If a module imported as
+`lib` contains `pub use "std:heap" heap`, its clients can access
+`lib.heap.allocator()` without exposing private declarations from `std:heap`.
 
 `pub` marks a top-level declaration as exported:
 
@@ -58,7 +69,8 @@ pub new[T](a alc.Allocator) !$Array[T]:
 ..
 ```
 
-Functions and struct types without `pub` are module-private and cannot be named
+Functions, structs, aliases, constants, globals, and imported namespaces can be
+public. Declarations without `pub` are module-private and cannot be named
 through an import alias. Both public and private declarations remain available
 inside their defining module. Methods are public by default when their owner
 struct is public and do not require a separate `pub` modifier.
@@ -95,8 +107,8 @@ else:
 
 ### 2.3 Identifiers and literals
 
-The corpus uses ASCII-style identifiers containing letters, digits, and
-underscores, with case carrying convention rather than special semantics:
+Identifiers contain Unicode letters, digits, and underscores; names cannot
+start with a digit. Case carries convention rather than special semantics:
 `Value` and `Allocator` are types, while `writeValue` and `byteCount` are
 functions or values.
 
@@ -133,8 +145,7 @@ a := heap.allocator()
 bound := value.countBytes()
 ```
 
-An uninitialized declaration is not undefined storage: the examples depend on
-locals, arrays, structs, pointers, and globals being zero-initialized. This is
+An uninitialized declaration is not undefined storage: all locals, arrays, structs, pointers, and globals are zero-initialized at declaration. This is
 used as a constructor substitute:
 
 ```magma
@@ -192,7 +203,7 @@ Trailing commas are accepted in call and declaration lists.
 The executable entry points show both supported shapes:
 
 ```magma
-main() !void:
+main() void:
     # ...
 ..
 
@@ -201,12 +212,13 @@ pub main(args str[]) !void:
 ..
 ```
 
-There is no overloading visible in the corpus. Different operations use distinct
-names (`writeUint64`, `writeInt64`, `numberFloat`, `numberInt`).
+Magma does not overload functions by parameter type. Different operations use
+distinct names (`writeUint64`, `writeInt64`, `numberFloat`, `numberInt`).
 
 ### 3.3 Structs
 
-A capitalized name followed by a parenthesized field list defines a struct:
+An identifier followed by a parenthesized field list and no return type defines
+a struct. Capitalization is conventional, not syntactic:
 
 ```magma
 Capture(
@@ -216,8 +228,8 @@ Capture(
 )
 ```
 
-Commas between fields are optional when newlines separate them; standard library
-code uses both styles. Struct values may be constructed with a complete
+Commas between fields are optional when newlines separate them.  
+Struct values may be constructed with a complete
 `Type(field=value, ...)` named-field list.
 
 Structs are value types in ordinary declarations and returns. A pointer suffix
@@ -257,21 +269,35 @@ not automatically insert them.
 
 ### 4.1 Primitive and built-in types
 
-The examples exercise:
+These types include:
 
 - unsigned integers: `u8`, `u16`, `u32`, `u64`, `u128`;
 - signed integers: `i8`, `i16`, `i32`, `i64`, `i128`;
-- floating point: `f16`, `f32`, `f64`, and `f128`, with `f32` and `f64`
-  exercised by the current library and tests;
-- `bool`, `void`, `ptr`, `str`, `slice`, and `error`.
+- floating point: `f16`, `f32`, `f64`, and `f128`;
+- `bool`, `void`, `str`, and `error`.
+- generic type-erased: `ptr`, `slice`, allowing `T*` and `T[]`  respectively
 
-`str` and `slice` are runtime descriptor values rather than raw pointers. Tests
-expect both a typed slice such as `u8[]` and the raw `slice` type to occupy 16
-bytes on a 64-bit target. Library LLVM snippets reveal a pointer-and-length
-layout. `error` is likewise a first-class aggregate; library code extracts a
-numeric code and message string from it.
+`str` and `slice` are runtime descriptor values (fat pointers) rather than raw pointers. They both occupy 16 bytes on a standard 64-bit target.
 
-There are no enums or tagged unions. `std/json.mg` demonstrates how the library
+`error` is likewise a first-class aggregate containing:
+- a error code (0 is OK, non zero is error)
+- a message provided at construction
+- a trace pointer (linked list-like built on error paths)
+They have the LLVM shape `{ ptr, i32, i16, i16 }`, 16 bytes wide.
+
+Aliases transparently name an existing type and create no distinct runtime
+representation:
+
+```magma
+alias Handle = ptr
+pub alias Count = u64
+```
+
+Public aliases are qualified through an import like other declarations.
+Trusted standard-library code uses `@compiler_known_type("...")` to map the
+target-dependent aliases in `std:c` to the selected C ABI.
+
+There are no enums or tagged unions. `std:json` demonstrates how the library
 constructs one manually using a `u8` kind tag plus `u128` payload storage.
 
 ### 4.2 Postfix type constructors
@@ -291,7 +317,7 @@ Slices are a pointer-and-count view. Pointers and slices share indexing syntax,
 and stack-backed arrays are accepted by generic slice utilities in the examples.
 
 The untyped `ptr` is the raw interoperation type. Typed and raw pointers are
-frequently passed through the explicit functions in `std/cast.mg`.
+frequently passed through explicit functions from `use "std:cast" cast`.
 
 ### 4.3 Ownership marker `$`
 
@@ -339,17 +365,18 @@ Allocator(impl ptr, vtable AllocatorVTable*)
 ```
 
 Together, an opaque implementation pointer and function-pointer fields form a
-manually built interface or vtable. `Allocator` points to a shared immutable
-`AllocatorVTable` and `DuplexVTable`; `Reader` and `Writer` embed their single function pointer.
-Calls through these function-pointer fields provide dynamic dispatch without
-language-level interfaces.
+manually built interface or vtable. `Allocator`, `Duplex`, and `ConstWriter`
+point to shared immutable vtables; `Reader` and `Writer` store their callback
+directly. Calls through these function-pointer fields provide dynamic dispatch
+without language-level interfaces. `Executor` applies the same pattern to
+type-erased task scheduling.
 
 ### 4.5 Generics
 
 Generic parameters and arguments use square brackets:
 
 ```magma
-Array[T](data T*, capacity u16)
+Array[T](data T*, state State*)
 new[T](a alc.Allocator) !$Array[T]
 arr.new[Value](a)
 ```
@@ -368,6 +395,9 @@ import-qualified. The design is parametric rather than subtype-based: constraint
 are not expressed, and generic algorithms receive operations explicitly as
 function pointers when needed. For example, search and sort routines accept a
 comparison function.
+
+Generic type arguments are explicit. Magma does not infer them from call
+arguments or assignment context, and it has no syntax for generic constraints.
 
 ## 5. Expressions and operators
 
@@ -436,7 +466,7 @@ such as `flag == false`, although `!flag` is syntactically available.
 
 ### 6.2 Loops
 
-The only demonstrated loop is `while`:
+The language's loop construct is `while`:
 
 ```magma
 i u64 = 0
@@ -450,7 +480,7 @@ syntax, `switch`, or `match`. Indexed traversal in the corpus uses `while`.
 
 ### 6.3 Deferred execution
 
-`defer` schedules cleanup, either as one expression or as a body:
+`defer` schedules unconditional cleanup, either as one expression or as a body:
 
 ```magma
 defer a.free(path_cstr)
@@ -462,9 +492,24 @@ defer:
 ```
 
 The examples use it for allocations and file/stream handles. Deferred work is
-scope-aware and runs on normal or abnormal exits, including returns, throws,
+scope-aware and runs on normal and abnormal exits, including returns, throws,
 loop control, and body fallthrough. Defers execute last-in-first-out within their
 scope. A deferred body cannot contain another `defer`.
+
+`onerror` acts exactly the same as `defer` but only executes on abnormal exits, such as failing `try` and `throw`, but does not execute on normal exits such as `ret` or leaving a nested scope:
+
+```magma
+func() !$Struct:
+    resource := acquireResource()
+    onerror resource.free()
+
+    try resource.doSomething() # may be freed here
+
+    ret Struct(field=resource) # is not freed here
+..
+```
+
+This is meant to fix the issue with having to duplicate resource freeing on each error paths, something not necessarily fixed by `defer` due to its unconditional nature.
 
 ## 7. Error model
 
@@ -519,13 +564,14 @@ The destructuring form is narrow: it declares exactly a value and an `error`,
 and the right side must be a throwing function call. A failed value result is
 zero-initialized and must not be used before checking the error.
 
-The standard error representation has a category code, message, and an
-allocation-free propagation trace. Failed `throw` and `try` edges append static
+The standard error representation is 16 bytes on 64-bit targets: a message
+pointer, 32-bit category code, 16-bit trace handle, and 16-bit message length.
+Messages retain at most 65,535 bytes. Failed `throw` and `try` edges append static
 source metadata to a bounded, sharded ring; successful paths do not touch the
 ring. `errors.trace` returns a cursor and
 `errors.printTrace` formats it without allocating. Platform errors are encoded
 by the standard library with the high bit of the code. The language supplies
-the mechanism, while error categories and constructors live in `std/errors.mg`.
+the mechanism, while error categories and constructors live in `std:errors`.
 
 ### 7.4 Propagation stack traces
 
@@ -548,7 +594,7 @@ qualified types. The trace describes error propagation rather than every
 native call frame: functions which neither throw nor propagate the error do not
 appear.
 
-Handled errors expose the same information through `std/errors.mg`:
+Handled errors expose the same information through `std:errors`:
 
 ```magma
 value, failure := mayFail()
@@ -568,18 +614,18 @@ if failure.nok():
 
 A `Trace` requires no cleanup, and its accessors are valid only while it is
 non-empty. Trace nodes live in a thread-safe ring with 64 shards and 1,024 slots
-per shard by default. A reused node ends iteration safely and makes
-`isTruncated()` true; formatted traces print the configured capacity and suggest
-increasing `--error-trace-slots`. The flag accepts powers of two from 1 through
-65,536 and changes the slots per shard without changing the `error` ABI.
+per shard by default. Handles retain recent sites on a best-effort basis;
+iteration is bounded so reused parent links cannot cycle forever. Reaching that
+bound makes `isTruncated()` true. The flag accepts powers of two from 1 through
+1,024 and changes the slots per shard without changing the `error` ABI.
 
 ## 8. Asynchronous work with futures
 
 Magma's asynchronous API is a standard-library composition of
-`thread_pool.ThreadPool` and `future.Future[T]`; `async` and `await` are not
-language keywords. A future submits a throwing function and a copied context to
-a pool, publishes either its value or error, and lets the caller wait for that
-result.
+`executor.Executor`, `thread_pool.ThreadPool`, and `future.Future[T]`; `async`
+and `await` are not language keywords. A future submits a throwing function and
+a copied context to a type-erased executor, publishes either its value or
+error, and lets the caller wait for that result.
 
 ### 8.1 Creating a pool
 
@@ -609,11 +655,15 @@ queue grows through the pool allocator when full. `pool.wait()` blocks until all
 submitted work completes. `pool.close()` first waits for pending work, stops and
 joins every worker, and releases the pool; it must not race with new submissions.
 
+`pool.executor()` returns a borrowed `Executor` view with generic
+`submit[Context]`. This is the scheduler interface accepted by futures. The pool
+must remain alive until every task submitted through the view completes.
+
 ### 8.2 Creating and awaiting a future
 
-`future.new[T, Context]` takes an allocator, pool, throwing task function, and
-context value. The context is copied into private work storage. Several task
-inputs can be packaged in one struct:
+`future.new[T, Context]` takes an allocator, executor, throwing task function,
+and context value. The context is copied into private work storage. Several
+task inputs can be packaged in one struct:
 
 ```magma
 ReadTask(source reader.Reader, allocator allocator.Allocator, count u64)
@@ -623,7 +673,8 @@ runRead(task ReadTask*) !$str:
 ..
 
 task := ReadTask(source=r, allocator=a, count=n)
-pending := try future.new[str, ReadTask](a, pool, runRead, task)
+scheduler := pool.executor()
+pending := try future.new[str, ReadTask](a, scheduler, runRead, task)
 
 if try pending.isDone():
     # Polling is optional; await also works before completion.
@@ -677,10 +728,10 @@ uncaught trace connects the caller to the asynchronous task's failure origin.
 
 ```magma
 @platform("windows")
-use "win/file_impl.mg" impl_file
+use "std:win/file_impl" impl_file
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "unix/file_impl.mg" impl_file
+use "std:unix/file_impl" impl_file
 ```
 
 This permits both branches to use the same alias and present one portable module
@@ -699,7 +750,29 @@ The first name is used by Magma code; the second is the linked external symbol.
 Arguments and the return type remain explicit, and declarations have no body.
 Windows and Unix implementations use this directly for OS and C-runtime APIs.
 
-### 9.3 Exported native functions
+### 9.3 Native libraries and bundled runtime files
+
+Top-level `link` declarations record native inputs used when producing an
+executable. Bare logical names are passed to Clang with `-l`; paths and
+file-like names resolve relative to the declaring Magma module:
+
+```magma
+link "winhttp"
+link "vendor/raylib/win/raylibdll.lib"
+```
+
+`bundle` records a runtime file to copy beside the linked executable:
+
+```magma
+@platform("windows")
+bundle "vendor/raylib/win/raylib.dll"
+```
+
+Both declarations are deduplicated across modules and may be selected with
+`@platform`. They are ignored for LLVM and object output; bundles are copied
+only after successful executable linking.
+
+### 9.4 Exported native functions
 
 `@export_name` exposes a top-level Magma function under a stable native symbol:
 
@@ -738,7 +811,7 @@ a throwing operation through an explicit non-throwing adapter instead, for
 example by returning an integer status and writing the successful value through
 a pointer argument.
 
-### 9.4 Inline LLVM
+### 9.5 Inline LLVM
 
 `llvm "..."` injects textual LLVM IR, most often inside a function:
 
@@ -754,7 +827,7 @@ intrinsics that are absent from the core syntax. Its strings are not type-checke
 against surrounding Magma code. Invalid or
 mismatched IR is deferred to LLVM and can compromise optimizer assumptions.
 
-### 9.5 Memory model in practice
+### 9.6 Memory model in practice
 
 Allocation is explicit and allocator-driven. Resource-owning structs expose
 explicit `destr` methods such as `free` or `close`; callers invoke or defer them.
@@ -775,21 +848,22 @@ arrays are zeroed, but pointer validity is not checked.
 
 The corpus contains the following standard-library functionality:
 
-- allocation and platform heap wrappers;
-- raw copy, move, compare, and fill operations;
-- owned and borrowed strings and slices;
-- UTF-8 decoding and UTF-8/UTF-16 conversion;
-- files, readers, writers, buffered streams, and duplex streams;
-- worker thread pools, typed futures, and asynchronous reader operations;
+- allocator interfaces plus heap, arena, scratch, fake, and debug allocators;
+- raw memory operations, explicit casts, checked arithmetic, and atomics;
+- owned and borrowed strings and slices, string building, UTF-8 and UTF-16
+  validation and conversion, Base64, hexadecimal, and percent encoding;
+- files, directories, metadata and traversal, paths, environment variables,
+  native dialogs, readers, writers, buffered streams, and duplex streams;
 - processes and asynchronous process execution;
-- atomics, mutexes, spin locks, lockers, and platform wake primitives;
-- HTTP clients and streaming request and response bodies;
-- generic iterators and pseudorandom number generation;
-- growable arrays, lists, queues, builders, linear maps, and hash maps;
-- generic sorting and searching through comparison callbacks;
-- numeric formatting and parsing;
-- time and path operations with Windows/Unix backends;
-- a manually tagged JSON value model and serializer.
+- mutexes, spin locks, lockers, platform wake primitives, native threads,
+  type-erased executors, dynamically sized thread pools, typed futures, and
+  asynchronous reader operations;
+- HTTP clients with streaming request and response bodies, plus raylib bindings;
+- growable arrays, lists, queues, heaps, builders, linear maps, hash maps,
+  generic iterators, sorting, searching, and pseudorandom generation;
+- numeric formatting and parsing, time, CPU information, command-line argument
+  and flag parsing, and common error categories;
+- a manually tagged JSON parser, value model, and serializer.
 
 The samples exercise benchmarking, file reading, JSON output, error
 destructuring, partial-write handling, overlapping memory moves, container
@@ -819,7 +893,8 @@ The current implementation has the following restrictions:
    target must have a pointer, slice, or fixed-array type.
 6. **No built-in sum types or interfaces.** Libraries manually encode tags,
    payload storage, and vtables.
-7. **No `for`, `switch`, closures, or inference-heavy generic constraints.**
+7. **No `for`, `switch`, closures, generic type inference, or generic
+   constraints.** Generic arguments are explicit at specialization sites.
 8. **Inline LLVM is not type-checked by Magma.** LLVM validates and transforms
    the injected IR.
 9. **Implicit fallthrough returns exist.** The backend can synthesize a zero

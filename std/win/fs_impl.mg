@@ -2,7 +2,7 @@ mod fs_impl_win
 # Windows filesystem backend used by the portable fs module.
 
 
-use "std:c" c
+use "std:win/types" win
 use "std:allocator" allocator
 use "std:builder" builder
 use "std:cast" cast
@@ -11,24 +11,24 @@ use "std:slices" slices
 use "std:strings" strings
 use "std:utf8" utf8
 
-ext ext_FindFirstFileW FindFirstFileW(pattern c.unsigned_short*, data ptr) ptr
-ext ext_FindNextFileW FindNextFileW(handle ptr, data ptr) c.int
-ext ext_FindClose FindClose(handle ptr) c.int
-ext ext_DeleteFileW DeleteFileW(path c.unsigned_short*) c.int
-ext ext_GetLastError GetLastError() c.unsigned_int
-ext ext_CreateDirectoryW CreateDirectoryW(path c.unsigned_short*, security ptr) c.int
-ext ext_RemoveDirectoryW RemoveDirectoryW(path c.unsigned_short*) c.int
-ext ext_MoveFileExW MoveFileExW(source c.unsigned_short*, destination c.unsigned_short*, flags c.unsigned_int) c.int
-ext ext_CopyFileW CopyFileW(source c.unsigned_short*, destination c.unsigned_short*, failIfExists c.int) c.int
-ext ext_GetCurrentDirectoryW GetCurrentDirectoryW(size c.unsigned_int, buffer c.unsigned_short*) c.unsigned_int
-ext ext_SetCurrentDirectoryW SetCurrentDirectoryW(path c.unsigned_short*) c.int
-ext ext_GetTempPathW GetTempPathW(size c.unsigned_int, buffer c.unsigned_short*) c.unsigned_int
-ext ext_GetFullPathNameW GetFullPathNameW(path c.unsigned_short*, size c.unsigned_int, buffer c.unsigned_short*, filePart ptr) c.unsigned_int
-ext ext_GetFileAttributesW GetFileAttributesW(path c.unsigned_short*) c.unsigned_int
-ext ext_SetFileAttributesW SetFileAttributesW(path c.unsigned_short*, attributes c.unsigned_int) c.int
-ext ext_CreateFileW CreateFileW(path c.unsigned_short*, access c.unsigned_int, share c.unsigned_int, security ptr, disposition c.unsigned_int, attributes c.unsigned_int, template ptr) ptr
-ext ext_GetFinalPathNameByHandleW GetFinalPathNameByHandleW(handle ptr, buffer c.unsigned_short*, size c.unsigned_int, flags c.unsigned_int) c.unsigned_int
-ext ext_CloseHandle CloseHandle(handle ptr) c.int
+ext ext_FindFirstFileW FindFirstFileW(pattern win.LPCWSTR, data win.LPVOID) win.HANDLE
+ext ext_FindNextFileW FindNextFileW(handle win.HANDLE, data win.LPVOID) win.BOOL
+ext ext_FindClose FindClose(handle win.HANDLE) win.BOOL
+ext ext_DeleteFileW DeleteFileW(path win.LPCWSTR) win.BOOL
+ext ext_GetLastError GetLastError() win.DWORD
+ext ext_CreateDirectoryW CreateDirectoryW(path win.LPCWSTR, security win.LPVOID) win.BOOL
+ext ext_RemoveDirectoryW RemoveDirectoryW(path win.LPCWSTR) win.BOOL
+ext ext_MoveFileExW MoveFileExW(source win.LPCWSTR, destination win.LPCWSTR, flags win.DWORD) win.BOOL
+ext ext_CopyFileW CopyFileW(source win.LPCWSTR, destination win.LPCWSTR, failIfExists win.BOOL) win.BOOL
+ext ext_GetCurrentDirectoryW GetCurrentDirectoryW(size win.DWORD, buffer win.LPWSTR) win.DWORD
+ext ext_SetCurrentDirectoryW SetCurrentDirectoryW(path win.LPCWSTR) win.BOOL
+ext ext_GetTempPathW GetTempPathW(size win.DWORD, buffer win.LPWSTR) win.DWORD
+ext ext_GetFullPathNameW GetFullPathNameW(path win.LPCWSTR, size win.DWORD, buffer win.LPWSTR, filePart win.LPWSTR*) win.DWORD
+ext ext_GetFileAttributesW GetFileAttributesW(path win.LPCWSTR) win.DWORD
+ext ext_SetFileAttributesW SetFileAttributesW(path win.LPCWSTR, attributes win.DWORD) win.BOOL
+ext ext_CreateFileW CreateFileW(path win.LPCWSTR, access win.DWORD, share win.DWORD, security win.LPVOID, disposition win.DWORD, attributes win.DWORD, template win.HANDLE) win.HANDLE
+ext ext_GetFinalPathNameByHandleW GetFinalPathNameByHandleW(handle win.HANDLE, buffer win.LPWSTR, size win.DWORD, flags win.DWORD) win.DWORD
+ext ext_CloseHandle CloseHandle(handle win.HANDLE) win.BOOL
 
 pub NativeMetadata(
     kind u8
@@ -190,7 +190,7 @@ pub setPermissions(a allocator.Allocator, path str, permissions u32) !void:
     ..
 ..
 
-pathCall(a allocator.Allocator, path str, operation (c.unsigned_short*) c.int, message str) !void:
+pathCall(a allocator.Allocator, path str, operation (win.LPCWSTR) win.BOOL, message str) !void:
     wide := try utf8.utf8To16NT(a, path)
     defer slices.free(a, wide)
     if operation(slices.toPtr(wide)) == 0:

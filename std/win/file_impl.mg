@@ -2,7 +2,7 @@ mod file_impl_win
 # Windows file backend used by the portable file and I/O modules.
 
 
-use "std:c" c
+use "std:win/types" win
 use "std:utf8"      utf8
 use "std:allocator" alc
 use "std:slices"    slices
@@ -13,13 +13,13 @@ use "std:writer"    writer
 use "std:reader"    reader
 use "std:file_op_mode" fopm
 
-ext ext_win32_CreateFileW      CreateFileW(pathUtf16 c.short*, accessMode c.unsigned_int, _arg0 c.int, _arg1 ptr, createMode c.int, _arg2 c.int, _arg3 ptr) ptr
-ext ext_win32_CloseHandle      CloseHandle(handle ptr) c.int
-ext ext_win32_WriteFile        WriteFile(handle ptr, arg0 ptr, arg1 c.unsigned_int, arg2 ptr, arg3 ptr) c.unsigned_int
-ext ext_win32_ReadFile         ReadFile(handle ptr, arg0 ptr, arg1 c.unsigned_int, arg2 ptr, arg3 ptr) c.unsigned_int
-ext ext_win32_GetStdHandle     GetStdHandle(handleNum c.int) ptr
-ext ext_win32_SetFilePointerEx SetFilePointerEx(handle ptr, distance i64, newPosition i64*, moveMethod c.unsigned_int) c.int
-ext ext_win32_GetLastError     GetLastError() c.unsigned_int
+ext ext_win32_CreateFileW      CreateFileW(pathUtf16 win.LPCWSTR, accessMode win.DWORD, shareMode win.DWORD, securityAttributes win.LPVOID, createMode win.DWORD, flagsAndAttributes win.DWORD, templateFile win.HANDLE) win.HANDLE
+ext ext_win32_CloseHandle      CloseHandle(handle win.HANDLE) win.BOOL
+ext ext_win32_WriteFile        WriteFile(handle win.HANDLE, buffer win.LPCVOID, bytesToWrite win.DWORD, bytesWritten win.DWORD*, overlapped win.LPVOID) win.BOOL
+ext ext_win32_ReadFile         ReadFile(handle win.HANDLE, buffer win.LPVOID, bytesToRead win.DWORD, bytesRead win.DWORD*, overlapped win.LPVOID) win.BOOL
+ext ext_win32_GetStdHandle     GetStdHandle(handleNum win.DWORD) win.HANDLE
+ext ext_win32_SetFilePointerEx SetFilePointerEx(handle win.HANDLE, distance win.LONGLONG, newPosition win.LONGLONG*, moveMethod win.DWORD) win.BOOL
+ext ext_win32_GetLastError     GetLastError() win.DWORD
 
 # Magma globals are thread-local by default. These syscall output slots avoid
 # repeated stack allocation without sharing state between threads.
@@ -34,7 +34,7 @@ writeOnce(handle ptr, next ptr, amount u32) !u64:
    # using a stack allocated var forces LLVM to generate it at call site too since
    # call to external function requires valid state without assumptions,
    # leading to guaranteed alloca instruction for each write call.
-   ok u32 = ext_win32_WriteFile(handle, next, amount, addrof gl_writeOnce_written, none)
+   ok win.BOOL = ext_win32_WriteFile(handle, next, amount, addrof gl_writeOnce_written, none)
    
    if ok == 0:
       throw errors.native(ext_win32_GetLastError(), "WriteFile failed")
@@ -94,7 +94,7 @@ pub write(handle ptr, bytes str) !u64:
 readOnce(handle ptr, next ptr, amount u32) !u64:
 
    # HACK: see writeOnce
-   ok u32 = ext_win32_ReadFile(handle, next, amount, addrof gl_readOnce_read, none)
+   ok win.BOOL = ext_win32_ReadFile(handle, next, amount, addrof gl_readOnce_read, none)
 
    if ok == 0:
       throw errors.native(ext_win32_GetLastError(), "ReadFile failed")
@@ -212,13 +212,13 @@ pub openFile(a alc.Allocator, path str, openMode fopm.OpenMode) !$ptr:
    WRITE u32 = 0x40000000
    APPEND u32 = 4
 
-   OPEN_EXISTING i32 = 3
-   CREATE_ALWAYS i32 = 2
-   OPEN_ALWAYS i32 = 4
-   TRUNCATE_EXISTING i32 = 5
+   OPEN_EXISTING u32 = 3
+   CREATE_ALWAYS u32 = 2
+   OPEN_ALWAYS u32 = 4
+   TRUNCATE_EXISTING u32 = 5
 
    access_mode u32
-   open_mode i32
+   open_mode u32
 
    if (openMode.bits & fopm.FLAG_APPEND) != 0:
       access_mode = APPEND

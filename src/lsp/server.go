@@ -161,7 +161,7 @@ func readMessage(r *bufio.Reader) ([]byte, error) {
 func (s *server) handle(msg message) error {
 	switch msg.Method {
 	case "initialize":
-		return s.respond(msg.ID, map[string]any{"capabilities": map[string]any{"textDocumentSync": 1, "hoverProvider": true, "definitionProvider": true, "completionProvider": map[string]any{"triggerCharacters": []string{"."}}}})
+		return s.respond(msg.ID, map[string]any{"capabilities": map[string]any{"textDocumentSync": 1, "hoverProvider": true, "definitionProvider": true, "completionProvider": map[string]any{"triggerCharacters": []string{".", "\"", "/", ":"}}}})
 	case "shutdown":
 		return s.respond(msg.ID, nil)
 	case "initialized", "$/cancelRequest", "textDocument/didSave":
@@ -265,9 +265,9 @@ func (s *server) handle(msg message) error {
 		}
 		d := s.documents[p.TextDocument.URI]
 		if d == nil {
-			return s.respond(msg.ID, []completionItem{})
+			return s.respond(msg.ID, completionList{IsIncomplete: true, Items: []completionItem{}})
 		}
-		return s.respond(msg.ID, complete(d.URI, d.Text, p.Position, s.stdRoot))
+		return s.respond(msg.ID, completionList{IsIncomplete: true, Items: complete(d.URI, d.Text, p.Position, s.stdRoot)})
 	default:
 		if len(msg.ID) != 0 {
 			return s.respondError(msg.ID, -32601, "method not found")

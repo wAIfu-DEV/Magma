@@ -27,7 +27,7 @@ try fs.writeFile(a, destination, encodedImage)
 
 ## API
 
-- `options()` returns a configuration with native defaults.
+- `defaultOptions()` returns a configuration with native defaults.
 - `openFile(a, options)` selects one existing file.
 - `saveFile(a, options)` selects a destination path; it does not write or download anything.
 - `openDir(a, options)` selects one directory.

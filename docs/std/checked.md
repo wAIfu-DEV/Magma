@@ -18,10 +18,12 @@ wide := try checked.u128Pow(base, exponent)
 ## Arithmetic
 
 The unsigned families provide `uAdd`, `uSub`, `uMul`, `uDiv`, `uShl`, and
-`uPow`, with corresponding `u128Add` through `u128Pow` operations.
+`uPow`. Their wide counterparts are `u128Add`, `u128Sub`, `u128Mul`,
+`u128Div`, `u128Shl`, and `u128Pow`.
 
 The signed families provide `iAdd`, `iSub`, `iMul`, `iDiv`, `iNeg`, `iShl`,
-and `iPow`, with corresponding `i128Add` through `i128Pow` operations.
+and `iPow`. Their wide counterparts are `i128Add`, `i128Sub`, `i128Mul`,
+`i128Div`, `i128Neg`, `i128Shl`, and `i128Pow`.
 
 Shift counts must be below the operand width. Signed shifts are checked as
 mathematical multiplication by a power of two, including for negative values.

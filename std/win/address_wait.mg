@@ -2,7 +2,7 @@ mod address_wait_win
 # Windows address-wait backend used by the portable wake module.
 
 
-use "std:c" c
+use "std:win/types" win
 use "std:errors" errors
 
 link "synchronization"
@@ -13,9 +13,9 @@ pub Wait(
     marker u8
 )
 
-ext ext_win32_WaitOnAddress WaitOnAddress(address ptr, compareAddress ptr, addressSize c.size_t, milliseconds c.unsigned_int) c.int
-ext ext_win32_WakeByAddressSingle WakeByAddressSingle(address ptr) void
-ext ext_win32_GetLastError GetLastError() c.unsigned_int
+ext ext_win32_WaitOnAddress WaitOnAddress(address win.PVOID, compareAddress win.PVOID, addressSize win.SIZE_T, milliseconds win.DWORD) win.BOOL
+ext ext_win32_WakeByAddressSingle WakeByAddressSingle(address win.PVOID) void
+ext ext_win32_GetLastError GetLastError() win.DWORD
 
 pub new() !$Wait:
     ret Wait(marker=0)

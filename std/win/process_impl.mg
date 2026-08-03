@@ -2,7 +2,7 @@ mod process_impl_win
 # Windows child-process backend used by the portable process module.
 
 
-use "std:c" c
+use "std:win/types" win
 use "std:allocator" allocator
 use "std:heap" heap
 use "std:strings" strings
@@ -14,12 +14,12 @@ use "std:memory" memory
 use "std:checked" checked
 use "std:utf16" utf16
 
-ext ext_win32_CreateProcessW CreateProcessW(applicationName c.unsigned_short*, commandLineValue c.unsigned_short*, processAttributes ptr, threadAttributes ptr, inheritHandles c.unsigned_int, creationFlags c.unsigned_int, environment ptr, currentDirectory c.unsigned_short*, startupInfo ptr, processInformation ptr) c.unsigned_int
-ext ext_win32_WaitForSingleObject WaitForSingleObject(handle ptr, milliseconds c.unsigned_int) c.unsigned_int
-ext ext_win32_GetExitCodeProcess GetExitCodeProcess(handle ptr, exitCode c.unsigned_int*) c.unsigned_int
-ext ext_win32_TerminateProcess TerminateProcess(handle ptr, exitCode c.unsigned_int) c.unsigned_int
-ext ext_win32_CloseHandle CloseHandle(handle ptr) c.unsigned_int
-ext ext_win32_GetLastError GetLastError() c.unsigned_int
+ext ext_win32_CreateProcessW CreateProcessW(applicationName win.LPCWSTR, commandLineValue win.LPWSTR, processAttributes win.LPVOID, threadAttributes win.LPVOID, inheritHandles win.BOOL, creationFlags win.DWORD, environment win.LPVOID, currentDirectory win.LPCWSTR, startupInfo win.LPVOID, processInformation win.LPVOID) win.BOOL
+ext ext_win32_WaitForSingleObject WaitForSingleObject(handle win.HANDLE, milliseconds win.DWORD) win.DWORD
+ext ext_win32_GetExitCodeProcess GetExitCodeProcess(handle win.HANDLE, exitCode win.DWORD*) win.BOOL
+ext ext_win32_TerminateProcess TerminateProcess(handle win.HANDLE, exitCode win.UINT) win.BOOL
+ext ext_win32_CloseHandle CloseHandle(handle win.HANDLE) win.BOOL
+ext ext_win32_GetLastError GetLastError() win.DWORD
 
 StartupInfo(
     cb u32
@@ -163,7 +163,7 @@ pub spawn(executable str, arguments str[]) !$Process:
     information ProcessInformation
     # A null application name makes CreateProcess search the usual executable
     # locations while taking argv[0] from the quoted command line.
-    ok u32 = ext_win32_CreateProcessW(none, slices.toPtr(line16), none, none, 1, 0, none, none, addrof startup, addrof information)
+    ok win.BOOL = ext_win32_CreateProcessW(none, slices.toPtr(line16), none, none, 1, 0, none, none, addrof startup, addrof information)
     if ok == 0:
         throw errors.native(ext_win32_GetLastError(), "CreateProcessW failed")
     ..

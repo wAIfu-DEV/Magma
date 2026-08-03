@@ -180,10 +180,14 @@ func parseModuleDecl(ctx *ParseCtx, tk t.Token) error {
 }
 
 func parseUseDecl(ctx *ParseCtx, tk t.Token, prune bool) error {
-	e := ensureNoModifiers(ctx, tk)
-	if e != nil {
-		return e
+	isPublic := false
+	for _, modifier := range ctx.NextModifiers {
+		if modifier != MdPublic {
+			return comp_err.CompilationErrorToken(ctx.Fctx, &tk, fmt.Sprintf("syntax error: modifier '%s' cannot be applied to 'use'", modifier), "only 'pub' may modify a use declaration")
+		}
+		isPublic = true
 	}
+	ctx.NextModifiers = nil
 
 	path, e := peekNth(ctx, 1)
 	if e != nil || path.Type != t.TokLitStr {
@@ -256,6 +260,9 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token, prune bool) error {
 
 	ctx.Fctx.Imports = append(ctx.Fctx.Imports, absPath)
 	ctx.Fctx.ImportAlias[alias.Repr] = absPath
+	if isPublic {
+		ctx.GlobalNode.PublicImportAlias[alias.Repr] = true
+	}
 
 	// start pipeline for imported file
 	//("running compilation pipeline for file: %s\n", absPath)
