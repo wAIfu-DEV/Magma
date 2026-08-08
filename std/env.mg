@@ -2,9 +2,11 @@ mod env
 # Portable access to the process environment.
 
 use "std:allocator" allocator
+use "std:list" list
 
 @platform("windows")
 use "std:win/env_impl" impl
+
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
 use "std:unix/env_impl" impl
 
@@ -24,6 +26,6 @@ pub unset(name str) !void:
     try impl.unset(name)
 ..
 
-pub list(a allocator.Allocator) !$impl.Variables:
+pub list(a allocator.Allocator) !$list.List[str]:
     ret try impl.list(a)
 ..

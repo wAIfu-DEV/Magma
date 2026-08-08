@@ -456,6 +456,9 @@ func assignLocalIrNames(ctx *IrCtx, body *t.NodeBody) {
 			assignLocalIrNames(ctx, &n.Body)
 		case *t.NodeStmtWhile:
 			assignLocalIrNames(ctx, &n.Body)
+		case *t.NodeStmtFor:
+			assignExprIrNames(ctx, n.DeclExpr)
+			assignLocalIrNames(ctx, &n.Body)
 		case *t.NodeStmtDefer:
 			if n.IsBody {
 				assignLocalIrNames(ctx, &n.Body)

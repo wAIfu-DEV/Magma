@@ -5,17 +5,15 @@ SET "ROOT=%~dp0"
 SET "TEST_ROOT=%~dp0tests"
 SET "STD_TEST_ROOT=%~dp0std\tests"
 SET "COMPILER=%~dp0Magma.exe"
-SET "GOCACHE=%~dp0.gocache"
 SET "LOG_FILE=%TEMP%\magma-tests-%RANDOM%-%RANDOM%.log"
 SET "OUTPUT_FILE=%TEMP%\magma-tests-%RANDOM%-%RANDOM%.ll"
 SET "EXECUTABLE_PREFIX=%TEMP%\magma-tests-%RANDOM%-%RANDOM%"
 SET "EXECUTABLE_FILE="
 SET /A TOTAL=0, PASSED=0, FAILED=0
 
-ECHO Building Magma...
-go build -o "%COMPILER%" "%ROOT%."
-IF ERRORLEVEL 1 (
-    ECHO [FAIL] Could not build the Magma compiler.
+IF NOT EXIST "%COMPILER%" (
+    ECHO [FAIL] Magma compiler not found: "%COMPILER%"
+    ECHO Build the compiler before running the tests.
     PAUSE
     EXIT /B 1
 )

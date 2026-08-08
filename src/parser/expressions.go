@@ -804,7 +804,7 @@ func parseUnaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
 
 func tokenEndsExpr(tk t.Token) bool {
 	switch tk.KeywType {
-	case t.KwNewline, t.KwComma, t.KwParenCl, t.KwColon, t.KwDots, t.KwBrackCl:
+	case t.KwNewline, t.KwComma, t.KwParenCl, t.KwColon, t.KwDots, t.KwBrackCl, t.KwTo:
 		return true
 	default:
 		return false

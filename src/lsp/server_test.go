@@ -112,6 +112,44 @@ func TestFunctionDefinitionNavigation(t *testing.T) {
 	}
 }
 
+func TestMemberFunctionDefinitionNavigation(t *testing.T) {
+	directory := t.TempDir()
+	dependency := filepath.Join(directory, "dependency.mg")
+	dependencySource := "mod dependency\npub Thing(value u64)\nThing.touch() void:\n..\n"
+	if err := os.WriteFile(dependency, []byte(dependencySource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := "mod main\nuse \"./dependency.mg\" dep\nLocal(value u64)\nLocal.reset() void:\n..\nmain() void:\n    local Local\n    local.reset()\n    remote dep.Thing\n    remote.touch()\n..\n"
+	path := filepath.Join(directory, "main.mg")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := analyze((&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String(), source, testStdRoot())
+
+	local, ok := result.definition(position{Line: 7, Character: 10})
+	if !ok || local.Range.Start != (position{Line: 3, Character: 6}) || !strings.HasSuffix(local.URI, "/main.mg") {
+		t.Fatalf("local method definition = %#v, %v", local, ok)
+	}
+	imported, ok := result.definition(position{Line: 9, Character: 11})
+	if !ok || imported.Range.Start != (position{Line: 2, Character: 6}) || !strings.HasSuffix(imported.URI, "/dependency.mg") {
+		t.Fatalf("imported method definition = %#v, %v", imported, ok)
+	}
+}
+
+func TestPrimitiveMethodDefinitionNavigation(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "main.mg")
+	source := "mod main\nuse \"std:allocator\" alc\nmain(a alc.Allocator) void:\n    text str = \"value\"\n    text.free(a)\n..\n"
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := analyze((&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String(), source, testStdRoot())
+	definition, ok := result.definition(position{Line: 4, Character: 9})
+	if !ok || !strings.HasSuffix(definition.URI, "/core.mg") {
+		t.Fatalf("primitive method definition = %#v, %v", definition, ok)
+	}
+}
+
 func TestExpressionCompletionContextsIncludeGenericScope(t *testing.T) {
 	contexts := []struct {
 		name string
@@ -407,6 +445,20 @@ func TestFieldAccessHoverUsesFieldType(t *testing.T) {
 	}
 }
 
+func TestMemberFunctionHoverUsesResolvedSignature(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "member_hover.mg")
+	source := "mod main\nThing(value u64)\nThing.touch() u64:\n    ret this.value\n..\nmain() void:\n    item Thing\n    item.touch()\n..\n"
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := analyze((&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String(), source, testStdRoot())
+	got := result.hover(position{Line: 7, Character: 9})
+	if !strings.Contains(got, "Thing.touch() u64") || strings.Contains(got, "touch ?") {
+		t.Fatalf("member function hover = %q, want resolved function signature", got)
+	}
+}
+
 func TestArgumentUsageSurvivesGenericTemplatePruning(t *testing.T) {
 	u64Type := &types.NodeType{KindNode: &types.NodeTypeNamed{NameNode: name("u64")}}
 	usageToken := types.Token{Repr: "index", Type: types.TokName, Pos: types.FilePos{Line: 3, Col: 8}}
@@ -530,6 +582,18 @@ func TestFormatFunctionUsesGenericDisplayName(t *testing.T) {
 	}
 
 	if got, want := formatFunction(function), "identity[u64](value u64) u64"; got != want {
+		t.Fatalf("formatFunction() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatFunctionMarksDestructor(t *testing.T) {
+	function := &types.NodeFuncDef{
+		Class:        types.NodeGenericClass{NameNode: name("Resource.close")},
+		ReturnType:   &types.NodeType{KindNode: &types.NodeTypeNamed{NameNode: name("void")}},
+		IsDestructor: true,
+		IsMember:     true,
+	}
+	if got, want := formatFunction(function), "destr Resource.close() void"; got != want {
 		t.Fatalf("formatFunction() = %q, want %q", got, want)
 	}
 }

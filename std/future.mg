@@ -146,7 +146,7 @@ destr Future[T].await() !$T:
         throw errors.invalidArgument("future is not active")
     ..
     state State[T]* = this.state
-    while loadStatus(addrof state.status) == 0:
+    loop loadStatus(addrof state.status) == 0:
         try address_wait.wait(addrof state.waiter, addrof state.status)
     ..
 

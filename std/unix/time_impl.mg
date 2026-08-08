@@ -16,12 +16,31 @@ ext ext_unix_getrusage     getrusage(who c.int, usage RUsage*) c.int
 
 # The first two fields of rusage are the user and system timeval values.
 # Remaining ABI fields are covered by oversized, naturally aligned storage.
+Opaque256(
+    part0 u128
+    part1 u128
+    part2 u128
+    part3 u128
+    part4 u128
+    part5 u128
+    part6 u128
+    part7 u128
+    part8 u128
+    part9 u128
+    part10 u128
+    part11 u128
+    part12 u128
+    part13 u128
+    part14 u128
+    part15 u128
+)
+
 RUsage(
     userSec i64
     userUsec i64
     systemSec i64
     systemUsec i64
-    remaining := array u64[32]
+    remaining Opaque256
 )
 
 pub processCpuTimeNs() u64:
@@ -75,5 +94,5 @@ pub unixTimestampNs() u128:
 ..
 
 pub sleep(ms u64) void:
-    ext_unix_usleep(cast.u64to32(ms))
+    ext_unix_usleep(cast.u64to32(ms * 1000))
 ..

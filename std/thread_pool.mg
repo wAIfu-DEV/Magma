@@ -126,12 +126,10 @@ growQueue(state State*) !bool:
     ..
     newCapacity u64 = state.capacity * 2
     newTasks Task* = try state.allocator.allocT[Task](newCapacity)
-    i u64 = 0
-    while i < state.count:
+    for i u64 = 0 to state.count:
         source u64 = (state.head + i) % state.capacity
         destination Task* = cast.utop(cast.ptou(newTasks) + (i * sizeof Task))
         *destination = *taskAt(state, source)
-        i = i + 1
     ..
     state.allocator.free(state.tasks)
     state.tasks = newTasks
@@ -176,14 +174,12 @@ growWorkerStorage(state State*) !bool:
     mem.zero(newContexts, newCapacity * sizeof WorkerContext*)
     mem.zero(newStates, newCapacity)
 
-    i u64 = 0
-    while i < state.workerCapacity:
+    for i u64 = 0 to state.workerCapacity:
         newWorker thread.Thread* = cast.utop(cast.ptou(newWorkers) + (i * sizeof thread.Thread))
         newContext WorkerContext** = cast.utop(cast.ptou(newContexts) + (i * sizeof WorkerContext*))
         *newWorker = *workerAt(state, i)
         *newContext = *workerContextAt(state, i)
         newStates[i] = state.workerStates[i]
-        i = i + 1
     ..
 
     state.allocator.free(state.workers)
@@ -200,8 +196,8 @@ growWorkerStorage(state State*) !bool:
 # pool lock, so the new worker cannot inspect the queue until submission has
 # finished publishing its task.
 growWorkers(state State*) !bool:
-    index u64 = 0
-    while index < state.workerCapacity:
+    oldCapacity := state.workerCapacity
+    for index u64 = 0 to oldCapacity:
         status u8 = state.workerStates[index]
         if status != 1:
             if status == 2:
@@ -212,11 +208,10 @@ growWorkers(state State*) !bool:
             ..
             ret try spawnWorkerInto(state, index)
         ..
-        index = index + 1
     ..
     grown := try growWorkerStorage(state)
     if grown:
-        ret try spawnWorkerInto(state, index)
+        ret try spawnWorkerInto(state, oldCapacity)
     ..
     ret false
 ..
@@ -264,7 +259,7 @@ recordFatal(state State*, failure error) void:
 workerMain(context WorkerContext*) u64:
     state State* = context.state
     running bool = true
-    while running:
+    loop running:
         locked bool, lockErr error = lockResult(state)
         if lockErr.nok():
             recordFatal(state, lockErr)
@@ -298,10 +293,8 @@ workerMain(context WorkerContext*) u64:
                 ret 1
             ..
             if becameIdle:
-                i u64 = 0
-                while i < idleWaiters:
+                for i u64 = 0 to idleWaiters:
                     state.idle.notify()
-                    i = i + 1
                 ..
             ..
         elif state.stopping:
@@ -324,7 +317,7 @@ workerMain(context WorkerContext*) u64:
                     ret 1
                 ..
                 spins u64 = 0
-                while spins < state.spinCount && generation_wait.observe(addrof state.workGeneration) == observed:
+                loop spins < state.spinCount && generation_wait.observe(addrof state.workGeneration) == observed:
                     cpuPause()
                     spins = spins + 1
                 ..
@@ -430,15 +423,13 @@ newConfigured(a alc.Allocator, minWorkers u64, maxWorkers u64, queueCapacity u64
     onerror:
         state.stopping = true
         generation_wait.wakeAll(addrof state.work, addrof state.workGeneration, i)
-        j u64 = 0
-        while j < i:
+        for j u64 = 0 to i:
             workerAt(state, j).join()
             a.free(*workerContextAt(state, j))
-            j = j + 1
         ..
     ..
 
-    while i < minWorkers:
+    loop i < minWorkers:
         try spawnWorkerInto(state, i)
         i = i + 1
     ..
@@ -528,7 +519,7 @@ ThreadPool.submit(entry (ptr) u64, context ptr) !void:
 ThreadPool.wait() !void:
     state State* = this.state
     waiting bool = true
-    while waiting:
+    loop waiting:
         state.lock.lock()
         onerror state.lock.unlock()
         throw state.fatalError
@@ -565,13 +556,11 @@ destr ThreadPool.close() !void:
     state.wakeReservations = 0
     state.lock.unlock()
     generation_wait.wakeAll(addrof state.work, addrof state.workGeneration, sleepers)
-    i u64 = 0
-    while i < state.workerCapacity:
+    for i u64 = 0 to state.workerCapacity:
         if state.workerStates[i] != 0:
             try workerAt(state, i).join()
             state.allocator.free(*workerContextAt(state, i))
         ..
-        i = i + 1
     ..
     try state.idle.free()
     generation_wait.free(addrof state.work)

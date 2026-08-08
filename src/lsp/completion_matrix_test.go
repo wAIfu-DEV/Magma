@@ -20,6 +20,9 @@ Thing.touch() Thing:
     ret *this
 ..
 
+destr Thing.release() void:
+..
+
 pub make() Thing:
     ret Thing(value=1)
 ..
@@ -50,15 +53,15 @@ func TestCompletionContextMatrix(t *testing.T) {
 		{name: "module destructuring", body: "    item, err := dep.|", want: []string{"make", "open"}},
 		{name: "module call argument", body: "    dep.consume(dep.|)", want: []string{"Thing", "make"}},
 		{name: "module nested condition argument", body: "    if dep.accepts(dep.make(), dep.|):\n        dep.consume(dep.make())\n    ..", want: []string{"Thing", "make"}},
-		{name: "typed local", body: "    item dep.Thing\n    item.|", want: []string{"touch", "value"}},
+		{name: "typed local", body: "    item dep.Thing\n    item.|", want: []string{"touch", "~release", "value"}},
 		{name: "inferred call local", body: "    item := dep.make()\n    item.|", want: []string{"touch", "value"}},
 		{name: "destructured call local", body: "    item, err := dep.open()\n    item.|", want: []string{"touch", "value"}},
 		{name: "invalid try destructured local", body: "    item, err := try dep.open()\n    item.|", want: []string{"touch", "value"}},
 		{name: "field chain", body: "    holder dep.Holder\n    holder.item.|", want: []string{"touch", "value"}},
-		{name: "intrinsic string", body: "    text str\n    text.|", want: []string{"countBytes", "free"}},
+		{name: "intrinsic string", body: "    text str\n    text.|", want: []string{"countBytes", "~free"}},
 		{name: "intrinsic error", body: "    failure error\n    failure.|", want: []string{"code", "message", "nok", "ok"}},
 		{name: "intrinsic typed slice", body: "    values u64[]\n    values.|", want: []string{"count"}},
-		{name: "intrinsic chained field", body: "    holder dep.TextHolder\n    holder.text.|", want: []string{"countBytes", "free"}},
+		{name: "intrinsic chained field", body: "    holder dep.TextHolder\n    holder.text.|", want: []string{"countBytes", "~free"}},
 		{name: "method result", body: "    item dep.Thing\n    item.touch().|", want: []string{"touch", "value"}},
 		{name: "module function result", body: "    dep.make().|", want: []string{"touch", "value"}},
 		{name: "function result in argument", body: "    dep.consume(dep.make().|)", want: []string{"touch", "value"}},
@@ -107,8 +110,18 @@ func TestCompletionContextMatrix(t *testing.T) {
 				}
 			}
 			if test.name == "module standalone" {
-				if kinds["LIMIT"] != 21 || kinds["shared"] != 6 {
-					t.Errorf("module value completion kinds = LIMIT:%d shared:%d, want constant:21 variable:6", kinds["LIMIT"], kinds["shared"])
+				if kinds["LIMIT"] != 21 || kinds["shared"] != 6 || kinds["Thing"] != 22 || kinds["make"] != 3 {
+					t.Errorf("module completion kinds = LIMIT:%d shared:%d Thing:%d make:%d", kinds["LIMIT"], kinds["shared"], kinds["Thing"], kinds["make"])
+				}
+			}
+			if test.name == "typed local" {
+				if kinds["touch"] != 2 || kinds["~release"] != 2 || kinds["value"] != 5 {
+					t.Errorf("member completion kinds = touch:%d release:%d value:%d", kinds["touch"], kinds["~release"], kinds["value"])
+				}
+				for _, item := range items {
+					if item.Label == "~release" && (item.FilterText != "release" || item.InsertText != "release") {
+						t.Errorf("destructor completion must filter and insert its source name: %#v", item)
+					}
 				}
 			}
 		})

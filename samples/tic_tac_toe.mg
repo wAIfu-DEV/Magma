@@ -29,7 +29,7 @@ won(board u8[], mark u8) bool:
 printBoard(out writer.Writer, board u8[]) !void:
     i u64 = 0
 
-    while i < 9:
+    loop i < 9:
         if board[i] == 0:
             try out.writeUint64(i + 1)
         else:
@@ -63,7 +63,7 @@ main() !void:
     board := array u8[9]
     turn u64 = 0
 
-    while turn < 9:
+    loop turn < 9:
         try printBoard(out, board)
 
         mark u8 = 88

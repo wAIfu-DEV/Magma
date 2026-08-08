@@ -64,7 +64,7 @@ Dir.readEntry() !$Entry:
     attributes u32* = this.data
     namePtr u16* = cast.utop(cast.ptou(this.data) + 44)
     count u64 = 0
-    while count < 260 && namePtr[count] != 0:
+    loop count < 260 && namePtr[count] != 0:
         count = count + 1
     ..
     units u16[] = slices.fromPtr(namePtr, count)
@@ -84,7 +84,7 @@ pub Dir.hasData() bool:
 ..
 
 pub Dir.next() !$Entry:
-    while this.pending:
+    loop this.pending:
         result := try this.readEntry()
         if ext_FindNextFileW(this.handle, this.data) == 0:
             code := ext_GetLastError()
@@ -333,9 +333,9 @@ walkInner(a allocator.Allocator, root str, visit (str, bool) !void) !void:
     defer ext_FindClose(handle)
 
     more bool = true
-    while more:
+    loop more:
         nameCount u64 = 0
-        while nameCount < 260 && namePtr[nameCount] != 0:
+        loop nameCount < 260 && namePtr[nameCount] != 0:
             nameCount = nameCount + 1
         ..
         nameWide u16[] = slices.fromPtr(namePtr, nameCount)

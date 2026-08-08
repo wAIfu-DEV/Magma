@@ -67,6 +67,38 @@ func clWhile(c *ctx, whileStmt *t.NodeStmtWhile) error {
 	return nil
 }
 
+func clFor(c *ctx, forStmt *t.NodeStmtFor) error {
+	enterScope(c, forStmt.Body.Scope)
+	defer leaveScope(c)
+
+	decl, hasDecl := forStmt.DeclExpr.(*t.NodeExprVarDefAssign)
+	inferredIndex := hasDecl && decl.VarDef != nil && decl.VarDef.Type == nil
+
+	if e := clExpr(c, forStmt.DeclExpr, false); e != nil {
+		return e
+	}
+	if e := clExpr(c, forStmt.BoundExpr, false); e != nil {
+		return e
+	}
+	// A numeric literal has no intrinsic integer width. In an inferred for-loop
+	// declaration, use the bound as its context so `for i := 0 to count():`
+	// selects count's integer type instead of the literal's default i64.
+	if inferredIndex {
+		literal, numericLiteral := decl.AssignExpr.(*t.NodeExprLit)
+		if numericLiteral && literal.LitType == t.TokLitNum {
+			if e := ctExpr(c, forStmt.BoundExpr); e != nil {
+				return e
+			}
+			if boundType := forStmt.BoundExpr.GetInferredType(); isIntegerType(boundType) {
+				decl.VarDef.Type = boundType
+			}
+		}
+	}
+	body := forStmt.Body
+	body.Scope = nil
+	return clBody(c, &body)
+}
+
 func clBody(c *ctx, bdy *t.NodeBody) error {
 	if bdy.Scope != nil {
 		enterScope(c, bdy.Scope)
@@ -97,6 +129,10 @@ func clBody(c *ctx, bdy *t.NodeBody) error {
 		case *t.NodeStmtWhile:
 			e := clWhile(c, n)
 			if e != nil {
+				return e
+			}
+		case *t.NodeStmtFor:
+			if e := clFor(c, n); e != nil {
 				return e
 			}
 		case *t.NodeStmtDefer:

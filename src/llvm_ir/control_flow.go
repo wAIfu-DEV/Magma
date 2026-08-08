@@ -351,6 +351,8 @@ func irStatement(ctx *IrCtx, stmtNode t.NodeStatement, fnDef *t.NodeFuncDef) err
 		e = irStmtIf(ctx, s, fnDef)
 	case *t.NodeStmtWhile:
 		e = irStmtWhile(ctx, s, fnDef)
+	case *t.NodeStmtFor:
+		e = irStmtFor(ctx, s, fnDef)
 	case *t.NodeStmtContinue:
 		e = irStmtContinue(ctx, s)
 	case *t.NodeStmtBreak:
@@ -444,6 +446,97 @@ func irStmtWhile(ctx *IrCtx, ifStmt *t.NodeStmtWhile, fnDef *t.NodeFuncDef) erro
 
 	ctx.LoopCondLbl = SsaName{}
 	ctx.LoopExitLbl = SsaName{}
+	return nil
+}
+
+func forIndexName(stmt *t.NodeStmtFor, variable *t.NodeExprVarDef) *t.NodeExprName {
+	return &t.NodeExprName{
+		Tk:             stmt.Tk,
+		Name:           variable.Name,
+		InfType:        variable.Type,
+		AssociatedNode: variable,
+		Storage:        variable.Storage,
+	}
+}
+
+func forIncrement(stmt *t.NodeStmtFor, variable *t.NodeExprVarDef) *t.NodeStmtDefer {
+	left := forIndexName(stmt, variable)
+	rightIndex := forIndexName(stmt, variable)
+	one := &t.NodeExprLit{Tk: stmt.Tk, Value: "1", LitType: t.TokLitNum, InfType: variable.Type}
+	add := &t.NodeExprBinary{
+		Tk:          stmt.Tk,
+		Operator:    t.KwPlus,
+		Left:        rightIndex,
+		Right:       one,
+		InfType:     variable.Type,
+		OperandType: variable.Type,
+	}
+	assignment := &t.NodeExprAssign{Tk: stmt.Tk, Left: left, Right: add, InfType: variable.Type}
+	return &t.NodeStmtDefer{Expression: assignment}
+}
+
+func irStmtFor(ctx *IrCtx, stmt *t.NodeStmtFor, fnDef *t.NodeFuncDef) error {
+	decl, ok := stmt.DeclExpr.(*t.NodeExprVarDefAssign)
+	if !ok || decl.VarDef == nil {
+		return fmt.Errorf("for loop has no initialized index declaration")
+	}
+	indexType := decl.VarDef.Type
+	if _, e := irExpression(ctx, indexType, stmt.DeclExpr, true); e != nil {
+		return e
+	}
+	bound, e := irExpression(ctx, indexType, stmt.BoundExpr, false)
+	if e != nil {
+		return e
+	}
+	bound, e = irCoerceNumeric(ctx, indexType, stmt.BoundExpr, bound)
+	if e != nil {
+		return e
+	}
+
+	condLabel := irSsaName(ctx)
+	bodyLabel := irSsaName(ctx)
+	exitLabel := irSsaName(ctx)
+	previousCond := ctx.LoopCondLbl
+	previousExit := ctx.LoopExitLbl
+	ctx.LoopCondLbl = condLabel
+	ctx.LoopExitLbl = exitLabel
+	defer func() {
+		ctx.LoopCondLbl = previousCond
+		ctx.LoopExitLbl = previousExit
+	}()
+
+	irWritef(ctx, "  br label %%%s\n", condLabel.Repr)
+	irWritef(ctx, "%s:\n", condLabel.Repr)
+	index, e := irExpression(ctx, indexType, forIndexName(stmt, decl.VarDef), false)
+	if e != nil {
+		return e
+	}
+	comparison := irSsaLocal(ctx)
+	predicate := "ult"
+	if getNumDesc(indexType).IsSigned {
+		predicate = "slt"
+	}
+	irWritef(ctx, "  %s = icmp %s ", comparison.Repr, predicate)
+	if e := irType(ctx, indexType); e != nil {
+		return e
+	}
+	irWrite(ctx, " ")
+	irPossibleLitSsa(ctx, index)
+	irWrite(ctx, ", ")
+	irPossibleLitSsa(ctx, bound)
+	irWritef(ctx, "\n  br i1 %s, label %%%s, label %%%s\n", comparison.Repr, bodyLabel.Repr, exitLabel.Repr)
+	irWritef(ctx, "%s:\n", bodyLabel.Repr)
+
+	body := stmt.Body
+	body.Statements = append([]t.NodeStatement{forIncrement(stmt, decl.VarDef)}, body.Statements...)
+	*ctx.NestedLoopCnt = *ctx.NestedLoopCnt + 1
+	e = irBody(ctx, &body, fnDef, true)
+	*ctx.NestedLoopCnt = *ctx.NestedLoopCnt - 1
+	if e != nil {
+		return e
+	}
+	irWritef(ctx, "  br label %%%s\n", condLabel.Repr)
+	irWritef(ctx, "%s:\n", exitLabel.Repr)
 	return nil
 }
 

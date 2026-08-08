@@ -49,12 +49,10 @@ Parser.add(name str, short u8, help str, kind u8, destination ptr) !void:
         throw errors.invalidArgument("flag name cannot be empty")
     ..
     defs := this.definitions.view()
-    i u64 = 0
-    while i < this.definitions.count():
+    for i u64 = 0 to this.definitions.count():
         if strings.compare(defs[i].name, name) || (short != 0 && defs[i].short == short):
             throw errors.invalidArgument("duplicate flag name")
         ..
-        i = i + 1
     ..
     try this.definitions.pushRight(this.allocator, Definition(name=name, short=short, help=help, kind=kind, destination=destination, seen=false))
 ..
@@ -83,20 +81,16 @@ Parser.integers(name str, short u8, destination array.Array[i64]*, help str) !vo
 
 findLong(parser Parser*, name str) !Definition*:
     defs := parser.definitions.view()
-    i u64 = 0
-    while i < parser.definitions.count():
+    for i u64 = 0 to parser.definitions.count():
         if strings.compare(defs[i].name, name): ret addrof defs[i] ..
-        i = i + 1
     ..
     throw errors.invalidArgument("unknown command-line option")
 ..
 
 findShort(parser Parser*, name u8) !Definition*:
     defs := parser.definitions.view()
-    i u64 = 0
-    while i < parser.definitions.count():
+    for i u64 = 0 to parser.definitions.count():
         if defs[i].short == name: ret addrof defs[i] ..
-        i = i + 1
     ..
     throw errors.invalidArgument("unknown command-line option")
 ..
@@ -159,16 +153,14 @@ apply(parser Parser*, def Definition*, value str, hasValue bool) !void:
 
 Parser.parse(arguments str[]) !$Result:
     defs := this.definitions.view()
-    d u64 = 0
-    while d < this.definitions.count():
+    for d u64 = 0 to this.definitions.count():
         defs[d].seen = false
-        d = d + 1
     ..
     positional := try array.new[str](this.allocator)
     onerror positional.free(this.allocator, none)
     i u64 = 0
     options bool = true
-    while i < slices.count(arguments):
+    loop i < slices.count(arguments):
         arg := arguments[i]
         if options && strings.compare(arg, "--"):
             options = false
@@ -195,7 +187,7 @@ Parser.parse(arguments str[]) !$Result:
             try apply(this, def, value, hasValue)
         elif options && arg.countBytes() > 1 && strings.byteAt(arg, 0) == 45:
             shortIndex u64 = 1
-            while shortIndex < arg.countBytes():
+            loop shortIndex < arg.countBytes():
                 def := try findShort(this, strings.byteAt(arg, shortIndex))
                 value str
                 hasValue bool = false
@@ -232,8 +224,7 @@ Parser.writeUsage(output writer.Writer) !void:
     try output.writeAll(this.program)
     try output.writeAll(" [options]\n")
     defs := this.definitions.view()
-    i u64 = 0
-    while i < this.definitions.count():
+    for i u64 = 0 to this.definitions.count():
         try output.writeAll("  --")
         try output.writeAll(defs[i].name)
         if defs[i].short != 0:
@@ -244,7 +235,6 @@ Parser.writeUsage(output writer.Writer) !void:
         ..
         try output.writeAll("  ")
         try output.writeLn(defs[i].help)
-        i = i + 1
     ..
 ..
 
@@ -255,8 +245,7 @@ Parser.usage() !$str:
     try text.appendBorrowed(this.program)
     try text.appendBorrowed(" [options]\n")
     defs := this.definitions.view()
-    i u64 = 0
-    while i < this.definitions.count():
+    for i u64 = 0 to this.definitions.count():
         try text.appendBorrowed("  --")
         try text.appendBorrowed(defs[i].name)
         if defs[i].short != 0:
@@ -268,7 +257,6 @@ Parser.usage() !$str:
         try text.appendBorrowed("  ")
         try text.appendBorrowed(defs[i].help)
         try text.appendBorrowed("\n")
-        i = i + 1
     ..
     ret try text.build()
 ..

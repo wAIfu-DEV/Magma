@@ -17,12 +17,12 @@ Context(
 
 worker(context Context*) u64:
     context.ready.fetchAdd(1)
-    while context.start.load() == 0:
+    loop context.start.load() == 0:
         thread.yield()
     ..
 
     i u64 = 0
-    while i < incrementsPerWorker:
+    loop i < incrementsPerWorker:
         context.lock.lock()
         *context.value = *context.value + 1
         context.lock.unlock()
@@ -40,12 +40,12 @@ pub main() !void:
     threads := array thread.Thread[4]
 
     i u64 = 0
-    while i < workerCount:
+    loop i < workerCount:
         contexts[i] = Context(lock=addrof lock, value=addrof value, ready=addrof ready, start=addrof start)
         threads[i] = try thread.new[Context](worker, addrof contexts[i])
         i = i + 1
     ..
-    while ready.load() != workerCount:
+    loop ready.load() != workerCount:
         thread.yield()
     ..
     start.store(1)

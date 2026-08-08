@@ -26,7 +26,7 @@ main() !void:
     inside bool = false
     i u64 = 0
 
-    while i < chars:
+    loop i < chars:
         if strings.byteAt(text, i) == 32 || strings.byteAt(text, i) == 9:
             inside = false
         elif inside == false:

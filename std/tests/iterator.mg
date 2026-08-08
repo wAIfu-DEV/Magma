@@ -2,13 +2,11 @@ mod main
 use "std:errors" errors
 use "std:iterator" iterator
 use "std:cast" cast
-hasData(impl ptr, index u64*) bool:
-    ret *index < 2
+hasData(impl ptr, index u64) bool:
+    ret index < 2
 ..
-next(impl ptr, index u64*) !u64:
-    value := *index + 10
-    *index = *index + 1
-    ret value
+next(impl ptr, index u64) !u64:
+    ret index + 10
 ..
 pub main() !void:
     values := iterator.new[u64](none, hasData, next)

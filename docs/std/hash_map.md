@@ -15,13 +15,13 @@ An allocator-backed, open-addressed map from borrowed string keys to values of `
 ## Type
 
 `HashMap[T](allocator alc.Allocator, storage ptr, capacity u64, length u64,
-cleanup ($T) void)` stores keys, values, and slot states in one allocation.
+cleanup (alc.Allocator, $T) void)` stores keys, values, and slot states in one allocation.
 Keys are copied; values are moved in and released through `cleanup` when
 replaced, deleted, or left at `free()`.
 
 ## API
 
-- `pub new[T](a alc.Allocator, capacity u64, cleanup ($T) void) !$HashMap[T]` creates an empty table. Capacity must be nonzero. The optional callback cleans up values replaced, deleted, or left at `free()`.
+- `pub new[T](a alc.Allocator, capacity u64, cleanup (alc.Allocator, $T) void) !$HashMap[T]` creates an empty table. Capacity must be nonzero. The optional callback receives the map allocator and cleans up values replaced, deleted, or left at `free()`.
 - `HashMap[T].get(key str) !T` returns the associated value or an error when absent.
 - `HashMap[T].set(key str, value $T) !void` takes and inserts or replaces an entry and grows the table as needed. New keys are copied using the map's allocator.
 - `HashMap[T].delete(key str) !void` removes an entry or errors when absent.

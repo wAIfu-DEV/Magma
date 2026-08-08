@@ -86,7 +86,7 @@ Decoder.acceptPair(first u8, second u8) !void:
 pub Decoder.push(input u8[], output u32[]) !DecodeResult:
     consumed u64 = 0
     written u64 = 0
-    while true:
+    loop true:
         if this.hasPendingUnit:
             unit := this.pendingUnit
             if this.hasPendingHigh:
@@ -194,7 +194,7 @@ Utf16Iterator.next() !Codepoint:
 # Reports whether every code unit belongs to a valid scalar sequence.
 pub validate(units u16[]) bool:
     it := iterator(units)
-    while it.hasData():
+    loop it.hasData():
         cp, e := it.next()
         if e.nok():
             ret false
@@ -254,7 +254,7 @@ pub fromUtf8Size(text str) !u64:
 fromUtf8SizeUsingIterator(text str) !u64:
     it := utf8.iterator(text)
     total u64 = 0
-    while it.hasData():
+    loop it.hasData():
         cp := try it.next()
         total = try checked.uAdd(total, try encodedSize(cp.value))
     ..
@@ -270,7 +270,7 @@ pub toUtf8Lossy(a alc.Allocator, units u16[]) !$str:
     inputIndex u64 = 0
     outputIndex u64 = 0
     count := slices.count(units)
-    while inputIndex < count:
+    loop inputIndex < count:
         cp u32 = unicode.REPLACEMENT
         first := units[inputIndex]
         if unicode.isHighSurrogate(first) && inputIndex + 1 < count && unicode.isLowSurrogate(units[inputIndex + 1]):
@@ -302,7 +302,7 @@ pub fromUtf8Lossy(a alc.Allocator, text str) !$u16[]:
     input := strings.toPtr(text)
     inputIndex u64 = 0
     outputIndex u64 = 0
-    while inputIndex < inputCount:
+    loop inputIndex < inputCount:
         remaining := slices.fromPtr(cast.utop(cast.ptou(input) + inputIndex), inputCount - inputIndex)
         decoded, decodeError := utf8.decode(remaining)
         cp u32 = unicode.REPLACEMENT
@@ -356,8 +356,7 @@ pub decodeBytes(a alc.Allocator, bytes u8[], endian u8) !$u16[]:
     ..
     result := try slices.alloc[u16](a, count)
     onerror slices.free(a, result)
-    i u64 = 0
-    while i < count:
+    for i u64 = 0 to count:
         at := offset + i * 2
         first := cast.u8to64(bytes[at])
         second := cast.u8to64(bytes[at + 1])
@@ -366,7 +365,6 @@ pub decodeBytes(a alc.Allocator, bytes u8[], endian u8) !$u16[]:
         else:
             result[i] = cast.u64to16((first << 8) | second)
         ..
-        i = i + 1
     ..
     if validate(result) == false:
         throw errors.failure("invalid UTF-16 byte input")

@@ -180,8 +180,7 @@ writeParts(f Format*, out writer.Writer) !u64:
     ..
 
     written u64 = 0
-    i u64 = 0
-    while i < f.count:
+    for i u64 = 0 to f.count:
         part := f.parts[i]
         next u64 = 0
         if part.kind == KIND_STRING:
@@ -208,7 +207,6 @@ writeParts(f Format*, out writer.Writer) !u64:
             throw errors.wouldOverflow("formatted byte count overflow")
         ..
         written = written + next
-        i = i + 1
     ..
     ret written
 ..
@@ -272,10 +270,8 @@ BufferSink(
 writeBuffer(impl ptr, bytes str) !u64:
     sink BufferSink* = impl
     count := bytes.countBytes()
-    i u64 = 0
-    while i < count:
+    for i u64 = 0 to count:
         sink.out[sink.offset + i] = strings.byteAt(bytes, i)
-        i = i + 1
     ..
     sink.offset = sink.offset + count
     ret count

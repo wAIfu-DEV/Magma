@@ -15,13 +15,13 @@ cleanup callback. It delegates storage to `std/array`.
 
 ## Type
 
-`List[T](allocator alc.Allocator, array arr.Array[T], cleanup ($T) void)` owns
+`List[T](allocator alc.Allocator, array arr.Array[T], cleanup (alc.Allocator, $T) void)` owns
 its backing array and uses `cleanup` for removed or remaining elements.
 
 ## API
 
-- `pub new[T](a alc.Allocator, cleanup ($T) void) !$List[T]` creates an empty list with an optional element cleanup callback.
-- `pub fromArray[T](a alc.Allocator, array $arr.Array[T], cleanup ($T) void) $List[T]` transfers an existing array into a list; use the allocator that owns that array.
+- `pub new[T](a alc.Allocator, cleanup (alc.Allocator, $T) void) !$List[T]` creates an empty list with an optional element cleanup callback. The callback receives the list allocator.
+- `pub fromArray[T](a alc.Allocator, array $arr.Array[T], cleanup (alc.Allocator, $T) void) $List[T]` transfers an existing array into a list; use the allocator that owns that array.
 - `count() u64` returns the element count.
 - `clearShrink() !void` empties and shrinks to initial capacity; `clearKeep() !void` empties while retaining capacity.
 - `resize(usable u64, padLeft u64, padRight u64) !void` changes capacity/padding while preserving elements that fit and cleans up discarded elements.

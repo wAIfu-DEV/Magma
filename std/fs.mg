@@ -194,12 +194,12 @@ pub Dir.next() !$Entry:
     )
 ..
 
-dirIteratorHasData(implementation ptr, index u64*) bool:
+dirIteratorHasData(implementation ptr, index u64) bool:
     directory Dir* = implementation
     ret directory.hasData()
 ..
 
-dirIteratorNext(implementation ptr, index u64*) !Entry:
+dirIteratorNext(implementation ptr, index u64) !Entry:
     directory Dir* = implementation
     ret try directory.next()
 ..
@@ -222,7 +222,7 @@ pub WalkOptions(
 walkEntriesInner(a alc.Allocator, root str, options WalkOptions, visit (str, Metadata) !void) !void:
     directory := try openDir(a, root)
     defer directory.close()
-    while directory.hasData():
+    loop directory.hasData():
         entry := try directory.next()
         parts := array str[2]
         parts[0] = root
@@ -290,7 +290,7 @@ pub removeTree(a alc.Allocator, root str) !void:
 removeTreeContents(a alc.Allocator, root str) !void:
     directory := try openDir(a, root)
     defer directory.close()
-    while directory.hasData():
+    loop directory.hasData():
         entry := try directory.next()
         parts := array str[2]
         parts[0] = root

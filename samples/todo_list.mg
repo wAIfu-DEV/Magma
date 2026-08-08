@@ -19,7 +19,7 @@ main() !void:
     count u64 = 0
     running bool = true
 
-    while running:
+    loop running:
         try out.writeLn("\n1. Add task  2. List tasks  3. Quit")
         try out.write("Choice: ")
         try stdout.flush()
@@ -35,7 +35,7 @@ main() !void:
         elif strings.compare(choice, "2"):
             i u64 = 0
 
-            while i < count:
+            loop i < count:
                 try out.writeUint64(i + 1)
                 try out.write(". ")
                 try out.writeLn(tasks[i])
@@ -50,7 +50,7 @@ main() !void:
 
     cleanupIndex u64 = 0
 
-    while cleanupIndex < count:
+    loop cleanupIndex < count:
         tasks[cleanupIndex].free(a)
         cleanupIndex = cleanupIndex + 1
     ..

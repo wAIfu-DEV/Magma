@@ -41,7 +41,7 @@ pub new(strategy u8) !$Wake:
 pub wait(wake Wake*) !void:
     if wake.strategy == condition:
         ext_win32_AcquireSRWLockExclusive(addrof wake.lock)
-        while wake.count == 0:
+        loop wake.count == 0:
             ok i32 = ext_win32_SleepConditionVariableSRW(addrof wake.conditionVariable, addrof wake.lock, infinite, 0)
             if ok == 0:
                 code u32 = ext_win32_GetLastError()

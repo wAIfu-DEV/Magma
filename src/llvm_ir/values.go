@@ -242,16 +242,20 @@ func irVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) (SsaName, error) {
 		irWrite(ctx, "  ; has destructor\n")
 	}*/
 
-	irWriteHdf(ctx, "  %s = alloca ", allocSsa.Repr)
-
+	// Fixed-size local slots must be allocated in the function entry block.
+	// Emitting an alloca into a nested scope makes it execute every time that
+	// scope is entered; for a loop body, those allocations accumulate until the
+	// function returns and can exhaust the stack. Keep initialization below at
+	// the declaration point so each scope entry still resets the variable.
 	cpy := *ctx
-	cpy.bld.Body = ctx.bld.Head
+	cpy.bld.Body = ctx.parentBld.Head
+	irWritef(&cpy, "  %s = alloca ", allocSsa.Repr)
 
 	e := irType(&cpy, vd.Type)
 	if e != nil {
 		return ssaName(""), e
 	}
-	irWriteHd(ctx, "\n")
+	irWrite(&cpy, "\n")
 
 	irWrite(ctx, "  store ")
 	e = irType(ctx, vd.Type)

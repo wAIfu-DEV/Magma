@@ -7,7 +7,7 @@ use "std:utf16" utf16
 use "std:slices" slices
 use "std:errors" errors
 use "std:c" c
-use "std:array" array
+use "std:list" list
 
 ext ext_GetEnvironmentVariableW GetEnvironmentVariableW(name win.LPCWSTR, value win.LPWSTR, size win.DWORD) win.DWORD
 ext ext_SetEnvironmentVariableW SetEnvironmentVariableW(name win.LPCWSTR, value win.LPCWSTR) win.BOOL
@@ -15,20 +15,8 @@ ext ext_GetLastError GetLastError() win.DWORD
 ext ext_GetEnvironmentStringsW GetEnvironmentStringsW() win.LPWSTR
 ext ext_FreeEnvironmentStringsW FreeEnvironmentStringsW(block win.LPWSTR) win.BOOL
 
-pub Variables(
-    allocator allocator.Allocator
-    entries array.Array[str]
-)
-
-Variables.view() str[]: ret this.entries.view() ..
-destr Variables.free() void:
-    values := this.entries.view()
-    i u64 = 0
-    while i < this.entries.count():
-        values[i].free(this.allocator)
-        i = i + 1
-    ..
-    this.entries.free(this.allocator, none)
+freeString(a allocator.Allocator, value $str) void:
+    value.free(a)
 ..
 
 name16(name str) !$u16[]:
@@ -85,33 +73,25 @@ pub unset(name str) !void:
     ..
 ..
 
-pub list(a allocator.Allocator) !$Variables:
+pub list(a allocator.Allocator) !$list.List[str]:
     block := ext_GetEnvironmentStringsW()
     if block == none: throw errors.native(ext_GetLastError(), "GetEnvironmentStringsW failed") ..
-    entries := try array.new[str](a)
-    onerror:
-        existing := entries.view()
-        i u64 = 0
-        while i < entries.count():
-            existing[i].free(a)
-            i = i + 1
-        ..
-        entries.free(a, none)
-    ..
+    entries := try list.new[str](a, freeString)
+    onerror entries.free()
     offset u64 = 0
-    while block[offset] != 0:
+    loop block[offset] != 0:
         count u64 = 0
-        while block[offset + count] != 0: count = count + 1 ..
+        loop block[offset + count] != 0: count = count + 1 ..
         value str, conversionError error = utf16.toUtf8(a, slices.fromPtr(addrof block[offset], count))
         if conversionError.nok():
             ext_FreeEnvironmentStringsW(block)
             throw conversionError
         ..
-        try entries.pushRight(a, value)
+        try entries.pushRight(value)
         offset = offset + count + 1
     ..
     if ext_FreeEnvironmentStringsW(block) == 0:
         throw errors.native(ext_GetLastError(), "FreeEnvironmentStringsW failed")
     ..
-    ret Variables(allocator=a, entries=entries)
+    ret entries
 ..

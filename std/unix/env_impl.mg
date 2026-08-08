@@ -5,25 +5,14 @@ use "std:heap" heap
 use "std:strings" strings
 use "std:errors" errors
 use "std:c" c
-use "std:array" array
+use "std:list" list
 
 ext ext_getenv getenv(name u8*) u8*
 ext ext_setenv setenv(name u8*, value u8*, overwrite c.int) c.int
 ext ext_unsetenv unsetenv(name u8*) c.int
 
-pub Variables(
-    allocator allocator.Allocator
-    entries array.Array[str]
-)
-Variables.view() str[]: ret this.entries.view() ..
-destr Variables.free() void:
-    values := this.entries.view()
-    i u64 = 0
-    while i < this.entries.count():
-        values[i].free(this.allocator)
-        i = i + 1
-    ..
-    this.entries.free(this.allocator, none)
+freeString(a allocator.Allocator, value $str) void:
+    value.free(a)
 ..
 
 environmentPointer() u8**:
@@ -66,23 +55,15 @@ pub unset(name str) !void:
     ..
 ..
 
-pub list(a allocator.Allocator) !$Variables:
-    entries := try array.new[str](a)
-    onerror:
-        existing := entries.view()
-        j u64 = 0
-        while j < entries.count():
-            existing[j].free(a)
-            j = j + 1
-        ..
-        entries.free(a, none)
-    ..
+pub list(a allocator.Allocator) !$list.List[str]:
+    entries := try list.new[str](a, freeString)
+    onerror entries.free()
     environment := environmentPointer()
     i u64 = 0
-    while environment[i] != none:
+    loop environment[i] != none:
         value str = try strings.fromCstr(a, environment[i])
-        try entries.pushRight(a, value)
+        try entries.pushRight(value)
         i = i + 1
     ..
-    ret Variables(allocator=a, entries=entries)
+    ret entries
 ..

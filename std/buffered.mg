@@ -58,7 +58,7 @@ Writer.flush() !u64:
     remaining u64 = this.position
     writePtr ptr = this.buffer
     
-    while remaining > 0:
+    loop remaining > 0:
         toWrite str = strings.fromPtrNoCopy(writePtr, remaining)
         written u64 = try this.underlying.write(toWrite)
         if written > remaining:
@@ -308,7 +308,7 @@ bufferedRead(br Reader*, buff u8[], nBytes u64) !u64:
     totalRead u64 = 0
     dstPtr ptr = none
 
-    while totalRead < nBytes:
+    loop totalRead < nBytes:
         # Serve from buffer if available
         available u64 = br.filledCount() - br.position
         
@@ -395,7 +395,7 @@ Reader.readLn(a alc.Allocator) !$str:
     dstPtr ptr = none
     newCapacity u64 = 0
     
-    while true:
+    loop true:
         # Check if we need more buffer space
         if lineLen >= capacity:
             if capacity > (0 - 1) / 2:
@@ -419,7 +419,7 @@ Reader.readLn(a alc.Allocator) !$str:
             nlLen u64 = 1
             nextPos u64 = 0
             
-            while i < available:
+            loop i < available:
                 if searchPtr[i] == 10:  # '\n'
                     found = true
                     foundPos = i

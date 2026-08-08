@@ -17,8 +17,7 @@ pub parseUint(s str) !u64:
         throw errors.invalidArgument("empty unsigned integer")
     ..
     value u64 = 0
-    i u64 = 0
-    while i < n:
+    for i u64 = 0 to n:
         c := strings.byteAt(s, i)
         if c < 48 || c > 57:
             throw errors.invalidArgument("invalid unsigned integer")
@@ -28,7 +27,6 @@ pub parseUint(s str) !u64:
             throw errors.wouldOverflow("unsigned integer overflow")
         ..
         value = value * 10 + digit
-        i = i + 1
     ..
     ret value
 ..
@@ -56,14 +54,14 @@ pub formatUint(a alc.Allocator, value u64) !$str:
     remaining := value
     digits u64 = 1
     tmp := value
-    while tmp >= 10:
+    loop tmp >= 10:
         tmp = tmp / 10
         digits = digits + 1
     ..
     result str = try strings.alloc(a, digits)
     out u8* = strings.toPtr(result)
     i := digits
-    while i > 0:
+    loop i > 0:
         i = i - 1
         out[i] = cast.u64to8((remaining % 10) + 48)
         remaining = remaining / 10

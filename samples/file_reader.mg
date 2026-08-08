@@ -21,7 +21,7 @@ main(args str[]) !void:
     out := stdout.writer()
     out.writeLn("Started program. Write file path to print.")
 
-    while true:
+    loop true:
         out.write("Path: ")
         stdout.flush()
 

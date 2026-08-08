@@ -48,10 +48,8 @@ pub allocFill(a alc.Allocator, size u64, fill u8) !$str:
     ..
     p u8* = try a.alloc(size + 1) # Zero terminated
 
-    i u64 = 0
-    while i < size:
+    for i u64 = 0 to size:
         p[i] = fill
-        i = i + 1
     ..
 
     p[size] = 0
@@ -102,10 +100,8 @@ pub fromPtr(a alc.Allocator, p ptr, byteCount u64) !$str:
     inData u8* = p
     strData u8* = try a.alloc(byteCount + 1) # Zero terminated
 
-    i u64 = 0
-    while i < byteCount:
+    for i u64 = 0 to byteCount:
         strData[i] = inData[i]
-        i = i + 1
     ..
 
     strData[byteCount] = 0
@@ -130,10 +126,8 @@ pub copy(a alc.Allocator, s str) !$str:
     inData u8* = toPtr(s)
     strData u8* = try a.alloc(byteCount + 1) # Zero terminated
 
-    i u64 = 0
-    while i < byteCount:
+    for i u64 = 0 to byteCount:
         strData[i] = inData[i]
-        i = i + 1
     ..
 
     strData[byteCount] = 0
@@ -148,12 +142,10 @@ pub copy(a alc.Allocator, s str) !$str:
 pub toLower(a alc.Allocator, s str) !$str:
     result $str = try copy(a, s)
     data u8* = toPtr(result)
-    i u64 = 0
-    while i < result.countBytes():
+    for i u64 = 0 to result.countBytes():
         if data[i] >= 65 && data[i] <= 90:
             data[i] = data[i] + 32
         ..
-        i = i + 1
     ..
     ret result
 ..
@@ -166,12 +158,10 @@ pub toLower(a alc.Allocator, s str) !$str:
 pub toUpper(a alc.Allocator, s str) !$str:
     result $str = try copy(a, s)
     data u8* = toPtr(result)
-    i u64 = 0
-    while i < result.countBytes():
+    for i u64 = 0 to result.countBytes():
         if data[i] >= 97 && data[i] <= 122:
             data[i] = data[i] - 32
         ..
-        i = i + 1
     ..
     ret result
 ..
@@ -212,10 +202,8 @@ pub toCstr(a alc.Allocator, s str) !$u8*:
     p u8* = toPtr(s)
     np u8* = try a.alloc(size + 1)
 
-    i u64 = 0
-    while i < size:
+    for i u64 = 0 to size:
         np[i] = p[i]
-        i = i + 1
     ..
     np[size] = 0
     ret np
@@ -251,7 +239,7 @@ pub toCstrNoCopy(s str) u8*:
 #   byteCount := strings.cStrLen(cText)
 pub cStrLen(cstr u8*) u64:
     len u64 = 0
-    while cstr[len] != 0:
+    loop cstr[len] != 0:
         len = len + 1
     ..
     ret len
@@ -295,10 +283,8 @@ pub fromCstr(a alc.Allocator, cstr u8*) !$str:
     ..
     strData u8* = try a.alloc(size + 1)
 
-    i u64 = 0
-    while i < size:
+    for i u64 = 0 to size:
         strData[i] = cstr[i]
-        i = i + 1
     ..
     strData[size] = 0
     ret fromPtrNoCopy(strData, size)
@@ -328,12 +314,10 @@ pub compare(a str, b str) bool:
 pub findByte(s str, value u8) !u64:
     size := s.countBytes()
     data := toPtr(s)
-    index u64 = 0
-    while index < size:
+    for index u64 = 0 to size:
         if data[index] == value:
             ret index
         ..
-        index = index + 1
     ..
     throw err.outOfBounds("byte was not found in string")
 ..
@@ -346,12 +330,10 @@ matchesAt(source str, needle str, offset u64) bool:
     ..
     sourceData := toPtr(source)
     needleData := toPtr(needle)
-    index u64 = 0
-    while index < needleSize:
+    for index u64 = 0 to needleSize:
         if sourceData[offset + index] != needleData[index]:
             ret false
         ..
-        index = index + 1
     ..
     ret true
 ..
@@ -371,7 +353,7 @@ pub find(s str, needle str) !u64:
     ..
     limit := sourceSize - needleSize
     index u64 = 0
-    while index <= limit:
+    loop index <= limit:
         if matchesAt(s, needle, index):
             ret index
         ..
@@ -406,10 +388,10 @@ pub trim(a alc.Allocator, s str) !$str:
     start u64 = 0
     end := s.countBytes()
     data := toPtr(s)
-    while start < end && isTrimByte(data[start]):
+    loop start < end && isTrimByte(data[start]):
         start = start + 1
     ..
-    while end > start && isTrimByte(data[end - 1]):
+    loop end > start && isTrimByte(data[end - 1]):
         end = end - 1
     ..
     ret try substring(a, s, start, end)
@@ -468,10 +450,8 @@ Split.get(index u64) !str:
 # Releases every owned part and the pointer table.
 # @complexity O(N), where N is the number of parts
 destr Split.free() void:
-    index u64 = 0
-    while index < this.size:
+    for index u64 = 0 to this.size:
         this.items[index].free(this.allocator)
-        index = index + 1
     ..
     if this.items != none:
         this.allocator.free(this.items)
@@ -488,7 +468,7 @@ countParts(s str, separator str) !u64:
     sourceSize := s.countBytes()
     count u64 = 1
     position u64 = 0
-    while position + separatorSize <= sourceSize:
+    loop position + separatorSize <= sourceSize:
         if matchesAt(s, separator, position):
             count = count + 1
             position = position + separatorSize
@@ -517,15 +497,13 @@ pub split(a alc.Allocator, s str, separator str) !$Split:
     position u64 = 0
     made u64 = 0
     onerror:
-        cleanup u64 = 0
-        while cleanup < made:
+        for cleanup u64 = 0 to made:
             items[cleanup].free(a)
-            cleanup = cleanup + 1
         ..
         a.free(items)
     ..
 
-    while position + separatorSize <= sourceSize:
+    loop position + separatorSize <= sourceSize:
         if matchesAt(s, separator, position):
             item $str = try substring(a, s, partStart, position)
             items[made] = item
@@ -585,7 +563,7 @@ SplitIterator.next() !$str:
     separatorSize := this.separator.countBytes()
     start := this.position
     position := start
-    while position + separatorSize <= sourceSize:
+    loop position + separatorSize <= sourceSize:
         if matchesAt(this.source, this.separator, position):
             this.position = position + separatorSize
             ret try substring(this.allocator, this.source, start, position)

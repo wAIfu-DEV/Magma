@@ -62,7 +62,7 @@ pub write(handle ptr, bytes str) !u64:
     p ptr = strings.toPtr(bytes)
     total u64 = 0
 
-    while total < bound:
+    loop total < bound:
         toWrite u64 = bound - total
 
         next ptr = cast.utop(cast.ptou(p) + total)
@@ -109,7 +109,7 @@ pub read(handle ptr, buff u8[], n u64) !u64:
 
    total u64 = 0
 
-   while total < bound:
+   loop total < bound:
       toRead u64 = bound - total
 
       next ptr = cast.utop(cast.ptou(p) + total)

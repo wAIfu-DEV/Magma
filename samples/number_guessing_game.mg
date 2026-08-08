@@ -22,7 +22,7 @@ main() !void:
     answer := rng.bounded(100) + 1
 
     try out.writeLn("Guess a number from 1 to 100.")
-    while true:
+    loop true:
         try out.write("Guess: ")
         try stdout.flush()
 

@@ -6,7 +6,6 @@ package destroychecker
 import (
 	"Magma/src/types"
 	"fmt"
-	"os"
 	"strings"
 )
 
@@ -28,6 +27,7 @@ type Diagnostic struct {
 	FilePath string
 	Line     uint32
 	Column   uint32
+	Token    types.Token
 	Message  string
 }
 
@@ -116,6 +116,7 @@ func (a *analyzer) warn(token types.Token, message string) {
 		FilePath: a.file.FilePath,
 		Line:     token.Pos.Line,
 		Column:   token.Pos.Col,
+		Token:    token,
 		Message:  message,
 	})
 }
@@ -652,6 +653,29 @@ func (a *analyzer) statement(out *flow, statement types.NodeStatement) {
 		a.loopBreaks = a.loopBreaks[:loopIndex]
 		a.loopNext = a.loopNext[:loopIndex]
 		a.loopDepths = a.loopDepths[:loopIndex]
+	case *types.NodeStmtFor:
+		a.expression(out, node.DeclExpr)
+		a.borrowExpr(out, node.BoundExpr)
+		a.loopBreaks = append(a.loopBreaks, nil)
+		a.loopNext = append(a.loopNext, nil)
+		a.loopDepths = append(a.loopDepths, len(out.scopes))
+		iteration := cloneFlow(*out)
+		a.body(&iteration, &node.Body)
+		loopIndex := len(a.loopBreaks) - 1
+		if !iteration.terminated {
+			a.loopNext[loopIndex] = append(a.loopNext[loopIndex], iteration)
+		}
+		breaks := a.loopBreaks[loopIndex]
+		nextFlows := a.loopNext[loopIndex]
+		for _, next := range nextFlows {
+			*out = mergeFlows(*out, next)
+		}
+		for _, broken := range breaks {
+			*out = mergeFlows(*out, broken)
+		}
+		a.loopBreaks = a.loopBreaks[:loopIndex]
+		a.loopNext = a.loopNext[:loopIndex]
+		a.loopDepths = a.loopDepths[:loopIndex]
 	case *types.NodeStmtBreak:
 		if len(a.loopBreaks) != 0 {
 			index := len(a.loopBreaks) - 1
@@ -739,9 +763,17 @@ func Check(shared *types.SharedState) []Diagnostic {
 	return diagnostics
 }
 
-// Run is the compiler pipeline hook. Warnings are intentionally non-fatal.
+// Run is the compiler pipeline hook. Store warnings in the shared diagnostic
+// stream so every frontend (CLI, LSP, and future integrations) can render them.
 func Run(shared *types.SharedState) {
 	for _, diagnostic := range Check(shared) {
-		fmt.Fprintf(os.Stderr, "%s:%d:%d: warning: %s\n", diagnostic.FilePath, diagnostic.Line, diagnostic.Column, diagnostic.Message)
+		shared.Warnings = append(shared.Warnings, types.Diagnostic{
+			Severity: types.SeverityWarning,
+			Stage:    "ownership checking",
+			Ctx:      shared.Files[diagnostic.FilePath],
+			FilePath: diagnostic.FilePath,
+			Token:    diagnostic.Token,
+			Message:  diagnostic.Message,
+		})
 	}
 }

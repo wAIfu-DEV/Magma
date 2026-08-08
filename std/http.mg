@@ -1,219 +1,924 @@
 mod http
-# HTTP client requests and streaming response bodies.
-# @platform windows
+# Portable HTTP/1.1 client over std/net with client-owned connection pooling.
 
-use "std:allocator" alc
-use "std:reader"    reader
-use "std:cast"      cast
-use "std:builder"   builder
-use "std:strings"   strings
-use "std:slices"    slices
-use "std:errors"    errors
-use "std:memory"    memory
+use "std:allocator" allocator
+use "std:async" async
+use "std:builder" builder
+use "std:cast" cast
+use "std:errors" errors
+use "std:future" future
+use "std:memory" memory
+use "std:mutex" mutex
+use "std:reader" reader
+use "std:slices" slices
+use "std:strconv" strconv
+use "std:strings" strings
+use "std:net/address" address
+use "std:net/dns" dns
+use "std:net/poll" poll
+use "std:net/socket" socket
+use "std:net/tls" tls
 
-@platform("windows")
-use "std:win/http_impl" impl_http
-
-# HTTP is intentionally Windows-only until the standard library has portable
-# TCP and TLS stream abstractions on which the non-Windows client can be built.
-
-# One HTTP request header. Names and values are borrowed for the duration of
-# Client.send.
 pub Header(
     name str
     value str
 )
 
-# Request metadata. The URL must be absolute and use http or https.
 pub Request(
     method str
     url str
     headers Header[]
+    body reader.Reader
+    bodyLength u64
 )
 
-# A request body is either absent or a known-length Reader. Keeping the length
-# explicit lets WinHTTP stream without first buffering the body.
-pub Body(
-    source reader.Reader
-    length u64
-)
-
-# Creates an absent request body for methods such as GET.
-# @complexity O(1)
-# @example
-#   response := try client.send(request, http.noBody())
-pub noBody() Body:
-    ret Body(source=memory.zeroValue[reader.Reader](), length=0)
+pub noBody(method str, url str, headers Header[]) Request:
+    ret Request(method=method, url=url, headers=headers, body=memory.zeroValue[reader.Reader](), bodyLength=0)
 ..
 
-# Creates a streaming request body with an exact byte length.
-# @warning source must remain valid until send() returns and must produce length bytes.
-# @complexity O(1)
-# @example
-#   requestBody := http.body(file.reader(), contentLength)
-pub body(source reader.Reader, length u64) Body:
-    ret Body(source=source, length=length)
-..
-
-# Reports whether this body contains a reader.
-# @complexity O(1)
-# @example
-#   hasBody := requestBody.isPresent()
-Body.isPresent() bool:
-    ret this.source.fn_read != none
-..
-
-# Client session configuration. Timeouts are expressed in milliseconds and
-# apply separately to connection establishment, sending, and receiving.
-# @example
-#   options := http.defaultOptions()
 pub Options(
-    userAgent str
-    connectTimeoutMs u32
-    sendTimeoutMs u32
-    receiveTimeoutMs u32
-    automaticDecompression bool
+    dns dns.Options
+    ioTimeoutMs i64
+    maxResponseBytes u64
+    readBufferBytes u64
+    connectionCapacity u64
 )
 
-# Returns practical client defaults, including 30-second phase timeouts and
-# automatic response decompression.
-# @complexity O(1)
-# @example
-#   client := try http.new(a, http.defaultOptions())
 pub defaultOptions() Options:
-    ret Options(
-        userAgent="Magma/0",
-        connectTimeoutMs=30000,
-        sendTimeoutMs=30000,
-        receiveTimeoutMs=30000,
-        automaticDecompression=true,
-    )
+    ret Options(dns=dns.defaultOptions(), ioTimeoutMs=30000, maxResponseBytes=16 * 1024 * 1024, readBufferBytes=16384, connectionCapacity=32)
 ..
 
-# Reusable HTTP client session. Reuse one client across requests to benefit
-# from the platform's connection pooling.
-# @ownership A Client returned by new() must be closed exactly once.
+Connection(
+    host $str
+    service $str
+    socket socket.Socket
+    tls tls.Session
+    secure bool
+    active bool
+    reusable bool
+    inUse bool
+)
+
 pub Client(
-    impl impl_http.Client
-    allocator alc.Allocator
+    allocator allocator.Allocator
+    resolver dns.Resolver
+    tlsContext tls.Context
+    connections Connection*
+    connectionCapacity u64
+    connectionLock mutex.Mutex
+    options Options
+    active bool
 )
 
-# Opens a reusable WinHTTP session.
-# @platform windows
-# @complexity O(1), excluding operating-system setup
-# @ownership The returned client must be closed.
-# @example
-#   client := try http.new(a, http.defaultOptions())
-pub new(a alc.Allocator, options Options) !$Client:
-    impl := try impl_http.openClient(a, options.userAgent, options.connectTimeoutMs, options.sendTimeoutMs, options.receiveTimeoutMs, options.automaticDecompression)
-    c Client
-    c.impl = impl
-    c.allocator = a
-    ret c
-..
-
-# Closes the underlying HTTP session and invalidates the client.
-# @complexity O(1)
-# @example
-#   client.close()
-destr Client.close() void:
-    impl_http.closeClient(addrof this.impl)
-..
-
-# Streaming HTTP response containing status, headers, and an unread body.
-# @ownership A Response returned by send(), get(), or post() must be closed.
 pub Response(
-    impl impl_http.Response
+    allocator allocator.Allocator
+    statusCode u16
+    rawHeaders $str
+    body $str
+    active bool
 )
 
-# Returns the numeric HTTP response status, such as 200 or 404.
-# @complexity O(1)
-# @example
-#   if response.statusCode() == 200:
-Response.statusCode() u16:
-    ret this.impl.statusCode
+ParsedUrl(
+    host $str
+    service $str
+    target $str
+    secure bool
+)
+
+pub Exchange(
+    allocator allocator.Allocator
+    client Client*
+    connection u64
+    socket socket.Socket*
+    poller poll.Poller
+    events poll.Event*
+    request $str
+    sent u64
+    received u8*
+    receivedCount u64
+    receivedCapacity u64
+    maxResponseBytes u64
+    readBufferBytes u64
+    headerEnd u64
+    expectedTotal u64
+    chunked bool
+    closeDelimited bool
+    complete bool
+    active bool
+)
+
+SendTask(
+    client Client*
+    request Request
+)
+
+claim[T](value $T) $T:
+    ret value
 ..
 
-# Raw response headers, including the HTTP status line, encoded as UTF-8.
-# The returned string is borrowed from the Response.
-# @complexity O(1)
-# @ownership The returned view becomes invalid when the response is closed.
-# @example
-#   headers := response.rawHeaders()
-Response.rawHeaders() str:
-    ret this.impl.rawHeaders
+pub new(a allocator.Allocator, options Options) !$Client:
+    if options.ioTimeoutMs < 0 || options.maxResponseBytes == 0 || options.readBufferBytes == 0 || options.dns.maxResults > 16 || options.connectionCapacity == 0:
+        throw errors.invalidArgument("invalid HTTP client limits")
+    ..
+    resolver := try dns.new(a, options.dns)
+    onerror resolver.close()
+
+    tlsContext := try tls.newContext()
+    onerror tlsContext.close()
+
+    connections := try a.allocT[Connection](options.connectionCapacity)
+    onerror a.free(connections)
+    
+    memory.zero(connections, options.connectionCapacity * sizeof Connection)
+    guard := try mutex.new()
+    client Client
+    client.allocator = a
+    client.resolver = claim[dns.Resolver](resolver)
+    client.tlsContext = claim[tls.Context](tlsContext)
+    client.connections = connections
+    client.connectionCapacity = options.connectionCapacity
+    client.connectionLock = guard
+    client.options = options
+    client.active = true
+    ret client
 ..
 
-# Returns a pull reader backed directly by WinHttpReadData.
-# The Response must remain alive and unmoved while the reader is in use.
-# @complexity O(1)
-# @ownership The reader borrows the response and must not outlive it.
-# @example
-#   bodyReader := try response.body()
-Response.body() !reader.Reader:
-    ret try impl_http.responseBody(addrof this.impl)
-..
-
-# Closes the response stream and invalidates its body reader and borrowed headers.
-# @complexity O(1)
-# @example
-#   response.close()
-destr Response.close() void:
-    impl_http.closeResponse(addrof this.impl)
-..
-
-# Sends request headers and streams the request body before returning as soon
-# as response headers are available. The response body is not buffered.
-# @complexity O(H + B) before returning, for header and request-body byte counts
-# @ownership The returned response must be closed; request inputs remain caller-owned.
-# @example
-#   response := try client.send(request, http.noBody())
-Client.send(request Request, requestBody Body) !$Response:
-    headerBuilder := try builder.new(this.allocator)
-    defer headerBuilder.free()
-
-    headers Header[] = request.headers
+findSchemeEnd(url str) u64:
+    n := url.countBytes()
     i u64 = 0
-    while i < slices.count(headers):
-        try headerBuilder.appendBorrowed(headers[i].name)
-        try headerBuilder.appendBorrowed(": ")
-        try headerBuilder.appendBorrowed(headers[i].value)
-        try headerBuilder.appendBorrowed("\r\n")
+    loop i + 2 < n:
+        if strings.byteAt(url, i) == 58 && strings.byteAt(url, i + 1) == 47 && strings.byteAt(url, i + 2) == 47:
+            ret i
+        ..
         i = i + 1
     ..
+    ret n
+..
 
-    rawHeaders str = try headerBuilder.build()
-
-    response Response
-    bodyPresent bool = requestBody.isPresent()
-    responseImpl impl_http.Response, sendErr error = impl_http.send(addrof this.impl, request.method, request.url, rawHeaders, requestBody.source, requestBody.length, bodyPresent)
-    rawHeaders.free(this.allocator)
-
-    if sendErr.nok():
-        throw sendErr
+parseUrl(a allocator.Allocator, url str) !$ParsedUrl:
+    n := url.countBytes()
+    schemeEnd := findSchemeEnd(url)
+    if schemeEnd == n || schemeEnd == 0:
+        throw errors.invalidArgument("HTTP URL must be absolute")
     ..
-    response.impl = responseImpl
-    ret response
+    secure bool = false
+    if schemeEnd == 5 && strings.byteAt(url, 0) == 104 && strings.byteAt(url, 1) == 116 && strings.byteAt(url, 2) == 116 && strings.byteAt(url, 3) == 112 && strings.byteAt(url, 4) == 115:
+        secure = true
+    elif schemeEnd != 4 || strings.byteAt(url, 0) != 104 || strings.byteAt(url, 1) != 116 || strings.byteAt(url, 2) != 116 || strings.byteAt(url, 3) != 112:
+        throw errors.invalidArgument("HTTP URL scheme must be http or https")
+    ..
+    authorityStart := schemeEnd + 3
+    authorityEnd := authorityStart
+    loop authorityEnd < n && strings.byteAt(url, authorityEnd) != 47:
+        authorityEnd = authorityEnd + 1
+    ..
+    if authorityEnd == authorityStart:
+        throw errors.invalidArgument("HTTP URL host is empty")
+    ..
+    colon := authorityEnd
+    for i := authorityStart to authorityEnd:
+        if strings.byteAt(url, i) == 58:
+            colon = i
+        ..
+    ..
+    hostEnd := authorityEnd
+    if colon < authorityEnd:
+        hostEnd = colon
+    ..
+    host := try strings.substring(a, url, authorityStart, hostEnd)
+    onerror host.free(a)
+
+    service str
+    if colon < authorityEnd:
+        service = try strings.substring(a, url, colon + 1, authorityEnd)
+        parsedPort := try strconv.parseUint(service)
+        if parsedPort == 0 || parsedPort > 65535:
+            throw errors.invalidArgument("HTTP port is out of range")
+        ..
+    else:
+        if secure:
+            service = try strings.copy(a, "443")
+        else:
+            service = try strings.copy(a, "80")
+        ..
+    ..
+    onerror service.free(a)
+
+    target str
+    if authorityEnd == n:
+        target = try strings.copy(a, "/")
+    else:
+        target = try strings.substring(a, url, authorityEnd, n)
+    ..
+    ret ParsedUrl(host=host, service=service, target=target, secure=secure)
 ..
 
-# Convenience GET. It still returns a streaming Response.
-# @complexity O(N) for request setup and network transmission
-# @ownership The returned response must be closed.
-# @example
-#   response := try client.get("https://example.com/")
-Client.get(url str) !$Response:
-    headers Header[] = slices.fromPtr(none, 0)
-    request := Request(method="GET", url=url, headers=headers)
-    ret try this.send(request, noBody())
+freeParsed(a allocator.Allocator, parsed ParsedUrl*) void:
+    parsed.host.free(a)
+    parsed.service.free(a)
+    parsed.target.free(a)
 ..
 
-# Sends a POST request with a known-length streaming body.
-# @complexity O(B) for request-body bytes before response headers arrive
-# @ownership The returned response must be closed.
-# @example
-#   response := try client.post(url, http.body(source, length))
-Client.post(url str, requestBody Body) !$Response:
-    headers Header[] = slices.fromPtr(none, 0)
-    request := Request(method="POST", url=url, headers=headers)
-    ret try this.send(request, requestBody)
+buildRequest(a allocator.Allocator, request Request, parsed ParsedUrl*) !$str:
+    if request.method.countBytes() == 0:
+        throw errors.invalidArgument("HTTP method is empty")
+    ..
+    output := try builder.newWithCapacity(a, 64)
+    defer output.free()
+    try output.appendBorrowed(request.method)
+    try output.appendBorrowed(" ")
+    try output.appendBorrowed(parsed.target)
+    try output.appendBorrowed(" HTTP/1.1\r\nHost: ")
+    try output.appendBorrowed(parsed.host)
+
+    defaultPort := strings.compare(parsed.service, "80") && parsed.secure == false
+    if parsed.secure:
+        defaultPort = strings.compare(parsed.service, "443")
+    ..
+    if defaultPort == false:
+        try output.appendBorrowed(":")
+        try output.appendBorrowed(parsed.service)
+    ..
+    try output.appendBorrowed("\r\nConnection: keep-alive\r\n")
+    if request.body.fn_read != none:
+        length := try strconv.formatUint(a, request.bodyLength)
+        try output.appendBorrowed("Content-Length: ")
+        try output.appendOwned(length)
+        try output.appendBorrowed("\r\n")
+    ..
+
+    for i u64 = 0 to slices.count(request.headers):
+        try output.appendBorrowed(request.headers[i].name)
+        try output.appendBorrowed(": ")
+        try output.appendBorrowed(request.headers[i].value)
+        try output.appendBorrowed("\r\n")
+    ..
+    try output.appendBorrowed("\r\n")
+    if request.body.fn_read != none && request.bodyLength > 0:
+        contents := try request.body.read(a, request.bodyLength)
+        if contents.countBytes() != request.bodyLength:
+            contents.free(a)
+            throw errors.failure("HTTP request body ended before its declared length")
+        ..
+        try output.appendOwned(contents)
+    ..
+    ret try output.build()
+..
+
+findReusable(client Client*, host str, service str, secure bool) u64:
+    for i u64 = 0 to client.connectionCapacity:
+        connection Connection* = addrof client.connections[i]
+        if connection.active && connection.reusable && connection.inUse == false && connection.secure == secure && strings.compare(connection.host, host) && strings.compare(connection.service, service):
+            ret i
+        ..
+    ..
+    ret client.connectionCapacity
+..
+
+findEmpty(client Client*) u64:
+    for i u64 = 0 to client.connectionCapacity:
+        if client.connections[i].active == false:
+            ret i
+        ..
+    ..
+    ret client.connectionCapacity
+..
+
+Client.acquire(host str, service str, secure bool) !u64:
+    try this.connectionLock.lock()
+    existing := findReusable(this, host, service, secure)
+    if existing < this.connectionCapacity:
+        this.connections[existing].inUse = true
+        try this.connectionLock.unlock()
+        ret existing
+    ..
+    slot := findEmpty(this)
+    if slot == this.connectionCapacity:
+        try this.connectionLock.unlock()
+        throw errors.wouldOverflow("HTTP connection pool capacity reached")
+    ..
+    # Reserve the slot before the native connect so concurrent requests cannot
+    # claim it. Different requests may intentionally establish parallel
+    # connections to the same origin.
+    this.connections[slot].active = true
+    this.connections[slot].inUse = true
+    this.connections[slot].reusable = false
+    try this.connectionLock.unlock()
+
+    ownedHost str, hostError error = strings.copy(this.allocator, host)
+    if hostError.nok():
+        this.connections[slot].active = false
+        this.connections[slot].inUse = false
+        throw hostError
+    ..
+    ownedService str, serviceError error = strings.copy(this.allocator, service)
+    if serviceError.nok():
+        ownedHost.free(this.allocator)
+        this.connections[slot].active = false
+        this.connections[slot].inUse = false
+        throw serviceError
+    ..
+    endpoints := array address.Endpoint[16]
+    endpointView address.Endpoint[] = endpoints
+    count u64, resolveError error = this.resolver.resolveTo(host, service, address.FAMILY_UNSPECIFIED, endpointView)
+    if resolveError.nok() || count == 0:
+        ownedHost.free(this.allocator)
+        ownedService.free(this.allocator)
+        this.connections[slot].active = false
+        this.connections[slot].inUse = false
+        if resolveError.nok():
+            throw resolveError
+        ..
+        throw errors.notFound("HTTP host has no addresses")
+    ..
+    transport socket.Socket, connectError error = socket.open(endpoints[0].address.family, socket.TYPE_STREAM)
+    if connectError.ok():
+        connectResult bool, captured error = connectSocket(addrof transport, endpoints[0])
+        connectError = captured
+    ..
+    if connectError.nok():
+        if transport.open:
+            transport.close()
+        ..
+        ownedHost.free(this.allocator)
+        ownedService.free(this.allocator)
+        this.connections[slot].active = false
+        this.connections[slot].inUse = false
+        throw connectError
+    ..
+    connection Connection* = addrof this.connections[slot]
+    connection.host = ownedHost
+    connection.service = ownedService
+    connection.socket = claim[socket.Socket](transport)
+    connection.secure = secure
+    if secure:
+        secured tls.Session, tlsError error = this.tlsContext.open(this.allocator, addrof connection.socket, host)
+        if tlsError.nok():
+            connection.socket.close()
+            ownedHost.free(this.allocator)
+            ownedService.free(this.allocator)
+            connection.active = false
+            connection.inUse = false
+            throw tlsError
+        ..
+        connection.tls = claim[tls.Session](secured)
+    ..
+    connection.reusable = true
+    ret slot
+..
+
+connectSocket(transport socket.Socket*, endpoint address.Endpoint) !bool:
+    try transport.connect(endpoint)
+    try transport.setNonBlocking(true)
+    ret true
+..
+
+Client.release(index u64, reusable bool) !void:
+    try this.connectionLock.lock()
+    if index < this.connectionCapacity && this.connections[index].active:
+        this.connections[index].reusable = this.connections[index].reusable && reusable
+        this.connections[index].inUse = false
+    ..
+    try this.connectionLock.unlock()
+..
+
+Client.start(request Request) !$Exchange:
+    if this.active == false:
+        throw errors.invalidArgument("HTTP client is closed")
+    ..
+    parsed := try parseUrl(this.allocator, request.url)
+    defer freeParsed(this.allocator, addrof parsed)
+    
+    connectionIndex := try this.acquire(parsed.host, parsed.service, parsed.secure)
+    onerror this.release(connectionIndex, false)
+
+    transport := addrof this.connections[connectionIndex].socket
+    requestBytes := try buildRequest(this.allocator, request, addrof parsed)
+    onerror requestBytes.free(this.allocator)
+
+    nativePoller := try poll.new(this.allocator, 1)
+    onerror nativePoller.close()
+
+    try nativePoller.add(transport, 0, poll.WRITE)
+    events poll.Event* = try this.allocator.allocT[poll.Event](1)
+    onerror this.allocator.free(events)
+
+    initial := this.options.readBufferBytes
+    if initial > this.options.maxResponseBytes:
+        initial = this.options.maxResponseBytes
+    ..
+    received u8* = try this.allocator.allocT[u8](initial)
+    exchange Exchange
+    exchange.allocator = this.allocator
+    exchange.client = this
+    exchange.connection = connectionIndex
+    exchange.socket = transport
+    exchange.poller = claim[poll.Poller](nativePoller)
+    exchange.events = events
+    exchange.request = requestBytes
+    exchange.sent = 0
+    exchange.received = received
+    exchange.receivedCount = 0
+    exchange.receivedCapacity = initial
+    exchange.maxResponseBytes = this.options.maxResponseBytes
+    exchange.readBufferBytes = this.options.readBufferBytes
+    exchange.headerEnd = 0
+    exchange.expectedTotal = 0
+    exchange.chunked = false
+    exchange.closeDelimited = false
+    exchange.complete = false
+    exchange.active = true
+    ret exchange
+..
+
+Exchange.desiredEvents() u32:
+    connection Connection* = addrof this.client.connections[this.connection]
+    if connection.secure && connection.tls.handshaken == false:
+        if connection.tls.want == tls.WANT_READ:
+            ret poll.READ
+        ..
+        ret poll.WRITE
+    ..
+    if this.sent < this.request.countBytes():
+        if connection.secure && connection.tls.want == tls.WANT_READ:
+            ret poll.READ
+        ..
+        ret poll.WRITE
+    ..
+    if connection.secure && connection.tls.want == tls.WANT_WRITE:
+        ret poll.WRITE
+    ..
+    ret poll.READ
+..
+
+Exchange.transportSend(bytes str) !u64:
+    connection Connection* = addrof this.client.connections[this.connection]
+    if connection.secure:
+        ret try connection.tls.send(bytes)
+    ..
+    ret try this.socket.send(bytes)
+..
+
+Exchange.transportRecv(buffer u8[], count u64) !u64:
+    connection Connection* = addrof this.client.connections[this.connection]
+    if connection.secure:
+        ret try connection.tls.recv(buffer, count)
+    ..
+    ret try this.socket.recv(buffer, count)
+..
+
+eventSlice(event poll.Event*) poll.Event[]:
+    ret slices.fromPtr(event, 1)
+..
+
+Exchange.grow() !void:
+    if this.receivedCount == this.maxResponseBytes:
+        throw errors.wouldOverflow("HTTP response exceeds configured limit")
+    ..
+    next := this.receivedCapacity * 2
+    if next < this.receivedCapacity || next > this.maxResponseBytes:
+        next = this.maxResponseBytes
+    ..
+    this.received = try this.allocator.reallocT[u8](this.received, next)
+    this.receivedCapacity = next
+..
+
+lowerAscii(value u8) u8:
+    if value >= 65 && value <= 90:
+        ret value + 32
+    ..
+    ret value
+..
+
+matchesAscii(bytes u8*, start u64, end u64, text str) bool:
+    if end - start != text.countBytes():
+        ret false
+    ..
+    for i u64 = 0 to text.countBytes():
+        if lowerAscii(bytes[start + i]) != lowerAscii(strings.byteAt(text, i)):
+            ret false
+        ..
+    ..
+    ret true
+..
+
+containsAscii(bytes u8*, start u64, end u64, text str) bool:
+    if text.countBytes() > end - start:
+        ret false
+    ..
+    i := start
+    loop i + text.countBytes() <= end:
+        if matchesAscii(bytes, i, i + text.countBytes(), text):
+            ret true
+        ..
+        i = i + 1
+    ..
+    ret false
+..
+
+hexDigit(value u8) !u64:
+    if value >= 48 && value <= 57:
+        ret value - 48
+    elif lowerAscii(value) >= 97 && lowerAscii(value) <= 102:
+        ret lowerAscii(value) - 87
+    ..
+    throw errors.failure("invalid HTTP chunk size")
+..
+
+ChunkScan(
+    complete bool
+    decodedBytes u64
+)
+
+scanChunks(bytes u8*, start u64, count u64) !ChunkScan:
+    position := start
+    decoded u64 = 0
+    loop position < count:
+        lineEnd := position
+        loop lineEnd + 1 < count && (bytes[lineEnd] != 13 || bytes[lineEnd + 1] != 10):
+            lineEnd = lineEnd + 1
+        ..
+        if lineEnd + 1 >= count:
+            ret ChunkScan(complete=false, decodedBytes=decoded)
+        ..
+        size u64 = 0
+        i := position
+        digits u64 = 0
+        loop i < lineEnd && bytes[i] != 59:
+            digit := try hexDigit(bytes[i])
+            if size > 0x0FFFFFFFFFFFFFFF:
+                throw errors.wouldOverflow("HTTP chunk size overflow")
+            ..
+            size = size * 16 + digit
+            digits = digits + 1
+            i = i + 1
+        ..
+        if digits == 0:
+            throw errors.failure("empty HTTP chunk size")
+        ..
+        position = lineEnd + 2
+        if size == 0:
+            # The empty trailer section is CRLF. Non-empty trailers terminate
+            # at the next CRLFCRLF sequence.
+            if position + 1 < count && bytes[position] == 13 && bytes[position + 1] == 10:
+                ret ChunkScan(complete=true, decodedBytes=decoded)
+            ..
+            trailerEnd := findHeaderEnd(cast.reinterpret[u8](cast.utop(cast.ptou(bytes) + position)), count - position)
+            if trailerEnd == 0:
+                ret ChunkScan(complete=false, decodedBytes=decoded)
+            ..
+            ret ChunkScan(complete=true, decodedBytes=decoded)
+        ..
+        if size > count - position || position + size + 2 > count:
+            ret ChunkScan(complete=false, decodedBytes=decoded)
+        ..
+        if bytes[position + size] != 13 || bytes[position + size + 1] != 10:
+            throw errors.failure("invalid HTTP chunk terminator")
+        ..
+        decoded = decoded + size
+        position = position + size + 2
+    ..
+    ret ChunkScan(complete=false, decodedBytes=decoded)
+..
+
+Exchange.updateFraming() !bool:
+    if this.headerEnd == 0:
+        end := findHeaderEnd(this.received, this.receivedCount)
+        if end == 0:
+            ret false
+        ..
+        this.headerEnd = end
+        status := try parseStatus(this.received, end)
+        lineStart u64 = 0
+        loop lineStart + 1 < end && (this.received[lineStart] != 13 || this.received[lineStart + 1] != 10):
+            lineStart = lineStart + 1
+        ..
+        lineStart = lineStart + 2
+        hasLength bool = false
+        contentLength u64 = 0
+        loop lineStart + 1 < end:
+            lineEnd := lineStart
+            loop lineEnd + 1 < end && (this.received[lineEnd] != 13 || this.received[lineEnd + 1] != 10):
+                lineEnd = lineEnd + 1
+            ..
+            if lineEnd == lineStart:
+                break
+            ..
+            colon := lineStart
+            loop colon < lineEnd && this.received[colon] != 58:
+                colon = colon + 1
+            ..
+            valueStart := colon + 1
+            loop valueStart < lineEnd && (this.received[valueStart] == 32 || this.received[valueStart] == 9):
+                valueStart = valueStart + 1
+            ..
+            if colon < lineEnd && matchesAscii(this.received, lineStart, colon, "content-length"):
+                hasLength = true
+                for i := valueStart to lineEnd:
+                    if this.received[i] < 48 || this.received[i] > 57:
+                        throw errors.failure("invalid HTTP Content-Length")
+                    ..
+                    contentLength = contentLength * 10 + this.received[i] - 48
+                ..
+            elif colon < lineEnd && matchesAscii(this.received, lineStart, colon, "transfer-encoding") && containsAscii(this.received, valueStart, lineEnd, "chunked"):
+                this.chunked = true
+            elif colon < lineEnd && matchesAscii(this.received, lineStart, colon, "connection") && containsAscii(this.received, valueStart, lineEnd, "close"):
+                this.closeDelimited = true
+            ..
+            lineStart = lineEnd + 2
+        ..
+        if status < 200 || status == 204 || status == 304:
+            this.expectedTotal = end
+        elif this.chunked == false && hasLength:
+            if contentLength > this.maxResponseBytes - end:
+                throw errors.wouldOverflow("HTTP response exceeds configured limit")
+            ..
+            this.expectedTotal = end + contentLength
+        elif this.chunked == false:
+            this.closeDelimited = true
+        ..
+    ..
+    if this.expectedTotal != 0 && this.receivedCount >= this.expectedTotal:
+        this.complete = true
+    elif this.chunked:
+        scan := try scanChunks(this.received, this.headerEnd, this.receivedCount)
+        this.complete = scan.complete
+    ..
+    ret this.complete
+..
+
+# Advances one readiness cycle and completes at the HTTP message boundary,
+# leaving a keep-alive socket open in the owning client.
+Exchange.poll(timeoutMs i64) !bool:
+    if this.active == false:
+        throw errors.invalidArgument("HTTP exchange is closed")
+    ..
+    if this.complete:
+        ret true
+    ..
+    connection Connection* = addrof this.client.connections[this.connection]
+    transferReady bool = true
+    if connection.secure && connection.tls.handshaken == false:
+        if try connection.tls.handshake() == false:
+            try this.poller.modify(this.socket, 0, this.desiredEvents())
+            transferReady = false
+        else:
+            try this.poller.modify(this.socket, 0, poll.WRITE)
+        ..
+    ..
+    # Optimistic I/O avoids an unnecessary kernel wait when a connected socket
+    # can make progress immediately (and avoids relying on synthetic WRITE
+    # readiness from WSAPoll after a blocking connect).
+    if transferReady && this.sent < this.request.countBytes():
+        remaining := this.request.countBytes() - this.sent
+        requestPtr := cast.utop(cast.ptou(strings.toPtr(this.request)) + this.sent)
+        view := strings.fromPtrNoCopy(requestPtr, remaining)
+        written u64, writeError error = this.transportSend(view)
+        if writeError.nok():
+            if errors.hasCode(writeError, errors.ERR_WOULD_BLOCK) == false:
+                throw writeError
+            ..
+        else:
+            this.sent = this.sent + written
+            if this.sent == this.request.countBytes():
+                try this.poller.modify(this.socket, 0, poll.READ)
+            ..
+        ..
+    ..
+    if transferReady && this.sent == this.request.countBytes():
+        if this.receivedCount == this.receivedCapacity:
+            try this.grow()
+        ..
+        available := this.receivedCapacity - this.receivedCount
+        receivePtr u8* = cast.reinterpret[u8](cast.utop(cast.ptou(this.received) + this.receivedCount))
+        out := slices.fromPtr(receivePtr, available)
+        read u64, readError error = this.transportRecv(out, available)
+        if readError.nok():
+            if errors.hasCode(readError, errors.ERR_WOULD_BLOCK) == false:
+                throw readError
+            ..
+        elif read == 0 && connection.secure && connection.tls.want != tls.WANT_NONE:
+            # OpenSSL reports WANT_READ/WANT_WRITE without consuming bytes.
+            try this.poller.modify(this.socket, 0, this.desiredEvents())
+        elif read == 0:
+            if this.closeDelimited == false:
+                try this.client.release(this.connection, false)
+                throw errors.connectionReset("HTTP peer closed before the framed response completed")
+            ..
+            this.complete = true
+            ret true
+        else:
+            this.receivedCount = this.receivedCount + read
+            ret try this.updateFraming()
+        ..
+    ..
+    try this.poller.modify(this.socket, 0, this.desiredEvents())
+    count := try this.poller.wait(eventSlice(this.events), timeoutMs)
+    if count == 0:
+        if timeoutMs == 0:
+            ret false
+        ..
+        throw errors.timedOut("HTTP I/O timed out")
+    ..
+    flags := this.events[0].flags
+    if (flags & poll.ERROR) != 0:
+        throw errors.failure("HTTP socket polling failed")
+    ..
+    if connection.secure && connection.tls.handshaken == false:
+        if try connection.tls.handshake() == false:
+            try this.poller.modify(this.socket, 0, this.desiredEvents())
+            ret false
+        ..
+        try this.poller.modify(this.socket, 0, poll.WRITE)
+    ..
+    if this.sent < this.request.countBytes() && (flags & this.desiredEvents()) != 0:
+        remaining := this.request.countBytes() - this.sent
+        requestPtr := cast.utop(cast.ptou(strings.toPtr(this.request)) + this.sent)
+        view := strings.fromPtrNoCopy(requestPtr, remaining)
+        written := try this.transportSend(view)
+        this.sent = this.sent + written
+        if this.sent == this.request.countBytes():
+            try this.poller.modify(this.socket, 0, poll.READ)
+        ..
+    ..
+    if this.sent == this.request.countBytes() && ((flags & poll.READ) != 0 || (flags & poll.HANGUP) != 0):
+        if this.receivedCount == this.receivedCapacity:
+            try this.grow()
+        ..
+        available := this.receivedCapacity - this.receivedCount
+        receivePtr u8* = cast.reinterpret[u8](cast.utop(cast.ptou(this.received) + this.receivedCount))
+        out := slices.fromPtr(receivePtr, available)
+        read u64, readError error = this.transportRecv(out, available)
+        if readError.nok():
+            if errors.hasCode(readError, errors.ERR_WOULD_BLOCK):
+                ret false
+            ..
+            throw readError
+        ..
+        if read == 0 && connection.secure && connection.tls.want != tls.WANT_NONE:
+            try this.poller.modify(this.socket, 0, this.desiredEvents())
+            ret false
+        ..
+        if read == 0:
+            if this.closeDelimited == false:
+                try this.client.release(this.connection, false)
+                throw errors.connectionReset("HTTP peer closed before the framed response completed")
+            ..
+            this.complete = true
+            ret true
+        ..
+        this.receivedCount = this.receivedCount + read
+        ret try this.updateFraming()
+    ..
+    ret false
+..
+
+findHeaderEnd(bytes u8*, count u64) u64:
+    i u64 = 0
+    loop i + 3 < count:
+        if bytes[i] == 13 && bytes[i + 1] == 10 && bytes[i + 2] == 13 && bytes[i + 3] == 10:
+            ret i + 4
+        ..
+        i = i + 1
+    ..
+    ret 0
+..
+
+parseStatus(bytes u8*, count u64) !u16:
+    if count < 12 || bytes[0] != 72 || bytes[1] != 84 || bytes[2] != 84 || bytes[3] != 80 || bytes[8] != 32:
+        throw errors.failure("invalid HTTP response status line")
+    ..
+    value u64 = 0
+    for i u64 = 9 to 12:
+        if bytes[i] < 48 || bytes[i] > 57:
+            throw errors.failure("invalid HTTP response status")
+        ..
+        value = value * 10 + bytes[i] - 48
+    ..
+    ret cast.u64to16(value)
+..
+
+decodeChunks(a allocator.Allocator, bytes u8*, start u64, count u64) !$str:
+    scan := try scanChunks(bytes, start, count)
+    if scan.complete == false:
+        throw errors.failure("incomplete chunked HTTP body")
+    ..
+    output := try strings.alloc(a, scan.decodedBytes)
+    destination := strings.toPtr(output)
+    position := start
+    written u64 = 0
+    loop position < count:
+        lineEnd := position
+        loop bytes[lineEnd] != 13 || bytes[lineEnd + 1] != 10:
+            lineEnd = lineEnd + 1
+        ..
+        size u64 = 0
+        i := position
+        loop i < lineEnd && bytes[i] != 59:
+            size = size * 16 + try hexDigit(bytes[i])
+            i = i + 1
+        ..
+        position = lineEnd + 2
+        if size == 0:
+            ret output
+        ..
+        memory.copy(cast.utop(cast.ptou(bytes) + position), cast.utop(cast.ptou(destination) + written), size)
+        written = written + size
+        position = position + size + 2
+    ..
+    ret output
+..
+
+destr Exchange.finish() !$Response:
+    if this.active == false || this.complete == false:
+        throw errors.invalidArgument("HTTP exchange is not complete")
+    ..
+    headerEnd := findHeaderEnd(this.received, this.receivedCount)
+    if headerEnd == 0:
+        throw errors.failure("HTTP response headers are incomplete")
+    ..
+    status := try parseStatus(this.received, headerEnd)
+    raw := try strings.copy(this.allocator, strings.fromPtrNoCopy(this.received, headerEnd))
+    onerror raw.free(this.allocator)
+    contents str
+    if this.chunked:
+        contents = try decodeChunks(this.allocator, this.received, headerEnd, this.receivedCount)
+    else:
+        bodyBytes := this.receivedCount - headerEnd
+        if this.expectedTotal != 0:
+            bodyBytes = this.expectedTotal - headerEnd
+        ..
+        bodyPtr := cast.utop(cast.ptou(this.received) + headerEnd)
+        contents = try strings.copy(this.allocator, strings.fromPtrNoCopy(bodyPtr, bodyBytes))
+    ..
+    try this.poller.close()
+    try this.client.release(this.connection, this.closeDelimited == false)
+    this.request.free(this.allocator)
+    this.allocator.free(this.received)
+    this.allocator.free(this.events)
+    this.active = false
+    ret Response(allocator=this.allocator, statusCode=status, rawHeaders=raw, body=contents, active=true)
+..
+
+Client.send(request Request) !$Response:
+    exchange := try this.start(request)
+    onerror exchange.close()
+    loop try exchange.poll(this.options.ioTimeoutMs) == false:
+    ..
+    ret try exchange.finish()
+..
+
+runSend(task SendTask*) !$Response:
+    ret try task.client.send(task.request)
+..
+
+# Runs the polling state machine on the Async worker pool and returns an awaitable response.
+Client.sendAsync(asc async.Async, request Request) !$future.Future[Response]:
+    if this.active == false:
+        throw errors.invalidArgument("HTTP client is closed")
+    ..
+    task := SendTask(client=this, request=request)
+    ret try future.new[Response, SendTask](asc.allocator, asc.pool.executor(), runSend, task)
+..
+
+destr Exchange.close() !void:
+    if this.active:
+        try this.poller.close()
+        try this.client.release(this.connection, false)
+        this.request.free(this.allocator)
+        this.allocator.free(this.received)
+        this.allocator.free(this.events)
+        this.active = false
+    ..
+..
+
+destr Response.close() void:
+    if this.active:
+        this.rawHeaders.free(this.allocator)
+        this.body.free(this.allocator)
+        this.active = false
+    ..
+..
+
+destr Client.close() !void:
+    if this.active:
+        for i u64 = 0 to this.connectionCapacity:
+            connection Connection* = addrof this.connections[i]
+            if connection.active:
+                if connection.secure && connection.tls.active:
+                    try connection.tls.close()
+                ..
+                try connection.socket.close()
+                connection.host.free(this.allocator)
+                connection.service.free(this.allocator)
+                connection.active = false
+            ..
+        ..
+        this.allocator.free(this.connections)
+        try this.connectionLock.free()
+        try this.resolver.close()
+        try this.tlsContext.close()
+        this.connections = none
+        this.active = false
+    ..
 ..

@@ -17,7 +17,7 @@ pub HashMap[T](
     storage ptr
     capacity u64
     length u64
-    cleanup ($T) void
+    cleanup (alc.Allocator, $T) void
 )
 
 keysPtr[T](map HashMap[T]*) str*:
@@ -46,13 +46,13 @@ storageSize[T](capacity u64) !u64:
     ret try checked.uAdd(try checked.uAdd(keysBytes, valuesBytes), capacity)
 ..
 
-release[T](cleanup ($T) void, value $T) void:
+release[T](a alc.Allocator, cleanup (alc.Allocator, $T) void, value $T) void:
     if cleanup == none:
         abandoned := array T[1]
         abandoned[0] = value
         ret
     ..
-    cleanup(value)
+    cleanup(a, value)
 ..
 
 claim[T](claimed $T) $T:
@@ -65,7 +65,7 @@ claim[T](claimed $T) $T:
 # @ownership The returned map owns its storage and every value passed to set().
 # @example
 #   users := try hash_map.new[User](a, 16, freeUser)
-pub new[T](a alc.Allocator, capacity u64, cleanup ($T) void) !$HashMap[T]:
+pub new[T](a alc.Allocator, capacity u64, cleanup (alc.Allocator, $T) void) !$HashMap[T]:
     if capacity == 0:
         throw errors.invalidArgument("hash map capacity must be positive")
     ..
@@ -82,8 +82,7 @@ HashMap[T].indexOf(key str) !u64:
     keys str* = keysPtr[T](this)
     states u8* = statesPtr[T](this)
     start := hash.string(key) % this.capacity
-    i u64 = 0
-    while i < this.capacity:
+    for i u64 = 0 to this.capacity:
         idx := (start + i) % this.capacity
         if states[idx] == 0:
             throw errors.failure("key not found in hash map")
@@ -91,7 +90,6 @@ HashMap[T].indexOf(key str) !u64:
         if states[idx] == 1 && strings.compare(keys[idx], key):
             ret idx
         ..
-        i = i + 1
     ..
     throw errors.failure("key not found in hash map")
 ..
@@ -129,12 +127,11 @@ HashMap[T].resize(newCapacity u64) !void:
     oldValues T* = valuesPtr[T](this)
     oldStates u8* = statesPtr[T](this)
 
-    i u64 = 0
-    while i < this.capacity:
+    for i u64 = 0 to this.capacity:
         if oldStates[i] == 1:
             start := hash.string(oldKeys[i]) % newCapacity
             probe u64 = 0
-            while probe < newCapacity:
+            loop probe < newCapacity:
                 idx := (start + probe) % newCapacity
                 if states[idx] == 0:
                     keys[idx] = oldKeys[i]
@@ -145,7 +142,6 @@ HashMap[T].resize(newCapacity u64) !void:
                 probe = probe + 1
             ..
         ..
-        i = i + 1
     ..
 
     this.allocator.free(this.storage)
@@ -164,7 +160,7 @@ resizeForInsert[T](map HashMap[T]*, newCapacity u64) !bool:
 # @example
 #   try users.set("alice", user)
 HashMap[T].set(key str, item $T) !void:
-    onerror release[T](this.cleanup, item)
+    onerror release[T](this.allocator, this.cleanup, item)
     # Keep the load factor below 75%. Besides maintaining probe performance,
     # rebuilding also discards tombstones left by delete().
     if (this.length + 1) * 4 >= this.capacity * 3:
@@ -179,11 +175,10 @@ HashMap[T].set(key str, item $T) !void:
     states u8* = statesPtr[T](this)
     start := hash.string(key) % this.capacity
     firstDeleted := this.capacity
-    i u64 = 0
-    while i < this.capacity:
+    for i u64 = 0 to this.capacity:
         idx := (start + i) % this.capacity
         if states[idx] == 1 && strings.compare(keys[idx], key):
-            release[T](this.cleanup, claim[T](values[idx]))
+            release[T](this.allocator, this.cleanup, claim[T](values[idx]))
             values[idx] = item
             ret
         elif states[idx] == 2 && firstDeleted == this.capacity:
@@ -199,7 +194,6 @@ HashMap[T].set(key str, item $T) !void:
             this.length = this.length + 1
             ret
         ..
-        i = i + 1
     ..
     if firstDeleted != this.capacity:
         fallbackKey str = try strings.copy(this.allocator, key)
@@ -219,7 +213,7 @@ HashMap[T].set(key str, item $T) !void:
 #   try users.delete("alice")
 HashMap[T].delete(key str) !void:
     value := try this.take(key)
-    release[T](this.cleanup, value)
+    release[T](this.allocator, this.cleanup, value)
 ..
 
 # Removes key and transfers its value to the caller without invoking cleanup.
@@ -256,21 +250,17 @@ HashMap[T].count() u64:
 destr HashMap[T].free() void:
     keys str* = keysPtr[T](this)
     states u8* = statesPtr[T](this)
-    i u64 = 0
-    while i < this.capacity:
+    for i u64 = 0 to this.capacity:
         if states[i] == 1:
             keys[i].free(this.allocator)
         ..
-        i = i + 1
     ..
     if this.cleanup != none:
         values T* = valuesPtr[T](this)
-        i = 0
-        while i < this.capacity:
+        for i u64 = 0 to this.capacity:
             if states[i] == 1:
-                this.cleanup(values[i])
+                this.cleanup(this.allocator, values[i])
             ..
-            i = i + 1
         ..
     ..
     this.allocator.free(this.storage)

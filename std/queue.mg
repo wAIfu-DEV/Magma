@@ -7,7 +7,7 @@ use "std:allocator" alc
 pub Queue[T](
     allocator alc.Allocator
     data     arr.Array[T]
-    cleanup   ($T) void
+    cleanup   (alc.Allocator, $T) void
 )
 
 # Creates an empty queue.
@@ -17,7 +17,7 @@ pub Queue[T](
 # @ownership Release with Queue.free.
 # @example
 #   pending := try queue.new[u64](a, none)
-pub new[T](a alc.Allocator, cleanup ($T) void) !$Queue[T]:
+pub new[T](a alc.Allocator, cleanup (alc.Allocator, $T) void) !$Queue[T]:
     data := try arr.new[T](a)
     q Queue[T]
     q.allocator = a

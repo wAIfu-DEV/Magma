@@ -10,8 +10,19 @@ use "std:cast" cast
 use "std:errors" errors
 
 # Opaque, naturally aligned storage. 128 bytes covers the supported pthread ABIs.
+Opaque128(
+    part0 u128
+    part1 u128
+    part2 u128
+    part3 u128
+    part4 u128
+    part5 u128
+    part6 u128
+    part7 u128
+)
+
 pub Mutex(
-    storage := array u64[16]
+    storage Opaque128
 )
 
 ext ext_pthread_mutex_init    pthread_mutex_init(mutex Mutex*, attributes ptr) c.int

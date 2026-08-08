@@ -22,7 +22,7 @@ fileExists(path str) bool:
 
 waitForChildStart() !void:
     attempts u64 = 0
-    while attempts < 100 && fileExists(readyFile) == false:
+    loop attempts < 100 && fileExists(readyFile) == false:
         time.sleep(20)
         attempts = attempts + 1
     ..

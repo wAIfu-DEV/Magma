@@ -1,7 +1,7 @@
 mod main
 main() void:
-    while true:
-        while true:
+    loop true:
+        loop true:
             break
         ..
         break

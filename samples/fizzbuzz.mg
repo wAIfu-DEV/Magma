@@ -6,7 +6,7 @@ use "../std/io.mg" io
 main() !void:
     n u64 = 1
 
-    while n <= 100:
+    loop n <= 100:
         if n % 15 == 0:
             io.writeLn("FizzBuzz")
         elif n % 3 == 0:

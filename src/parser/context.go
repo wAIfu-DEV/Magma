@@ -299,7 +299,9 @@ func parseLinkDecl(ctx *ParseCtx, tk t.Token, prune bool) error {
 	requirement := library.Repr
 	// Values that look like files are module-relative inputs passed directly to
 	// Clang. Bare logical names retain the portable -l<name> behavior.
-	if filepath.IsAbs(requirement) || strings.ContainsAny(requirement, `/\`) || filepath.Ext(requirement) != "" {
+	// A leading colon is the Clang/GNU ld exact-library-name form. Preserve it
+	// so it reaches emission as `-l:filename` rather than a relative file path.
+	if !strings.HasPrefix(requirement, ":") && (filepath.IsAbs(requirement) || strings.ContainsAny(requirement, `/\`) || filepath.Ext(requirement) != "") {
 		if !filepath.IsAbs(requirement) {
 			requirement = filepath.Join(filepath.Dir(ctx.Fctx.FilePath), requirement)
 		}

@@ -33,11 +33,24 @@ pub Builder(
 # @example
 #   output := try builder.new(a)
 pub new(a alc.Allocator) !$Builder:
+    ret try newWithCapacity(a, 8)
+..
+
+# Creates an empty builder using a for segment storage and copied strings.
+# Uses the provided chunkCapacity to set initial chunk capacity.
+# This will allocate n chunks that will be filled before reallocation.  
+# Note that appended string's sizes doesn't influence the count of allocations,
+# only the amount of strings appended influence allocation count.
+# @complexity O(1), excluding allocator cost
+# @ownership Release with Builder.free.
+# @example
+#   output := try builder.newWithCapacity(a, 8)
+pub newWithCapacity(a alc.Allocator, chunkCapacity u64) !$Builder:
     ret Builder(
         allocator=a,
-        segments=try a.allocT[Segment](8),
+        segments=try a.allocT[Segment](chunkCapacity),
         count=0,
-        capacity=8,
+        capacity=chunkCapacity,
         totalBytes=0,
     )
 ..
@@ -143,7 +156,7 @@ Builder.build() !$str:
     byteBuff := array u8[2]
     byteBuff[1] = 0
 
-    while i < this.count:
+    loop i < this.count:
         seg Segment = segments[i]
         s := seg.value
 
@@ -176,12 +189,10 @@ Builder.isEmpty() bool:
 
 Builder.releaseCopies() void:
     segments Segment* = this.segments
-    i u64 = 0
-    while i < this.count:
+    for i u64 = 0 to this.count:
         if (segments[i].flags & FLAG_OWNED) != 0:
             segments[i].value.free(this.allocator)
         ..
-        i = i + 1
     ..
 ..
 

@@ -75,16 +75,13 @@ decodedSizeFor(text str, urlSafe bool) !u64:
             padding = 2
         ..
     ..
-    i u64 = 0
-    while i < count - padding:
+    for i u64 = 0 to count - padding:
         ignored := try decodeValue(input[i], urlSafe)
-        i = i + 1
     ..
-    while i < count:
+    for i u64 = count - padding to count:
         if input[i] != 61:
             throw errors.invalidArgument("Base64 padding is misplaced")
         ..
-        i = i + 1
     ..
     size := try checked.uMul(count / 4, 3)
     ret try checked.uSub(size, padding)
@@ -106,7 +103,7 @@ encodeToKind(input u8[], output u8[], urlSafe bool) !u64:
     inputIndex u64 = 0
     outputIndex u64 = 0
     count := slices.count(input)
-    while inputIndex + 3 <= count:
+    loop inputIndex + 3 <= count:
         a := input[inputIndex]
         b := input[inputIndex + 1]
         c := input[inputIndex + 2]
@@ -152,7 +149,7 @@ decodeToKind(text str, output u8[], urlSafe bool) !u64:
     inputIndex u64 = 0
     outputIndex u64 = 0
     count := text.countBytes()
-    while inputIndex < count:
+    loop inputIndex < count:
         a := try decodeValue(input[inputIndex], urlSafe)
         b := try decodeValue(input[inputIndex + 1], urlSafe)
         thirdPadding := input[inputIndex + 2] == 61

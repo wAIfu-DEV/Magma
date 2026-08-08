@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -69,5 +70,30 @@ func TestDidOpenPublishesCompilerDiagnostics(t *testing.T) {
 		!bytes.Contains(output.Bytes(), []byte(`"version":7`)) ||
 		!bytes.Contains(output.Bytes(), []byte("unknown function")) {
 		t.Fatalf("unexpected LSP output: %s", got)
+	}
+}
+
+func TestDidOpenPublishesCompilerWarnings(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "warning.mg")
+	source := "mod warning\nleak(value $str) void:\n..\n"
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	uri := (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
+	params, err := json.Marshal(map[string]any{"textDocument": map[string]any{
+		"uri": uri, "text": source, "version": 3,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	s := &server{in: bufio.NewReader(nil), out: &output, stdRoot: testStdRoot(), documents: map[string]*document{}}
+	if err := s.handle(message{Method: "textDocument/didOpen", Params: params}); err != nil {
+		t.Fatal(err)
+	}
+	got := output.String()
+	if !strings.Contains(got, `"severity":2`) || !strings.Contains(got, "not consumed") {
+		t.Fatalf("compiler warning was not published: %s", got)
 	}
 }

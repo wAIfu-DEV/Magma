@@ -149,6 +149,12 @@ func substituteStmt(stmt t.NodeStatement, subst map[string]*t.NodeType) {
 		for _, s := range n.Body.Statements {
 			substituteStmt(s, subst)
 		}
+	case *t.NodeStmtFor:
+		substituteExpr(n.DeclExpr, subst)
+		substituteExpr(n.BoundExpr, subst)
+		for _, s := range n.Body.Statements {
+			substituteStmt(s, subst)
+		}
 	case *t.NodeStmtDefer:
 		if n.IsBody {
 			for _, s := range n.Body.Statements {

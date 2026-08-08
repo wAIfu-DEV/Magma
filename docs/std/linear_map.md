@@ -15,14 +15,14 @@ it can change iteration order.
 
 ## Type
 
-`LinearMap[T](allocator alc.Allocator, keys str*, values T*, cleanup ($T) void,
+`LinearMap[T](allocator alc.Allocator, keys str*, values T*, cleanup (alc.Allocator, $T) void,
 countValue u16, capacity u16)` owns parallel key/value allocations and uses
 `cleanup` for removed, replaced, or remaining values. Its capacity is limited
 to the `u16` range.
 
 ## API
 
-- `pub new[T](a alc.Allocator, cleanup ($T) void) !$LinearMap[T]` creates an empty map with an optional value cleanup callback.
+- `pub new[T](a alc.Allocator, cleanup (alc.Allocator, $T) void) !$LinearMap[T]` creates an empty map with an optional value cleanup callback that receives the map allocator.
 - `get(key str) !T` returns a value or an error when absent.
 - `set(key str, item $T) !void` takes a value, replacing an existing value or inserting it with an owned key copy.
 - `delete(key str) !void` removes an entry and frees its copied key.

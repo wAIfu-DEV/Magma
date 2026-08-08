@@ -2,11 +2,38 @@ package compilerpipeline
 
 import (
 	"Magma/src/shared"
+	"Magma/src/types"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestOwnershipWarningsJoinSharedDiagnostics(t *testing.T) {
+	parsed, _ := testProgram(t, "mod main\nleak(value $str) void:\n..\n")
+	specialized, err := Specialize(*parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked, err := Link(specialized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typed, err := CheckTypes(linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validated, err := ValidateLowering(typed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	CheckOwnership(validated)
+	warnings := parsed.State().Warnings
+	if len(warnings) != 1 || warnings[0].Severity != types.SeverityWarning ||
+		warnings[0].Stage != "ownership checking" || !strings.Contains(warnings[0].Message, "not consumed") {
+		t.Fatalf("ownership warnings were not collected: %#v", warnings)
+	}
+}
 
 func testProgram(t *testing.T, source string) (*ParsedProgram, string) {
 	t.Helper()

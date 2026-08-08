@@ -144,7 +144,7 @@ Value.borrowed() Value:
     ret out
 ..
 
-valueCleanup(val $Value) void:
+valueCleanup(a alc.Allocator, val $Value) void:
     if val.owned == false:
         ret
     ..
@@ -433,7 +433,7 @@ writeEscaped(w writer.Writer, value str) !void:
     escaped[2] = 48
     escaped[3] = 48
 
-    while i < bound:
+    loop i < bound:
         byte := strings.byteAt(value, i)
         if byte == 34:
             pair[1] = 34
@@ -535,15 +535,13 @@ Object.write(w writer.Writer, precision u64) !void:
     try w.writeAll("{")
     keys := this.entries.keysView()
     values := this.entries.valuesView()
-    i u64 = 0
-    while i < this.count():
+    for i u64 = 0 to this.count():
         if i != 0:
             try w.writeAll(",")
         ..
         try writeEscaped(w, keys[i])
         try w.writeAll(":")
         try writeValue(w, values[i], precision)
-        i = i + 1
     ..
     try w.writeAll("}")
 ..
@@ -555,13 +553,11 @@ Object.write(w writer.Writer, precision u64) !void:
 Array.write(w writer.Writer, precision u64) !void:
     try w.writeAll("[")
     values := this.values.view()
-    i u64 = 0
-    while i < this.count():
+    for i u64 = 0 to this.count():
         if i != 0:
             try w.writeAll(",")
         ..
         try writeValue(w, values[i], precision)
-        i = i + 1
     ..
     try w.writeAll("]")
 ..

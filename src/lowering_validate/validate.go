@@ -237,6 +237,22 @@ func namedTypeIs(node *t.NodeType, expected string) bool {
 	}
 }
 
+func resolvedIntegerType(node *t.NodeType) bool {
+	if node == nil || node.Throws {
+		return false
+	}
+	named, ok := node.KindNode.(*t.NodeTypeNamed)
+	if !ok {
+		return false
+	}
+	name, ok := named.NameNode.(*t.NodeNameSingle)
+	if !ok || len(named.GenericArgs) != 0 {
+		return false
+	}
+	descriptor, ok := magmatypes.NumberTypes[name.Name]
+	return ok && !descriptor.IsFloat
+}
+
 func variableValid(file *t.FileCtx, variable *t.NodeExprVarDef, context string) error {
 	if variable == nil || variable.Name == nil {
 		return invalid(file, nil, context+" has no variable definition")
@@ -469,6 +485,25 @@ func bodyValidAtLoopDepth(file *t.FileCtx, body *t.NodeBody, ownerReturn *t.Node
 			err = expressionValid(file, node.CondExpr)
 			if err == nil && !namedTypeIs(node.CondExpr.GetInferredType(), "bool") {
 				err = invalid(file, &node.Tk, "while condition does not have resolved type 'bool'")
+			}
+			if err == nil {
+				err = bodyValidAtLoopDepth(file, &node.Body, ownerReturn, loopDepth+1)
+			}
+		case *t.NodeStmtFor:
+			decl, ok := node.DeclExpr.(*t.NodeExprVarDefAssign)
+			if !ok || decl.VarDef == nil {
+				err = invalid(file, &node.Tk, "for loop has no initialized index declaration")
+			} else if err = expressionValid(file, node.DeclExpr); err == nil {
+				if !resolvedIntegerType(decl.VarDef.Type) {
+					err = invalid(file, &node.Tk, "for loop index does not have a resolved integer type")
+				} else if err = expressionValid(file, node.BoundExpr); err == nil {
+					boundType := node.BoundExpr.GetInferredType()
+					if !resolvedIntegerType(boundType) {
+						err = invalid(file, &node.Tk, "for loop bound does not have a resolved integer type")
+					} else if _, literal := node.BoundExpr.(*t.NodeExprLit); !literal && !sameResolvedType(decl.VarDef.Type, boundType) {
+						err = invalid(file, &node.Tk, "for loop index and bound types do not match")
+					}
+				}
 			}
 			if err == nil {
 				err = bodyValidAtLoopDepth(file, &node.Body, ownerReturn, loopDepth+1)

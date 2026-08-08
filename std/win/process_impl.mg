@@ -54,12 +54,10 @@ pub Process(
 )
 
 containsNull(value str) bool:
-    i u64 = 0
-    while i < value.countBytes():
+    for i u64 = 0 to value.countBytes():
         if strings.byteAt(value, i) == 0:
             ret true
         ..
-        i = i + 1
     ..
     ret false
 ..
@@ -70,13 +68,12 @@ appendQuoted(value str, out u8*, offset u64*) void:
     out[*offset] = 34
     *offset = *offset + 1
     slashes u64 = 0
-    i u64 = 0
-    while i < value.countBytes():
+    for i u64 = 0 to value.countBytes():
         byte u8 = strings.byteAt(value, i)
         if byte == 92:
             slashes = slashes + 1
         elif byte == 34:
-            while slashes > 0:
+            loop slashes > 0:
                 out[*offset] = 92
                 *offset = *offset + 1
                 out[*offset] = 92
@@ -88,7 +85,7 @@ appendQuoted(value str, out u8*, offset u64*) void:
             out[*offset] = 34
             *offset = *offset + 1
         else:
-            while slashes > 0:
+            loop slashes > 0:
                 out[*offset] = 92
                 *offset = *offset + 1
                 slashes = slashes - 1
@@ -96,9 +93,8 @@ appendQuoted(value str, out u8*, offset u64*) void:
             out[*offset] = byte
             *offset = *offset + 1
         ..
-        i = i + 1
     ..
-    while slashes > 0:
+    loop slashes > 0:
         out[*offset] = 92
         *offset = *offset + 1
         out[*offset] = 92
@@ -112,14 +108,12 @@ appendQuoted(value str, out u8*, offset u64*) void:
 commandLine(a allocator.Allocator, executable str, arguments str[]) !$str:
     count u64 = slices.count(arguments)
     total u64 = executable.countBytes()
-    i u64 = 0
-    while i < count:
+    for i u64 = 0 to count:
         n u64 = arguments[i].countBytes()
         if n > (0 - 1 - total):
             throw errors.wouldOverflow("process command line is too large")
         ..
         total = total + n
-        i = i + 1
     ..
     if total > ((0 - 1 - ((count + 1) * 3)) / 2):
         throw errors.wouldOverflow("process command line is too large")
@@ -128,12 +122,10 @@ commandLine(a allocator.Allocator, executable str, arguments str[]) !$str:
     data u8* = try a.alloc(capacity + 1)
     offset u64 = 0
     appendQuoted(executable, data, addrof offset)
-    i = 0
-    while i < count:
+    for i u64 = 0 to count:
         data[offset] = 32
         offset = offset + 1
         appendQuoted(arguments[i], data, addrof offset)
-        i = i + 1
     ..
     data[offset] = 0
     ret strings.fromPtrNoCopy(data, offset)
@@ -143,12 +135,10 @@ pub spawn(executable str, arguments str[]) !$Process:
     if executable.countBytes() == 0 || containsNull(executable):
         throw errors.invalidArgument("process executable is empty or contains a null byte")
     ..
-    i u64 = 0
-    while i < slices.count(arguments):
+    for i u64 = 0 to slices.count(arguments):
         if containsNull(arguments[i]):
             throw errors.invalidArgument("process argument contains a null byte")
         ..
-        i = i + 1
     ..
 
     a := heap.allocator()
@@ -178,17 +168,14 @@ pub spawn(executable str, arguments str[]) !$Process:
 environmentBlock(a allocator.Allocator, entries str[]) !$u16*:
     count := slices.count(entries)
     total u64 = 1
-    i u64 = 0
-    while i < count:
+    for i u64 = 0 to count:
         total = try checked.uAdd(total, try utf16.fromUtf8Size(entries[i]))
         total = try checked.uAdd(total, 1)
-        i = i + 1
     ..
     block := try a.allocT[u16](total)
     offset u64 = 0
     onerror a.free(block)
-    i = 0
-    while i < count:
+    for i u64 = 0 to count:
         encoded u16[] = try utf8.utf8To16(a, entries[i])
         units := slices.count(encoded)
         memory.copy(slices.toPtr(encoded), addrof block[offset], units * sizeof u16)
@@ -196,7 +183,6 @@ environmentBlock(a allocator.Allocator, entries str[]) !$u16*:
         offset = offset + units
         block[offset] = 0
         offset = offset + 1
-        i = i + 1
     ..
     block[offset] = 0
     ret block

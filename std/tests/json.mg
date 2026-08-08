@@ -153,7 +153,7 @@ pub main() !void:
     expected[19] = 55
     expected[20] = 93
     byteIndex u64 = 0
-    while byteIndex < 21:
+    loop byteIndex < 21:
         if strings.byteAt(escaped, byteIndex) != expected[byteIndex]:
             throw errors.failure("JSON string escaping changed")
         ..

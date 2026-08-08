@@ -159,7 +159,7 @@ extensionPattern(a allocator.Allocator, extensions str) !$str:
     defer out.free()
     start u64 = 0
     i u64 = 0
-    while i <= extensions.countBytes():
+    loop i <= extensions.countBytes():
         if i == extensions.countBytes() || strings.byteAt(extensions, i) == 44:
             if i > start:
                 if out.isEmpty() == false:
@@ -186,14 +186,11 @@ setFilters(a allocator.Allocator, dialog ptr, rawFilters ptr, count u64) !void:
     specs := try a.allocT[FilterSpec](count)
     names := try a.allocT[u16*](count)
     patterns := try a.allocT[u16*](count)
-    built u64 = 0
-    while built < count:
+    for built u64 = 0 to count:
         names[built] = none
         patterns[built] = none
-        built = built + 1
     ..
-    built = 0
-    while built < count:
+    for built u64 = 0 to count:
         nameUnits := try utf8.utf8To16NT(a, filters[built].name)
         pattern := try extensionPattern(a, filters[built].extensions)
         patternUnits := try utf8.utf8To16NT(a, pattern)
@@ -201,15 +198,12 @@ setFilters(a allocator.Allocator, dialog ptr, rawFilters ptr, count u64) !void:
         names[built] = slices.toPtr(nameUnits)
         patterns[built] = slices.toPtr(patternUnits)
         specs[built] = FilterSpec(name=names[built], pattern=patterns[built])
-        built = built + 1
     ..
     table := dialogTable(dialog)
     result := table.setFileTypes(dialog, cast.u64to32(count), specs)
-    i u64 = 0
-    while i < count:
+    for i u64 = 0 to count:
         a.free(names[i])
         a.free(patterns[i])
-        i = i + 1
     ..
     a.free(names)
     a.free(patterns)
@@ -274,7 +268,7 @@ selectionFromDialog(a allocator.Allocator, dialog ptr) !$str:
     ..
     defer ext_CoTaskMemFree(wide)
     count u64 = 0
-    while wide[count] != 0:
+    loop wide[count] != 0:
         count = count + 1
     ..
     path := try utf8.utf16to8(a, slices.fromPtr(wide, count))

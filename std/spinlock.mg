@@ -36,7 +36,7 @@ pub new() SpinLock:
 # @example
 #   guard.lock()
 SpinLock.lock() void:
-    while this.flag.load() == 0 || this.flag.exchange(0) == 0:
+    loop this.flag.load() == 0 || this.flag.exchange(0) == 0:
         impl_thread.yield()
     ..
 ..

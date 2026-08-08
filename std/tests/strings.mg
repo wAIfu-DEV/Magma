@@ -40,7 +40,7 @@ pub main() !void:
     unterminated u8* = try a.alloc(5)
     defer a.free(unterminated)
     i u64 = 0
-    while i < 5:
+    loop i < 5:
         unterminated[i] = 65
         i = i + 1
     ..

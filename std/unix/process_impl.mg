@@ -23,12 +23,10 @@ pub Process(
 )
 
 containsNull(value str) bool:
-    i u64 = 0
-    while i < value.countBytes():
+    for i u64 = 0 to value.countBytes():
         if strings.byteAt(value, i) == 0:
             ret true
         ..
-        i = i + 1
     ..
     ret false
 ..
@@ -44,10 +42,8 @@ decodeStatus(status i32) u32:
 
 freeArguments(argv u8**, count u64) void:
     a := heap.allocator()
-    i u64 = 0
-    while i < count:
+    for i u64 = 0 to count:
         a.free(argv[i])
-        i = i + 1
     ..
     a.free(argv)
 ..
@@ -57,12 +53,10 @@ pub spawn(executable str, arguments str[]) !$Process:
         throw errors.invalidArgument("process executable is empty or contains a null byte")
     ..
     count u64 = slices.count(arguments)
-    i u64 = 0
-    while i < count:
+    for i u64 = 0 to count:
         if containsNull(arguments[i]):
             throw errors.invalidArgument("process argument contains a null byte")
         ..
-        i = i + 1
     ..
 
     a := heap.allocator()
@@ -72,15 +66,13 @@ pub spawn(executable str, arguments str[]) !$Process:
     executableCopy u8* = try strings.toCstr(a, executable)
     argv[0] = executableCopy
     initialized = 1
-    i = 0
-    while i < count:
+    for i u64 = 0 to count:
         copied u8*, copyError error = strings.toCstr(a, arguments[i])
         if copyError.nok():
             throw copyError
         ..
         argv[i + 1] = copied
         initialized = initialized + 1
-        i = i + 1
     ..
     argv[count + 1] = none
 
@@ -108,22 +100,18 @@ pub spawnWithEnv(executable str, arguments str[], environment str[]) !$Process:
     executableCopy := try strings.toCstr(a, executable)
     argv[0] = executableCopy
     initialized = 1
-    i u64 = 0
-    while i < count:
+    for i u64 = 0 to count:
         argv[i + 1] = try strings.toCstr(a, arguments[i])
         initialized = initialized + 1
-        i = i + 1
     ..
     argv[count + 1] = none
     environmentCount := slices.count(environment)
     envp := try a.allocT[u8*](environmentCount + 1)
     envInitialized u64 = 0
     onerror freeArguments(envp, envInitialized)
-    i = 0
-    while i < environmentCount:
+    for i u64 = 0 to environmentCount:
         envp[i] = try strings.toCstr(a, environment[i])
         envInitialized = envInitialized + 1
-        i = i + 1
     ..
     envp[environmentCount] = none
     pid := ext_unix_fork()

@@ -50,7 +50,7 @@ or executables. `Magma.exe` therefore requires a working `clang.exe`; the
 compiler alone is not sufficient.
 
 Download an official Windows LLVM installer from the
-[LLVM release page](https://github.com/llvm/llvm-project/releases). Run the
+[LLVM release page](https://github.com/llvm/llvm-project/releases/latest). Run the
 installer and install LLVM in its conventional location:
 
 ```text

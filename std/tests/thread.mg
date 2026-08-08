@@ -13,7 +13,7 @@ pub main() !void:
     value u64 = 0
     t := try thread.new[ptr](worker, addrof value)
     finished bool = try t.isFinished()
-    while finished == false:
+    loop finished == false:
         thread.yield()
         finished = try t.isFinished()
     ..

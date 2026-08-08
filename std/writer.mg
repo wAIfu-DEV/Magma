@@ -40,7 +40,7 @@ constWriterWriteRemaining(cw ConstWriter*, bytes str, firstWritten u64) !u64:
     total u64 = firstWritten
     bound u64 = bytes.countBytes()
     base ptr = strings.toPtr(bytes)
-    while total < bound:
+    loop total < bound:
         remaining u64 = bound - total
         next ptr = cast.utop(cast.ptou(base) + total)
         written u64 = try cw.write(strings.fromPtrNoCopy(next, remaining))
@@ -126,7 +126,7 @@ Writer.writeAll(bytes str) !u64:
     bound u64 = bytes.countBytes()
     base ptr = strings.toPtr(bytes)
 
-    while total < bound:
+    loop total < bound:
         remaining u64 = bound - total
         next ptr = cast.utop(cast.ptou(base) + total)
         written u64 = try this.fn_write(this.impl, strings.fromPtrNoCopy(next, remaining))
@@ -199,7 +199,7 @@ Writer.writeInt64(num i64) !u64:
         n = cast.itou(0 - (num + 1)) + 1
     ..
 
-    while n != 0:
+    loop n != 0:
         idx = idx - 1
         d u16 = cast.u64to16(n % 10)
         buf[idx] = digitToChar(d)
@@ -234,7 +234,7 @@ Writer.writeUint64(num u64) !u64:
         ret try this.writeAll("0")
     ..
 
-    while n != 0:
+    loop n != 0:
         idx = idx - 1
         d u16 = cast.u64to16(n % 10)
         buf[idx] = digitToChar(d)
@@ -306,10 +306,8 @@ Writer.writeFloat64(flt f64, precision u64) !u64:
     fracPart f64 = fltCpy - cast.utof(intPart)
 
     scale f64 = 1.0
-    i u64 = 0
-    while i < precision:
+    for i u64 = 0 to precision:
         scale = scale * 10.0
-        i = i + 1
     ..
 
     fracInt u64 = 0
@@ -323,13 +321,11 @@ Writer.writeFloat64(flt f64, precision u64) !u64:
     ..
 
     if precision > 0:
-        i = 0
-        while i < precision:
+        for i u64 = 0 to precision:
             idx = idx - 1
             d u64 = fracInt % 10
             buf[idx] = digitToChar(cast.u64to16(d))
             fracInt = fracInt / 10
-            i = i + 1
         ..
 
         idx = idx - 1
@@ -341,7 +337,7 @@ Writer.writeFloat64(flt f64, precision u64) !u64:
         buf[idx] = strings.byteAt("0", 0)
     else:
         n u64 = intPart
-        while n != 0:
+        loop n != 0:
             idx = idx - 1
             d u64 = n % 10
             buf[idx] = digitToChar(cast.u64to16(d))

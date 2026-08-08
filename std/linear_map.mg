@@ -14,18 +14,18 @@ pub LinearMap[T](
     allocator alc.Allocator
     keys str*
     values T*
-    cleanup ($T) void
+    cleanup (alc.Allocator, $T) void
     countValue u16
     capacity u16
 )
 
-release[T](cleanup ($T) void, value $T) void:
+release[T](a alc.Allocator, cleanup (alc.Allocator, $T) void, value $T) void:
     if cleanup == none:
         abandoned := array T[1]
         abandoned[0] = value
         ret
     ..
-    cleanup(value)
+    cleanup(a, value)
 ..
 
 claim[T](claimed $T) $T:
@@ -37,7 +37,7 @@ claim[T](claimed $T) $T:
 # @ownership The map owns inserted values and must be freed.
 # @example
 #   map := try linear_map.new[Value](a, freeValue)
-pub new[T](a alc.Allocator, cleanup ($T) void) !$LinearMap[T]:
+pub new[T](a alc.Allocator, cleanup (alc.Allocator, $T) void) !$LinearMap[T]:
     keys str* = try a.allocT[str](8)
     onerror a.free(keys)
     values T* = try a.allocT[T](8)
@@ -59,12 +59,10 @@ pub new[T](a alc.Allocator, cleanup ($T) void) !$LinearMap[T]:
 LinearMap[T].indexOf(key str) !u64:
     bound := cast.u16to64(this.countValue)
     keys str* = this.keys
-    i u64 = 0
-    while i < bound:
+    for i u64 = 0 to bound:
         if stg.compare(key, keys[i]):
             ret i
         ..
-        i = i + 1
     ..
     throw err.failure("key not found in linear map")
 ..
@@ -103,7 +101,7 @@ LinearMap[T].grow() !void:
 #   try map.delete("temporary")
 LinearMap[T].delete(key str) !void:
     value := try this.take(key)
-    release[T](this.cleanup, value)
+    release[T](this.allocator, this.cleanup, value)
 ..
 
 # Removes key and transfers its value to the caller without cleanup.
@@ -169,11 +167,11 @@ LinearMap[T].valuesView() T[]:
 # @example
 #   try map.set("name", value)
 LinearMap[T].set(key str, item $T) !void:
-    onerror release[T](this.cleanup, item)
+    onerror release[T](this.allocator, this.cleanup, item)
     idx u64, e error = this.indexOf(key)
     if e.ok():
         existingValues T* = this.values
-        release[T](this.cleanup, claim[T](existingValues[idx]))
+        release[T](this.allocator, this.cleanup, claim[T](existingValues[idx]))
         existingValues[idx] = item
         ret
     ..
@@ -199,19 +197,15 @@ growForInsert[T](map LinearMap[T]*) !bool:
 # @example
 #   map.free()
 destr LinearMap[T].free() void:
-    i u64 = 0
     bound := cast.u16to64(this.countValue)
     keys str* = this.keys
     values T* = this.values
-    while i < bound:
+    for i u64 = 0 to bound:
         keys[i].free(this.allocator)
-        i = i + 1
     ..
     if this.cleanup != none:
-        i = 0
-        while i < bound:
-            this.cleanup(values[i])
-            i = i + 1
+        for i u64 = 0 to bound:
+            this.cleanup(this.allocator, values[i])
         ..
     ..
     this.allocator.free(this.keys)

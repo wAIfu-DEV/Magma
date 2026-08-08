@@ -57,6 +57,10 @@ func (m *monoCtx) resolveCandidateStmt(module string, gl *t.NodeGlobal, stmt t.N
 	case *t.NodeStmtWhile:
 		node.CondExpr = m.resolveCandidateExpr(module, gl, node.CondExpr)
 		m.resolveCandidateBody(module, gl, &node.Body)
+	case *t.NodeStmtFor:
+		node.DeclExpr = m.resolveCandidateExpr(module, gl, node.DeclExpr)
+		node.BoundExpr = m.resolveCandidateExpr(module, gl, node.BoundExpr)
+		m.resolveCandidateBody(module, gl, &node.Body)
 	case *t.NodeStmtDefer:
 		if node.IsBody {
 			m.resolveCandidateBody(module, gl, &node.Body)

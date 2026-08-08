@@ -36,14 +36,15 @@ type docIndex struct {
 	// completionVisible distinguishes exported module declarations from members.
 	// Members are part of their receiver's public surface even though Magma does
 	// not spell `pub` on each method or field.
-	completionVisible   map[string]bool
-	completionKinds     map[string]int
-	completionBindings  []completionBinding
-	memberTypes         map[string]*types.NodeType
-	expressionSymbols   map[string]map[string]completionItem
-	functionReturns     map[string]*types.NodeType
-	primitiveModules    map[string]string
-	publicModuleAliases map[string]map[string]string
+	completionVisible     map[string]bool
+	completionKinds       map[string]int
+	completionDestructors map[string]bool
+	completionBindings    []completionBinding
+	memberTypes           map[string]*types.NodeType
+	expressionSymbols     map[string]map[string]completionItem
+	functionReturns       map[string]*types.NodeType
+	primitiveModules      map[string]string
+	publicModuleAliases   map[string]map[string]string
 }
 
 // completionBinding is captured from the source AST before monomorphization.
@@ -58,7 +59,7 @@ type completionBinding struct {
 }
 
 func buildDocIndex(state *types.SharedState) *docIndex {
-	index := &docIndex{byNode: map[any]string{}, modules: map[string]string{}, symbols: map[string]string{}, hoverSymbols: map[string]string{}, hoverByName: map[string]string{}, valueHovers: map[string]string{}, completionVisible: map[string]bool{}, completionKinds: map[string]int{}, memberTypes: map[string]*types.NodeType{}, expressionSymbols: map[string]map[string]completionItem{}, functionReturns: map[string]*types.NodeType{}, primitiveModules: map[string]string{}, publicModuleAliases: map[string]map[string]string{}}
+	index := &docIndex{byNode: map[any]string{}, modules: map[string]string{}, symbols: map[string]string{}, hoverSymbols: map[string]string{}, hoverByName: map[string]string{}, valueHovers: map[string]string{}, completionVisible: map[string]bool{}, completionKinds: map[string]int{}, completionDestructors: map[string]bool{}, memberTypes: map[string]*types.NodeType{}, expressionSymbols: map[string]map[string]completionItem{}, functionReturns: map[string]*types.NodeType{}, primitiveModules: map[string]string{}, publicModuleAliases: map[string]map[string]string{}}
 	for _, file := range state.Files {
 		if file == nil || file.GlNode == nil {
 			continue
@@ -87,7 +88,13 @@ func buildDocIndex(state *types.SharedState) *docIndex {
 				docs := index.add(file, name, nameLine(node.Class.NameNode), node, byLine)
 				index.addHover(file.PackageName, name, joinHover(code(formatFunction(node)), docs))
 				index.completionVisible[file.PackageName+"\x00"+name] = node.IsPublic || strings.Contains(name, ".")
-				index.completionKinds[file.PackageName+"\x00"+name] = 3
+				kind := 3 // CompletionItemKind.Function
+				if strings.Contains(name, ".") {
+					kind = 2 // CompletionItemKind.Method
+				}
+				key := file.PackageName + "\x00" + name
+				index.completionKinds[key] = kind
+				index.completionDestructors[key] = node.IsDestructor
 				index.functionReturns[file.PackageName+"\x00"+name] = node.ReturnType
 				if !strings.Contains(name, ".") {
 					index.addExpressionSymbol(file.PackageName, completionItem{Label: name, Kind: 3, Detail: formatFunction(node), Documentation: markdownContent(index.hoverSymbols[file.PackageName+"\x00"+name])})
@@ -115,6 +122,7 @@ func buildDocIndex(state *types.SharedState) *docIndex {
 				text := index.add(file, name, nameLine(node.Class.NameNode), node, byLine)
 				index.addHover(file.PackageName, name, joinHover(code("struct "+name), text))
 				index.completionVisible[file.PackageName+"\x00"+name] = node.IsPublic
+				index.completionKinds[file.PackageName+"\x00"+name] = 22 // CompletionItemKind.Struct
 				for _, field := range node.Class.ArgsNode.Args {
 					key := file.PackageName + "\x00" + name + "." + field.Name
 					index.hoverSymbols[key] = code(field.Name + " " + formatType(field.TypeNode))

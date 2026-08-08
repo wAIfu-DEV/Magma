@@ -64,7 +64,7 @@ pub write(handle ptr, bytes str) !u64:
    p ptr = strings.toPtr(bytes)
    total u64 = 0
 
-   while total < bound:
+   loop total < bound:
       toWrite u32 = 0
       if (bound - total) > 0xFFFFFFFF:
          toWrite = 0xFFFFFFFF
@@ -129,7 +129,7 @@ pub read(handle ptr, buff u8[], n u64) !u64:
 
    total u64 = 0
 
-   while total < bound:
+   loop total < bound:
       toRead u32 = 0
       if (bound - total) > 0xFFFFFFFF:
          toRead = 0xFFFFFFFF

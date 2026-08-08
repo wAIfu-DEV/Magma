@@ -4,6 +4,7 @@ mod process
 use "std:allocator" allocator
 use "std:future" future
 use "std:thread_pool" thread_pool
+use "std:context" ctx
 
 @platform("windows")
 use "std:win/process_impl" impl_process
@@ -92,8 +93,7 @@ runExecTask(task SpawnTask*) !u32:
 # @ownership The future must be awaited or freed according to the future API.
 # @example
 #   pending := try process.execAsync(pool, a, "tool", arguments)
-pub execAsync(pool thread_pool.ThreadPool, a allocator.Allocator, executable str, arguments str[]) !$future.Future[u32]:
+pub execAsync(c ctx.Ctx, executable str, arguments str[]) !$future.Future[u32]:
     task := SpawnTask(executable=executable, arguments=arguments)
-    scheduler := pool.executor()
-    ret try future.new[u32, SpawnTask](a, scheduler, runExecTask, task)
+    ret try future.new[u32, SpawnTask](c.allocator, c.executor, runExecTask, task)
 ..

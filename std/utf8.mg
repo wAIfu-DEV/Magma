@@ -54,11 +54,9 @@ Decoder.appendPending(byte u8) void:
 
 Decoder.emitPending(output u32[], written u64*) !void:
     bytes := array u8[4]
-    i u64 = 0
-    while i < cast.u8to64(this.pendingCount):
+    for i u64 = 0 to cast.u8to64(this.pendingCount):
         shift u32 = cast.u64to32(i * 8)
         bytes[i] = u32to8((this.pending >> shift) & 0xFF)
-        i = i + 1
     ..
     view u8[] = slices.fromPtr(slices.toPtr(bytes), cast.u8to64(this.pendingCount))
     cp, e := decode(view)
@@ -80,9 +78,9 @@ pub Decoder.push(input u8[], output u32[]) !DecodeResult:
     inputCount := slices.count(input)
     outputCount := slices.count(output)
 
-    while true:
+    loop true:
         if this.pendingCount != 0:
-            while this.pendingCount < this.pendingWidth && consumed < inputCount:
+            loop this.pendingCount < this.pendingWidth && consumed < inputCount:
                 this.appendPending(input[consumed])
                 consumed = consumed + 1
             ..
@@ -107,7 +105,7 @@ pub Decoder.push(input u8[], output u32[]) !DecodeResult:
             throw errors.failure("invalid UTF-8 leading byte")
         ..
         this.pendingWidth = width
-        while this.pendingCount < width && consumed < inputCount:
+        loop this.pendingCount < width && consumed < inputCount:
             this.appendPending(input[consumed])
             consumed = consumed + 1
         ..
@@ -240,16 +238,14 @@ decodeFirst(start u8*, end u8*) Codepoint:
     ..
 
     cont u8 = 0
-    i u64 = 1
+    for i u64 = 1 to cast.u8to64(width):
 
-    while i < width:
         cont = start[i]
 
         if (cont & 192) != 128:
             ret outCp
         ..
         codepoint = (codepoint << 6) | u8to32(cont & 63)
-        i = i + 1
     ..
 
     # Validate against overlong encodings
@@ -306,7 +302,7 @@ pub decode(bytes u8[]) !Codepoint:
 # @complexity O(N)
 pub validate(s str) bool:
     it := iterator(s)
-    while it.hasData():
+    loop it.hasData():
         cp, e := it.next()
         if e.nok():
             ret false
@@ -321,7 +317,7 @@ utf8to16size(s str) !u64:
     it Utf8Iterator = iterator(s)
     total u64 = 0
 
-    while it.hasData():
+    loop it.hasData():
         cp Codepoint = try it.next()
         v u32 = cp.value
 
@@ -355,7 +351,7 @@ pub utf8To16(a alc.Allocator, s str) !$u16[]:
     onerror a.free(outPtr)
 
     i u64 = 0
-    while it.hasData():
+    loop it.hasData():
         cp Codepoint = try it.next()
         v u32 = cp.value
 
@@ -400,7 +396,7 @@ pub utf8To16NT(a alc.Allocator, s str) !$u16[]:
     outPtr[elemCount] = 0
 
     i u64 = 0
-    while it.hasData():
+    loop it.hasData():
         cp Codepoint = try it.next()
         v u32 = cp.value
 
@@ -489,7 +485,7 @@ pub utf16to8size(in u16[]) !u64:
     totalBytes u64 = 0
     i u64 = 0
 
-    while i < n:
+    loop i < n:
         w1 u16 = in[i]
         i = i + 1
 
@@ -607,11 +603,12 @@ pub utf16to8(a alc.Allocator, in u16[]) !$str:
 
     result str = try strings.alloc(a, outSize)
     onerror result.free(a)
+    
     outPtr u8* = strings.toPtr(result)
     writePtr u8* = outPtr
     i u64 = 0
 
-    while i < n:
+    loop i < n:
         writeSize u64 = try utf16to8iter(in, writePtr, addrof i, n)
         writePtr = cast.utop(cast.ptou(writePtr) + writeSize)
     ..
@@ -633,7 +630,7 @@ pub countCodepoints(s str) !u64:
     cnt u64 = 0
     it Utf8Iterator = iterator(s)
 
-    while it.hasData():
+    loop it.hasData():
         try it.next()
         cnt = cnt + 1
     ..

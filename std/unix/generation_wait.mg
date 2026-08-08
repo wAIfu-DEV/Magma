@@ -40,10 +40,8 @@ pub wakeOne(waiter Wait*, generation u32*) void:
 
 pub wakeAll(waiter Wait*, generation u32*, count u64) void:
     advance(generation)
-    i u64 = 0
-    while i < count:
+    for i u64 = 0 to count:
         waiter.wake.notify()
-        i = i + 1
     ..
 ..
 

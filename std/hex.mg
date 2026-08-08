@@ -46,11 +46,9 @@ encodeToCase(input u8[], output u8[], uppercase bool) !u64:
     if slices.count(output) < needed:
         throw errors.invalidArgument("hexadecimal output buffer is too small")
     ..
-    i u64 = 0
-    while i < slices.count(input):
+    for i u64 = 0 to slices.count(input):
         output[i * 2] = digit(input[i] >> 4, uppercase)
         output[i * 2 + 1] = digit(input[i] & 0x0F, uppercase)
-        i = i + 1
     ..
     ret needed
 ..
@@ -69,12 +67,10 @@ pub decodeTo(text str, output u8[]) !u64:
         throw errors.invalidArgument("hexadecimal output buffer is too small")
     ..
     input := strings.toPtr(text)
-    i u64 = 0
-    while i < needed:
+    for i u64 = 0 to needed:
         high := try decodeNibble(input[i * 2])
         low := try decodeNibble(input[i * 2 + 1])
         output[i] = (high << 4) | low
-        i = i + 1
     ..
     ret needed
 ..

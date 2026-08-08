@@ -85,6 +85,8 @@ const (
 	KwDestructor
 	KwConst
 	KwAlias
+	KwFor
+	KwTo
 )
 
 var KwTypeToRepr []string = []string{
@@ -119,7 +121,7 @@ var KwTypeToRepr []string = []string{
 	KwTrue:       "true",
 	KwFalse:      "false",
 	KwNoneLit:    "none",
-	KwWhile:      "while",
+	KwWhile:      "loop",
 	KwCmpEq:      "==",
 	KwCmpNeq:     "!=",
 	KwTry:        "try",
@@ -148,6 +150,8 @@ var KwTypeToRepr []string = []string{
 	KwDestructor: "destr",
 	KwConst:      "const",
 	KwAlias:      "alias",
+	KwFor:        "for",
+	KwTo:         "to",
 }
 
 var KwReprToType map[string]KwType = map[string]KwType{
@@ -182,7 +186,7 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"true":     KwTrue,
 	"false":    KwFalse,
 	"none":     KwNoneLit,
-	"while":    KwWhile,
+	"loop":     KwWhile,
 	"==":       KwCmpEq,
 	"!=":       KwCmpNeq,
 	"try":      KwTry,
@@ -211,6 +215,7 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"destr":    KwDestructor,
 	"const":    KwConst,
 	"alias":    KwAlias,
+	"for":      KwFor,
 }
 
 type Token struct {

@@ -20,7 +20,7 @@ pub main() !void:
     entries := snapshot.view()
     found bool = false
     i u64 = 0
-    while i < entries.count():
+    loop i < entries.count():
         if strings.compare(entries[i], "MAGMA_STDLIB_ENV_TEST_7C3A=hello"):
             found = true
         ..

@@ -29,13 +29,13 @@ in the array.
 ## Methods
 
 - `count() u64` returns the logical element count.
-- `clearShrink(a alc.Allocator, cleanup ($T) void) !void` empties the array and returns it to its initial allocation.
-- `clearKeep(a alc.Allocator, cleanup ($T) void) !void` empties the array while retaining capacity.
-- `resize(a alc.Allocator, usable u64, padLeft u64, padRight u64, cleanup ($T) void) !void` replaces the allocation, preserves elements that fit, and cleans up discarded values.
+- `clearShrink(a alc.Allocator, cleanup (alc.Allocator, $T) void) !void` empties the array and returns it to its initial allocation.
+- `clearKeep(a alc.Allocator, cleanup (alc.Allocator, $T) void) !void` empties the array while retaining capacity.
+- `resize(a alc.Allocator, usable u64, padLeft u64, padRight u64, cleanup (alc.Allocator, $T) void) !void` replaces the allocation, preserves elements that fit, and cleans up discarded values.
 - `view() T[]` returns a borrowed slice of current elements. Push, pop, resize, clear, or free may invalidate it.
-- `get(index u64) !T`, `take(index u64) !$T`, and `set(index u64, value $T, cleanup ($T) void) !void` access, remove, or replace indexed elements.
+- `get(index u64) !T`, `take(index u64) !$T`, and `set(a alc.Allocator, index u64, value $T, cleanup (alc.Allocator, $T) void) !void` access, remove, or replace indexed elements.
 - `expandRight(a alc.Allocator) !u64` and `expandLeft(a alc.Allocator) !void` are growth primitives used by pushes.
 - `popRight(a alc.Allocator) !$T` / `popLeft(a alc.Allocator) !$T` remove and transfer an end element; an empty array produces `wouldOverflow`.
 - `pushRight(a alc.Allocator, item $T) !void` / `pushLeft(a alc.Allocator, item $T) !void` take and add an end element.
-- `free(a alc.Allocator, cleanup ($T) void) void` is the array's `destr` method, cleans up remaining elements, and releases storage.
+- `free(a alc.Allocator, cleanup (alc.Allocator, $T) void) void` is the array's `destr` method, cleans up remaining elements, and releases storage.
 - `iterator() iter.Iterator[T]` returns an iterator over the current values.

@@ -4,6 +4,7 @@ import (
 	"Magma/src/comp_err"
 	t "Magma/src/types"
 	"fmt"
+	"strings"
 )
 
 func ctIfStmt(c *ctx, ifStmt *t.NodeStmtIf) error {
@@ -49,7 +50,7 @@ func ctWhileStmt(c *ctx, whileStmt *t.NodeStmtWhile) error {
 	isBool := isBoolType(infType)
 
 	if !isBool {
-		return comp_err.CompilationErrorToken(c.FileCtx, &whileStmt.Tk, fmt.Sprintf("while condition must have type 'bool', but got '%s'", flattenType(infType)), "")
+		return comp_err.CompilationErrorToken(c.FileCtx, &whileStmt.Tk, fmt.Sprintf("loop condition must have type 'bool', but got '%s'", flattenType(infType)), "")
 	}
 
 	c.LoopDepth++
@@ -59,6 +60,42 @@ func ctWhileStmt(c *ctx, whileStmt *t.NodeStmtWhile) error {
 		return e
 	}
 	return nil
+}
+
+func ctForStmt(c *ctx, forStmt *t.NodeStmtFor) error {
+	decl, ok := forStmt.DeclExpr.(*t.NodeExprVarDefAssign)
+	if !ok || decl.VarDef == nil {
+		return comp_err.CompilationErrorToken(c.FileCtx, &forStmt.Tk, "for loop index must be an initialized variable declaration", "")
+	}
+	if e := ctExpr(c, forStmt.DeclExpr); e != nil {
+		return e
+	}
+	if literal, ok := decl.AssignExpr.(*t.NodeExprLit); ok && strings.Contains(literal.Value, ".") {
+		return comp_err.CompilationErrorToken(c.FileCtx, &forStmt.Tk, "for loop index must have an integer type, but got a floating-point initializer", "floating-point loop indexes are not supported")
+	}
+	indexType := decl.VarDef.Type
+	if !isIntegerType(indexType) {
+		return comp_err.CompilationErrorToken(c.FileCtx, &forStmt.Tk, fmt.Sprintf("for loop index must have an integer type, but got '%s'", flattenType(indexType)), "floating-point loop indexes are not supported")
+	}
+	if e := ctExprWithUsage(c, forStmt.BoundExpr, true); e != nil {
+		return e
+	}
+	if literal, ok := forStmt.BoundExpr.(*t.NodeExprLit); ok && strings.Contains(literal.Value, ".") {
+		return comp_err.CompilationErrorToken(c.FileCtx, &forStmt.Tk, "for loop bound must have an integer type, but got a floating-point literal", "")
+	}
+	boundType := forStmt.BoundExpr.GetInferredType()
+	if !isIntegerType(boundType) {
+		return comp_err.CompilationErrorToken(c.FileCtx, &forStmt.Tk, fmt.Sprintf("for loop bound must have an integer type, but got '%s'", flattenType(boundType)), "")
+	}
+	_, literalBound := forStmt.BoundExpr.(*t.NodeExprLit)
+	if !sameType(indexType, boundType) && !literalBound {
+		return comp_err.CompilationErrorToken(c.FileCtx, &forStmt.Tk, fmt.Sprintf("for loop bound must have type '%s', but got '%s'", flattenType(indexType), flattenType(boundType)), "the index and bound must use the same integer type")
+	}
+
+	c.LoopDepth++
+	e := ctBody(c, &forStmt.Body)
+	c.LoopDepth--
+	return e
 }
 func ctThrow(c *ctx, throw *t.NodeStmtThrow) error {
 	if c.CurrentTypeFunc != nil && (c.CurrentTypeFunc.ReturnType == nil || !c.CurrentTypeFunc.ReturnType.Throws) {
@@ -151,13 +188,15 @@ func ctBody(c *ctx, bdy *t.NodeBody) error {
 			e = ctIfStmt(c, n)
 		case *t.NodeStmtWhile:
 			e = ctWhileStmt(c, n)
+		case *t.NodeStmtFor:
+			e = ctForStmt(c, n)
 		case *t.NodeStmtBreak:
 			if c.LoopDepth == 0 {
-				e = comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, "cannot use 'break' outside a loop", "place 'break' inside a while loop")
+				e = comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, "cannot use 'break' outside a loop", "place 'break' inside a loop")
 			}
 		case *t.NodeStmtContinue:
 			if c.LoopDepth == 0 {
-				e = comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, "cannot use 'continue' outside a loop", "place 'continue' inside a while loop")
+				e = comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, "cannot use 'continue' outside a loop", "place 'continue' inside a loop")
 			}
 		case *t.NodeStmtDefer:
 			e = ctDefer(c, n)

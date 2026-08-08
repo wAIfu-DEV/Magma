@@ -80,7 +80,7 @@ pub uPow(base u64, exponent u64) !u64:
     result u64 = 1
     factor u64 = base
     remaining u64 = exponent
-    while remaining != 0:
+    loop remaining != 0:
         if (remaining & 1) != 0:
             result = try uMul(result, factor)
         ..
@@ -148,10 +148,8 @@ pub iShl(value i64, amount u64) !i64:
         throw errors.invalidArgument("shift count must be below 64")
     ..
     result i64 = value
-    i u64 = 0
-    while i < amount:
+    for i u64 = 0 to amount:
         result = try iAdd(result, result)
-        i = i + 1
     ..
     ret result
 ..
@@ -160,7 +158,7 @@ pub iPow(base i64, exponent u64) !i64:
     result i64 = 1
     factor i64 = base
     remaining u64 = exponent
-    while remaining != 0:
+    loop remaining != 0:
         if (remaining & 1) != 0:
             result = try iMul(result, factor)
         ..
@@ -216,7 +214,7 @@ pub u128Pow(base u128, exponent u64) !u128:
     result u128 = 1
     factor u128 = base
     remaining u64 = exponent
-    while remaining != 0:
+    loop remaining != 0:
         if (remaining & 1) != 0:
             result = try u128Mul(result, factor)
         ..
@@ -284,10 +282,8 @@ pub i128Shl(value i128, amount u64) !i128:
         throw errors.invalidArgument("shift count must be below 128")
     ..
     result i128 = value
-    i u64 = 0
-    while i < amount:
+    for i u64 = 0 to amount:
         result = try i128Add(result, result)
-        i = i + 1
     ..
     ret result
 ..
@@ -296,7 +292,7 @@ pub i128Pow(base i128, exponent u64) !i128:
     result i128 = 1
     factor i128 = base
     remaining u64 = exponent
-    while remaining != 0:
+    loop remaining != 0:
         if (remaining & 1) != 0:
             result = try i128Mul(result, factor)
         ..

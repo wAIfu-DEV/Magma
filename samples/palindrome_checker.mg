@@ -25,7 +25,7 @@ main() !void:
     palindrome bool = true
     i u64 = 0
 
-    while i < count / 2:
+    loop i < count / 2:
         if strings.byteAt(word, i) != strings.byteAt(word, count - i - 1):
             palindrome = false
             break

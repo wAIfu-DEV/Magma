@@ -53,11 +53,11 @@ pub isAbsolute(path str) bool:
 pub base(a allocator.Allocator, path str) !$str:
     n := path.countBytes()
     end := n
-    while end > 0 && isSeparator(strings.byteAt(path, end - 1)):
+    loop end > 0 && isSeparator(strings.byteAt(path, end - 1)):
         end = end - 1
     ..
     start := end
-    while start > 0 && isSeparator(strings.byteAt(path, start - 1)) == false:
+    loop start > 0 && isSeparator(strings.byteAt(path, start - 1)) == false:
         start = start - 1
     ..
     p := cast.utop(cast.ptou(strings.toPtr(path)) + start)
@@ -78,7 +78,7 @@ pub extension(a allocator.Allocator, path str) !$str:
     defer b.free(a)
     n := b.countBytes()
     i := n
-    while i > 0:
+    loop i > 0:
         i = i - 1
         if strings.byteAt(b, i) == 46:
             p := cast.utop(cast.ptou(strings.toPtr(b)) + i)
@@ -102,8 +102,7 @@ borrowRange(value str, start u64, end u64) str:
 pub join(a allocator.Allocator, parts str[]) !$str:
     out := try builder.new(a)
     defer out.free()
-    i u64 = 0
-    while i < parts.count():
+    for i u64 = 0 to parts.count():
         part := parts[i]
         if part.countBytes() > 0:
             if out.isEmpty() == false && isAbsolute(part) == false:
@@ -113,7 +112,6 @@ pub join(a allocator.Allocator, parts str[]) !$str:
             ..
             try out.appendBorrowed(part)
         ..
-        i = i + 1
     ..
     combined := try out.build()
     defer combined.free(a)
@@ -133,12 +131,12 @@ pub normalize(a allocator.Allocator, value str) !$str:
         prefixEnd = 2
     ..
     i := prefixEnd
-    while i < n && isSeparator(strings.byteAt(value, i)):
+    loop i < n && isSeparator(strings.byteAt(value, i)):
         i = i + 1
     ..
-    while i < n:
+    loop i < n:
         start := i
-        while i < n && isSeparator(strings.byteAt(value, i)) == false:
+        loop i < n && isSeparator(strings.byteAt(value, i)) == false:
             i = i + 1
         ..
         component := borrowRange(value, start, i)
@@ -154,7 +152,7 @@ pub normalize(a allocator.Allocator, value str) !$str:
                 try components.pushRight(a, Component(value=component))
             ..
         ..
-        while i < n && isSeparator(strings.byteAt(value, i)):
+        loop i < n && isSeparator(strings.byteAt(value, i)):
             i = i + 1
         ..
     ..
@@ -171,13 +169,11 @@ pub normalize(a allocator.Allocator, value str) !$str:
         ..
     ..
     items := components.view()
-    j u64 = 0
-    while j < items.count():
+    for j u64 = 0 to items.count():
         if j > 0:
             try out.addByte(separator())
         ..
         try out.appendBorrowed(items[j].value)
-        j = j + 1
     ..
     if out.isEmpty():
         ret try strings.copy(a, ".")
@@ -194,13 +190,13 @@ pub parent(a allocator.Allocator, value str) !$str:
         ret try strings.copy(a, normalized)
     ..
     end := n
-    while end > 0 && isSeparator(strings.byteAt(normalized, end - 1)):
+    loop end > 0 && isSeparator(strings.byteAt(normalized, end - 1)):
         end = end - 1
     ..
-    while end > 0 && isSeparator(strings.byteAt(normalized, end - 1)) == false:
+    loop end > 0 && isSeparator(strings.byteAt(normalized, end - 1)) == false:
         end = end - 1
     ..
-    while end > 1 && isSeparator(strings.byteAt(normalized, end - 1)):
+    loop end > 1 && isSeparator(strings.byteAt(normalized, end - 1)):
         end = end - 1
     ..
     if end == 0:
@@ -215,7 +211,7 @@ pub stem(a allocator.Allocator, value str) !$str:
     defer b.free(a)
     n := b.countBytes()
     i := n
-    while i > 0:
+    loop i > 0:
         i = i - 1
         if strings.byteAt(b, i) == 46:
             ret try strings.substring(a, b, 0, i)

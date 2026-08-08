@@ -59,16 +59,14 @@ Thread.isFinished() !bool:
 pub joinAll(threads Thread[]) !void:
     firstError error = errors.ok()
     base Thread* = slices.toPtr(threads)
-    i u64 = 0
+    for i u64 = 0 to slices.count(threads):
     
-    while i < slices.count(threads):
         implPtr ptr = cast.utop(cast.ptou(base) + (i * sizeof Thread))
         joined bool, joinError error = impl_thread.join(implPtr)
 
         if joinError.nok() && firstError.ok():
             firstError = joinError
         ..
-        i = i + 1
     ..
     if firstError.nok():
         throw firstError

@@ -448,6 +448,11 @@ func (a *analysis) definition(pos position) (location, bool) {
 	if a == nil || a.file == nil {
 		return location{}, false
 	}
+	// A method call is qualified by a value (`item.close`), not a module or
+	// type name. Use the semantic call resolution before the token-only path.
+	if definition, ok := a.resolvedMemberDefinition(pos); ok {
+		return definition, true
+	}
 	for i, token := range a.file.Tokens {
 		if token.Type != types.TokName || !tokenAt(token, pos) {
 			continue
@@ -470,6 +475,31 @@ func (a *analysis) definition(pos position) (location, bool) {
 		return definition, ok
 	}
 	return location{}, false
+}
+
+func (a *analysis) resolvedMemberDefinition(pos position) (location, bool) {
+	if a.file.GlNode == nil || a.definitions == nil {
+		return location{}, false
+	}
+	var result location
+	found := false
+	walkAST(a.file.GlNode, func(value any) bool {
+		if found {
+			return false
+		}
+		call, ok := value.(*types.NodeExprCall)
+		if !ok || !call.IsMemberFunc || call.AssociatedFnDef == nil || !callNameAt(call.Callee, pos) {
+			return true
+		}
+		module := call.MemberOwnerModule
+		if module == "" {
+			module = a.file.PackageName
+		}
+		name := flattenName(call.AssociatedFnDef.Class.NameNode)
+		result, found = a.definitions[module+"\x00"+name]
+		return !found
+	})
+	return result, found
 }
 
 // blankSourceLine preserves every token position outside the invalid line so
@@ -687,6 +717,10 @@ func (f *hoverFinder) nameAt(name types.NodeName) bool {
 
 func (f *hoverFinder) inspect(value any) {
 	switch n := value.(type) {
+	case *types.NodeExprCall:
+		if n.AssociatedFnDef != nil && callNameAt(n.Callee, f.pos) {
+			f.value = f.analysis.withDocs(code(formatFunction(n.AssociatedFnDef)), n.AssociatedFnDef)
+		}
 	case *types.NodeExprName:
 		if f.nameAt(n.Name) {
 			if module := f.analysis.importedModuleAt(n.Name, f.pos); module != "" {
@@ -728,6 +762,21 @@ func (f *hoverFinder) inspect(value any) {
 			f.value = f.analysis.hoverType(n)
 		}
 	}
+}
+
+func callNameAt(callee types.NodeExpr, pos position) bool {
+	switch node := callee.(type) {
+	case *types.NodeExprName:
+		switch name := node.Name.(type) {
+		case *types.NodeNameSingle:
+			return tokenAt(name.Tk, pos)
+		case *types.NodeNameComposite:
+			return len(name.Tokens) != 0 && tokenAt(name.Tokens[len(name.Tokens)-1], pos)
+		}
+	case *types.NodeExprMemberAccess:
+		return tokenAt(node.Tk, pos)
+	}
+	return false
 }
 func hoverExpression(n *types.NodeExprName, pos position) string {
 	if composite, ok := n.Name.(*types.NodeNameComposite); ok {
@@ -808,14 +857,23 @@ func sourceName(name string) string {
 }
 func formatFunction(fn *types.NodeFuncDef) string {
 	args := make([]string, 0, len(fn.Class.ArgsNode.Args))
-	for _, a := range fn.Class.ArgsNode.Args {
+	for i, a := range fn.Class.ArgsNode.Args {
+		// Semantic analysis inserts the receiver as argument zero. It is not
+		// part of the source signature and should never leak into editor UI.
+		if fn.IsMember && i == 0 && a.Name == "this" {
+			continue
+		}
 		args = append(args, a.Name+" "+formatType(a.TypeNode))
 	}
 	name := flattenName(fn.Class.NameNode)
 	if fn.DisplayName != "" {
 		name = sourceName(fn.DisplayName)
 	}
-	return name + "(" + strings.Join(args, ", ") + ") " + formatType(fn.ReturnType)
+	prefix := ""
+	if fn.IsDestructor {
+		prefix = "destr "
+	}
+	return prefix + name + "(" + strings.Join(args, ", ") + ") " + formatType(fn.ReturnType)
 }
 func formatType(node *types.NodeType) string {
 	if node == nil {

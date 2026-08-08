@@ -44,14 +44,12 @@ Args.get(index u64) !str:
     ret values[index]
 ..
 
-iterHasData(impl Args*, index u64*) bool:
-    ret *index < impl.count()
+iterHasData(impl Args*, index u64) bool:
+    ret index < impl.count()
 ..
 
-iterNext(impl Args*, index u64*) !str:
-    value := try impl.get(*index)
-    *index = *index + 1
-    ret value
+iterNext(impl Args*, index u64) !str:
+    ret try impl.get(index)
 ..
 
 Args.iterator() iterator.Iterator[str]:

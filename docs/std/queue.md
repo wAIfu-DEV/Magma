@@ -14,12 +14,12 @@ An allocator-backed generic FIFO queue.
 
 ## Type
 
-`Queue[T](allocator alc.Allocator, array arr.Array[T], cleanup ($T) void)` owns a
+`Queue[T](allocator alc.Allocator, array arr.Array[T], cleanup (alc.Allocator, $T) void)` owns a
 double-ended backing array and retains its cleanup callback.
 
 ## API
 
-- `pub new[T](a alc.Allocator, cleanup ($T) void) !$Queue[T]` creates an empty queue with an optional element cleanup callback.
+- `pub new[T](a alc.Allocator, cleanup (alc.Allocator, $T) void) !$Queue[T]` creates an empty queue with an optional element cleanup callback that receives the queue allocator.
 - `enqueue(item $T) !void` takes an item and appends it to the back.
 - `dequeue() !$T` removes and transfers the front item; an empty queue fails.
 - `view() T[]` returns a borrowed FIFO-order slice, invalidated by structural mutation.

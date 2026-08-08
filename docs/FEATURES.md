@@ -17,8 +17,8 @@ pointer operations. It compiles through LLVM and supports inline LLVM.
 
 Calls, arithmetic, member access, and inference are expressions. Control-flow
 constructs are statements.
-It has no classes, traits, exceptions, pattern matching, lambdas, or `for` loop
-in the observed corpus. Instead, abstraction is built from:
+It has no classes, traits, exceptions, pattern matching, or lambdas. Instead,
+abstraction is built from:
 
 - modules and explicitly aliased imports;
 - structs with receiver methods;
@@ -466,17 +466,19 @@ such as `flag == false`, although `!flag` is syntactically available.
 
 ### 6.2 Loops
 
-The language's loop construct is `while`:
+The condition-controlled loop construct is `loop`:
 
 ```magma
 i u64 = 0
-while i < n:
+loop i < n:
     i = i + 1
 ..
 ```
 
-`break` and `continue` operate on the nearest loop. There is no `for`, range
-syntax, `switch`, or `match`. Indexed traversal in the corpus uses `while`.
+`for index := initial to bound:` provides ascending integer iteration with an
+exclusive bound. The bound is evaluated once, and the loop-local index advances
+by one after each iteration. `break` and `continue` operate on the nearest loop.
+There is no general range syntax, `switch`, or `match`.
 
 ### 6.3 Deferred execution
 
@@ -893,7 +895,7 @@ The current implementation has the following restrictions:
    target must have a pointer, slice, or fixed-array type.
 6. **No built-in sum types or interfaces.** Libraries manually encode tags,
    payload storage, and vtables.
-7. **No `for`, `switch`, closures, generic type inference, or generic
+7. **No `switch`, closures, generic type inference, or generic
    constraints.** Generic arguments are explicit at specialization sites.
 8. **Inline LLVM is not type-checked by Magma.** LLVM validates and transforms
    the injected IR.

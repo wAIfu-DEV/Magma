@@ -10,7 +10,7 @@ runExisting() !u64:
     out := io.stdoutUnbuffered()
     start := time.ticks()
     i u64 = 0
-    while i < ITERATIONS:
+    loop i < ITERATIONS:
         try out.writeLn("magma stdout benchmark")
         i = i + 1
     ..
@@ -20,7 +20,7 @@ runExisting() !u64:
 runConstant() !u64:
     start := time.ticks()
     i u64 = 0
-    while i < ITERATIONS:
+    loop i < ITERATIONS:
         try io.printLn("magma stdout benchmark")
         i = i + 1
     ..
@@ -35,7 +35,7 @@ pub main() !void:
     existingTotal u64 = 0
     constantTotal u64 = 0
     round u64 = 0
-    while round < ROUNDS:
+    loop round < ROUNDS:
         if round % 2 == 0:
             existingTotal = existingTotal + try runExisting()
             constantTotal = constantTotal + try runConstant()

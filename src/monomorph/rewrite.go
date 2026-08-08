@@ -328,6 +328,20 @@ func (m *monoCtx) rewriteStmt(module string, gl *t.NodeGlobal, stmt t.NodeStatem
 				return e
 			}
 		}
+	case *t.NodeStmtFor:
+		loopEnv := cloneEnv(env)
+		if e := m.rewriteExpr(module, gl, n.DeclExpr, loopEnv); e != nil {
+			return e
+		}
+		trackExprVarDefs(n.DeclExpr, loopEnv)
+		if e := m.rewriteExpr(module, gl, n.BoundExpr, loopEnv); e != nil {
+			return e
+		}
+		for _, s := range n.Body.Statements {
+			if e := m.rewriteStmt(module, gl, s, loopEnv); e != nil {
+				return e
+			}
+		}
 	case *t.NodeStmtDefer:
 		if n.IsBody {
 			deferEnv := cloneEnv(env)

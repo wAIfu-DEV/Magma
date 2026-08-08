@@ -43,7 +43,7 @@ pub main() !void:
     directory := try fs.openDir(a, nested)
     entryFound bool = false
     entries := directory.iterator()
-    while entries.hasData():
+    loop entries.hasData():
         entry := try entries.next()
         if strings.compare(entry.name(), "source.bin"):
             entryFound = true

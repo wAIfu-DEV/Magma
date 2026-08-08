@@ -234,6 +234,28 @@ func bldBody(ctx *lcx, bdy *t.NodeBody, makeScope bool) error {
 			if e != nil {
 				return e
 			}
+		case *t.NodeStmtFor:
+			scope := &t.Scope{
+				Parent:      ctx.CurrScope,
+				DeclVars:    map[string]*t.NodeExprVarDef{},
+				DeclFuncs:   map[string]t.FnScope{},
+				DeclStructs: map[string]*t.NodeStructDef{},
+			}
+			n.Body.Scope = scope
+			ctx.CurrScope = scope
+			if e := bldExpr(ctx, n.DeclExpr); e != nil {
+				ctx.CurrScope = scope.Parent
+				return e
+			}
+			if e := bldExpr(ctx, n.BoundExpr); e != nil {
+				ctx.CurrScope = scope.Parent
+				return e
+			}
+			if e := bldBody(ctx, &n.Body, false); e != nil {
+				ctx.CurrScope = scope.Parent
+				return e
+			}
+			ctx.CurrScope = scope.Parent
 		case *t.NodeStmtDefer:
 			if n.IsBody {
 				if e := bldBody(ctx, &n.Body, true); e != nil {

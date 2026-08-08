@@ -25,7 +25,7 @@ pub main() !void:
     defer directory.close()
 
     entries := directory.iterator()
-    while entries.hasData():
+    loop entries.hasData():
         entry := try entries.next()
         try io.printLn(entry.name())
     ..

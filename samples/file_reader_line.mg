@@ -17,7 +17,7 @@ main(args str[]) !void:
 
     io.writeLn("Started program. Write file path to print.")
 
-    while true:
+    loop true:
         io.write("Path: ")
         io.flush()
 
@@ -30,7 +30,7 @@ main(args str[]) !void:
         reader := buff.readerBuffered(a, f.reader())
         defer reader.close()
 
-        while true:
+        loop true:
             line, e := reader.readLn(a)
 
             if e.nok():

@@ -29,7 +29,7 @@ run(a allocator.Allocator, spinning bool, workers u64) !u64:
 
     start u64 = time.ticks()
     i u64 = 0
-    while i < TASKS:
+    loop i < TASKS:
         try pool.submit(increment, addrof counter)
         i = i + 1
     ..
@@ -52,7 +52,7 @@ pub main() !void:
     mutexTotal u64 = 0
     spinTotal u64 = 0
     round u64 = 0
-    while round < ROUNDS:
+    loop round < ROUNDS:
         # Alternate order to reduce bias from temperature and background load.
         if round % 2 == 0:
             mutexTotal = mutexTotal + try run(a, false, workers)

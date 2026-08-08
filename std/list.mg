@@ -14,14 +14,14 @@ use "std:iterator"  iter
 pub List[T](
     allocator alc.Allocator
     array     arr.Array[T]
-    cleanup   ($T) void
+    cleanup   (alc.Allocator, $T) void
 )
 
 # Creates an empty list with an optional element cleanup callback.
 # @complexity O(1), excluding allocation
 # @example
 #   values := try list.new[Value](a, freeValue)
-pub new[T](a alc.Allocator, cleanup ($T) void) !$List[T]:
+pub new[T](a alc.Allocator, cleanup (alc.Allocator, $T) void) !$List[T]:
 	array := try arr.new[T](a)
 	ret List[T](
         allocator=a,
@@ -35,7 +35,7 @@ pub new[T](a alc.Allocator, cleanup ($T) void) !$List[T]:
 # @complexity O(1)
 # @example
 #   values := list.fromArray[Value](a, backing, freeValue)
-pub fromArray[T](a alc.Allocator, array $arr.Array[T], cleanup ($T) void) $List[T]:
+pub fromArray[T](a alc.Allocator, array $arr.Array[T], cleanup (alc.Allocator, $T) void) $List[T]:
 	ret List[T](allocator=a, array=array, cleanup=cleanup)
 ..
 
@@ -105,7 +105,7 @@ List[T].take(index u64) !$T:
 # @example
 #   try values.set(0, replacement)
 List[T].set(index u64, value $T) !void:
-    ret try this.array.set(index, value, this.cleanup)
+    ret try this.array.set(this.allocator, index, value, this.cleanup)
 ..
 
 # Adds one uninitialized slot at the right and returns its index.

@@ -1,18 +1,20 @@
 mod reader
 # Type-erased byte input with convenience methods for exact and allocated reads.
 
+use "std:context"   context
 use "std:allocator" alc
 use "std:slices"    slices
 use "std:strings"   strings
 use "std:errors"    errors
 use "std:cast"      cast
 use "std:footgun"   footgun
+use "std:future"    future
 
 # Reader interface for pulling bytes into strings or buffers.
 # @complexity O(1) wrapper calls; underlying reader decides cost.
 pub Reader(
     impl ptr,
-    fn_read (ptr, u8[], u64) !u64,
+    readFunc (ptr, u8[], u64) !u64,
 )
 
 # Creates a reader over caller-owned state.
@@ -21,7 +23,7 @@ pub Reader(
 # @example
 #   input := reader.new(state, readCallback)
 pub new(impl ptr, readFunc (ptr, u8[], u64) !u64) Reader:
-    ret Reader(impl=impl, fn_read=readFunc)
+    ret Reader(impl=impl, readFunc=readFunc)
 ..
 
 # Reads up to nBytes and returns a string containing the bytes read.
@@ -62,9 +64,24 @@ Reader.readToBuff(buff u8[], nBytes u64) !u64:
     if slices.count(buff) < nBytes:
         throw errors.invalidArgument("would overflow")
     ..
-    readCnt u64 = try this.fn_read(this.impl, buff, nBytes)
+    readCnt u64 = try this.readFunc(this.impl, buff, nBytes)
     if readCnt > nBytes:
         throw errors.failure("reader returned more bytes than requested")
     ..
     ret readCnt
+..
+
+ReaderReadTask(
+    allocator alc.Allocator
+    source Reader*
+    count u64
+)
+
+runReadTask(ctx ReaderReadTask*) !str:
+    ret try ctx.source.read(ctx.allocator, ctx.count)
+..
+
+Reader.readAsync(ctx context.Ctx, nBytes u64) !future.Future[str]:
+    task := ReaderReadTask(source=this, allocator=ctx.allocator, count=nBytes)
+    ret try future.new[str, ReaderReadTask](ctx.allocator, ctx.executor, runReadTask, task)
 ..

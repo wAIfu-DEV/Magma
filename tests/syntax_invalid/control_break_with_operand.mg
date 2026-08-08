@@ -1,6 +1,6 @@
 mod main
 main() void:
-    while true:
+    loop true:
         break 1
     ..
 ..

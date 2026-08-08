@@ -92,6 +92,8 @@ func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
 		return parseStmtIf(ctx, tk)
 	case t.KwWhile:
 		return parseStmtWhile(ctx, tk)
+	case t.KwFor:
+		return parseStmtFor(ctx, tk)
 	case t.KwDefer, t.KwOnError:
 		n, e := parseDefer(ctx, tk)
 		if e != nil {
@@ -326,4 +328,106 @@ func parseStmtWhile(ctx *ParseCtx, tk t.Token) (*t.NodeStmtWhile, error) {
 
 	whileStmt.Body = body
 	return whileStmt, nil
+}
+
+func parseStmtFor(ctx *ParseCtx, tk t.Token) (*t.NodeStmtFor, error) {
+	consume(ctx)
+
+	toIndex := -1
+	depth := 0
+	for i := ctx.TokIdx; i < len(ctx.Toks); i++ {
+		candidate := ctx.Toks[i]
+		switch candidate.KeywType {
+		case t.KwParenOp, t.KwBrackOp:
+			depth++
+		case t.KwParenCl, t.KwBrackCl:
+			if depth > 0 {
+				depth--
+			}
+		case t.KwColon, t.KwNewline:
+			if depth == 0 {
+				i = len(ctx.Toks)
+			}
+		}
+		if depth == 0 && candidate.Repr == "to" {
+			toIndex = i
+			break
+		}
+	}
+	if toIndex < 0 {
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&tk,
+			"syntax error: expected 'to' keyword after index declaration in 'for' statement",
+			"example: 'for i u64 = 0 to 10:' or 'for i := 0 to expr:'",
+		)
+	}
+	ctx.Toks[toIndex].Type = t.TokKeyword
+	ctx.Toks[toIndex].KeywType = t.KwTo
+
+	next, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	declExpr, e := parseExpression(ctx, next, 0)
+	if e != nil {
+		return nil, e
+	}
+
+	switch declExpr.(type) {
+	case *t.NodeExprVarDefAssign:
+		break
+	default:
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&tk,
+			"syntax error: expected index variable declaration with initial value after 'for' keyword",
+			"example: 'for i u64 = 0 to expr:' or 'for i := 0 to expr:'",
+		)
+	}
+
+	next2, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	if next2.KeywType != t.KwTo {
+		return nil, comp_err.CompilationErrorToken(
+			ctx.Fctx,
+			&tk,
+			"syntax error: expected 'to' keyword after index declaration in 'for' statement",
+			"example: 'for i u64 = 0 to 10:' or 'for i := 0 to expr:'\nexpr is evaluated only once and is exclusive",
+		)
+	}
+
+	consume(ctx)
+	next3, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	boundExpr, e := parseExpression(ctx, next3, 0)
+	if e != nil {
+		return nil, e
+	}
+
+	forStmt := &t.NodeStmtFor{
+		Tk:        tk,
+		DeclExpr:  declExpr,
+		BoundExpr: boundExpr,
+	}
+
+	bodyStart, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+
+	body, e := parseBody(ctx, bodyStart)
+	if e != nil {
+		return nil, e
+	}
+
+	forStmt.Body = body
+	return forStmt, nil
 }

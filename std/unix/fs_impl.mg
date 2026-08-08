@@ -59,7 +59,7 @@ Dir.clearCurrent() void:
 
 advance(directory Dir*) void:
     directory.nextEntry = ext_readdir(directory.handle)
-    while directory.nextEntry != none:
+    loop directory.nextEntry != none:
         raw u8* = directory.nextEntry
         name u8* = cast.utop(cast.ptou(raw) + 19)
         borrowed := strings.fromCstrNoCopy(name)
@@ -206,7 +206,7 @@ pub copyFile(a allocator.Allocator, source str, destination str) !void:
     ..
     buffer := array u8[16384]
     done bool = false
-    while done == false:
+    loop done == false:
         count := ext_read(input, slices.toPtr(buffer), 16384)
         if count < 0:
             ext_close(input)
@@ -216,7 +216,7 @@ pub copyFile(a allocator.Allocator, source str, destination str) !void:
             done = true
         else:
             offset i64 = 0
-            while offset < count:
+            loop offset < count:
                 written := ext_write(output, cast.utop(cast.ptou(slices.toPtr(buffer)) + cast.itou(offset)), cast.itou(count - offset))
                 if written <= 0:
                     ext_close(input)
@@ -289,7 +289,7 @@ walkInner(a allocator.Allocator, root str, visit (str, bool) !void) !void:
     defer ext_closedir(directory)
 
     entry := ext_readdir(directory)
-    while entry != none:
+    loop entry != none:
         raw u8* = entry
         name u8* = cast.utop(cast.ptou(raw) + 19)
         borrowed := strings.fromCstrNoCopy(name)

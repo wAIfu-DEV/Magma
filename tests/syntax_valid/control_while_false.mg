@@ -1,5 +1,5 @@
 mod main
 main() void:
-    while false:
+    loop false:
     ..
 ..

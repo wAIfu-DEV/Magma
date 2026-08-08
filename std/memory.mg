@@ -19,10 +19,8 @@ pub copy(from ptr, to ptr, n u64) void:
     au u8* = from
     bu u8* = to
 
-    i u64 = 0
-    while i < n:
+    for i u64 = 0 to n:
         bu[i] = au[i]
-        i = i + 1
     ..
 ..
 
@@ -46,7 +44,7 @@ pub move(from ptr, to ptr, n u64) void:
 
         bound u64 = 0 - 1 # U64_MAX
         i u64 = n - 1
-        while i != bound: # stops after 0
+        loop i != bound: # stops after 0
             bu[i] = au[i]
             i = i - 1
         ..
@@ -69,12 +67,10 @@ pub swap(x ptr, y ptr, n u64) void:
     ax u8* = x
     ay u8* = y
 
-    i u64 = 0
-    while i < n:
+    for i u64 = 0 to n:
         tmp u8 = ax[i]
         ax[i] = ay[i]
         ay[i] = tmp
-        i = i + 1
     ..
 ..
 
@@ -94,12 +90,10 @@ pub compare(a ptr, b ptr, n u64) bool:
     au u8* = a
     bu u8* = b
     
-    i u64 = 0
-    while i < n:
+    for i u64 = 0 to n:
         if au[i] != bu[i]:
             ret false
         ..
-        i = i + 1
     ..
     ret true
 ..
@@ -117,10 +111,8 @@ pub set(in ptr, n u64, with u8) void:
 
     inu u8* = in
 
-    i u64 = 0
-    while i < n:
+    for i u64 = 0 to n:
         inu[i] = with
-        i = i + 1
     ..
 ..
 

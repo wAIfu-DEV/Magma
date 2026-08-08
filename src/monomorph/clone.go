@@ -218,6 +218,13 @@ func cloneStmt(in t.NodeStatement) t.NodeStatement {
 			CondExpr: cloneExpr(n.CondExpr),
 			Body:     cloneBody(&n.Body),
 		}
+	case *t.NodeStmtFor:
+		return &t.NodeStmtFor{
+			Tk:        n.Tk,
+			DeclExpr:  cloneExpr(n.DeclExpr),
+			BoundExpr: cloneExpr(n.BoundExpr),
+			Body:      cloneBody(&n.Body),
+		}
 	case *t.NodeLlvm:
 		return &t.NodeLlvm{Text: n.Text}
 	case *t.NodeStmtDefer:

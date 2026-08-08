@@ -739,6 +739,28 @@ func (n *NodeStmtWhile) Print(indent int) {
 	n.Body.Print(indent + 1)
 }
 
+type NodeStmtFor struct {
+	Tk        Token
+	DeclExpr  NodeExpr
+	BoundExpr NodeExpr
+	Body      NodeBody
+}
+
+func (n *NodeStmtFor) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("StmtFor\n")
+
+	PrintIndent(indent + 1)
+	fmt.Printf("DeclExpr\n")
+	n.DeclExpr.Print(indent + 2)
+
+	PrintIndent(indent + 1)
+	fmt.Printf("BoundExpr\n")
+	n.BoundExpr.Print(indent + 2)
+
+	n.Body.Print(indent + 1)
+}
+
 type NodeStmtExpr struct {
 	Expression NodeExpr
 }
@@ -1015,6 +1037,7 @@ func (*NodeStmtThrow) IsStatement()        {}
 func (*NodeStmtIf) IsStatement()           {}
 func (*NodeStmtElse) IsStatement()         {}
 func (*NodeStmtWhile) IsStatement()        {}
+func (*NodeStmtFor) IsStatement()          {}
 func (*NodeLlvm) IsStatement()             {}
 func (*NodeStmtDefer) IsStatement()        {}
 func (*NodeExprVarDef) IsGlobalDecl()      {}

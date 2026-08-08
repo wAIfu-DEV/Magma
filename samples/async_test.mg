@@ -17,10 +17,10 @@ pub main() !void:
 
     f := try file.open(a, "main.go", file.mode().read())
     defer f.close()
-    
-    future := try as.read(f.reader(), try f.count())
+
+    future := try as.read(try f.reader(), try f.count())
     contents := try future.await()
     defer contents.free(a)
 
-    io.writeLn(contents)
+    io.printLn(contents)
 ..

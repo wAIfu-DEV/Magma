@@ -134,6 +134,52 @@ main() void:
 	}
 }
 
+func TestParseCharacterizesForLoop(t *testing.T) {
+	global, err := parseTestSource(t, `mod main
+main() void:
+    for i u64 = 1 to 10:
+        continue
+    ..
+..
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainFn := global.FuncDefs["main"]
+	if mainFn == nil || len(mainFn.Body.Statements) != 1 {
+		t.Fatalf("main body = %#v, want one statement", mainFn)
+	}
+	loop, ok := mainFn.Body.Statements[0].(*mt.NodeStmtFor)
+	if !ok {
+		t.Fatalf("statement = %T, want *NodeStmtFor", mainFn.Body.Statements[0])
+	}
+	if _, ok := loop.DeclExpr.(*mt.NodeExprVarDefAssign); !ok {
+		t.Fatalf("index declaration = %T, want initialized variable", loop.DeclExpr)
+	}
+	if len(loop.Body.Statements) != 1 {
+		t.Fatalf("loop body statements = %d, want 1", len(loop.Body.Statements))
+	}
+}
+
+func TestForLoopSyntaxErrors(t *testing.T) {
+	tests := map[string]struct {
+		body string
+		want string
+	}{
+		"missing declaration": {body: "for 0 to 10:\n    ..", want: "expected index variable declaration"},
+		"missing to":          {body: "for i := 0 10:\n    ..", want: "expected 'to' keyword"},
+		"missing colon":       {body: "for i := 0 to 10\n    ..", want: "expected body opening ':'"},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseTestSource(t, "mod main\nmain() void:\n    "+test.body+"\n..\n")
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want it to contain %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestParseCharacterizesPrematureEOF(t *testing.T) {
 	_, err := parseTestSource(t, "mod main\nmain() void:\n")
 	if err == nil || !strings.Contains(err.Error(), "reached end of file prematurely") {

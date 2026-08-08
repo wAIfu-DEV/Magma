@@ -207,6 +207,52 @@ make(count u64) void:
 	}
 }
 
+func TestLoopLocalFixedSizeAllocasAreHoistedToFunctionEntry(t *testing.T) {
+	ir, err := compileSource(t, `mod main
+
+sum(limit u64) u64:
+    total u64 = 0
+    i u64 = 0
+    loop i < limit:
+        value u64 = i
+        total = total + value
+        i = i + 1
+    ..
+    ret total
+..
+
+main() void:
+    ret
+..
+`)
+	if err != nil {
+		t.Fatalf("compile loop-local allocation: %v", err)
+	}
+
+	fnStart := strings.Index(ir, ".sum(")
+	if fnStart < 0 {
+		t.Fatal("sum function was not emitted")
+	}
+	fnEndOffset := strings.Index(ir[fnStart:], "\n}")
+	if fnEndOffset < 0 {
+		t.Fatal("sum function body has no closing brace")
+	}
+	fnBody := ir[fnStart : fnStart+fnEndOffset]
+	firstBranch := strings.Index(fnBody, "  br label ")
+	if firstBranch < 0 {
+		t.Fatalf("sum function has no loop branch:\n%s", fnBody)
+	}
+
+	entry := fnBody[:firstBranch]
+	loopAndExit := fnBody[firstBranch:]
+	if got := strings.Count(entry, "alloca i64"); got < 4 {
+		t.Fatalf("expected argument and fixed-size local slots in entry, got %d:\n%s", got, fnBody)
+	}
+	if strings.Contains(loopAndExit, "alloca i64") {
+		t.Fatalf("fixed-size local alloca remained after the entry block:\n%s", fnBody)
+	}
+}
+
 func TestConstantArrayInitializerLowersBackingStorage(t *testing.T) {
 	ir, err := compileSource(t, `mod test
 

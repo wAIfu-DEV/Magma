@@ -747,12 +747,12 @@ else:
 ..
 ```
 
-### While Loops
+### Loops
 
-Loops use `while`:
+Condition-controlled loops use `loop`:
 
 ```magma
-while i < n:
+loop i < n:
     i = i + 1
 ..
 ```
@@ -760,7 +760,7 @@ while i < n:
 `break` exits the nearest loop:
 
 ```magma
-while true:
+loop true:
     if done:
         break
     ..
@@ -770,7 +770,7 @@ while true:
 `continue` skips to the next iteration:
 
 ```magma
-while i < n:
+loop i < n:
     i = i + 1
     if shouldSkip:
         continue
@@ -779,16 +779,19 @@ while i < n:
 ..
 ```
 
-Magma has no `for` statement. Indexed iteration can use a `while` loop:
+An index loop declares an integer index and uses an exclusive upper bound:
 
 ```magma
-i u64 = 0
-while i < n:
-    defer i = i + 1
-
+for i u64 = 0 to n:
     statements
 ..
 ```
+
+The inferred declaration form is also valid: `for i := 0 to n:`. The index
+and bound must use the same integer type; floating-point indexes are rejected.
+The upper bound is evaluated exactly once before iteration begins. The index is
+local to the loop, advances by one after each iteration, and is also advanced
+when an iteration leaves through `continue`, `break`, `ret`, or `throw`.
 
 ## Errors
 
@@ -1027,6 +1030,11 @@ treated as library files, resolved relative to the declaring Magma file, and
 passed directly to Clang. `link` does not affect LLVM or object emission and may
 be selected with `@platform(...)`.
 
+A name beginning with `:` selects an exact linker library filename. For example,
+`link ":libssl.so.3"` is passed as `-l:libssl.so.3`; it is not resolved as a
+module-relative path. This supports versioned Unix runtime libraries without an
+unversioned development-package symlink.
+
 On Windows, linking an import library such as `raylib.lib` keeps the dependency
 dynamic: `raylib.dll` must be beside the generated executable or otherwise on
 the DLL search path at runtime. Files declared with `bundle` are copied beside
@@ -1137,8 +1145,10 @@ is part of the number literal only when it is immediately followed by a digit;
 otherwise `-` is parsed as an operator. Hex literals are accepted after `0x` or
 `0X`, but their internal representation is backend-oriented.
 
-Keywords such as `ret`, `if`, `while`, and `true` are reserved by the tokenizer.
+Keywords such as `ret`, `if`, `loop`, `for`, and `true` are reserved by the tokenizer.
 They cannot be used as ordinary identifiers.
+`to` is contextual: it separates the initializer and bound in a `for` header,
+but remains available as an identifier elsewhere.
 
 ### Parsing and Statement Shapes
 
@@ -1201,7 +1211,7 @@ grouped := (values)[index]
 
 ### Scope and Name Resolution
 
-Functions and nested `if`, `elif`, `else`, and `while` bodies have lexical local
+Functions and nested `if`, `elif`, `else`, `loop`, and `for` bodies have lexical local
 scopes. Magma forbids shadowing: a variable, parameter, global, or
 function declaration cannot reuse a visible variable or function name.
 Duplicate declarations in the same scope are also rejected. Separate sibling
@@ -1227,7 +1237,7 @@ argument. Method calls subtract that implicit argument from the call-site arity.
 
 ### Type Checking Expectations
 
-`if` and `while` conditions must infer to `bool`. Comparisons infer to `bool`;
+`if` and `loop` conditions must infer to `bool`. Comparisons infer to `bool`;
 `&&` and `||` require both operands to be `bool`.
 
 Bitwise operators `&`, `|`, and `^` accept integer operands. They also accept
@@ -1267,7 +1277,7 @@ Defers execute in last-in-first-out order for the scope where they were
 registered. A `defer:` body cannot contain another `defer`.
 
 `break` and `continue` are statements, but type checking rejects them outside a
-`while` loop.
+loop.
 
 ### Globals and Initialization
 

@@ -11,6 +11,11 @@ pub const ERR_INVALID_TYPE u32 = 6
 pub const ERR_OUT_OF_BOUNDS u32 = 7
 pub const ERR_NOT_FOUND u32 = 8
 pub const ERR_CANCELLED u32 = 9
+pub const ERR_WOULD_BLOCK u32 = 10
+pub const ERR_TIMED_OUT u32 = 11
+pub const ERR_CONNECTION_RESET u32 = 12
+pub const ERR_CONNECTION_REFUSED u32 = 13
+pub const ERR_ADDRESS_IN_USE u32 = 14
 
 # A cursor over an error's bounded propagation trace. The newest propagation
 # site is returned first. Traversal is bounded because ring reuse may replace
@@ -166,6 +171,16 @@ pub toStr(e error) str:
         ret "not found"
     elif c == ERR_CANCELLED:
         ret "cancelled"
+    elif c == ERR_WOULD_BLOCK:
+        ret "would block"
+    elif c == ERR_TIMED_OUT:
+        ret "timed out"
+    elif c == ERR_CONNECTION_RESET:
+        ret "connection reset"
+    elif c == ERR_CONNECTION_REFUSED:
+        ret "connection refused"
+    elif c == ERR_ADDRESS_IN_USE:
+        ret "address in use"
     ..
     ret "unknown error"
 ..
@@ -298,4 +313,24 @@ pub notFound(msg str) error:
 # a result. Cancellation is distinct from native or unexpected failure.
 pub cancelled(msg str) error:
     ret makeErr(ERR_CANCELLED, msg)
+..
+
+pub wouldBlock(msg str) error:
+    ret makeErr(ERR_WOULD_BLOCK, msg)
+..
+
+pub timedOut(msg str) error:
+    ret makeErr(ERR_TIMED_OUT, msg)
+..
+
+pub connectionReset(msg str) error:
+    ret makeErr(ERR_CONNECTION_RESET, msg)
+..
+
+pub connectionRefused(msg str) error:
+    ret makeErr(ERR_CONNECTION_REFUSED, msg)
+..
+
+pub addressInUse(msg str) error:
+    ret makeErr(ERR_ADDRESS_IN_USE, msg)
 ..

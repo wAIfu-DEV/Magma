@@ -1,57 +1,41 @@
 # `std/http`
 
-## Example
+Portable buffered HTTP/1.1 client for Windows and Linux. It supports `http`
+and `https`, synchronous and asynchronous requests, response-size limits, and
+client-owned keep-alive connection pooling.
 
 ```magma
+headers http.Header[] = slices.fromPtr(none, 0)
+request := http.noBody("GET", "https://example.com/", headers)
 client := try http.new(heap.allocator(), http.defaultOptions())
 defer client.close()
-response := try client.get("https://example.com/")
+response := try client.send(request)
 defer response.close()
-status := response.statusCode()
+status := response.statusCode
+body := response.body
 ```
 
-A synchronous, streaming HTTP client backed by WinHTTP. The module currently
-supports Windows only.
-
-## Types
+## Requests and options
 
 - `Header(name str, value str)` is a borrowed request-header pair.
-- `Request(method str, url str, headers Header[])` describes a request; its strings and header slice are borrowed for the duration of `send`.
-- `Body(source reader.Reader, length u64)` describes an optional streaming request body. A null reader callback represents absence; `Body.isPresent()` queries it.
-- `Options(userAgent str, connectTimeoutMs u32, sendTimeoutMs u32,
-  receiveTimeoutMs u32, automaticDecompression bool)` configures a client.
-- `Client(impl impl_http.Client, allocator alc.Allocator)` owns the platform session.
-- `Response(impl impl_http.Response)` owns response handles and headers.
+- `Request(method, url, headers, body, bodyLength)` describes a request.
+- `noBody(method, url, headers)` creates a request without a body.
+- `Options` controls DNS, I/O timeout, response and read-buffer limits, and
+  connection-pool capacity. `defaultOptions()` supplies practical defaults.
 
-## Request bodies
+Request bodies have a known length and are buffered into the serialized
+request before transmission. Responses are buffered up to `maxResponseBytes`.
 
-- `pub noBody() Body` creates an absent request body.
-- `pub body(source reader.Reader, length u64) Body` creates a known-length
-  streaming body. `Client.send` pulls exactly `length` bytes and fails if the
-  reader reaches EOF early.
+## Client and responses
 
-Unknown-length/chunked uploads are not implemented yet.
+- `new(allocator, options)` creates a reusable client.
+- `Client.start(request)` creates a manually polled `Exchange`.
+- `Exchange.poll(timeoutMs)` advances one readiness cycle.
+- `Exchange.finish()` returns the completed buffered `Response`.
+- `Client.send(request)` performs a synchronous exchange.
+- `Client.sendAsync(async, request)` runs an exchange on the async worker pool.
+- `Response.statusCode`, `Response.rawHeaders`, and `Response.body` contain the
+  buffered response data.
 
-## Client
-
-- `pub defaultOptions() Options` enables automatic gzip/deflate decompression
-  and sets 30-second connect, send, and receive timeouts.
-- `pub new(a alc.Allocator, options Options) !$Client` opens a reusable WinHTTP
-  session.
-- `Client.send(request Request, body Body) !$Response` streams the upload and
-  returns after response headers arrive. It does not buffer the response body.
-- `Client.get(url str) !$Response` is a streaming GET convenience method.
-- `Client.post(url str, body Body) !$Response` is a streaming POST convenience method.
-- `destr Client.close()` closes the WinHTTP session.
-
-## Response
-
-- `Response.statusCode() u16` returns the numeric HTTP status.
-- `Response.rawHeaders() str` borrows the UTF-8 response header block.
-- `Response.body() !reader.Reader` returns a reader backed by WinHTTP. A zero
-  byte read indicates EOF.
-- `destr Response.close()` closes native handles and frees owned headers.
-
-The response must remain alive and unmoved while its body reader is used. Close
-every response, including responses whose status is an error. Operations are
-synchronous and may block according to the configured timeouts.
+Close every `Response`, `Exchange`, and `Client` that is successfully created.
+HTTPS verifies the peer chain and hostname and uses the platform TLS backend.

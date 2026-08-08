@@ -55,15 +55,13 @@ hexValue(byte u8) !u8:
 pub encodedSize(text str, policy u8) !u64:
     input := strings.toPtr(text)
     total u64 = 0
-    i u64 = 0
-    while i < text.countBytes():
+    for i u64 = 0 to text.countBytes():
         byte := input[i]
         if (policy == FORM && byte == 32) || try allowed(byte, policy):
             total = try checked.uAdd(total, 1)
         else:
             total = try checked.uAdd(total, 3)
         ..
-        i = i + 1
     ..
     ret total
 ..
@@ -76,7 +74,7 @@ pub encodeTo(text str, output u8[], policy u8) !u64:
     input := strings.toPtr(text)
     inputIndex u64 = 0
     outputIndex u64 = 0
-    while inputIndex < text.countBytes():
+    loop inputIndex < text.countBytes():
         byte := input[inputIndex]
         if policy == FORM && byte == 32:
             output[outputIndex] = 43
@@ -108,7 +106,7 @@ decodedSizeKind(text str, form bool) !u64:
     input := strings.toPtr(text)
     total u64 = 0
     i u64 = 0
-    while i < text.countBytes():
+    loop i < text.countBytes():
         if input[i] == 37:
             if i + 2 >= text.countBytes():
                 throw errors.invalidArgument("truncated percent escape")
@@ -136,7 +134,7 @@ decodeToKind(text str, output u8[], form bool) !u64:
     input := strings.toPtr(text)
     inputIndex u64 = 0
     outputIndex u64 = 0
-    while inputIndex < text.countBytes():
+    loop inputIndex < text.countBytes():
         byte := input[inputIndex]
         if byte == 37:
             high := try hexValue(input[inputIndex + 1])

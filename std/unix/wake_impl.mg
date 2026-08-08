@@ -9,15 +9,26 @@ link "pthread"
 use "std:cast" cast
 use "std:errors" errors
 
-const condition u8 = 0
+const conditionStrategy u8 = 0
 
 # Opaque, naturally aligned storage for pthread and POSIX semaphore objects.
+Opaque128(
+    part0 u128
+    part1 u128
+    part2 u128
+    part3 u128
+    part4 u128
+    part5 u128
+    part6 u128
+    part7 u128
+)
+
 pub Wake(
     strategy u8
-    lock := array u64[16]
-    conditionVariable := array u64[16]
+    lock Opaque128
+    conditionVariable Opaque128
     count u64
-    semaphore := array u64[16]
+    semaphore Opaque128
 )
 
 ext ext_pthread_mutex_init pthread_mutex_init(mutex ptr, attributes ptr) c.int
@@ -40,8 +51,9 @@ nativeError(code i32, message str) error:
 pub new(strategy u8) !$Wake:
     value Wake
     value.strategy = strategy
-    if strategy == condition:
-        code i32 = ext_pthread_mutex_init(addrof value.lock, none)
+    code i32
+    if strategy == conditionStrategy:
+        code = ext_pthread_mutex_init(addrof value.lock, none)
         if code != 0:
             throw nativeError(code, "pthread_mutex_init failed")
         ..
@@ -60,12 +72,13 @@ pub new(strategy u8) !$Wake:
 ..
 
 pub wait(wake Wake*) !void:
-    if wake.strategy == condition:
-        code i32 = ext_pthread_mutex_lock(addrof wake.lock)
+    code i32
+    if wake.strategy == conditionStrategy:
+        code = ext_pthread_mutex_lock(addrof wake.lock)
         if code != 0:
             throw nativeError(code, "pthread_mutex_lock failed")
         ..
-        while wake.count == 0:
+        loop wake.count == 0:
             code = ext_pthread_cond_wait(addrof wake.conditionVariable, addrof wake.lock)
             if code != 0:
                 ext_pthread_mutex_unlock(addrof wake.lock)
@@ -86,8 +99,9 @@ pub wait(wake Wake*) !void:
 ..
 
 pub notify(wake Wake*) !void:
-    if wake.strategy == condition:
-        code i32 = ext_pthread_mutex_lock(addrof wake.lock)
+    code i32
+    if wake.strategy == conditionStrategy:
+        code = ext_pthread_mutex_lock(addrof wake.lock)
         if code != 0:
             throw nativeError(code, "pthread_mutex_lock failed")
         ..
@@ -109,8 +123,9 @@ pub notify(wake Wake*) !void:
 ..
 
 pub free(wake Wake*) !void:
-    if wake.strategy == condition:
-        code i32 = ext_pthread_cond_destroy(addrof wake.conditionVariable)
+    code i32
+    if wake.strategy == conditionStrategy:
+        code = ext_pthread_cond_destroy(addrof wake.conditionVariable)
         if code != 0:
             throw nativeError(code, "pthread_cond_destroy failed")
         ..

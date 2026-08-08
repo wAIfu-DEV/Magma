@@ -27,19 +27,19 @@ pub main() !void:
 
     # Force growth in both directions and verify that it preserves order.
     i u64 = 0
-    while i < 16:
+    loop i < 16:
         try values.pushRight(a, 100 + i)
         i = i + 1
     ..
 
     i = 0
-    while i < 16:
+    loop i < 16:
         try values.pushLeft(a, 15 - i)
         i = i + 1
     ..
 
     i = 0
-    while i < 16:
+    loop i < 16:
         if try values.get(i) != i:
             throw errors.failure("array left growth changed element order")
         ..
@@ -47,7 +47,7 @@ pub main() !void:
     ..
 
     i = 0
-    while i < 16:
+    loop i < 16:
         if try values.get(17 + i) != 100 + i:
             throw errors.failure("array right growth changed element order")
         ..
@@ -67,20 +67,20 @@ pub main() !void:
     zeros := try array.newWithSize[u64](a, 3, 0, 0)
     defer zeros.free(a, none)
     i = 0
-    while i < zeros.count():
+    loop i < zeros.count():
         if try zeros.get(i) != 0:
             throw errors.failure("newWithSize was not zero initialized")
         ..
         i = i + 1
     ..
 
-    try zeros.set(0, 42, none)
+    try zeros.set(a, 0, 42, none)
     try zeros.resize(a, 6, 0, 0, none)
     if try zeros.get(0) != 42:
         throw errors.failure("resize did not preserve an existing value")
     ..
     i = 3
-    while i < zeros.count():
+    loop i < zeros.count():
         if try zeros.get(i) != 0:
             throw errors.failure("resize growth was not zero initialized")
         ..

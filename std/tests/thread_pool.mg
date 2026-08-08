@@ -32,7 +32,7 @@ atomicStore(target u64*, value u64) void:
 occupy(raw ptr) u64:
     context ScaleContext* = raw
     atomicAdd(context.ready, 1)
-    while atomicLoad(context.release) == 0:
+    loop atomicLoad(context.release) == 0:
         thread.yield()
     ..
     ret 0
@@ -91,9 +91,9 @@ pub main() !void:
 
     # Exercise more tasks than the ring capacity across several idle cycles.
     round u64 = 0
-    while round < 4:
+    loop round < 4:
         i u64 = 0
-        while i < 8:
+        loop i < 8:
             try pool.submit(increment, addrof value)
             i = i + 1
         ..
@@ -122,9 +122,9 @@ pub main() !void:
     spinningValue u64 = 0
     spinning := try thread_pool.new(a, 1, 1, 8, 4096)
     spinRound u64 = 0
-    while spinRound < 100:
+    loop spinRound < 100:
         spinIndex u64 = 0
-        while spinIndex < 8:
+        loop spinIndex < 8:
             try spinning.submit(increment, addrof spinningValue)
             spinIndex = spinIndex + 1
         ..
@@ -140,7 +140,7 @@ pub main() !void:
     growingValue u64 = 0
     growing := try thread_pool.new(a, 1, 1, 1, 1)
     growingIndex u64 = 0
-    while growingIndex < 10000:
+    loop growingIndex < 10000:
         try growing.submit(increment, addrof growingValue)
         growingIndex = growingIndex + 1
     ..
@@ -161,12 +161,12 @@ pub main() !void:
         throw errors.failure("thread pool allocated its maximum worker storage eagerly")
     ..
     scaleIndex u64 = 0
-    while scaleIndex < 4:
+    loop scaleIndex < 4:
         try scaling.submit(occupy, addrof scaleContext)
         scaleIndex = scaleIndex + 1
     ..
     deadline u64 = time.ticks() + time.msToTicks(2000)
-    while atomicLoad(addrof ready) != 4 && time.ticks() < deadline:
+    loop atomicLoad(addrof ready) != 4 && time.ticks() < deadline:
         thread.yield()
     ..
     if atomicLoad(addrof ready) != 4:
@@ -183,7 +183,7 @@ pub main() !void:
     try scaling.wait()
     shrinkDeadline u64 = time.ticks() + time.msToTicks(2000)
     active u64 = 4
-    while active != 2 && time.ticks() < shrinkDeadline:
+    loop active != 2 && time.ticks() < shrinkDeadline:
         scaling.state.lock.lock()
         active = scaling.state.activeWorkers
         scaling.state.lock.unlock()

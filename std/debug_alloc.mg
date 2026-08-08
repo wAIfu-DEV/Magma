@@ -59,23 +59,19 @@ pub DebugAllocator(
 )
 
 findEntry(debug DebugAllocator*, pointer u8*) Entry*:
-    i u64 = 0
-    while i < debug.capacityValue:
+    for i u64 = 0 to debug.capacityValue:
         if debug.entries[i].active && debug.entries[i].pointer == pointer:
             ret addrof debug.entries[i]
         ..
-        i = i + 1
     ..
     ret none
 ..
 
 findFreeEntry(debug DebugAllocator*) Entry*:
-    i u64 = 0
-    while i < debug.capacityValue:
+    for i u64 = 0 to debug.capacityValue:
         if debug.entries[i].active == false:
             ret addrof debug.entries[i]
         ..
-        i = i + 1
     ..
     ret none
 ..
@@ -96,7 +92,7 @@ grow(debug DebugAllocator*) !void:
     memory.zero(newEntries, newCapacity * sizeof Entry)
     i u64 = 0
     writeIndex u64 = 0
-    while i < debug.capacityValue:
+    loop i < debug.capacityValue:
         if debug.entries[i].active:
             newEntries[writeIndex] = debug.entries[i]
             writeIndex = writeIndex + 1
@@ -268,15 +264,13 @@ DebugAllocator.leak(index u64) !Leak:
         throw errors.outOfBounds("debug allocator leak index is out of bounds")
     ..
     seen u64 = 0
-    i u64 = 0
-    while i < this.capacityValue:
+    for i u64 = 0 to this.capacityValue:
         if this.entries[i].active:
             if seen == index:
                 ret Leak(pointer=this.entries[i].pointer, size=this.entries[i].size)
             ..
             seen = seen + 1
         ..
-        i = i + 1
     ..
     throw errors.outOfBounds("debug allocator leak index is out of bounds")
 ..

@@ -40,7 +40,7 @@ scratchAlloc(raw ptr, byteCount u64) !u8*:
     ..
     required := try checked.alignUp(byteCount, ALIGNMENT)
     block Block* = scratch.bytes
-    while block != none:
+    loop block != none:
         if block.free && block.size >= required:
             remaining := block.size - required
             if remaining >= sizeof Block + ALIGNMENT:
@@ -59,7 +59,7 @@ scratchAlloc(raw ptr, byteCount u64) !u8*:
 
 findBlock(scratch Scratch*, pointer u8*) Block*:
     block Block* = scratch.bytes
-    while block != none:
+    loop block != none:
         if cast.ptou(block) + sizeof Block == cast.ptou(pointer):
             ret block
         ..
@@ -70,7 +70,7 @@ findBlock(scratch Scratch*, pointer u8*) Block*:
 
 coalesce(scratch Scratch*) void:
     block Block* = scratch.bytes
-    while block != none:
+    loop block != none:
         next := nextBlock(scratch, block)
         if next != none && block.free && next.free:
             block.size = block.size + sizeof Block + next.size

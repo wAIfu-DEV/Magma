@@ -17,12 +17,10 @@ pub equal(a u8[], b u8[]) bool:
     if n != slc.count(b):
         ret false
     ..
-    i u64 = 0
-    while i < n:
+    for i u64 = 0 to n:
         if a[i] != b[i]:
             ret false
         ..
-        i = i + 1
     ..
     ret true
 ..
@@ -36,12 +34,10 @@ pub equal(a u8[], b u8[]) bool:
 # @example
 #   index := try bytes.indexByte(data, 10)
 pub indexByte(in u8[], value u8) !u64:
-    i u64 = 0
-    while i < slc.count(in):
+    for i u64 = 0 to slc.count(in):
         if in[i] == value:
             ret i
         ..
-        i = i + 1
     ..
     throw errors.failure("byte not found")
 ..
@@ -67,12 +63,10 @@ pub startsWith(in u8[], prefix u8[]) bool:
     if slc.count(prefix) > slc.count(in):
         ret false
     ..
-    i u64 = 0
-    while i < slc.count(prefix):
+    for i u64 = 0 to slc.count(prefix):
         if in[i] != prefix[i]:
             ret false
         ..
-        i = i + 1
     ..
     ret true
 ..
@@ -88,13 +82,11 @@ pub endsWith(in u8[], suffix u8[]) bool:
         ret false
     ..
     start := slc.count(in) - slc.count(suffix)
-    i u64 = 0
-    while i < slc.count(suffix):
+    for i u64 = 0 to slc.count(suffix):
         idx := start + i
         if in[idx] != suffix[i]:
             ret false
         ..
-        i = i + 1
     ..
     ret true
 ..
@@ -106,31 +98,26 @@ pub endsWith(in u8[], suffix u8[]) bool:
 #   bytes.reverse(data)
 pub reverse(in u8[]) void:
     n := slc.count(in)
-    i u64 = 0
-    while i < n / 2:
+    for i u64 = 0 to n / 2:
         right := n - i - 1
         tmp := in[i]
         in[i] = in[right]
         in[right] = tmp
-        i = i + 1
     ..
 ..
 
-iterHasData(impl ptr, index u64*) bool:
+iterHasData(impl ptr, index u64) bool:
     bytesPtr u8[]* = impl
     bytes u8[] = *bytesPtr
     count := slc.count(bytes)
-    ret *index < count
+    ret index < count
 ..
 
-iterNext(impl ptr, index u64*) !u8:
+iterNext(impl ptr, index u64) !u8:
     bytesPtr u8[]* = impl
     bytes u8[] = *bytesPtr
     count := slc.count(bytes)
-    idx := *index
-    item := bytes[idx]
-    *index = idx + 1
-    ret item
+    ret bytes[index]
 ..
 
 # Creates a non-owning iterator over a byte slice.

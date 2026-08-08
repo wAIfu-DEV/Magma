@@ -99,11 +99,11 @@ test() void:
 `,
 		},
 		{
-			name: "string while condition",
+			name: "string loop condition",
 			source: `mod test
 
 test() void:
-    while "yes":
+    loop "yes":
     ..
 ..
 `,
@@ -291,7 +291,7 @@ test() void:
 		"wrong constructor field type":               {"link", "count", "expects type 'u64'"},
 		"constructor on intrinsic type":              {"link", "u64", "non-struct type 'u64'"},
 		"numeric if condition":                       {"type", "if", "if condition must have type 'bool'"},
-		"string while condition":                     {"type", "while", "while condition must have type 'bool'"},
+		"string loop condition":                      {"type", "loop", "loop condition must have type 'bool'"},
 		"throw non-error value":                      {"type", "throw", "cannot throw value of type 'i64'"},
 		"return value from void function":            {"type", "ret", "cannot return a value"},
 		"bare return from value function":            {"type", "ret", "missing return value"},

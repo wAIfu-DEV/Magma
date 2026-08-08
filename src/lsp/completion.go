@@ -14,6 +14,7 @@ type completionItem struct {
 	Kind          int                 `json:"kind,omitempty"`
 	Detail        string              `json:"detail,omitempty"`
 	FilterText    string              `json:"filterText,omitempty"`
+	InsertText    string              `json:"insertText,omitempty"`
 	SortText      string              `json:"sortText,omitempty"`
 	Documentation map[string]any      `json:"documentation,omitempty"`
 	TextEdit      *completionTextEdit `json:"textEdit,omitempty"`
@@ -292,7 +293,7 @@ func sanitizeOtherSelectors(source string, activeLine int) string {
 		}
 		if lineNumber != activeLine {
 			trimmed := strings.TrimSpace(string(clean[lineStart:lineEnd]))
-			if trimmed == "if" || trimmed == "while" || trimmed == "elif" {
+			if trimmed == "if" || trimmed == "loop" || trimmed == "elif" {
 				for i := lineStart; i < lineEnd; i++ {
 					clean[i] = ' '
 				}
@@ -622,7 +623,15 @@ func (d *docIndex) completions(keyPrefix, forbiddenDotPrefix, typedPrefix string
 		if forbiddenDotPrefix != "" && !strings.Contains(firstCodeLine(hover), "(") {
 			kind = 5
 		}
-		items = append(items, completionItem{Label: name, Kind: kind, Detail: firstCodeLine(hover), Documentation: map[string]any{"kind": "markdown", "value": hover}})
+		label := name
+		filterText := ""
+		insertText := ""
+		if d.completionDestructors[key] {
+			label = "~" + name
+			filterText = name
+			insertText = name
+		}
+		items = append(items, completionItem{Label: label, Kind: kind, Detail: firstCodeLine(hover), FilterText: filterText, InsertText: insertText, Documentation: map[string]any{"kind": "markdown", "value": hover}})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Label < items[j].Label })
 	return items

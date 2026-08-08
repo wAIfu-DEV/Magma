@@ -8,7 +8,7 @@ pub main() !void:
 
     rl.setTargetFPS(60)
 
-    while rl.windowShouldClose() == false:
+    loop rl.windowShouldClose() == false:
         rl.beginDrawing()
         defer rl.endDrawing()
         
