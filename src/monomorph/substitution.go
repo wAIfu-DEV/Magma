@@ -115,6 +115,9 @@ func substituteExpr(expr t.NodeExpr, subst map[string]*t.NodeType) {
 		n.Type = substituteType(n.Type, subst)
 	case *t.NodeExprAddrof:
 		substituteExpr(n.Expr, subst)
+	case *t.NodeExprMove:
+		n.InfType = substituteType(n.InfType, subst)
+		substituteExpr(n.Expr, subst)
 	case *t.NodeExprDestructureAssign:
 		n.ValueDef.Type = substituteType(n.ValueDef.Type, subst)
 		n.ErrDef.Type = substituteType(n.ErrDef.Type, subst)
@@ -152,6 +155,17 @@ func substituteStmt(stmt t.NodeStatement, subst map[string]*t.NodeType) {
 	case *t.NodeStmtFor:
 		substituteExpr(n.DeclExpr, subst)
 		substituteExpr(n.BoundExpr, subst)
+		for _, s := range n.Body.Statements {
+			substituteStmt(s, subst)
+		}
+	case *t.NodeStmtBounded:
+		for _, predicate := range n.Predicates {
+			substituteExpr(predicate, subst)
+		}
+		for _, s := range n.Body.Statements {
+			substituteStmt(s, subst)
+		}
+	case *t.NodeStmtUnsafe:
 		for _, s := range n.Body.Statements {
 			substituteStmt(s, subst)
 		}

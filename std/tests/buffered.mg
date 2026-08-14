@@ -10,22 +10,31 @@ use "std:strings" strings
 use "std:writer" writer
 
 sink(impl ptr, bytes str) !u64:
-    total u64* = impl
     count := bytes.countBytes()
-    *total = *total + count
+    # SAFETY: writer.new receives impl as addrof a live u64 in main.
+    unsafe:
+        total u64* = impl
+        *total = *total + count
+    ..
     ret count
 ..
 
 source(impl ptr, bytes u8[], count u64) !u64:
-    calls u64* = impl
-    if *calls == 0 && count >= 2:
-        bytes[0] = 65
-        bytes[1] = 10
-        *calls = 1
-        ret 2
+    # SAFETY: reader supplies a slice with at least count writable elements,
+    # and impl is addrof the live calls counter.
+    unsafe:
+        calls u64* = impl
+        if *calls == 0 && count >= 2:
+            bytes[0] = 65
+            bytes[1] = 10
+            *calls = 1
+            ret 2
+        ..
     ..
     ret 0
 ..
+
+const implVtable := reader.Vtable(read=source)
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()
@@ -46,7 +55,7 @@ pub main() !void:
         throw errors.failure("buffered writer flush changed")
     ..
     calls u64 = 0
-    input := reader.new(addrof calls, source)
+    input := reader.new(addrof calls, addrof implVtable)
     bufferedInput := try buffered.readerBuffered(a, input)
     defer bufferedInput.close()
     if bufferedInput.filledCount() != 0 || bufferedInput.isEof():
@@ -58,8 +67,11 @@ pub main() !void:
     line := try bufferedInput.readLn(a)
     defer line.free(a)
     linePtr u8* = strings.toPtr(line)
-    if linePtr[line.countBytes()] != 0:
-        throw errors.failure("buffered line is not null terminated")
+    # SAFETY: owned strings reserve a terminator immediately after countBytes.
+    unsafe:
+        if linePtr[line.countBytes()] != 0:
+            throw errors.failure("buffered line is not null terminated")
+        ..
     ..
     rawReader := bufferedInput.reader()
     spare := array u8[1]

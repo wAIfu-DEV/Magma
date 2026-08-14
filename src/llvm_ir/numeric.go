@@ -225,6 +225,9 @@ func irPromoteToNum(ctx *IrCtx, expectedType *t.NodeType, leftSsa SsaName, leftT
 }
 
 func irExprUnary(ctx *IrCtx, expectedType *t.NodeType, unaryExpr *t.NodeExprUnary) (SsaName, error) {
+	if unaryExpr.Operator == t.KwAsterisk && !unaryExpr.ProvenanceChecked {
+		return SsaName{}, fmt.Errorf("refusing to lower pointer dereference at line %d, column %d without provenance analysis", unaryExpr.Tk.Pos.Line, unaryExpr.Tk.Pos.Col)
+	}
 	operandType := unaryExpr.Operand.GetInferredType()
 	operandSsa, e := irExpression(ctx, operandType, unaryExpr.Operand, false)
 	if e != nil {

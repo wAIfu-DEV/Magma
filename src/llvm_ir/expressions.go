@@ -505,6 +505,9 @@ func irExprSubscript(ctx *IrCtx, subs *t.NodeExprSubscript) (SsaName, error) {
 	if subs.BoxType == nil || subs.BoxType.KindNode == nil || subs.ElemType == nil || subs.ElemType.KindNode == nil {
 		return SsaName{}, fmt.Errorf("cannot lower subscript without resolved container and element types")
 	}
+	if _, pointer := subs.BoxType.KindNode.(*t.NodeTypePointer); !pointer && subs.RangeProof == nil {
+		return SsaName{}, fmt.Errorf("cannot lower safe subscript at line %d, column %d without a validated range proof", subs.Tk.Pos.Line, subs.Tk.Pos.Col)
+	}
 	subsExpr, e := irExpression(ctx, subs.IndexType, subs.Expr, false)
 	if e != nil {
 		return SsaName{}, e
@@ -621,6 +624,9 @@ func irExprSubscriptLvalue(ctx *IrCtx, subs *t.NodeExprSubscript) (SsaName, erro
 	}
 	if subs.BoxType == nil || subs.BoxType.KindNode == nil || subs.ElemType == nil || subs.ElemType.KindNode == nil {
 		return SsaName{}, fmt.Errorf("cannot lower subscript lvalue without resolved container and element types")
+	}
+	if _, pointer := subs.BoxType.KindNode.(*t.NodeTypePointer); !pointer && subs.RangeProof == nil {
+		return SsaName{}, fmt.Errorf("cannot lower safe subscript lvalue at line %d, column %d without a validated range proof", subs.Tk.Pos.Line, subs.Tk.Pos.Col)
 	}
 	subsExpr, e := irExpression(ctx, subs.IndexType, subs.Expr, false)
 	if e != nil {
@@ -826,6 +832,8 @@ func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr, topLeve
 		return irExprSizeof(ctx, ne)
 	case *t.NodeExprAddrof:
 		return irExprAddrof(ctx, ne)
+	case *t.NodeExprMove:
+		return irExpression(ctx, expectedType, ne.Expr, topLevel)
 	case *t.NodeExprName:
 		return irExprName(ctx, ne)
 	case *t.NodeExprMemberAccess:
@@ -908,6 +916,9 @@ func irExpressionLvalue(ctx *IrCtx, expr t.NodeExpr) (SsaName, error) {
 		return irExprMemberAccessLvalue(ctx, ne)
 	case *t.NodeExprUnary:
 		if ne.Operator == t.KwAsterisk {
+			if !ne.ProvenanceChecked {
+				return SsaName{}, fmt.Errorf("refusing to lower pointer dereference at line %d, column %d without provenance analysis", ne.Tk.Pos.Line, ne.Tk.Pos.Col)
+			}
 			return irExpression(ctx, ne.Operand.GetInferredType(), ne.Operand, false)
 		}
 	}

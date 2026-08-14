@@ -12,7 +12,7 @@ pub Wait(
 
 pub new() !$Wait:
     value wake_mod.Wake = try wake_mod.new(wake_mod.condition())
-    ret Wait(wake=value)
+    ret Wait(wake=move value)
 ..
 
 pub wait(waiter Wait*, status u32*) !void:
@@ -24,5 +24,8 @@ pub wake(waiter Wait*, status u32*) void:
 ..
 
 pub free(waiter Wait*) void:
-    waiter.wake.free()
+    # SAFETY: free consumes the embedded wake object through its owning Wait pointer.
+    unsafe:
+        waiter.wake.free()
+    ..
 ..

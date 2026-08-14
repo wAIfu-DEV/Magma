@@ -4,18 +4,19 @@ use "../std/heap.mg" heap
 use "../std/io.mg" io
 
 main() !void:
+    out := io.stdoutUnbuffered()
     n u64 = 1
 
     loop n <= 100:
         if n % 15 == 0:
-            io.writeLn("FizzBuzz")
+            try out.writeLn("FizzBuzz")
         elif n % 3 == 0:
-            io.writeLn("Fizz")
+            try out.writeLn("Fizz")
         elif n % 5 == 0:
-            io.writeLn("Buzz")
+            try out.writeLn("Buzz")
         else:
-            io.writeUint64(n)
-            io.writeLn("")
+            try out.writeUint64(n)
+            try out.writeLn("")
         ..
 
         n = n + 1

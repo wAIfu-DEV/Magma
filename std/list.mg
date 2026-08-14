@@ -25,7 +25,7 @@ pub new[T](a alc.Allocator, cleanup (alc.Allocator, $T) void) !$List[T]:
 	array := try arr.new[T](a)
 	ret List[T](
         allocator=a,
-        array=array,
+		array=move array,
         cleanup=cleanup,
     )
 ..
@@ -36,7 +36,7 @@ pub new[T](a alc.Allocator, cleanup (alc.Allocator, $T) void) !$List[T]:
 # @example
 #   values := list.fromArray[Value](a, backing, freeValue)
 pub fromArray[T](a alc.Allocator, array $arr.Array[T], cleanup (alc.Allocator, $T) void) $List[T]:
-	ret List[T](allocator=a, array=array, cleanup=cleanup)
+	ret List[T](allocator=a, array=move array, cleanup=cleanup)
 ..
 
 # Returns the number of elements.
@@ -99,13 +99,20 @@ List[T].take(index u64) !$T:
     ret try this.array.take(index)
 ..
 
+# Replaces an element and transfers the previous value to the caller.
+# @ownership Consumes value and returns ownership of the displaced element.
+# @complexity O(1)
+List[T].replace(index u64, value $T) !$T:
+    ret try this.array.replace(index, move value)
+..
+
 # Replaces an element and cleans up the previous value.
 # @ownership Consumes value.
 # @complexity O(1)
 # @example
 #   try values.set(0, replacement)
 List[T].set(index u64, value $T) !void:
-    ret try this.array.set(this.allocator, index, value, this.cleanup)
+    ret try this.array.set(this.allocator, index, move value, this.cleanup)
 ..
 
 # Adds one uninitialized slot at the right and returns its index.
@@ -145,7 +152,7 @@ List[T].popLeft() !$T:
 # @example
 #   try values.pushRight(item)
 List[T].pushRight(item $T) !void:
-    try this.array.pushRight(this.allocator, item)
+    try this.array.pushRight(this.allocator, move item)
 ..
 
 # Prepends item and transfers ownership into the list.
@@ -153,7 +160,7 @@ List[T].pushRight(item $T) !void:
 # @example
 #   try values.pushLeft(item)
 List[T].pushLeft(item $T) !void:
-    try this.array.pushLeft(this.allocator, item)
+    try this.array.pushLeft(this.allocator, move item)
 ..
 
 # Cleans up every element and releases backing storage.
@@ -161,7 +168,10 @@ List[T].pushLeft(item $T) !void:
 # @example
 #   values.free()
 destr List[T].free() void:
-    this.array.free(this.allocator, this.cleanup)
+    # SAFETY: the List destructor exclusively consumes its embedded Array.
+    unsafe:
+        this.array.free(this.allocator, this.cleanup)
+    ..
 ..
 
 # Returns a forward iterator borrowing the list's current storage.

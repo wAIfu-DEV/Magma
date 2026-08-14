@@ -60,8 +60,11 @@ pub DebugAllocator(
 
 findEntry(debug DebugAllocator*, pointer u8*) Entry*:
     for i u64 = 0 to debug.capacityValue:
-        if debug.entries[i].active && debug.entries[i].pointer == pointer:
-            ret addrof debug.entries[i]
+        # SAFETY: entries is allocated for capacityValue Entry objects.
+        unsafe:
+            if debug.entries[i].active && debug.entries[i].pointer == pointer:
+                ret addrof debug.entries[i]
+            ..
         ..
     ..
     ret none
@@ -69,8 +72,11 @@ findEntry(debug DebugAllocator*, pointer u8*) Entry*:
 
 findFreeEntry(debug DebugAllocator*) Entry*:
     for i u64 = 0 to debug.capacityValue:
-        if debug.entries[i].active == false:
-            ret addrof debug.entries[i]
+        # SAFETY: entries is allocated for capacityValue Entry objects.
+        unsafe:
+            if debug.entries[i].active == false:
+                ret addrof debug.entries[i]
+            ..
         ..
     ..
     ret none
@@ -93,9 +99,13 @@ grow(debug DebugAllocator*) !void:
     i u64 = 0
     writeIndex u64 = 0
     loop i < debug.capacityValue:
-        if debug.entries[i].active:
-            newEntries[writeIndex] = debug.entries[i]
-            writeIndex = writeIndex + 1
+        # SAFETY: both metadata arrays have their recorded capacities; writeIndex
+        # never exceeds the number of active entries already visited.
+        unsafe:
+            if debug.entries[i].active:
+                newEntries[writeIndex] = debug.entries[i]
+                writeIndex = writeIndex + 1
+            ..
         ..
         i = i + 1
     ..
@@ -128,7 +138,11 @@ record(debug DebugAllocator*, entry Entry*, pointer u8*, size u64) void:
 ..
 
 debugAlloc(raw ptr, byteCount u64) !u8*:
-    debug DebugAllocator* = raw
+    debug DebugAllocator*
+    # SAFETY: allocator callbacks receive the DebugAllocator installed by allocator().
+    unsafe:
+        debug = raw
+    ..
     if byteCount == 0:
         throw errors.invalidArgument("debug allocation size must be greater than zero")
     ..
@@ -143,7 +157,11 @@ debugFree(raw ptr, pointer u8*) void:
     if pointer == none:
         ret
     ..
-    debug DebugAllocator* = raw
+    debug DebugAllocator*
+    # SAFETY: allocator callbacks receive the DebugAllocator installed by allocator().
+    unsafe:
+        debug = raw
+    ..
     entry := findEntry(debug, pointer)
     if entry == none:
         debug.rejectedFreesValue = debug.rejectedFreesValue + 1
@@ -164,7 +182,11 @@ debugFree(raw ptr, pointer u8*) void:
 ..
 
 debugRealloc(raw ptr, pointer u8*, byteCount u64) !u8*:
-    debug DebugAllocator* = raw
+    debug DebugAllocator*
+    # SAFETY: allocator callbacks receive the DebugAllocator installed by allocator().
+    unsafe:
+        debug = raw
+    ..
     if pointer == none:
         ret try debugAlloc(raw, byteCount)
     ..
@@ -193,9 +215,9 @@ debugRealloc(raw ptr, pointer u8*, byteCount u64) !u8*:
 ..
 
 const vtable := allocator.Vtable(
-    fn_alloc=debugAlloc,
-    fn_realloc=debugRealloc,
-    fn_free=debugFree,
+    alloc=debugAlloc,
+    realloc=debugRealloc,
+    free=debugFree,
 )
 
 # Creates a debug allocator with explicit tracking behavior.
@@ -264,12 +286,15 @@ DebugAllocator.leak(index u64) !Leak:
         throw errors.outOfBounds("debug allocator leak index is out of bounds")
     ..
     seen u64 = 0
-    for i u64 = 0 to this.capacityValue:
-        if this.entries[i].active:
-            if seen == index:
-                ret Leak(pointer=this.entries[i].pointer, size=this.entries[i].size)
+    # SAFETY: entries points to capacityValue initialized metadata records.
+    unsafe:
+        for i u64 = 0 to this.capacityValue:
+            if this.entries[i].active:
+                if seen == index:
+                    ret Leak(pointer=this.entries[i].pointer, size=this.entries[i].size)
+                ..
+                seen = seen + 1
             ..
-            seen = seen + 1
         ..
     ..
     throw errors.outOfBounds("debug allocator leak index is out of bounds")

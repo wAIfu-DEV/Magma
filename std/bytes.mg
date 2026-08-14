@@ -84,8 +84,10 @@ pub endsWith(in u8[], suffix u8[]) bool:
     start := slc.count(in) - slc.count(suffix)
     for i u64 = 0 to slc.count(suffix):
         idx := start + i
-        if in[idx] != suffix[i]:
-            ret false
+        bounded idx < slc.count(in), i < slc.count(suffix):
+            if in[idx] != suffix[i]:
+                ret false
+            ..
         ..
     ..
     ret true
@@ -100,24 +102,36 @@ pub reverse(in u8[]) void:
     n := slc.count(in)
     for i u64 = 0 to n / 2:
         right := n - i - 1
-        tmp := in[i]
-        in[i] = in[right]
-        in[right] = tmp
+        bounded i < n, right < n:
+            tmp := in[i]
+            in[i] = in[right]
+            in[right] = tmp
+        ..
     ..
 ..
 
 iterHasData(impl ptr, index u64) bool:
-    bytesPtr u8[]* = impl
-    bytes u8[] = *bytesPtr
+    bytes u8[]
+    # SAFETY: iterator contexts are created from a live u8[] descriptor by iter().
+    unsafe:
+        bytesPtr u8[]* = impl
+        bytes = *bytesPtr
+    ..
     count := slc.count(bytes)
     ret index < count
 ..
 
 iterNext(impl ptr, index u64) !u8:
-    bytesPtr u8[]* = impl
-    bytes u8[] = *bytesPtr
+    bytes u8[]
+    # SAFETY: iterator contexts are created from a live u8[] descriptor by iter().
+    unsafe:
+        bytesPtr u8[]* = impl
+        bytes = *bytesPtr
+    ..
     count := slc.count(bytes)
-    ret bytes[index]
+    bounded index < count:
+        ret bytes[index]
+    ..
 ..
 
 # Creates a non-owning iterator over a byte slice.

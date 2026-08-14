@@ -71,6 +71,30 @@ release(value $str, allocator alc.Allocator) void:
 	}
 }
 
+func TestLeadingDestructorHelperConsumesAddressedLocal(t *testing.T) {
+	diagnostics := checkSource(t, `mod main
+Resource(value u64)
+destr Resource.close() !void: this.value = 0 ..
+
+closeResult(resource Resource*) !bool:
+    try resource.close()
+    ret true
+..
+
+main() !void:
+    resource := Resource(value=0)
+    closed bool, closeError error = closeResult(addrof resource)
+    throw closeError
+    if closed == false:
+        ret
+    ..
+..
+`)
+	if len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %+v, want helper's leading destructor effect to consume local", diagnostics)
+	}
+}
+
 func TestOwnedPrimitiveStringMustBeConsumed(t *testing.T) {
 	diagnostics := checkSource(t, `mod main
 

@@ -75,6 +75,8 @@ func expressionSourceToken(expr t.NodeExpr) *t.Token {
 		return &n.Tk
 	case *t.NodeExprAddrof:
 		return &n.Tk
+	case *t.NodeExprMove:
+		return &n.Tk
 	case *t.NodeExprAssign:
 		return &n.Tk
 	case *t.NodeExprVarDefAssign:

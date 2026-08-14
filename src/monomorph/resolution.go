@@ -180,7 +180,7 @@ func (m *monoCtx) inferOwnerTypeFromCallee(currModule string, currGl *t.NodeGlob
 	return currType, sdModule, sdName, nil
 }
 
-func trackExprVarDefs(expr t.NodeExpr, env map[string]*t.NodeType) {
+func (m *monoCtx) trackExprVarDefs(module string, gl *t.NodeGlobal, expr t.NodeExpr, env map[string]*t.NodeType) {
 	switch n := expr.(type) {
 	case *t.NodeExprVarDef:
 		if s, ok := n.Name.(*t.NodeNameSingle); ok && n.Type != nil {
@@ -195,6 +195,18 @@ func trackExprVarDefs(expr t.NodeExpr, env map[string]*t.NodeType) {
 				// specialization later in the same body.
 				if init, isStructInit := n.AssignExpr.(*t.NodeExprStructInit); isStructInit {
 					varType = init.Type
+				}
+				if call, isCall := n.AssignExpr.(*t.NodeExprCall); isCall {
+					if callee, isName := call.Callee.(*t.NodeExprName); isName {
+						if targetModule, functionName, err := resolveQualifiedName(m.modules, module, gl, callee.Name); err == nil {
+							if target := m.modules[targetModule]; target != nil {
+								if definition := target.FuncDefs[functionName]; definition != nil {
+									varType = cloneType(definition.ReturnType)
+									_ = m.rewriteType(targetModule, target, varType)
+								}
+							}
+						}
+					}
 				}
 			}
 			if varType != nil {

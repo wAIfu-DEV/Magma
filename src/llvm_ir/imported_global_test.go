@@ -2,6 +2,7 @@ package llvmir_test
 
 import (
 	"Magma/src/checker"
+	"Magma/src/destroy_checker"
 	"Magma/src/join"
 	llvmir "Magma/src/llvm_ir"
 	"Magma/src/monomorph"
@@ -51,6 +52,9 @@ main() void:
 	}
 	if err == nil {
 		err = checker.TypeChecker(state)
+	}
+	if err == nil {
+		err = destroychecker.Run(state, false)
 	}
 	if err != nil {
 		t.Fatalf("check imported global member chain: %v", err)

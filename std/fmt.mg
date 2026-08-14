@@ -112,7 +112,11 @@ append(f Format*, part Part) void:
     if ensureCapacity(f) == false:
         ret
     ..
-    f.parts[f.count] = part
+    # SAFETY: ensureCapacity guarantees an initialized allocation with a free
+    # slot at count.
+    unsafe:
+        f.parts[f.count] = part
+    ..
     f.count = f.count + 1
 ..
 
@@ -132,7 +136,7 @@ pub str(a alc.Allocator, initial str) $Format:
         failure=allocErr,
     )
     append(addrof result, stringPart(initial))
-    ret result
+    ret move result
 ..
 
 # Appends a borrowed string part.
@@ -181,7 +185,11 @@ writeParts(f Format*, out writer.Writer) !u64:
 
     written u64 = 0
     for i u64 = 0 to f.count:
-        part := f.parts[i]
+        part Part
+        # SAFETY: Format maintains count <= capacity and initializes each part.
+        unsafe:
+            part = f.parts[i]
+        ..
         next u64 = 0
         if part.kind == KIND_STRING:
             payload str* = cast.reinterpret[str](addrof part.value)
@@ -268,12 +276,16 @@ BufferSink(
 )
 
 writeBuffer(impl ptr, bytes str) !u64:
-    sink BufferSink* = impl
     count := bytes.countBytes()
-    for i u64 = 0 to count:
-        sink.out[sink.offset + i] = strings.byteAt(bytes, i)
+    # SAFETY: impl is created from BufferSink by render, and render allocates
+    # enough output for every write accepted by this callback.
+    unsafe:
+        sink BufferSink* = impl
+        for i u64 = 0 to count:
+            sink.out[sink.offset + i] = strings.byteAt(bytes, i)
+        ..
+        sink.offset = sink.offset + count
     ..
-    sink.offset = sink.offset + count
     ret count
 ..
 
@@ -306,7 +318,7 @@ destr Format.toStr(a alc.Allocator) !$str:
     ignored u64, writeErr error = writeParts(this, out)
     release(this)
     if writeErr.nok(): throw writeErr ..
-    ret result
+    ret move result
 ..
 
 # Discards a format without rendering it.

@@ -7,6 +7,7 @@ use "std:fs" fs
 use "std:strings" strings
 use "std:time" time
 use "std:thread_pool" thread_pool
+use "std:context" context
 
 const readyFile str = "std_process_kill_ready.tmp"
 
@@ -66,7 +67,8 @@ runSpawnTest() !void:
     asyncArgs[0] = "/d"
     asyncArgs[1] = "/c exit 11"
 
-    execPending := try process.execAsync(pool, a, "cmd.exe", asyncArgs)
+    ctx := context.new(a, pool.executor())
+    execPending := try process.execAsync(ctx, "cmd.exe", asyncArgs)
     if try execPending.await() != 11:
         try pool.close()
         throw errors.failure("execAsync returned the wrong exit code")
@@ -115,7 +117,6 @@ runSpawnTest() !void:
     args[0] = "-c"
     args[1] = "exit 0"
     child := try process.spawn("sh", args)
-    try child.isFinished()
     if try child.await() != 0:
         throw errors.failure("spawned process returned the wrong exit code")
     ..
@@ -126,7 +127,8 @@ runSpawnTest() !void:
     asyncArgs[0] = "-c"
     asyncArgs[1] = "exit 11"
 
-    execPending := try process.execAsync(pool, a, "sh", asyncArgs)
+    ctx := context.new(a, pool.executor())
+    execPending := try process.execAsync(ctx, "sh", asyncArgs)
     if try execPending.await() != 11:
         try pool.close()
         throw errors.failure("execAsync returned the wrong exit code")
@@ -144,8 +146,8 @@ runSpawnTest() !void:
     killArgs[0] = "-c"
     killArgs[1] = "printf ready > std_process_kill_ready.tmp; while :; do :; done"
     killed := try process.spawn("sh", killArgs)
+    defer try killed.kill()
     try waitForChildStart()
-    try killed.kill()
     try process.exec("sh", cleanupArgs)
 ..
 

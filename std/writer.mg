@@ -39,7 +39,11 @@ ConstWriter.write(bytes str) !u64:
 constWriterWriteRemaining(cw ConstWriter*, bytes str, firstWritten u64) !u64:
     total u64 = firstWritten
     bound u64 = bytes.countBytes()
-    base ptr = strings.toPtr(bytes)
+    base ptr
+    # SAFETY: byte-offset traversal remains within bytes.countBytes().
+    unsafe:
+        base = strings.toPtr(bytes)
+    ..
     loop total < bound:
         remaining u64 = bound - total
         next ptr = cast.utop(cast.ptou(base) + total)
@@ -124,7 +128,11 @@ Writer.writeAll(bytes str) !u64:
 
     total u64 = firstWritten
     bound u64 = bytes.countBytes()
-    base ptr = strings.toPtr(bytes)
+    base ptr
+    # SAFETY: byte-offset traversal remains within bytes.countBytes().
+    unsafe:
+        base = strings.toPtr(bytes)
+    ..
 
     loop total < bound:
         remaining u64 = bound - total
@@ -202,13 +210,17 @@ Writer.writeInt64(num i64) !u64:
     loop n != 0:
         idx = idx - 1
         d u16 = cast.u64to16(n % 10)
-        buf[idx] = digitToChar(d)
+        bounded idx < buf.count():
+            buf[idx] = digitToChar(d)
+        ..
         n = n / 10
     ..
 
     if isNeg:
         idx = idx - 1
-        buf[idx] = strings.byteAt("-", 0)
+        bounded idx < buf.count():
+            buf[idx] = strings.byteAt("-", 0)
+        ..
     ..
 
     len u64 = 20 - idx
@@ -237,7 +249,9 @@ Writer.writeUint64(num u64) !u64:
     loop n != 0:
         idx = idx - 1
         d u16 = cast.u64to16(n % 10)
-        buf[idx] = digitToChar(d)
+        bounded idx < buf.count():
+            buf[idx] = digitToChar(d)
+        ..
         n = n / 10
     ..
 
@@ -324,30 +338,40 @@ Writer.writeFloat64(flt f64, precision u64) !u64:
         for i u64 = 0 to precision:
             idx = idx - 1
             d u64 = fracInt % 10
-            buf[idx] = digitToChar(cast.u64to16(d))
+            bounded idx < buf.count():
+                buf[idx] = digitToChar(cast.u64to16(d))
+            ..
             fracInt = fracInt / 10
         ..
 
         idx = idx - 1
-        buf[idx] = strings.byteAt(".", 0)
+        bounded idx < buf.count():
+            buf[idx] = strings.byteAt(".", 0)
+        ..
     ..
 
     if intPart == 0:
         idx = idx - 1
-        buf[idx] = strings.byteAt("0", 0)
+        bounded idx < buf.count():
+            buf[idx] = strings.byteAt("0", 0)
+        ..
     else:
         n u64 = intPart
         loop n != 0:
             idx = idx - 1
             d u64 = n % 10
-            buf[idx] = digitToChar(cast.u64to16(d))
+            bounded idx < buf.count():
+                buf[idx] = digitToChar(cast.u64to16(d))
+            ..
             n = n / 10
         ..
     ..
 
     if isNeg:
         idx = idx - 1
-        buf[idx] = strings.byteAt("-", 0)
+        bounded idx < buf.count():
+            buf[idx] = strings.byteAt("-", 0)
+        ..
     ..
 
     len u64 = 64 - idx

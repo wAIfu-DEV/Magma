@@ -26,9 +26,9 @@ fakeFree(impl ptr, in u8*) void:
 ..
 
 const gl_fakeVtable := a.Vtable(
-    fn_alloc =   fakeAlloc,
-    fn_realloc = fakeRealloc,
-    fn_free =    fakeFree,
+    alloc =   fakeAlloc,
+    realloc = fakeRealloc,
+    free =    fakeFree,
 )
 
 # Returns an allocator whose allocation and reallocation operations always fail.

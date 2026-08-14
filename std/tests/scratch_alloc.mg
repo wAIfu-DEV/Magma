@@ -11,11 +11,17 @@ pub main() !void:
 
     first := try a.alloc(64)
     second := try a.alloc(64)
-    first[0] = 73
+    # SAFETY: first names a live writable 64-byte allocation.
+    unsafe:
+        first[0] = 73
+    ..
     a.free(second)
     first = try a.realloc(first, 160)
-    if first[0] != 73:
-        throw errors.failure("scratch realloc did not preserve data")
+    # SAFETY: successful realloc returned 160 bytes and preserves the prefix.
+    unsafe:
+        if first[0] != 73:
+            throw errors.failure("scratch realloc did not preserve data")
+        ..
     ..
 
     a.free(first)

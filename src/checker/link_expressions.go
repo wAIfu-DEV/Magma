@@ -274,6 +274,8 @@ func clExpr(c *ctx, expr t.NodeExpr, lvalue bool) error {
 		return nil
 	case *t.NodeExprAddrof:
 		return clExpr(c, n.Expr, lvalue)
+	case *t.NodeExprMove:
+		return clExpr(c, n.Expr, false)
 	case *t.NodeExprCall:
 		return clExprCall(c, n)
 	case *t.NodeExprStructInit:

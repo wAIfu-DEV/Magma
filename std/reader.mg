@@ -7,23 +7,26 @@ use "std:slices"    slices
 use "std:strings"   strings
 use "std:errors"    errors
 use "std:cast"      cast
-use "std:footgun"   footgun
 use "std:future"    future
+
+pub Vtable(
+    read (ptr, u8[], u64) !u64,
+)
 
 # Reader interface for pulling bytes into strings or buffers.
 # @complexity O(1) wrapper calls; underlying reader decides cost.
 pub Reader(
     impl ptr,
-    readFunc (ptr, u8[], u64) !u64,
+    vtable Vtable*,
 )
 
 # Creates a reader over caller-owned state.
 # @complexity O(1)
 # @ownership impl must remain valid while the Reader is used.
 # @example
-#   input := reader.new(state, readCallback)
-pub new(impl ptr, readFunc (ptr, u8[], u64) !u64) Reader:
-    ret Reader(impl=impl, readFunc=readFunc)
+#   input := reader.new(state, addrof constVtable)
+pub new(impl ptr, vtable Vtable*) Reader:
+    ret Reader(impl=impl, vtable=vtable)
 ..
 
 # Reads up to nBytes and returns a string containing the bytes read.
@@ -45,11 +48,16 @@ Reader.read(a alc.Allocator, nBytes u64) !$str:
     buffPtr u8* = strings.toPtr(result)
     buff u8[] = slices.fromPtr(buffPtr, nBytes)
     readCnt u64 = try this.readToBuff(buff, nBytes)
-    buffPtr[readCnt] = 0
+    # SAFETY: strings.alloc reserves the trailing terminator byte and readToBuff
+    # returns no more than the supplied nBytes extent.
+    unsafe:
+        buffPtr[readCnt] = 0
+    ..
 
-    # Compiler warning suppression
-    footgun.drop[str](result)
-    ret strings.fromPtrNoCopy(buffPtr, readCnt)
+    if strings.truncate(addrof result, readCnt) == false:
+        throw errors.failure("reader produced an invalid byte count")
+    ..
+    ret move result
 ..
 
 # Reads into the provided buffer up to nBytes bytes.
@@ -64,7 +72,7 @@ Reader.readToBuff(buff u8[], nBytes u64) !u64:
     if slices.count(buff) < nBytes:
         throw errors.invalidArgument("would overflow")
     ..
-    readCnt u64 = try this.readFunc(this.impl, buff, nBytes)
+    readCnt u64 = try this.vtable.read(this.impl, buff, nBytes)
     if readCnt > nBytes:
         throw errors.failure("reader returned more bytes than requested")
     ..
@@ -81,7 +89,7 @@ runReadTask(ctx ReaderReadTask*) !str:
     ret try ctx.source.read(ctx.allocator, ctx.count)
 ..
 
-Reader.readAsync(ctx context.Ctx, nBytes u64) !future.Future[str]:
-    task := ReaderReadTask(source=this, allocator=ctx.allocator, count=nBytes)
-    ret try future.new[str, ReaderReadTask](ctx.allocator, ctx.executor, runReadTask, task)
+Reader.readAsync(ctx context.Ctx, nBytes u64) !$future.Future[str]:
+    task := ReaderReadTask(source=this, allocator=ctx.alloc, count=nBytes)
+    ret try future.new[str, ReaderReadTask](ctx.alloc, ctx.exec, runReadTask, task)
 ..

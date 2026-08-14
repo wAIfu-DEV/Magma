@@ -35,33 +35,51 @@ pub Future[T](
 )
 
 atomicAdd(target u64*, value u64) void:
-    llvm "  %previous = atomicrmw add ptr %target, i64 %value monotonic, align 8\n"
-    llvm "  ret void\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %previous = atomicrmw add ptr %target, i64 %value monotonic, align 8\n"
+        llvm "  ret void\n"
+    ..
 ..
 
 atomicLoad(target u64*) u64:
-    llvm "  %value = load atomic i64, ptr %target monotonic, align 8\n"
-    llvm "  ret i64 %value\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %value = load atomic i64, ptr %target monotonic, align 8\n"
+        llvm "  ret i64 %value\n"
+    ..
 ..
 
 atomicStore(target u64*, value u64) void:
-    llvm "  store atomic i64 %value, ptr %target monotonic, align 8\n"
-    llvm "  ret void\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  store atomic i64 %value, ptr %target monotonic, align 8\n"
+        llvm "  ret void\n"
+    ..
 ..
 
 publishDone(status u32*) void:
-    llvm "  store atomic i32 1, ptr %status release, align 4\n"
-    llvm "  ret void\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  store atomic i32 1, ptr %status release, align 4\n"
+        llvm "  ret void\n"
+    ..
 ..
 
 loadStatus(status u32*) u32:
-    llvm "  %value = load atomic i32, ptr %status acquire, align 4\n"
-    llvm "  ret i32 %value\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %value = load atomic i32, ptr %status acquire, align 4\n"
+        llvm "  ret i32 %value\n"
+    ..
 ..
 
 releaseReference(references u32*) u32:
-    llvm "  %previous = atomicrmw sub ptr %references, i32 1 acq_rel, align 4\n"
-    llvm "  ret i32 %previous\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %previous = atomicrmw sub ptr %references, i32 1 acq_rel, align 4\n"
+        llvm "  ret i32 %previous\n"
+    ..
 ..
 
 releaseState[T](state State[T]*) void:
@@ -76,7 +94,10 @@ taskMain[T, Context](raw ptr) u64:
     state State[T]* = addrof work.state
     value T, failure error = work.entry(addrof work.context)
     if failure.ok():
-        state.value = value
+        # SAFETY: this worker has exclusive initialization access before publishDone.
+        unsafe:
+            state.value = value
+        ..
     else:
         state.failure = failure
     ..
@@ -159,5 +180,5 @@ destr Future[T].await() !$T:
     value $T = state.value
     this.state = none
     releaseState[T](state)
-    ret value
+    ret move value
 ..

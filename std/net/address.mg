@@ -170,10 +170,14 @@ pub parseIpv6(text str) !IpAddress:
         compressedIndex u64 = cast.itou(compression)
         tail u64 = count - compressedIndex
         for moved u64 = 0 to tail:
-            groups[7 - moved] = groups[count - 1 - moved]
+            bounded 7 - moved < groups.count(), count - 1 - moved < groups.count():
+                groups[7 - moved] = groups[count - 1 - moved]
+            ..
         ..
         for zeroIndex u64 = compressedIndex to 8 - tail:
-            groups[zeroIndex] = 0
+            bounded zeroIndex < groups.count():
+                groups[zeroIndex] = 0
+            ..
         ..
     ..
     word0 u32 = (cast.u64to32(groups[0]) << 16) | cast.u64to32(groups[1])

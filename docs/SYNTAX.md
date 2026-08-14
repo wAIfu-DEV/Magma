@@ -255,7 +255,7 @@ Magma also accepts an ownership/reference marker `$` before or after types:
 ```magma
 heap_ptr $MyStruct* = try heap.alloc(sizeof MyStruct)
 Allocator.alloc(byteCount u64) !$u8*:
-    ret try this.vtable.fn_alloc(this.impl, byteCount)
+    ret try this.vtable.alloc(this.impl, byteCount)
 ..
 ```
 
@@ -310,21 +310,21 @@ Function-pointer types are written as an argument type list followed by a return
 type:
 
 ```magma
-fn_alloc   (ptr, u64) !u8*
-fn_realloc (ptr, u8*, u64) !u8*
-fn_free    (ptr, u8*) void
+alloc   (ptr, u64) !u8*
+realloc (ptr, u8*, u64) !u8*
+free    (ptr, u8*) void
 ```
 
 They are commonly used inside interface-like structs:
 
 ```magma
-AllocatorVTable(
-    fn_alloc   (ptr, u64) !u8*,
-    fn_realloc (ptr, u8*, u64) !u8*,
-    fn_free    (ptr, u8*) void,
+VTable(
+    alloc   (ptr, u64) !u8*,
+    realloc (ptr, u8*, u64) !u8*,
+    free    (ptr, u8*) void,
 )
 
-Allocator(impl ptr, vtable AllocatorVTable*)
+Allocator(impl ptr, vtable VTable*)
 ```
 
 Function type argument lists contain types only, not argument names:
@@ -793,6 +793,20 @@ The upper bound is evaluated exactly once before iteration begins. The index is
 local to the loop, advances by one after each iteration, and is also advanced
 when an iteration leaves through `continue`, `break`, `ret`, or `throw`.
 
+Ordinary slice subscripts require a dominating range proof. Canonical `for`
+and conditional `loop` headers establish that proof automatically. A dynamic
+relation can be checked once for a lexical region with `bounded`:
+
+```magma
+bounded i < left.count(), i < right.count():
+    left[i] = right[i]
+..
+```
+
+The compiler emits one entry guard for the predicate list and no per-access
+checks. Assigning an index, bound, or relevant container descriptor invalidates
+the affected fact; an unproven ordinary subscript is a safety error.
+
 ## Errors
 
 Magma has a first-class `error` type and throwing return types. On 64-bit
@@ -918,8 +932,8 @@ fd i32 = ext_unix_open(path_cstr, flags, mode)
 
 ## Compiler Directives
 
-Compiler directives begin with `@`. The implemented directives are `platform`
-and `export_name`.
+Compiler directives begin with `@`. The implemented directives are `platform`,
+`export_name`, and `no_retain`.
 
 ```magma
 @platform("windows")
@@ -935,6 +949,19 @@ item. If the selected target OS does not match one of the string arguments,
 that item is pruned.
 
 Directive arguments must be literal constants: strings, numbers, or booleans.
+
+`@no_retain` applies to a function whose owned result does not retain any
+pointer or slice argument. It refines the ownership checker's conservative
+completion-lifetime inference; it does not make pointer access unsafe or bypass
+ordinary provenance and bounds checks.
+
+```magma
+@no_retain
+parseTree(scanner Scanner*) !$Tree:
+    # The returned tree owns detached storage and stores no scanner pointer.
+    ret try parseDetached(scanner)
+..
+```
 
 ## Exported Native Symbols
 
@@ -1014,6 +1041,15 @@ fd i32 = ext_unix_open(path_cstr, flags, mode)
 
 External declarations have no body.
 
+Pointer arguments have a fixed call-only FFI contract: the native function may
+use them until it returns but does not consume or retain them. A `$` spelling on
+an external parameter does not override this default. Returned pointers have
+opaque provenance and require validation or an unsafe conversion before use.
+Native operations that retain a pointer or return owned pointer-backed state
+must be hidden behind a Magma wrapper that validates its sizes/nullability and
+localizes the exceptional call in `unsafe:`. Safe callers use the wrapper's
+owning or completion-bearing result; no lifetime clauses are added to `ext`.
+
 ## Native Libraries
 
 Native libraries required by external declarations are declared at top level:
@@ -1052,7 +1088,24 @@ across imported modules, and ignored for LLVM and object emission. Selecting a
 static `.lib` later uses the same `link` declaration; the referenced library
 artifact determines the linkage kind.
 
+On ELF platforms, a bundled shared library's filename must match its `SONAME`.
+Magma gives Linux and supported BSD executables an `$ORIGIN` runtime search
+path, allowing the dynamic loader to find bundled libraries beside them.
+
 ## Inline LLVM
+
+Inline LLVM is an unsafe-only operation inside function bodies and must be
+localized in an `unsafe:` block. The block is lexical: it permits otherwise
+unverifiable low-level operations but does not disable type, ownership, bounds,
+or control-flow checking.
+
+```magma
+rawRead(value u8*) u8:
+    unsafe:
+        ret *value
+    ..
+..
+```
 
 Inline LLVM is written with `llvm` followed by a string literal:
 
@@ -1211,7 +1264,7 @@ grouped := (values)[index]
 
 ### Scope and Name Resolution
 
-Functions and nested `if`, `elif`, `else`, `loop`, and `for` bodies have lexical local
+Functions and nested `if`, `elif`, `else`, `loop`, `for`, and `bounded` bodies have lexical local
 scopes. Magma forbids shadowing: a variable, parameter, global, or
 function declaration cannot reuse a visible variable or function name.
 Duplicate declarations in the same scope are also rejected. Separate sibling
@@ -1302,7 +1355,7 @@ declaration, or inline LLVM item. It does not apply to a whole file or to a
 block of declarations.
 
 Directive arguments must be literal strings, numbers, or booleans. The
-implemented directive names are `platform` and `export_name`; other directive
+implemented directive names are `platform`, `export_name`, and `no_retain`; other directive
 names are rejected. `@export_name` must immediately precede the function it
 exports.
 

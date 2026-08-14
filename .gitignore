@@ -1,6 +1,8 @@
 Magma.exe
+Magma
 magma-*.zip
 out.exe
+out
 out/*
 /out*.ll
 IGNORE/

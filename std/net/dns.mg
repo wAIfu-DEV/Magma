@@ -58,7 +58,7 @@ pub new(a allocator.Allocator, options Options) !$Resolver:
     onerror a.free(entries)
     memory.zero(entries, options.capacity * sizeof Entry)
     guard := try mutex.new()
-    ret Resolver(allocator=a, entries=entries, capacity=options.capacity, ttlMs=options.ttlMs, negativeTtlMs=options.negativeTtlMs, maxResults=options.maxResults, lock=guard, active=true)
+    ret Resolver(allocator=a, entries=entries, capacity=options.capacity, ttlMs=options.ttlMs, negativeTtlMs=options.negativeTtlMs, maxResults=options.maxResults, lock=move guard, active=true)
 ..
 
 hashKey(host str, service str, family u8) u64:
@@ -74,7 +74,10 @@ hashKey(host str, service str, family u8) u64:
 ..
 
 entryAt(resolver Resolver*, index u64) Entry*:
-    ret addrof resolver.entries[index]
+    # SAFETY: callers reduce or compare index against resolver.capacity.
+    unsafe:
+        ret addrof resolver.entries[index]
+    ..
 ..
 
 matches(entry Entry*, hash u64, host str, service str, family u8) bool:
@@ -82,16 +85,23 @@ matches(entry Entry*, hash u64, host str, service str, family u8) bool:
 ..
 
 copyResults(source address.Endpoint*, count u64, output address.Endpoint[]) !u64:
+    # SAFETY: source contains count cached endpoints and the output guard
+    # establishes at least count writable slots.
+    unsafe:
     if count > slices.count(output):
         throw errors.wouldOverflow("DNS output buffer is too small")
     ..
     for i u64 = 0 to count:
         output[i] = source[i]
     ..
-    ret count
+      ret count
+    ..
 ..
 
 clearEntry(resolver Resolver*, entry Entry*) void:
+    # SAFETY: occupied is the ownership bit for host, service, and endpoints;
+    # zeroing prevents any second cleanup.
+    unsafe:
     if entry.occupied:
         entry.host.free(resolver.allocator)
         entry.service.free(resolver.allocator)
@@ -99,6 +109,7 @@ clearEntry(resolver Resolver*, entry Entry*) void:
             resolver.allocator.free(entry.endpoints)
         ..
         memory.zero(entry, sizeof Entry)
+      ..
     ..
 ..
 
@@ -182,8 +193,8 @@ Resolver.resolveTo(host str, service str, family u8, output address.Endpoint[]) 
     ..
     cached.occupied = true
     cached.hash = hash
-    cached.host = ownedHost
-    cached.service = ownedService
+    cached.host = move ownedHost
+    cached.service = move ownedService
     cached.family = family
     cached.endpoints = resolved
     cached.count = resolvedCount

@@ -6,6 +6,7 @@ use "../std/strconv.mg" strconv
 use "../std/strings.mg" strings
 
 won(board u8[], mark u8) bool:
+    bounded 9 <= board.count():
     if board[0] == mark && board[1] == mark && board[2] == mark:
         ret true
     elif board[3] == mark && board[4] == mark && board[5] == mark:
@@ -23,10 +24,12 @@ won(board u8[], mark u8) bool:
     elif board[2] == mark && board[4] == mark && board[6] == mark:
         ret true
     ..
-    ret false
+      ret false
+    ..
 ..
 
 printBoard(out writer.Writer, board u8[]) !void:
+    bounded 9 <= board.count():
     i u64 = 0
 
     loop i < 9:
@@ -44,6 +47,7 @@ printBoard(out writer.Writer, board u8[]) !void:
         ..
 
         i = i + 1
+      ..
     ..
 ..
 

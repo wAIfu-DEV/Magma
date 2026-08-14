@@ -161,6 +161,33 @@ main() void:
 	}
 }
 
+func TestMoveIsContextualAndPreserved(t *testing.T) {
+	global, err := parseTestSource(t, `mod main
+consume(value $str) void:
+..
+move(value str) void:
+..
+main() void:
+    value $str = "owned"
+    consume(move value)
+    move("ordinary call")
+..
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainFn := global.FuncDefs["main"]
+	consumeStmt := mainFn.Body.Statements[1].(*mt.NodeStmtExpr)
+	consumeCall := consumeStmt.Expression.(*mt.NodeExprCall)
+	if _, ok := consumeCall.Args[0].(*mt.NodeExprMove); !ok {
+		t.Fatalf("consume argument = %T, want move expression", consumeCall.Args[0])
+	}
+	ordinaryStmt := mainFn.Body.Statements[2].(*mt.NodeStmtExpr)
+	if _, ok := ordinaryStmt.Expression.(*mt.NodeExprCall); !ok {
+		t.Fatalf("ordinary move call = %T, want call expression", ordinaryStmt.Expression)
+	}
+}
+
 func TestForLoopSyntaxErrors(t *testing.T) {
 	tests := map[string]struct {
 		body string

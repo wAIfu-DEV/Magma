@@ -28,7 +28,11 @@ pub Arena(
 )
 
 arenaAlloc(raw ptr, byteCount u64) !u8*:
-    arena Arena* = raw
+    arena Arena*
+    # SAFETY: allocator callbacks receive the Arena address installed by allocator().
+    unsafe:
+        arena = raw
+    ..
     if byteCount == 0:
         throw errors.invalidArgument("arena allocation size must be greater than zero")
     ..
@@ -45,7 +49,11 @@ arenaAlloc(raw ptr, byteCount u64) !u8*:
 ..
 
 arenaRealloc(raw ptr, block u8*, byteCount u64) !u8*:
-    arena Arena* = raw
+    arena Arena*
+    # SAFETY: allocator callbacks receive the Arena address installed by allocator().
+    unsafe:
+        arena = raw
+    ..
     if block == none:
         ret try arenaAlloc(raw, byteCount)
     ..
@@ -82,9 +90,9 @@ arenaFree(raw ptr, block u8*) void:
 ..
 
 const vtable := allocator.Vtable(
-    fn_alloc=arenaAlloc,
-    fn_realloc=arenaRealloc,
-    fn_free=arenaFree,
+    alloc=arenaAlloc,
+    realloc=arenaRealloc,
+    free=arenaFree,
 )
 
 # Creates an arena with owned storage of capacity bytes.

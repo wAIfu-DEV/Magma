@@ -21,19 +21,19 @@ pub listen(endpoint address.Endpoint, backlog u32) !$Listener:
     try value.setReuseAddress(true)
     try value.bind(endpoint)
     try value.listen(backlog)
-    ret Listener(socket=value)
+    ret Listener(socket=move value)
 ..
 
 pub connect(endpoint address.Endpoint) !$Stream:
     value := try socket.open(endpoint.address.family, socket.TYPE_STREAM)
     onerror value.close()
     try value.connect(endpoint)
-    ret Stream(socket=value)
+    ret Stream(socket=move value)
 ..
 
 Listener.accept() !$Stream:
     accepted := try this.socket.accept()
-    ret Stream(socket=accepted)
+    ret Stream(socket=move accepted)
 ..
 
 Listener.localEndpoint() !address.Endpoint:

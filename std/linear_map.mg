@@ -22,14 +22,10 @@ pub LinearMap[T](
 release[T](a alc.Allocator, cleanup (alc.Allocator, $T) void, value $T) void:
     if cleanup == none:
         abandoned := array T[1]
-        abandoned[0] = value
+        abandoned[0] = move value
         ret
     ..
-    cleanup(a, value)
-..
-
-claim[T](claimed $T) $T:
-    ret claimed
+    cleanup(a, move value)
 ..
 
 # Creates an empty map and optionally installs a value cleanup callback.
@@ -57,6 +53,8 @@ pub new[T](a alc.Allocator, cleanup (alc.Allocator, $T) void) !$LinearMap[T]:
 # @example
 #   index := try map.indexOf("name")
 LinearMap[T].indexOf(key str) !u64:
+    # SAFETY: keys points to capacity slots and countValue never exceeds capacity.
+    unsafe:
     bound := cast.u16to64(this.countValue)
     keys str* = this.keys
     for i u64 = 0 to bound:
@@ -64,7 +62,8 @@ LinearMap[T].indexOf(key str) !u64:
             ret i
         ..
     ..
-    throw err.failure("key not found in linear map")
+      throw err.failure("key not found in linear map")
+    ..
 ..
 
 # Expands storage while preserving current entry order.
@@ -101,7 +100,7 @@ LinearMap[T].grow() !void:
 #   try map.delete("temporary")
 LinearMap[T].delete(key str) !void:
     value := try this.take(key)
-    release[T](this.allocator, this.cleanup, value)
+    release[T](this.allocator, this.cleanup, move value)
 ..
 
 # Removes key and transfers its value to the caller without cleanup.
@@ -110,18 +109,25 @@ LinearMap[T].delete(key str) !void:
 # @example
 #   value := try map.take("name")
 LinearMap[T].take(key str) !$T:
+    # SAFETY: indexOf returns an occupied slot below countValue; clearing a slot
+    # before moving the last entry preserves unique ownership and occupancy.
+    unsafe:
     idx := try this.indexOf(key)
     lastIdx := cast.u16to64(this.countValue) - 1
     keys str* = this.keys
     values T* = this.values
-    taken := claim[T](values[idx])
+    taken $T = values[idx]
+    values[idx] = mem.zeroValue[T]()
     keys[idx].free(this.allocator)
     if idx != lastIdx:
         keys[idx] = keys[lastIdx]
         values[idx] = values[lastIdx]
+        keys[lastIdx] = ""
+        values[lastIdx] = mem.zeroValue[T]()
     ..
     this.countValue = this.countValue - 1
-    ret taken
+      ret move taken
+    ..
 ..
 
 # Returns the value for key without removing it.
@@ -130,9 +136,12 @@ LinearMap[T].take(key str) !$T:
 # @example
 #   value := try map.get("name")
 LinearMap[T].get(key str) !T:
+    # SAFETY: indexOf returns an initialized value slot below countValue.
+    unsafe:
     idx := try this.indexOf(key)
     values T* = this.values
-    ret values[idx]
+      ret values[idx]
+    ..
 ..
 
 # Returns the number of entries.
@@ -167,12 +176,17 @@ LinearMap[T].valuesView() T[]:
 # @example
 #   try map.set("name", value)
 LinearMap[T].set(key str, item $T) !void:
-    onerror release[T](this.allocator, this.cleanup, item)
+    # SAFETY: existing indices are occupied; growth reserves capacity before a
+    # new key/value pair is transferred into the next unoccupied slot.
+    unsafe:
+    onerror release[T](this.allocator, this.cleanup, move item)
     idx u64, e error = this.indexOf(key)
     if e.ok():
         existingValues T* = this.values
-        release[T](this.allocator, this.cleanup, claim[T](existingValues[idx]))
-        existingValues[idx] = item
+        previous $T = existingValues[idx]
+        existingValues[idx] = mem.zeroValue[T]()
+        release[T](this.allocator, this.cleanup, move previous)
+        existingValues[idx] = move item
         ret
     ..
     if this.countValue == this.capacity:
@@ -182,9 +196,10 @@ LinearMap[T].set(key str, item $T) !void:
     insertAt := cast.u16to64(this.countValue)
     keys str* = this.keys
     values T* = this.values
-    keys[insertAt] = ownedKey
-    values[insertAt] = item
-    this.countValue = this.countValue + 1
+    keys[insertAt] = move ownedKey
+    values[insertAt] = move item
+      this.countValue = this.countValue + 1
+    ..
 ..
 
 growForInsert[T](map LinearMap[T]*) !bool:
@@ -197,6 +212,9 @@ growForInsert[T](map LinearMap[T]*) !bool:
 # @example
 #   map.free()
 destr LinearMap[T].free() void:
+    # SAFETY: slots below countValue are initialized; keys and configured values
+    # are consumed exactly once before both backing allocations are released.
+    unsafe:
     bound := cast.u16to64(this.countValue)
     keys str* = this.keys
     values T* = this.values
@@ -205,7 +223,9 @@ destr LinearMap[T].free() void:
     ..
     if this.cleanup != none:
         for i u64 = 0 to bound:
-            this.cleanup(this.allocator, values[i])
+            value $T = values[i]
+            values[i] = mem.zeroValue[T]()
+            this.cleanup(this.allocator, move value)
         ..
     ..
     this.allocator.free(this.keys)
@@ -213,7 +233,8 @@ destr LinearMap[T].free() void:
     this.keys = none
     this.values = none
     this.countValue = 0
-    this.capacity = 0
+      this.capacity = 0
+    ..
 ..
 
 # Removes all entries and returns the map to its initial capacity.
@@ -224,10 +245,5 @@ destr LinearMap[T].free() void:
 LinearMap[T].clear() !void:
     replacement := try new[T](this.allocator, this.cleanup)
     this.free()
-    this.keys = replacement.keys
-    this.values = replacement.values
-    this.countValue = replacement.countValue
-    this.capacity = replacement.capacity
-    abandoned := array LinearMap[T][1]
-    abandoned[0] = replacement
+    *this = move replacement
 ..

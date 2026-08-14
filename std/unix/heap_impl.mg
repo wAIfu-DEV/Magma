@@ -7,6 +7,7 @@ use "std:allocator" a
 use "std:errors"    e
 use "std:cast"      cast
 use "std:memory"    mem
+
 ext ext_stdlib_malloc  malloc(size c.size_t) ptr
 ext ext_stdlib_realloc realloc(block ptr, newSize c.size_t) ptr
 ext ext_stdlib_free    free(block ptr) void
@@ -21,7 +22,10 @@ heapAlloc(impl ptr, nBytes u64) !$u8*:
     if p == none:
         throw e.outOfMemory("OOM")
     ..
-    ret p
+    # SAFETY: malloc returned a validated non-null allocation of nBytes bytes.
+    unsafe:
+        ret p
+    ..
 ..
 
 # Internals for realloc, used by both realloc() and HeapAllocator.realloc()
@@ -37,7 +41,10 @@ heapRealloc(impl ptr, in u8*, nBytes u64) !$u8*:
     if p == none:
         throw e.outOfMemory("OOM")
     ..
-    ret p
+    # SAFETY: realloc returned a validated non-null replacement allocation.
+    unsafe:
+        ret p
+    ..
 ..
 
 # Internals for free, used by both free() and HeapAllocator.free()
@@ -49,9 +56,9 @@ heapFree(impl ptr, in u8*) void:
 ..
 
 const gl_heapVtable := a.Vtable(
-    fn_alloc =   heapAlloc,
-    fn_realloc = heapRealloc,
-    fn_free =    heapFree,
+    alloc =   heapAlloc,
+    realloc = heapRealloc,
+    free =    heapFree,
 )
 
 # Returns an allocator object that uses the OS's standard heap allocation methods.
@@ -82,7 +89,7 @@ pub alloc(nBytes u64) !$u8*:
 # @param nBytes how many bytes to allocate
 # @returns owned region of memory
 pub allocZero(nBytes u64) !$u8*:
-    out ptr = try heapAlloc(none, nBytes)
+    out u8* = try heapAlloc(none, nBytes)
     mem.zero(out, nBytes)
     ret out
 ..
@@ -122,7 +129,7 @@ pub reallocZero(in u8*, nBytes u64, prevNbytes u64) !$u8*:
         ret try heapRealloc(none, in, nBytes)
     ..
     # manual realloc
-    out ptr = try heapAlloc(none, nBytes)
+    out u8* = try heapAlloc(none, nBytes)
     mem.copy(in, out, prevNbytes)
 
     # zero end of region

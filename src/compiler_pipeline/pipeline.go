@@ -23,7 +23,7 @@ type SpecializedProgram struct{ state *types.SharedState }
 type LinkedProgram struct{ state *types.SharedState }
 type TypedProgram struct{ state *types.SharedState }
 type ValidatedProgram struct{ state *types.SharedState }
-type LoweringReadyProgram struct{ state *types.SharedState }
+type SafetyCheckedProgram struct{ state *types.SharedState }
 
 // State exposes the program state for read-only consumers such as the LSP and
 // output metadata collection. Compiler passes should use the stage functions.
@@ -32,7 +32,7 @@ func (p SpecializedProgram) State() *types.SharedState   { return p.state }
 func (p LinkedProgram) State() *types.SharedState        { return p.state }
 func (p TypedProgram) State() *types.SharedState         { return p.state }
 func (p ValidatedProgram) State() *types.SharedState     { return p.state }
-func (p LoweringReadyProgram) State() *types.SharedState { return p.state }
+func (p SafetyCheckedProgram) State() *types.SharedState { return p.state }
 
 // Parse loads, tokenizes, parses, and builds scopes for the root and all of its
 // imports. It returns a partial program alongside an error so editor tooling can
@@ -89,14 +89,19 @@ func ValidateLowering(program TypedProgram) (ValidatedProgram, error) {
 	return ValidatedProgram{state: program.state}, nil
 }
 
-func CheckOwnership(program ValidatedProgram) LoweringReadyProgram {
-	destroychecker.Run(program.state)
-	return LoweringReadyProgram{state: program.state}
+// CheckSafety is the mandatory ownership-safety gate before lowering. Definite
+// safety violations fail the stage unless warningMode was explicitly selected;
+// resource-leak findings remain warnings in either mode.
+func CheckSafety(program ValidatedProgram, warningMode bool) (SafetyCheckedProgram, error) {
+	if err := destroychecker.Run(program.state, warningMode); err != nil {
+		return SafetyCheckedProgram{}, comp_err.AtStage("ownership checking", err)
+	}
+	return SafetyCheckedProgram{state: program.state}, nil
 }
 
 // Lower emits and cleans LLVM IR. IrWrite retains its own defensive contract
 // validation for direct users outside this pipeline.
-func Lower(program LoweringReadyProgram) ([]byte, error) {
+func Lower(program SafetyCheckedProgram) ([]byte, error) {
 	ir, err := llvmir.IrWrite(program.state)
 	if err != nil {
 		return nil, comp_err.AtStage("LLVM lowering", err)

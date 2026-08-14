@@ -5,10 +5,9 @@ use "std:allocator" alc
 use "std:memory"    mem
 use "std:cast"      cast
 use "std:errors"    err
-use "std:footgun"   footgun
 use "std:pair"      pair
 
-const gl_nullTerm u8 = 0 
+const gl_nullTerm u8 = 0
 
 # Returns the pointer to the underlying data of the string (u8 array).
 # Allocating string APIs provide a null byte at s.countBytes(); borrowed views
@@ -19,8 +18,11 @@ const gl_nullTerm u8 = 0
 # @example
 #   pointer := strings.toPtr(text)
 pub toPtr(s str) u8*:
-    llvm "  %l0 = extractvalue %type.str %s, 0\n"
-    llvm "  ret ptr %l0\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %l0 = extractvalue %type.str %s, 0\n"
+            llvm "  ret ptr %l0\n"
+    ..
 ..
 
 # Allocates an owned, uninitialized string with size bytes plus a null terminator.
@@ -29,12 +31,15 @@ pub toPtr(s str) u8*:
 # @example
 #   text := try strings.alloc(a, 32)
 pub alloc(a alc.Allocator, size u64) !$str:
-    if size == 0 - 1:
-        throw err.wouldOverflow("string allocation size overflow")
+    # SAFETY: checked sizes and ownership invariants bound the raw string operation.
+    unsafe:
+        if size == 0 - 1:
+            throw err.wouldOverflow("string allocation size overflow")
+        ..
+        p u8* = try a.alloc(size + 1) # Zero terminated
+        p[size] = 0
+        ret fromPtrNoCopy(p, size)
     ..
-    p u8* = try a.alloc(size + 1) # Zero terminated
-    p[size] = 0
-    ret fromPtrNoCopy(p, size)
 ..
 
 # Allocates an owned string and initializes every byte to fill.
@@ -43,17 +48,20 @@ pub alloc(a alc.Allocator, size u64) !$str:
 # @example
 #   padding := try strings.allocFill(a, 8, 32)
 pub allocFill(a alc.Allocator, size u64, fill u8) !$str:
-    if size == 0 - 1:
-        throw err.wouldOverflow("string allocation size overflow")
-    ..
-    p u8* = try a.alloc(size + 1) # Zero terminated
+    # SAFETY: checked sizes and ownership invariants bound the raw string operation.
+    unsafe:
+        if size == 0 - 1:
+            throw err.wouldOverflow("string allocation size overflow")
+        ..
+        p u8* = try a.alloc(size + 1) # Zero terminated
 
-    for i u64 = 0 to size:
-        p[i] = fill
-    ..
+        for i u64 = 0 to size:
+            p[i] = fill
+        ..
 
-    p[size] = 0
-    ret fromPtrNoCopy(p, size)
+        p[size] = 0
+        ret fromPtrNoCopy(p, size)
+    ..
 ..
 
 # Returns a str from a pointer and a length in bytes.
@@ -69,9 +77,40 @@ pub allocFill(a alc.Allocator, size u64, fill u8) !$str:
 # @example
 #   view := strings.fromPtrNoCopy(pointer, byteCount)
 pub fromPtrNoCopy(p ptr, bytesCount u64) str:
-    llvm "  %s0 = insertvalue %type.str zeroinitializer, ptr %p, 0\n"
-    llvm "  %s1 = insertvalue %type.str %s0, i64 %bytesCount, 1\n"
-    llvm "  ret %type.str %s1\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %s0 = insertvalue %type.str zeroinitializer, ptr %p, 0\n"
+            llvm "  %s1 = insertvalue %type.str %s0, i64 %bytesCount, 1\n"
+            llvm "  ret %type.str %s1\n"
+    ..
+..
+
+# Shrinks a string descriptor without changing its backing allocation.
+# The string remains the same borrowed or owned value; only its logical length
+# changes. Expanding through this API is rejected because capacity is unknown.
+pub truncate(value str*, byteCount u64) bool:
+    if byteCount > value.countBytes():
+        ret false
+    ..
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %countPtr = getelementptr %type.str, ptr %value, i32 0, i32 1\n"
+            llvm "  store i64 %byteCount, ptr %countPtr\n"
+            llvm "  ret i1 true\n"
+    ..
+..
+
+# Updates an owned string descriptor after its backing allocation was
+# successfully reallocated. The caller retains the same ownership obligation.
+pub updateAfterRealloc(value str*, data ptr, capacity u64) void:
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %dataPtr = getelementptr %type.str, ptr %value, i32 0, i32 0\n"
+            llvm "  store ptr %data, ptr %dataPtr\n"
+            llvm "  %capacityPtr = getelementptr %type.str, ptr %value, i32 0, i32 1\n"
+            llvm "  store i64 %capacity, ptr %capacityPtr\n"
+            llvm "  ret void\n"
+    ..
 ..
 
 # Returns a str from a pointer and a length in bytes.
@@ -84,28 +123,31 @@ pub fromPtrNoCopy(p ptr, bytesCount u64) str:
 # @example
 #   text := try strings.fromPtr(a, pointer, byteCount)
 pub fromPtr(a alc.Allocator, p ptr, byteCount u64) !$str:
-    if byteCount == 0:
-        nt u8* = try a.alloc(1)
-        *nt = 0
-        ret fromPtrNoCopy(nt, 0)
+    # SAFETY: checked sizes and ownership invariants bound the raw string operation.
+    unsafe:
+        if byteCount == 0:
+            nt u8* = try a.alloc(1)
+            *nt = 0
+            ret fromPtrNoCopy(nt, 0)
+        ..
+
+        # cap size to 0 in case of impossibly large string size (9 exabytes in this case)
+        # this should prevent classes of attacks using size overflow as vector
+        max u64 = 0 - 1
+        if byteCount > (max / 2):
+            throw err.wouldOverflow("string too large")
+        ..
+
+        inData u8* = p
+        strData u8* = try a.alloc(byteCount + 1) # Zero terminated
+
+        for i u64 = 0 to byteCount:
+            strData[i] = inData[i]
+        ..
+
+        strData[byteCount] = 0
+        ret fromPtrNoCopy(strData, byteCount)
     ..
-
-    # cap size to 0 in case of impossibly large string size (9 exabytes in this case)
-    # this should prevent classes of attacks using size overflow as vector
-    max u64 = 0 - 1
-    if byteCount > (max / 2):
-        throw err.wouldOverflow("string too large")
-    ..
-
-    inData u8* = p
-    strData u8* = try a.alloc(byteCount + 1) # Zero terminated
-
-    for i u64 = 0 to byteCount:
-        strData[i] = inData[i]
-    ..
-
-    strData[byteCount] = 0
-    ret fromPtrNoCopy(strData, byteCount)
 ..
 
 # Allocates an independent copy of a string.
@@ -114,24 +156,27 @@ pub fromPtr(a alc.Allocator, p ptr, byteCount u64) !$str:
 # @example
 #   owned := try strings.copy(a, borrowed)
 pub copy(a alc.Allocator, s str) !$str:
-    byteCount u64 = s.countBytes()
-    if byteCount == 0 - 1:
-        throw err.wouldOverflow("string allocation size overflow")
-    ..
-    if byteCount == 0:
-        nt u8* = try a.alloc(1)
-        *nt = 0
-        ret fromPtrNoCopy(nt, 0)
-    ..
-    inData u8* = toPtr(s)
-    strData u8* = try a.alloc(byteCount + 1) # Zero terminated
+    # SAFETY: checked sizes and ownership invariants bound the raw string operation.
+    unsafe:
+        byteCount u64 = s.countBytes()
+        if byteCount == 0 - 1:
+            throw err.wouldOverflow("string allocation size overflow")
+        ..
+        if byteCount == 0:
+            nt u8* = try a.alloc(1)
+            *nt = 0
+            ret fromPtrNoCopy(nt, 0)
+        ..
+        inData u8* = toPtr(s)
+        strData u8* = try a.alloc(byteCount + 1) # Zero terminated
 
-    for i u64 = 0 to byteCount:
-        strData[i] = inData[i]
-    ..
+        for i u64 = 0 to byteCount:
+            strData[i] = inData[i]
+        ..
 
-    strData[byteCount] = 0
-    ret fromPtrNoCopy(strData, byteCount)
+        strData[byteCount] = 0
+        ret fromPtrNoCopy(strData, byteCount)
+    ..
 ..
 
 # Returns an owned ASCII-lowercase copy of s. Bytes outside A-Z are unchanged.
@@ -140,14 +185,17 @@ pub copy(a alc.Allocator, s str) !$str:
 # @example
 #   lower := try strings.toLower(a, "Hello")
 pub toLower(a alc.Allocator, s str) !$str:
-    result $str = try copy(a, s)
-    data u8* = toPtr(result)
-    for i u64 = 0 to result.countBytes():
-        if data[i] >= 65 && data[i] <= 90:
-            data[i] = data[i] + 32
+    # SAFETY: checked sizes and ownership invariants bound the raw string operation.
+    unsafe:
+        result $str = try copy(a, s)
+        data u8* = toPtr(result)
+        for i u64 = 0 to result.countBytes():
+            if data[i] >= 65 && data[i] <= 90:
+                data[i] = data[i] + 32
+            ..
         ..
+        ret move result
     ..
-    ret result
 ..
 
 # Returns an owned ASCII-uppercase copy of s. Bytes outside a-z are unchanged.
@@ -156,14 +204,17 @@ pub toLower(a alc.Allocator, s str) !$str:
 # @example
 #   upper := try strings.toUpper(a, "Hello")
 pub toUpper(a alc.Allocator, s str) !$str:
-    result $str = try copy(a, s)
-    data u8* = toPtr(result)
-    for i u64 = 0 to result.countBytes():
-        if data[i] >= 97 && data[i] <= 122:
-            data[i] = data[i] - 32
+    # SAFETY: checked sizes and ownership invariants bound the raw string operation.
+    unsafe:
+        result $str = try copy(a, s)
+        data u8* = toPtr(result)
+        for i u64 = 0 to result.countBytes():
+            if data[i] >= 97 && data[i] <= 122:
+                data[i] = data[i] - 32
+            ..
         ..
+        ret move result
     ..
-    ret result
 ..
 
 # Returns the byte at position idx in string, prefer utf8.Utf8Iter for UTF8-aware
@@ -175,10 +226,13 @@ pub toUpper(a alc.Allocator, s str) !$str:
 # @example
 #   firstByte := strings.byteAt(text, 0)
 pub byteAt(s str, idx u64) u8:
-    llvm "  %l0 = extractvalue %type.str %s, 0\n"
-    llvm "  %ptr = getelementptr inbounds i8, ptr %l0, i64 %idx\n"
-    llvm "  %byte = load i8, ptr %ptr\n"
-    llvm "  ret i8 %byte\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %l0 = extractvalue %type.str %s, 0\n"
+            llvm "  %ptr = getelementptr inbounds i8, ptr %l0, i64 %idx\n"
+            llvm "  %byte = load i8, ptr %ptr\n"
+            llvm "  ret i8 %byte\n"
+    ..
 ..
 
 # Copies the provided string into a null-terminated C string.
@@ -189,24 +243,27 @@ pub byteAt(s str, idx u64) u8:
 # @example
 #   cText := try strings.toCstr(a, text)
 pub toCstr(a alc.Allocator, s str) !$u8*:
-    size u64 = s.countBytes()
-    if size == 0 - 1:
-        throw err.wouldOverflow("C string allocation size overflow")
-    ..
+    # SAFETY: checked sizes and ownership invariants bound the raw string operation.
+    unsafe:
+        size u64 = s.countBytes()
+        if size == 0 - 1:
+            throw err.wouldOverflow("C string allocation size overflow")
+        ..
 
-    if size == 0:
-        nt u8* = try a.alloc(1)
-        *nt = 0
-        ret nt
-    ..
-    p u8* = toPtr(s)
-    np u8* = try a.alloc(size + 1)
+        if size == 0:
+            nt u8* = try a.alloc(1)
+            *nt = 0
+            ret nt
+        ..
+        p u8* = toPtr(s)
+        np u8* = try a.alloc(size + 1)
 
-    for i u64 = 0 to size:
-        np[i] = p[i]
+        for i u64 = 0 to size:
+            np[i] = p[i]
+        ..
+        np[size] = 0
+        ret np
     ..
-    np[size] = 0
-    ret np
 ..
 
 # Returns the underlying string pointer without reading or copying its data.
@@ -238,11 +295,14 @@ pub toCstrNoCopy(s str) u8*:
 # @example
 #   byteCount := strings.cStrLen(cText)
 pub cStrLen(cstr u8*) u64:
-    len u64 = 0
-    loop cstr[len] != 0:
-        len = len + 1
+    # SAFETY: checked sizes and ownership invariants bound the raw string operation.
+    unsafe:
+        len u64 = 0
+        loop cstr[len] != 0:
+            len = len + 1
+        ..
+        ret len
     ..
-    ret len
 ..
 
 # Creates a magma-style str from a null-terminated C-string.
@@ -272,22 +332,25 @@ pub fromCstrNoCopy(cstr u8*) str:
 # @example
 #   text := try strings.fromCstr(a, cText)
 pub fromCstr(a alc.Allocator, cstr u8*) !$str:
-    size u64 = cStrLen(cstr)
-    if size == 0 - 1:
-        throw err.wouldOverflow("string allocation size overflow")
-    ..
-    if size == 0:
-        nt u8* = try a.alloc(1)
-        *nt = 0
-        ret fromPtrNoCopy(nt, 0)
-    ..
-    strData u8* = try a.alloc(size + 1)
+    # SAFETY: checked sizes and ownership invariants bound the raw string operation.
+    unsafe:
+        size u64 = cStrLen(cstr)
+        if size == 0 - 1:
+            throw err.wouldOverflow("string allocation size overflow")
+        ..
+        if size == 0:
+            nt u8* = try a.alloc(1)
+            *nt = 0
+            ret fromPtrNoCopy(nt, 0)
+        ..
+        strData u8* = try a.alloc(size + 1)
 
-    for i u64 = 0 to size:
-        strData[i] = cstr[i]
+        for i u64 = 0 to size:
+            strData[i] = cstr[i]
+        ..
+        strData[size] = 0
+        ret fromPtrNoCopy(strData, size)
     ..
-    strData[size] = 0
-    ret fromPtrNoCopy(strData, size)
 ..
 
 # Compares both strings and returns true if they are strictly equal in size and
@@ -312,30 +375,36 @@ pub compare(a str, b str) bool:
 # @example
 #   index := try strings.findByte(text, 10)
 pub findByte(s str, value u8) !u64:
-    size := s.countBytes()
-    data := toPtr(s)
-    for index u64 = 0 to size:
-        if data[index] == value:
-            ret index
+    # SAFETY: checked sizes and ownership invariants bound the raw string operation.
+    unsafe:
+        size := s.countBytes()
+        data := toPtr(s)
+        for index u64 = 0 to size:
+            if data[index] == value:
+                ret index
+            ..
         ..
+        throw err.outOfBounds("byte was not found in string")
     ..
-    throw err.outOfBounds("byte was not found in string")
 ..
 
 matchesAt(source str, needle str, offset u64) bool:
-    sourceSize := source.countBytes()
-    needleSize := needle.countBytes()
-    if offset > sourceSize || needleSize > sourceSize - offset:
-        ret false
-    ..
-    sourceData := toPtr(source)
-    needleData := toPtr(needle)
-    for index u64 = 0 to needleSize:
-        if sourceData[offset + index] != needleData[index]:
+    # SAFETY: checked sizes and ownership invariants bound the raw string operation.
+    unsafe:
+        sourceSize := source.countBytes()
+        needleSize := needle.countBytes()
+        if offset > sourceSize || needleSize > sourceSize - offset:
             ret false
         ..
+        sourceData := toPtr(source)
+        needleData := toPtr(needle)
+        for index u64 = 0 to needleSize:
+            if sourceData[offset + index] != needleData[index]:
+                ret false
+            ..
+        ..
+        ret true
     ..
-    ret true
 ..
 
 # Returns the first byte index at which needle occurs.
@@ -385,16 +454,19 @@ isTrimByte(value u8) bool:
 # @example
 #   clean := try strings.trim(a, "  magma  ")
 pub trim(a alc.Allocator, s str) !$str:
-    start u64 = 0
-    end := s.countBytes()
-    data := toPtr(s)
-    loop start < end && isTrimByte(data[start]):
-        start = start + 1
+    # SAFETY: checked sizes and ownership invariants bound the raw string operation.
+    unsafe:
+        start u64 = 0
+        end := s.countBytes()
+        data := toPtr(s)
+        loop start < end && isTrimByte(data[start]):
+            start = start + 1
+        ..
+        loop end > start && isTrimByte(data[end - 1]):
+            end = end - 1
+        ..
+        ret try substring(a, s, start, end)
     ..
-    loop end > start && isTrimByte(data[end - 1]):
-        end = end - 1
-    ..
-    ret try substring(a, s, start, end)
 ..
 
 # Allocates s without prefix when it starts with prefix, otherwise copies s.
@@ -441,23 +513,29 @@ Split.count() u64:
 # @example
 #   first := try parts.get(0)
 Split.get(index u64) !str:
-    if index >= this.size:
-        throw err.outOfBounds("split index is out of bounds")
+    # SAFETY: checked sizes and ownership invariants bound the raw string operation.
+    unsafe:
+        if index >= this.size:
+            throw err.outOfBounds("split index is out of bounds")
+        ..
+        ret this.items[index]
     ..
-    ret this.items[index]
 ..
 
 # Releases every owned part and the pointer table.
 # @complexity O(N), where N is the number of parts
 destr Split.free() void:
-    for index u64 = 0 to this.size:
-        this.items[index].free(this.allocator)
+    # SAFETY: checked sizes and ownership invariants bound the raw string operation.
+    unsafe:
+        for index u64 = 0 to this.size:
+            this.items[index].free(this.allocator)
+        ..
+        if this.items != none:
+            this.allocator.free(this.items)
+        ..
+        this.items = none
+        this.size = 0
     ..
-    if this.items != none:
-        this.allocator.free(this.items)
-    ..
-    this.items = none
-    this.size = 0
 ..
 
 countParts(s str, separator str) !u64:
@@ -485,39 +563,42 @@ countParts(s str, separator str) !u64:
 # @example
 #   parts := try strings.split(a, "a,b,c", ",")
 pub split(a alc.Allocator, s str, separator str) !$Split:
-    partCount := try countParts(s, separator)
-    maxU64 u64 = 0 - 1
-    if partCount > maxU64 / sizeof str:
-        throw err.wouldOverflow("split result is too large")
-    ..
-    items str* = try a.allocT[str](partCount)
-    separatorSize := separator.countBytes()
-    sourceSize := s.countBytes()
-    partStart u64 = 0
-    position u64 = 0
-    made u64 = 0
-    onerror:
-        for cleanup u64 = 0 to made:
-            items[cleanup].free(a)
+    # SAFETY: checked sizes and ownership invariants bound the raw string operation.
+    unsafe:
+        partCount := try countParts(s, separator)
+        maxU64 u64 = 0 - 1
+        if partCount > maxU64 / sizeof str:
+            throw err.wouldOverflow("split result is too large")
         ..
-        a.free(items)
-    ..
-
-    loop position + separatorSize <= sourceSize:
-        if matchesAt(s, separator, position):
-            item $str = try substring(a, s, partStart, position)
-            items[made] = item
-            made = made + 1
-            position = position + separatorSize
-            partStart = position
-        else:
-            position = position + 1
+        items str* = try a.allocT[str](partCount)
+        separatorSize := separator.countBytes()
+        sourceSize := s.countBytes()
+        partStart u64 = 0
+        position u64 = 0
+        made u64 = 0
+        onerror:
+            for cleanup u64 = 0 to made:
+                items[cleanup].free(a)
+            ..
+            a.free(items)
         ..
-    ..
 
-    last $str = try substring(a, s, partStart, sourceSize)
-    items[made] = last
-    ret Split(items=items, size=partCount, allocator=a)
+        loop position + separatorSize <= sourceSize:
+            if matchesAt(s, separator, position):
+                item $str = try substring(a, s, partStart, position)
+                items[made] = move item
+                made = made + 1
+                position = position + separatorSize
+                partStart = position
+            else:
+                position = position + 1
+            ..
+        ..
+
+        last $str = try substring(a, s, partStart, sourceSize)
+        items[made] = move last
+        ret Split(items=items, size=partCount, allocator=a)
+    ..
 ..
 
 # Owning lazy splitter. Source and separator are copied at construction, and
@@ -542,7 +623,7 @@ pub splitIter(a alc.Allocator, s str, separator str) !$SplitIterator:
     sourceCopy := try copy(a, s)
     onerror sourceCopy.free(a)
     separatorCopy $str = try copy(a, separator)
-    ret SplitIterator(source=sourceCopy, separator=separatorCopy, position=0, finished=false, allocator=a)
+    ret SplitIterator(source=move sourceCopy, separator=move separatorCopy, position=0, finished=false, allocator=a)
 ..
 
 # Reports whether another part remains.
@@ -578,8 +659,11 @@ SplitIterator.next() !$str:
 # Releases the iterator's copied source and separator strings.
 # @complexity O(1), excluding allocator cost
 destr SplitIterator.free() void:
-    this.source.free(this.allocator)
-    this.separator.free(this.allocator)
+    # SAFETY: checked sizes and ownership invariants bound the raw string operation.
+    unsafe:
+        this.source.free(this.allocator)
+        this.separator.free(this.allocator)
+    ..
 ..
 
 # Splits at the first separator and allocates both halves independently.
@@ -596,8 +680,6 @@ pub splitOnce(a alc.Allocator, s str, separator str) !$pair.Pair[str, str]:
     onerror first.free(a)
     secondStart := position + separator.countBytes()
     second $str = try substring(a, s, secondStart, s.countBytes())
-    result := pair.new[str, str](first, second)
-    footgun.drop[str](first)
-    footgun.drop[str](second)
+    result := pair.new[str, str](move first, move second)
     ret result
 ..

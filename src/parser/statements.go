@@ -94,6 +94,19 @@ func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
 		return parseStmtWhile(ctx, tk)
 	case t.KwFor:
 		return parseStmtFor(ctx, tk)
+	case t.KwBounded:
+		return parseStmtBounded(ctx, tk)
+	case t.KwUnsafe:
+		consume(ctx)
+		next, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+		body, e := parseBody(ctx, next)
+		if e != nil {
+			return nil, e
+		}
+		return &t.NodeStmtUnsafe{Tk: tk, Body: body}, nil
 	case t.KwDefer, t.KwOnError:
 		n, e := parseDefer(ctx, tk)
 		if e != nil {
@@ -108,6 +121,43 @@ func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
 	}
 
 	return &t.NodeStmtExpr{Expression: expr}, nil
+}
+
+func parseStmtBounded(ctx *ParseCtx, tk t.Token) (*t.NodeStmtBounded, error) {
+	consume(ctx)
+	stmt := &t.NodeStmtBounded{Tk: tk}
+	for {
+		next, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+		predicate, e := parseExpression(ctx, next, 0)
+		if e != nil {
+			return nil, e
+		}
+		stmt.Predicates = append(stmt.Predicates, predicate)
+		next, e = peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+		if next.KeywType != t.KwComma {
+			break
+		}
+		consume(ctx)
+	}
+	if len(stmt.Predicates) == 0 {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, "bounded requires at least one range comparison", "use: bounded i < values.count():")
+	}
+	next, e := peek(ctx)
+	if e != nil {
+		return nil, e
+	}
+	body, e := parseBody(ctx, next)
+	if e != nil {
+		return nil, e
+	}
+	stmt.Body = body
+	return stmt, nil
 }
 
 func parseBody(ctx *ParseCtx, tk t.Token) (t.NodeBody, error) {

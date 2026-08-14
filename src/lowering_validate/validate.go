@@ -508,6 +508,24 @@ func bodyValidAtLoopDepth(file *t.FileCtx, body *t.NodeBody, ownerReturn *t.Node
 			if err == nil {
 				err = bodyValidAtLoopDepth(file, &node.Body, ownerReturn, loopDepth+1)
 			}
+		case *t.NodeStmtBounded:
+			if len(node.Predicates) == 0 {
+				err = invalid(file, &node.Tk, "bounded statement has no predicates")
+			}
+			for _, predicate := range node.Predicates {
+				if err == nil {
+					err = expressionValid(file, predicate)
+				}
+				binary, ok := predicate.(*t.NodeExprBinary)
+				if err == nil && (!ok || (binary.Operator != t.KwCmpLt && binary.Operator != t.KwCmpLtEq)) {
+					err = invalid(file, &node.Tk, "bounded statement contains an invalid predicate")
+				}
+			}
+			if err == nil {
+				err = bodyValidAtLoopDepth(file, &node.Body, ownerReturn, loopDepth)
+			}
+		case *t.NodeStmtUnsafe:
+			err = bodyValidAtLoopDepth(file, &node.Body, ownerReturn, loopDepth)
 		case *t.NodeStmtDefer:
 			if node.IsBody {
 				if node.Expression != nil {
@@ -693,6 +711,11 @@ func expressionValid(file *t.FileCtx, expression t.NodeExpr) error {
 		}
 	case *t.NodeExprAddrof:
 		if err := typeValid(file, node.InfType, "address-of expression result"); err != nil {
+			return err
+		}
+		return expressionValid(file, node.Expr)
+	case *t.NodeExprMove:
+		if err := typeValid(file, node.InfType, "move expression result"); err != nil {
 			return err
 		}
 		return expressionValid(file, node.Expr)

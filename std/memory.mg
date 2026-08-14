@@ -16,11 +16,13 @@ use "std:cast" cast
 pub copy(from ptr, to ptr, n u64) void:
     # will lower to @llvm.memcpy.p0.p0.i64
 
-    au u8* = from
-    bu u8* = to
-
-    for i u64 = 0 to n:
-        bu[i] = au[i]
+    # SAFETY: the API contract requires two valid n-byte non-overlapping ranges.
+    unsafe:
+        au u8* = from
+        bu u8* = to
+        for i u64 = 0 to n:
+            bu[i] = au[i]
+        ..
     ..
 ..
 
@@ -39,14 +41,17 @@ pub move(from ptr, to ptr, n u64) void:
     # Subtraction is used instead of reg0 + n so an address-range check cannot
     # wrap at U64_MAX.
     if reg1 > reg0 && (reg1 - reg0) < n:
-        au u8* = from
-        bu u8* = to
-
-        bound u64 = 0 - 1 # U64_MAX
-        i u64 = n - 1
-        loop i != bound: # stops after 0
-            bu[i] = au[i]
-            i = i - 1
+        # SAFETY: the API contract provides valid n-byte ranges; reverse copy
+        # preserves overlapping regions.
+        unsafe:
+            au u8* = from
+            bu u8* = to
+            bound u64 = 0 - 1 # U64_MAX
+            i u64 = n - 1
+            loop i != bound: # stops after 0
+                bu[i] = au[i]
+                i = i - 1
+            ..
         ..
     else:
         # safe to copy left-to-right
@@ -64,13 +69,15 @@ pub move(from ptr, to ptr, n u64) void:
 # @example
 #   memory.swap(left, right, sizeof Value)
 pub swap(x ptr, y ptr, n u64) void:
-    ax u8* = x
-    ay u8* = y
-
-    for i u64 = 0 to n:
-        tmp u8 = ax[i]
-        ax[i] = ay[i]
-        ay[i] = tmp
+    # SAFETY: the API contract requires two valid n-byte non-overlapping ranges.
+    unsafe:
+        ax u8* = x
+        ay u8* = y
+        for i u64 = 0 to n:
+            tmp u8 = ax[i]
+            ax[i] = ay[i]
+            ay[i] = tmp
+        ..
     ..
 ..
 
@@ -87,12 +94,14 @@ pub compare(a ptr, b ptr, n u64) bool:
     # fails to lower to llvm intrinsics, however code is tight so it should be good,
     # though it could use some optimization with variable length chunking.
 
-    au u8* = a
-    bu u8* = b
-    
-    for i u64 = 0 to n:
-        if au[i] != bu[i]:
-            ret false
+    # SAFETY: the API contract requires two readable n-byte ranges.
+    unsafe:
+        au u8* = a
+        bu u8* = b
+        for i u64 = 0 to n:
+            if au[i] != bu[i]:
+                ret false
+            ..
         ..
     ..
     ret true
@@ -109,10 +118,12 @@ pub compare(a ptr, b ptr, n u64) bool:
 pub set(in ptr, n u64, with u8) void:
     # will lower to @llvm.memset.p0i8.i64
 
-    inu u8* = in
-
-    for i u64 = 0 to n:
-        inu[i] = with
+    # SAFETY: the API contract requires a writable n-byte range.
+    unsafe:
+        inu u8* = in
+        for i u64 = 0 to n:
+            inu[i] = with
+        ..
     ..
 ..
 

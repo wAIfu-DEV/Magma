@@ -22,6 +22,8 @@ State(
     capacity u64
     size u64
     leftOffset u64
+    # Keep the element region 16-byte aligned for values such as u128.
+    reserved u64
 )
 
 State.rightBufferSize() u64:
@@ -84,23 +86,35 @@ pub newWithSize[T](a alc.Allocator, usable u64, padLeft u64, padRight u64) !$Arr
     stateSize u64 = sizeof State
     allocationSize u64 = try addSize(stateSize, dataSize)
     headAndData u8* = try a.alloc(allocationSize)
-    data u8* = cast.utop(cast.ptou(headAndData) + stateSize)
+    data u8* = none
+    # SAFETY: the checked allocation size includes the aligned State header.
+    unsafe:
+        data = cast.utop(cast.ptou(headAndData) + stateSize)
+    ..
 
     # All elements exposed by usable must have a defined value. Zero the full
     # data region so padding that is later consumed by expand is defined too.
     mem.zero(data, dataSize)
 
-    state State* = headAndData
-    *state = State(
-        capacity = capacity
-        size = usable
-        leftOffset = padLeft
-    )
+    state State* = none
+    # SAFETY: headAndData is a fresh allocation sized for State plus data.
+    unsafe:
+        state = headAndData
+        *state = State(
+            capacity = capacity
+            size = usable
+            leftOffset = padLeft
+            reserved = 0
+        )
+    ..
 
-    ret Array[T](
-        data = data
-        state = state
-    )
+    # SAFETY: the returned owner records both views of the same fresh allocation.
+    unsafe:
+        ret Array[T](
+            data = data
+            state = state
+        )
+    ..
 ..
 
 # Returns the number of accessible values.
@@ -115,20 +129,16 @@ runCleanupFromIdx[T](arr Array[T]*, a alc.Allocator, idx u64, cleanup (alc.Alloc
     if cleanup != none:
         items := arr.view()
         i u64 = idx
-
         zeroVal T = mem.zeroValue[T]()
         valSize u64 = sizeof T
-
-        loop i < arr.count():
-            # HACK: The following tries to fix an issue introduced by the take()
-            # function, if ownership can be transferred then items affected should
-            # not have cleanup called on them (double free)
-            # This assume that zero-initialized values are such transferred items.
-            # This is shit beyond belief.
-
-            item T* = addrof items[i]
-            if mem.compare(item, addrof zeroVal, valSize) == false:
-                cleanup(a, items[i])
+        loop i < items.count():
+            # SAFETY: this is the container's occupancy-aware removal path.
+            unsafe:
+                if mem.compare(addrof items[i], addrof zeroVal, valSize) == false:
+                    value $T = items[i]
+                    items[i] = mem.zeroValue[T]()
+                    cleanup(a, move value)
+                ..
             ..
             i = i + 1
         ..
@@ -153,16 +163,11 @@ Array[T].clearShrink(a alc.Allocator, cleanup (alc.Allocator, $T) void) !void:
     # Allocate first so failure leaves both the Array and its elements owned.
     runCleanup[T](this, a, cleanup)
 
-    this.data = tmp.data
-    this.state = tmp.state
-
-    # new may fail, this will keep state viable in case of failure
-    # hopefully O3 doesn't fuck with the ordering
     a.free(oldState)
-    
-    # HACK: tmp is considered owned, this drops the ownership
-    # and removes compiler warnings
-    fg.drop[Array[T]](tmp)
+    # SAFETY: this is the checked whole-container replacement path.
+    unsafe:
+        *this = move tmp
+    ..
 ..
 
 # Removes every value while retaining the current allocation for reuse.
@@ -214,14 +219,21 @@ resizeStorage[T](array Array[T]*, a alc.Allocator, usable u64, padLeft u64, padR
     
     a.free(array.state)
 
-    array.data = newData
-    array.state = newHeadAndData
+    # SAFETY: both pointers refer into the fresh checked allocation.
+    unsafe:
+        array.data = newData
+        array.state = newHeadAndData
+    ..
 
-    *array.state = State(
-        capacity = newCont,
-        size = usable,
-        leftOffset = padLeft
-    )
+    # SAFETY: array.state points at the newly allocated State header.
+    unsafe:
+        *array.state = State(
+            capacity = newCont,
+            size = usable,
+            leftOffset = padLeft
+            reserved = 0
+        )
+    ..
 ..
 
 # Resizes the accessible range and replaces both growth-padding regions.
@@ -269,9 +281,12 @@ Array[T].get(index u64) !T:
         throw err.outOfBounds("index is out of bounds")
     ..
 
-    idx u64 = this.state.leftOffset + index
-    typedPtr T* = cast.reinterpret[T](this.data)
-    ret typedPtr[idx]
+    # SAFETY: state bounds and the allocation layout prove this element exists.
+    unsafe:
+        idx u64 = this.state.leftOffset + index
+        typedPtr T* = cast.reinterpret[T](this.data)
+        ret typedPtr[idx]
+    ..
 ..
 
 # Removes and returns ownership of the value at index without changing array length.
@@ -283,14 +298,34 @@ Array[T].take(index u64) !$T:
         throw err.outOfBounds("index is out of bounds")
     ..
 
-    idx u64 = this.state.leftOffset + index
-    typedPtr T* = cast.reinterpret[T](this.data)
-    val T = typedPtr[idx]
+    # SAFETY: this is the container's occupancy-aware extraction path.
+    unsafe:
+        idx u64 = this.state.leftOffset + index
+        typedPtr T* = cast.reinterpret[T](this.data)
+        val $T = typedPtr[idx]
+        typedPtr[idx] = mem.zeroValue[T]()
+        ret move val
+    ..
+..
 
-    # Set the consumed slot as zero value, this will tell cleanup to not process
-    # on later iterations.
-    typedPtr[idx] = mem.zeroValue[T]()
-    ret val
+# Replaces an element and transfers the previous value to the caller.
+# Both ownership transfers are explicit; no cleanup callback is invoked.
+# @throws outOfBounds when index is outside the accessible range
+# @complexity O(1)
+Array[T].replace(index u64, value $T) !$T:
+    onerror fg.drop[T](move value)
+    if index >= this.state.size:
+        throw err.outOfBounds("index is out of bounds")
+    ..
+
+    # SAFETY: this is the container's occupancy-aware replacement path.
+    unsafe:
+        idx u64 = this.state.leftOffset + index
+        typedPtr T* = cast.reinterpret[T](this.data)
+        previous $T = typedPtr[idx]
+        typedPtr[idx] = move value
+        ret move previous
+    ..
 ..
 
 # Replaces the value at index, optionally cleaning up the previous value.
@@ -302,23 +337,27 @@ Array[T].take(index u64) !$T:
 Array[T].set(a alc.Allocator, index u64, value $T, cleanup (alc.Allocator, $T) void) !void:
     onerror:
         if cleanup != none:
-            cleanup(a, value)
+            cleanup(a, move value)
         else:
-            fg.drop[T](value)
+            fg.drop[T](move value)
         ..
     ..
     if index >= this.state.size:
         throw err.outOfBounds("index is out of bounds")
     ..
 
-    idx u64 = this.state.leftOffset + index
-    typedPtr T* = cast.reinterpret[T](this.data)
-    if cleanup != none:
-        cleanup(a, typedPtr[idx]) # cleanup overwritten slot
+    # SAFETY: this is the container's checked cleanup-and-replacement path.
+    unsafe:
+        idx u64 = this.state.leftOffset + index
+        typedPtr T* = cast.reinterpret[T](this.data)
+        if cleanup != none:
+            previous $T = typedPtr[idx]
+            typedPtr[idx] = mem.zeroValue[T]()
+            cleanup(a, move previous)
+        ..
+        typedPtr[idx] = move value
+        ret
     ..
-
-    typedPtr[idx] = value
-    ret
 ..
 
 expandRightStorage[T](array Array[T]*, a alc.Allocator) !u64:
@@ -336,8 +375,14 @@ expandRightStorage[T](array Array[T]*, a alc.Allocator) !u64:
     stateSize u64 = sizeof State
 
     allocationSize u64 = try addSize(stateSize, expandedSize)
-    array.state = try a.realloc(array.state, allocationSize)
-    array.data = cast.utop(cast.ptou(array.state) + stateSize)
+    # SAFETY: realloc preserves the State-header-plus-elements allocation layout.
+    unsafe:
+        array.state = try a.realloc(array.state, allocationSize)
+    ..
+    # SAFETY: state is followed by the aligned element region in this allocation.
+    unsafe:
+        array.data = cast.utop(cast.ptou(array.state) + stateSize)
+    ..
     array.state.capacity = expanded
     array.state.size = array.state.size + 1
     
@@ -349,7 +394,9 @@ expandRightStorage[T](array Array[T]*, a alc.Allocator) !u64:
 Array[T].expandRight(a alc.Allocator) !u64:
     idx u64 = try expandRightStorage[T](this, a)
     items := this.view()
-    mem.zero(addrof items[idx], sizeof T)
+    bounded idx < items.count():
+        mem.zero(addrof items[idx], sizeof T)
+    ..
     ret idx
 ..
 
@@ -374,7 +421,9 @@ expandLeftStorage[T](array Array[T]*, a alc.Allocator) !void:
 Array[T].expandLeft(a alc.Allocator) !void:
     try expandLeftStorage[T](this, a)
     items := this.view()
-    mem.zero(addrof items[0], sizeof T)
+    bounded 0 < items.count():
+        mem.zero(addrof items[0], sizeof T)
+    ..
 ..
 
 # Removes and returns ownership of the last value.
@@ -396,10 +445,19 @@ Array[T].popRight(a alc.Allocator) !$T:
     ..
 
     items T[] = this.view()
-    item T = items[this.state.size - 1]
+    index u64 = this.state.size - 1
+    bounded index < items.count():
+        # SAFETY: this is the container's occupancy-aware removal path.
+        unsafe:
+            item $T = items[index]
+            items[index] = mem.zeroValue[T]()
 
-    this.state.size = this.state.size - 1
-    ret item
+            this.state.size = this.state.size - 1
+            ret move item
+        ..
+    ..
+
+    throw err.outOfBounds("array storage invariant failed")
 ..
 
 # Removes and returns ownership of the first value.
@@ -420,12 +478,17 @@ Array[T].popLeft(a alc.Allocator) !$T:
     ..
 
     items T[] = this.view()
-    item T = items[0]
-
-    this.state.leftOffset = this.state.leftOffset + 1
-    this.state.size = this.state.size - 1
-    
-    ret item
+    bounded 0 < items.count():
+        # SAFETY: this is the container's occupancy-aware removal path.
+        unsafe:
+            item $T = items[0]
+            items[0] = mem.zeroValue[T]()
+            this.state.leftOffset = this.state.leftOffset + 1
+            this.state.size = this.state.size - 1
+            ret move item
+        ..
+    ..
+    throw err.outOfBounds("array storage invariant failed")
 ..
 
 # Appends an owned value to the array.
@@ -435,7 +498,12 @@ Array[T].popLeft(a alc.Allocator) !$T:
 Array[T].pushRight(a alc.Allocator, item $T) !void:
     idx u64 = try expandRightStorage[T](this, a)
     items T[] = this.view()
-    items[idx] = item
+    bounded idx < items.count():
+        # SAFETY: expandRightStorage initialized this vacant slot.
+        unsafe:
+            items[idx] = move item
+        ..
+    ..
 ..
 
 # Prepends an owned value to the array.
@@ -443,7 +511,12 @@ Array[T].pushRight(a alc.Allocator, item $T) !void:
 Array[T].pushLeft(a alc.Allocator, item $T) !void:
     try expandLeftStorage[T](this, a)
     items T[] = this.view()
-    items[0] = item
+    bounded 0 < items.count():
+        # SAFETY: expandLeftStorage initialized this vacant slot.
+        unsafe:
+            items[0] = move item
+        ..
+    ..
 ..
 
 # Cleans up all remaining values and releases the array storage.
@@ -471,6 +544,9 @@ iterHasData[T](impl Array[T]*, index u64) bool:
 
 iterNext[T](impl Array[T]*, index u64) !T:
     view := impl.view()
+    if index >= view.count():
+        throw err.outOfBounds("iterator index is out of bounds")
+    ..
     ret view[index]
 ..
 

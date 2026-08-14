@@ -12,12 +12,12 @@ pub bind(endpoint address.Endpoint) !$Datagram:
     value := try socket.open(endpoint.address.family, socket.TYPE_DATAGRAM)
     onerror value.close()
     try value.bind(endpoint)
-    ret Datagram(socket=value)
+    ret Datagram(socket=move value)
 ..
 
 pub open(family u8) !$Datagram:
     value := try socket.open(family, socket.TYPE_DATAGRAM)
-    ret Datagram(socket=value)
+    ret Datagram(socket=move value)
 ..
 
 Datagram.connect(endpoint address.Endpoint) !void:

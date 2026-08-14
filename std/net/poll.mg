@@ -75,7 +75,10 @@ Poller.wait(output Event[], timeoutMs i64) !u64:
     count := try impl.wait(addrof this.impl, limit, timeoutMs)
     for i u64 = 0 to count:
         native := impl.eventAt(addrof this.impl, i)
-        output[i] = Event(token=native.token, flags=native.flags)
+        # The backend returns no more than the supplied limit.
+        bounded i < slices.count(output):
+            output[i] = Event(token=native.token, flags=native.flags)
+        ..
     ..
     ret count
 ..

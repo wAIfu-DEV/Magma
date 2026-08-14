@@ -1,4 +1,5 @@
 mod env_impl_unix
+# SAFETY: declares the platform-owned process environment global; no access occurs here.
 llvm "@environ = external global ptr\n"
 use "std:allocator" allocator
 use "std:heap" heap
@@ -16,8 +17,18 @@ freeString(a allocator.Allocator, value $str) void:
 ..
 
 environmentPointer() u8**:
-    llvm "  %environment = load ptr, ptr @environ\n"
-    llvm "  ret ptr %environment\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %environment = load ptr, ptr @environ\n"
+            llvm "  ret ptr %environment\n"
+    ..
+..
+
+environmentAt(environment u8**, index u64) u8*:
+    # SAFETY: environ is a platform-owned, null-terminated pointer array.
+    unsafe:
+        ret environment[index]
+    ..
 ..
 
 pub get(a allocator.Allocator, name str) !$str:
@@ -60,10 +71,10 @@ pub list(a allocator.Allocator) !$list.List[str]:
     onerror entries.free()
     environment := environmentPointer()
     i u64 = 0
-    loop environment[i] != none:
-        value str = try strings.fromCstr(a, environment[i])
-        try entries.pushRight(value)
+    loop environmentAt(environment, i) != none:
+        value str = try strings.fromCstr(a, environmentAt(environment, i))
+        try entries.pushRight(move value)
         i = i + 1
     ..
-    ret entries
+    ret move entries
 ..

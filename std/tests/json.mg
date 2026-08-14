@@ -13,29 +13,31 @@ use "std:footgun" footgun
 
 Capture(
     data u8*
-    count u64*
+    count u64
 )
 
 captureWrite(raw ptr, bytes str) !u64:
-    output Capture* = raw
     count := bytes.countBytes()
-    countPtr u64* = output.count
-    destination := cast.utop(cast.ptou(output.data) + *countPtr)
-    memory.copy(strings.toPtr(bytes), destination, count)
-    *countPtr = *countPtr + count
+    # SAFETY: render passes addrof its live Capture; its 1024-byte allocation
+    # exceeds every test rendering and count tracks the initialized prefix.
+    unsafe:
+        output Capture* = raw
+        destination := cast.utop(cast.ptou(output.data) + output.count)
+        memory.copy(strings.toPtr(bytes), destination, count)
+        output.count = output.count + count
+    ..
     ret count
 ..
 
 render(a allocator.Allocator, value json.Value, precision u64) !$str:
     storage u8* = try a.allocT[u8](1024)
     defer a.free(storage)
-    count u64 = 0
     output Capture
     output.data = storage
-    output.count = addrof count
+    output.count = 0
     sink := writer.new(addrof output, captureWrite)
     try value.write(sink, precision)
-    view := strings.fromPtrNoCopy(output.data, count)
+    view := strings.fromPtrNoCopy(output.data, output.count)
     ret try strings.copy(a, view)
 ..
 
@@ -164,7 +166,7 @@ pub main() !void:
     try nested.set("ok", json.bool(true))
     try object.set("items", json.arrayBorrowed(addrof array))
     try object.set("nested", json.objectOwned(addrof nested))
-    footgun.drop[json.Object](nested)
+    footgun.drop[json.Object](move nested)
     encoded := try render(a, json.objectBorrowed(addrof object), 2)
     defer encoded.free(a)
     encodedLength := encoded.countBytes()
@@ -178,7 +180,7 @@ pub main() !void:
         throw errors.failure("JSON owned string copy failed")
     ..
     cleanup := try json.newArray(a)
-    try cleanup.append(copied)
+    try cleanup.append(move copied)
 
     borrowedValue := json.stringBorrowed("borrowed")
     if strings.compare(try borrowedValue.asString(), "borrowed") == false:
@@ -186,11 +188,11 @@ pub main() !void:
         throw errors.failure("JSON borrowed string changed")
     ..
     transferredText := try strings.copy(a, "transferred")
-    try cleanup.append(json.stringOwned(a, transferredText))
+    try cleanup.append(json.stringOwned(a, move transferredText))
 
     child := try json.newArray(a)
     try child.append(json.bool(true))
     try cleanup.append(json.arrayOwned(addrof child))
-    footgun.drop[json.Array](child)
+    footgun.drop[json.Array](move child)
     cleanup.free()
 ..

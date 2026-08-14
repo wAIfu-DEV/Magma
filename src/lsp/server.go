@@ -35,10 +35,11 @@ type document struct {
 	result    *analysis
 }
 type server struct {
-	in        *bufio.Reader
-	out       io.Writer
-	stdRoot   string
-	documents map[string]*document
+	in             *bufio.Reader
+	out            io.Writer
+	stdRoot        string
+	documents      map[string]*document
+	safetyWarnings bool
 }
 type analysis struct {
 	file        *types.FileCtx
@@ -58,10 +59,17 @@ type location struct {
 }
 
 type diagnostic struct {
-	Range    rangePosition `json:"range"`
-	Severity int           `json:"severity"`
-	Source   string        `json:"source"`
-	Message  string        `json:"message"`
+	Range              rangePosition       `json:"range"`
+	Severity           int                 `json:"severity"`
+	Source             string              `json:"source"`
+	Message            string              `json:"message"`
+	Code               string              `json:"code,omitempty"`
+	RelatedInformation []diagnosticRelated `json:"relatedInformation,omitempty"`
+}
+
+type diagnosticRelated struct {
+	Location location `json:"location"`
+	Message  string   `json:"message"`
 }
 
 // diagnosticsForFile is the protocol adapter for compiler diagnostics. It is
@@ -99,15 +107,34 @@ func diagnosticsForFile(err error, warnings []types.Diagnostic, path string) []d
 		message = strings.Join(strings.Fields(message), " ")
 		result = append(result, diagnostic{
 			Range:    rangePosition{Start: position{Line: line, Character: column}, End: position{Line: line, Character: end}},
-			Severity: severity, Source: "magma", Message: message,
+			Severity: severity, Source: "magma", Message: message, Code: item.Code,
+			RelatedInformation: relatedDiagnostics(item.Related),
 		})
+	}
+	return result
+}
+
+func relatedDiagnostics(items []types.DiagnosticRelated) []diagnosticRelated {
+	result := make([]diagnosticRelated, 0, len(items))
+	for _, item := range items {
+		if item.FilePath == "" || item.Token.Pos.Line == 0 {
+			continue
+		}
+		result = append(result, diagnosticRelated{Location: tokenLocation(item.FilePath, item.Token), Message: item.Message})
 	}
 	return result
 }
 
 // Serve processes LSP messages until exit or end-of-file.
 func Serve(input io.Reader, output io.Writer, stdRoot string) error {
-	s := &server{in: bufio.NewReader(input), out: output, stdRoot: stdRoot, documents: map[string]*document{}}
+	return ServeWithPolicy(input, output, stdRoot, false)
+}
+
+// ServeWithPolicy starts the language server with the same safety policy used
+// by the command-line compiler. Clients may subsequently update it through
+// workspace/didChangeConfiguration.
+func ServeWithPolicy(input io.Reader, output io.Writer, stdRoot string, safetyWarnings bool) error {
+	s := &server{in: bufio.NewReader(input), out: output, stdRoot: stdRoot, documents: map[string]*document{}, safetyWarnings: safetyWarnings}
 	for {
 		payload, err := readMessage(s.in)
 		if errors.Is(err, io.EOF) {
@@ -161,10 +188,38 @@ func readMessage(r *bufio.Reader) ([]byte, error) {
 func (s *server) handle(msg message) error {
 	switch msg.Method {
 	case "initialize":
-		return s.respond(msg.ID, map[string]any{"capabilities": map[string]any{"textDocumentSync": 1, "hoverProvider": true, "definitionProvider": true, "completionProvider": map[string]any{"triggerCharacters": []string{".", "\"", "/", ":"}}}})
+		var p struct {
+			InitializationOptions struct {
+				SafetyWarnings bool `json:"safetyWarnings"`
+			} `json:"initializationOptions"`
+		}
+		if len(msg.Params) != 0 {
+			_ = json.Unmarshal(msg.Params, &p)
+			if p.InitializationOptions.SafetyWarnings {
+				s.safetyWarnings = true
+			}
+		}
+		return s.respond(msg.ID, map[string]any{"capabilities": map[string]any{"textDocumentSync": 1, "hoverProvider": true, "definitionProvider": true, "completionProvider": map[string]any{"triggerCharacters": []string{".", "\"", "/", ":"}}, "codeActionProvider": true, "semanticTokensProvider": map[string]any{"legend": map[string]any{"tokenTypes": []string{"keyword"}, "tokenModifiers": []string{}}, "full": true}}})
 	case "shutdown":
 		return s.respond(msg.ID, nil)
 	case "initialized", "$/cancelRequest", "textDocument/didSave":
+		return nil
+	case "workspace/didChangeConfiguration":
+		var p struct {
+			Settings struct {
+				SafetyWarnings bool `json:"safetyWarnings"`
+			} `json:"settings"`
+		}
+		if err := json.Unmarshal(msg.Params, &p); err != nil {
+			return err
+		}
+		s.safetyWarnings = p.Settings.SafetyWarnings
+		for uri, d := range s.documents {
+			d.result = nil
+			if err := s.publishDiagnostics(uri); err != nil {
+				return err
+			}
+		}
 		return nil
 	case "textDocument/didOpen":
 		var p struct {
@@ -268,6 +323,10 @@ func (s *server) handle(msg message) error {
 			return s.respond(msg.ID, completionList{IsIncomplete: true, Items: []completionItem{}})
 		}
 		return s.respond(msg.ID, completionList{IsIncomplete: true, Items: complete(d.URI, d.Text, p.Position, s.stdRoot)})
+	case "textDocument/semanticTokens/full":
+		return s.handleSemanticTokens(msg)
+	case "textDocument/codeAction":
+		return s.handleCodeAction(msg)
 	default:
 		if len(msg.ID) != 0 {
 			return s.respondError(msg.ID, -32601, "method not found")
@@ -281,7 +340,7 @@ func (s *server) publishDiagnostics(uri string) error {
 	if d == nil {
 		return nil
 	}
-	d.result = analyze(d.URI, d.Text, s.stdRoot)
+	d.result = analyzePolicy(d.URI, d.Text, s.stdRoot, s.safetyWarnings)
 	path, err := uriPath(uri)
 	if err != nil {
 		return err
@@ -317,10 +376,18 @@ func (s *server) write(v any) error {
 }
 
 func analyze(rawURI, source, stdRoot string) *analysis {
-	return analyzeWithRecovery(rawURI, source, stdRoot, true)
+	return analyzePolicy(rawURI, source, stdRoot, false)
+}
+
+func analyzePolicy(rawURI, source, stdRoot string, safetyWarnings bool) *analysis {
+	return analyzeWithRecoveryPolicy(rawURI, source, stdRoot, true, safetyWarnings)
 }
 
 func analyzeWithRecovery(rawURI, source, stdRoot string, recoverSyntax bool) *analysis {
+	return analyzeWithRecoveryPolicy(rawURI, source, stdRoot, recoverSyntax, false)
+}
+
+func analyzeWithRecoveryPolicy(rawURI, source, stdRoot string, recoverSyntax, safetyWarnings bool) *analysis {
 	path, err := uriPath(rawURI)
 	if err != nil {
 		return &analysis{err: err}
@@ -342,7 +409,7 @@ func analyzeWithRecovery(rawURI, source, stdRoot string, recoverSyntax bool) *an
 		for _, syntaxError := range comp_err.Diagnostics(err) {
 			if syntaxError.Ctx != nil && filepath.Clean(syntaxError.Ctx.FilePath) == path {
 				if recovered, ok := blankSourceLine(source, syntaxError.Token.Pos.Line); ok {
-					result := analyzeWithRecovery(rawURI, recovered, stdRoot, false)
+					result := analyzeWithRecoveryPolicy(rawURI, recovered, stdRoot, false, safetyWarnings)
 					result.err = err
 					return result
 				}
@@ -374,7 +441,7 @@ func analyzeWithRecovery(rawURI, source, stdRoot string, recoverSyntax bool) *an
 				var validated compilerpipeline.ValidatedProgram
 				validated, err = compilerpipeline.ValidateLowering(typed)
 				if err == nil {
-					compilerpipeline.CheckOwnership(validated)
+					_, err = compilerpipeline.CheckSafety(validated, safetyWarnings)
 				}
 			}
 		}
@@ -556,6 +623,16 @@ func (a *analysis) hover(pos position) string {
 			sourceToken = &a.file.Tokens[i]
 			sourceTokenIndex = i
 			break
+		}
+	}
+	if sourceToken != nil {
+		switch sourceToken.Repr {
+		case "move":
+			return "`move value` transfers ownership from a named place."
+		case "bounded":
+			return "`bounded condition:` establishes a reusable range proof for its lexical block."
+		case "unsafe":
+			return "`unsafe:` localizes operations whose validity the compiler cannot prove."
 		}
 	}
 	// Prefer information indexed from the intact source tree. Transformed nodes
@@ -744,6 +821,14 @@ func (f *hoverFinder) inspect(value any) {
 	case *types.NodeExprMemberAccess:
 		if f.tokenAt(n.Tk) && n.Access != nil {
 			f.value = code(n.Member + " " + formatType(n.Access.Type))
+		}
+	case *types.NodeExprSubscript:
+		if f.tokenAt(n.Tk) && n.RangeProof != nil {
+			origin := "control-flow range proof"
+			if n.RangeProof.Guarded {
+				origin = "`bounded` entry proof"
+			}
+			f.value = "Bounds verified by " + origin + "."
 		}
 	case *types.NodeFuncDef:
 		if f.nameAt(n.Class.NameNode) {

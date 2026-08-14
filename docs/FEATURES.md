@@ -356,12 +356,13 @@ by a return type:
 They appear as struct fields:
 
 ```magma
-AllocatorVTable(
-    fn_alloc (ptr, u64) !u8*,
-    fn_free  (ptr, u8*) void,
+VTable(
+    alloc (ptr, u64) !u8*,
+    realloc (ptr, ptr, u64) !u8*,
+    free  (ptr, u8*) void,
 )
 
-Allocator(impl ptr, vtable AllocatorVTable*)
+Allocator(impl ptr, vtable VTable*)
 ```
 
 Together, an opaque implementation pointer and function-pointer fields form a
@@ -438,7 +439,7 @@ mix shifts, masks, and comparisons.
 `sizeof Type` yields the byte size of a type and is used in generic allocation:
 
 ```magma
-ret try this.vtable.fn_alloc(this.impl, count * sizeof T)
+ret try this.vtable.alloc(this.impl, count * sizeof T)
 ```
 
 There is no general cast operator. Numeric conversions and pointer/integer
@@ -774,6 +775,11 @@ Both declarations are deduplicated across modules and may be selected with
 `@platform`. They are ignored for LLVM and object output; bundles are copied
 only after successful executable linking.
 
+On ELF platforms, bundled shared libraries must use the filename recorded in
+their `SONAME`. Magma adds an `$ORIGIN` runtime search path to executables on
+Linux and the supported BSD targets, so the dynamic loader finds those files
+beside the executable.
+
 ### 9.4 Exported native functions
 
 `@export_name` exposes a top-level Magma function under a stable native symbol:
@@ -812,6 +818,10 @@ Magma's internal error aggregate, which does not have a supported C ABI. Expose
 a throwing operation through an explicit non-throwing adapter instead, for
 example by returning an integer status and writing the successful value through
 a pointer argument.
+
+`@no_retain` marks owned results that are detached from all pointer and slice
+arguments, avoiding conservative completion-lifetime retention when the
+function contract guarantees those arguments are call-duration borrows.
 
 ### 9.5 Inline LLVM
 

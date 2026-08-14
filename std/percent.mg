@@ -55,12 +55,16 @@ hexValue(byte u8) !u8:
 pub encodedSize(text str, policy u8) !u64:
     input := strings.toPtr(text)
     total u64 = 0
-    for i u64 = 0 to text.countBytes():
-        byte := input[i]
-        if (policy == FORM && byte == 32) || try allowed(byte, policy):
-            total = try checked.uAdd(total, 1)
-        else:
-            total = try checked.uAdd(total, 3)
+    # SAFETY: input is the byte pointer for text and the loop is bounded by its
+    # exact byte count.
+    unsafe:
+        for i u64 = 0 to text.countBytes():
+            byte := input[i]
+            if (policy == FORM && byte == 32) || try allowed(byte, policy):
+                total = try checked.uAdd(total, 1)
+            else:
+                total = try checked.uAdd(total, 3)
+            ..
         ..
     ..
     ret total
@@ -74,7 +78,10 @@ pub encodeTo(text str, output u8[], policy u8) !u64:
     input := strings.toPtr(text)
     inputIndex u64 = 0
     outputIndex u64 = 0
-    loop inputIndex < text.countBytes():
+    # SAFETY: input spans text.countBytes; encodedSize and the capacity guard
+    # bound the one- or three-byte output produced per input byte.
+    unsafe:
+      loop inputIndex < text.countBytes():
         byte := input[inputIndex]
         if policy == FORM && byte == 32:
             output[outputIndex] = 43
@@ -88,7 +95,8 @@ pub encodeTo(text str, output u8[], policy u8) !u64:
             output[outputIndex + 2] = hexDigit(byte & 15)
             outputIndex = outputIndex + 3
         ..
-        inputIndex = inputIndex + 1
+          inputIndex = inputIndex + 1
+      ..
     ..
     ret outputIndex
 ..
@@ -99,14 +107,17 @@ pub encode(a alc.Allocator, text str, policy u8) !$str:
     onerror result.free(a)
     output u8[] = slices.fromPtr(strings.toPtr(result), size)
     try encodeTo(text, output, policy)
-    ret result
+    ret move result
 ..
 
 decodedSizeKind(text str, form bool) !u64:
     input := strings.toPtr(text)
     total u64 = 0
     i u64 = 0
-    loop i < text.countBytes():
+    # SAFETY: input spans text.countBytes; the truncation guard precedes both
+    # lookahead bytes of every percent escape.
+    unsafe:
+      loop i < text.countBytes():
         if input[i] == 37:
             if i + 2 >= text.countBytes():
                 throw errors.invalidArgument("truncated percent escape")
@@ -117,7 +128,8 @@ decodedSizeKind(text str, form bool) !u64:
         else:
             i = i + 1
         ..
-        total = try checked.uAdd(total, 1)
+          total = try checked.uAdd(total, 1)
+      ..
     ..
     ret total
 ..
@@ -134,7 +146,10 @@ decodeToKind(text str, output u8[], form bool) !u64:
     input := strings.toPtr(text)
     inputIndex u64 = 0
     outputIndex u64 = 0
-    loop inputIndex < text.countBytes():
+    # SAFETY: decodedSizeKind validates escape lookahead and needed bounds the
+    # destination; each iteration produces exactly one output byte.
+    unsafe:
+      loop inputIndex < text.countBytes():
         byte := input[inputIndex]
         if byte == 37:
             high := try hexValue(input[inputIndex + 1])
@@ -149,7 +164,8 @@ decodeToKind(text str, output u8[], form bool) !u64:
             ..
             inputIndex = inputIndex + 1
         ..
-        outputIndex = outputIndex + 1
+          outputIndex = outputIndex + 1
+      ..
     ..
     ret outputIndex
 ..

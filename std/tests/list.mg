@@ -19,14 +19,22 @@ pub main() !void:
     ..
     backing := try array.new[u64](a)
     try backing.pushRight(a, 10)
-    converted := list.fromArray[u64](a, backing, none)
+    converted := list.fromArray[u64](a, move backing, none)
     defer converted.free()
     if converted.count() != 1 || try converted.get(0) != 10:
         throw errors.failure("list fromArray changed")
     ..
     try converted.set(0, 11)
-    if converted.view()[0] != 11 || try converted.take(0) != 11:
-        throw errors.failure("list set, view, or take changed")
+    convertedView := converted.view()
+    bounded 0 < convertedView.count():
+        if convertedView[0] != 11 || try converted.take(0) != 11:
+            throw errors.failure("list set, view, or take changed")
+        ..
+    ..
+    try converted.pushRight(12)
+    replaced := try converted.replace(0, 13)
+    if replaced != 0 || try converted.get(0) != 13:
+        throw errors.failure("list replace changed")
     ..
     try converted.resize(2, 1, 1)
     try converted.expandLeft()

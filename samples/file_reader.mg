@@ -19,23 +19,25 @@ main(args str[]) !void:
     ..
 
     out := stdout.writer()
-    out.writeLn("Started program. Write file path to print.")
+    try out.writeLn("Started program. Write file path to print.")
 
     loop true:
-        out.write("Path: ")
-        stdout.flush()
+        try out.write("Path: ")
+        try stdout.flush()
 
-        input := stdin.readLn(a)
+        input := try stdin.readLn(a)
         defer input.free(a)
 
         f := try file.open(a, input, file.mode().read())
         defer f.close()
 
-        contents := f.reader().read(a, f.count())
+        source := try f.reader()
+        size := try f.count()
+        contents := try source.read(a, size)
         defer contents.free(a)
 
-        out.write(contents)
-        out.writeLn("<EOF>")
+        try out.write(contents)
+        try out.writeLn("<EOF>")
     ..
 .. 
 

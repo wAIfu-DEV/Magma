@@ -17,7 +17,7 @@ func parseLlvm(ctx *ParseCtx, tk t.Token) (*t.NodeLlvm, error) {
 
 	if next.Type == t.TokLitStr {
 		consume(ctx)
-		return &t.NodeLlvm{Text: next.Repr}, nil
+		return &t.NodeLlvm{Tk: tk, Text: next.Repr}, nil
 	}
 
 	return nil, comp_err.CompilationErrorToken(
@@ -138,12 +138,21 @@ func parseCompilerDirective(ctx *ParseCtx, tk t.Token) error {
 		ctx.NextExportName = dirArgs[0].Repr
 		ctx.NextExportABI = "C"
 		return nil
+	case "no_retain":
+		if len(dirArgs) != 0 {
+			return comp_err.CompilationErrorToken(ctx.Fctx, &tk, "syntax error: directive 'no_retain' takes no arguments", "expected: `@no_retain`")
+		}
+		if ctx.NextNoRetain {
+			return comp_err.CompilationErrorToken(ctx.Fctx, &tk, "syntax error: duplicate 'no_retain' directive", "apply it once to a function definition")
+		}
+		ctx.NextNoRetain = true
+		return nil
 	default:
 		return comp_err.CompilationErrorToken(
 			ctx.Fctx,
 			&next,
 			"syntax error: invalid compiler directive name",
-			"expected: `@platform(...)` or `@export_name(...)`",
+			"expected: `@platform(...)`, `@export_name(...)`, or `@no_retain`",
 		)
 	}
 }

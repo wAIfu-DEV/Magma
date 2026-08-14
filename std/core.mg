@@ -8,9 +8,12 @@ use "std:allocator" alc
 # @example
 #   length := values.count()
 slice.count() u64:
-    llvm "  %value = load %type.slice, ptr %this\n"
-    llvm "  %cnt = extractvalue %type.slice %value, 1\n"
-    llvm "  ret i64 %cnt\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %value = load %type.slice, ptr %this\n"
+        llvm "  %cnt = extractvalue %type.slice %value, 1\n"
+        llvm "  ret i64 %cnt\n"
+    ..
 ..
 
 # Canonical error predicates. Besides being convenient, these are the only
@@ -19,10 +22,13 @@ slice.count() u64:
 # @example
 #   if resultError.ok():
 error.ok() bool:
-    llvm "  %value = load %type.error, ptr %this\n"
-    llvm "  %code = extractvalue %type.error %value, 1\n"
-    llvm "  %ok = icmp eq i32 %code, 0\n"
-    llvm "  ret i1 %ok\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %value = load %type.error, ptr %this\n"
+        llvm "  %code = extractvalue %type.error %value, 1\n"
+        llvm "  %ok = icmp eq i32 %code, 0\n"
+        llvm "  ret i1 %ok\n"
+    ..
 ..
 
 # Reports whether an error represents failure.
@@ -30,10 +36,13 @@ error.ok() bool:
 # @example
 #   if resultError.nok():
 error.nok() bool:
-    llvm "  %value = load %type.error, ptr %this\n"
-    llvm "  %code = extractvalue %type.error %value, 1\n"
-    llvm "  %nok = icmp ne i32 %code, 0\n"
-    llvm "  ret i1 %nok\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %value = load %type.error, ptr %this\n"
+        llvm "  %code = extractvalue %type.error %value, 1\n"
+        llvm "  %nok = icmp ne i32 %code, 0\n"
+        llvm "  ret i1 %nok\n"
+    ..
 ..
 
 # Returns the error code of an error.
@@ -43,9 +52,18 @@ error.nok() bool:
 # @example
 #   category := failure.code()
 error.code() u32:
-    llvm "  %value = load %type.error, ptr %this\n"
-	llvm "  %e0 = extractvalue %type.error %value, 1\n"
-    llvm "  ret i32 %e0\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %value = load %type.error, ptr %this\n"
+    ..
+	# SAFETY: this audited implementation injects the required low-level IR.
+	unsafe:
+        llvm "  %e0 = extractvalue %type.error %value, 1\n"
+	..
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  ret i32 %e0\n"
+    ..
 ..
 
 # Returns the message from an error. Error construction retains at most 65,535
@@ -55,21 +73,30 @@ error.code() u32:
 # @example
 #   detail := failure.message()
 error.message() str:
-    llvm "  %value = load %type.error, ptr %this\n"
-	llvm "  %ep = extractvalue %type.error %value, 0\n"
-	llvm "  %el = extractvalue %type.error %value, 3\n"
-	llvm "  %el64 = zext i16 %el to i64\n"
-	llvm "  %s0 = insertvalue %type.str zeroinitializer, ptr %ep, 0\n"
-	llvm "  %s1 = insertvalue %type.str %s0, i64 %el64, 1\n"
-	llvm "  ret %type.str %s1\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %value = load %type.error, ptr %this\n"
+    ..
+	# SAFETY: this audited implementation injects the required low-level IR.
+	unsafe:
+        llvm "  %ep = extractvalue %type.error %value, 0\n"
+        llvm "  %el = extractvalue %type.error %value, 3\n"
+        llvm "  %el64 = zext i16 %el to i64\n"
+        llvm "  %s0 = insertvalue %type.str zeroinitializer, ptr %ep, 0\n"
+        llvm "  %s1 = insertvalue %type.str %s0, i64 %el64, 1\n"
+        llvm "  ret %type.str %s1\n"
+	..
 ..
 
 # Methods declared on primitive types form Magma's implicit core method set.
 # The compiler passes a pointer to the receiver as `this`, just as it does for
 # struct member functions.
 strData(value str) u8*:
-    llvm "  %data = extractvalue %type.str %value, 0\n"
-    llvm "  ret ptr %data\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %data = extractvalue %type.str %value, 0\n"
+        llvm "  ret ptr %data\n"
+    ..
 ..
 
 # Releases the backing allocation of an owned string. Borrowed strings and
@@ -96,7 +123,10 @@ destr str.free(a alc.Allocator) void:
 # @example
 #   byteCount := myStr.countBytes()
 str.countBytes() u64:
-    llvm "  %value = load %type.str, ptr %this\n"
-    llvm "  %l0 = extractvalue %type.str %value, 1\n"
-    llvm "  ret i64 %l0\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %value = load %type.str, ptr %this\n"
+        llvm "  %l0 = extractvalue %type.str %value, 1\n"
+        llvm "  ret i64 %l0\n"
+    ..
 ..

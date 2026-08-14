@@ -10,14 +10,15 @@ import (
 )
 
 type completionItem struct {
-	Label         string              `json:"label"`
-	Kind          int                 `json:"kind,omitempty"`
-	Detail        string              `json:"detail,omitempty"`
-	FilterText    string              `json:"filterText,omitempty"`
-	InsertText    string              `json:"insertText,omitempty"`
-	SortText      string              `json:"sortText,omitempty"`
-	Documentation map[string]any      `json:"documentation,omitempty"`
-	TextEdit      *completionTextEdit `json:"textEdit,omitempty"`
+	Label            string              `json:"label"`
+	Kind             int                 `json:"kind,omitempty"`
+	Detail           string              `json:"detail,omitempty"`
+	FilterText       string              `json:"filterText,omitempty"`
+	InsertText       string              `json:"insertText,omitempty"`
+	InsertTextFormat int                 `json:"insertTextFormat,omitempty"`
+	SortText         string              `json:"sortText,omitempty"`
+	Documentation    map[string]any      `json:"documentation,omitempty"`
+	TextEdit         *completionTextEdit `json:"textEdit,omitempty"`
 }
 
 type completionList struct {
@@ -399,6 +400,19 @@ func insideFunctionBody(lines []string, line int) bool {
 
 func (a *analysis) expressionCompletions(prefix string, line uint32) []completionItem {
 	items := map[string]completionItem{}
+	for _, keyword := range []struct{ label, detail, insert string }{
+		{"move", "transfer ownership", "move "},
+		{"bounded", "establish a range proof", "bounded ${1:condition}:\n    ${0}\n.."},
+		{"unsafe", "localize an unverifiable operation", "unsafe:\n    ${0}\n.."},
+	} {
+		if strings.HasPrefix(keyword.label, prefix) {
+			item := completionItem{Label: keyword.label, Kind: 14, Detail: keyword.detail, InsertText: keyword.insert}
+			if strings.Contains(keyword.insert, "${") {
+				item.InsertTextFormat = 2
+			}
+			items[keyword.label] = item
+		}
+	}
 	for name, item := range a.docs.expressionSymbols[a.file.PackageName] {
 		if strings.HasPrefix(name, prefix) {
 			items[name] = item

@@ -131,20 +131,27 @@ destr Socket.close() !void:
 ..
 
 socketRead(raw ptr, buffer u8[], count u64) !u64:
-    socket Socket* = raw
-    ret try socket.recv(buffer, count)
+    # SAFETY: Socket.reader stores its live receiver as the callback context.
+    unsafe:
+        socket Socket* = raw
+        ret try socket.recv(buffer, count)
+    ..
 ..
 
 socketWrite(raw ptr, bytes str) !u64:
-    socket Socket* = raw
-    ret try socket.send(bytes)
+    # SAFETY: Socket.writer stores its live receiver as the callback context.
+    unsafe:
+        socket Socket* = raw
+        ret try socket.send(bytes)
+    ..
 ..
 
 const socketDuplexVtable := duplex.Vtable(fn_write=socketWrite, fn_read=socketRead)
+const socketReaderVtable := reader.Vtable(read=socketRead)
 
 Socket.reader() !reader.Reader:
     try this.requireOpen()
-    ret reader.new(this, socketRead)
+    ret reader.new(this, addrof socketReaderVtable)
 ..
 
 Socket.writer() !writer.Writer:

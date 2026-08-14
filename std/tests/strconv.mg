@@ -17,7 +17,10 @@ pub main() !void:
         throw errors.failure("strconv format changed")
     ..
     formattedPtr u8* = strings.toPtr(formatted)
-    if formattedPtr[formatted.countBytes()] != 0:
-        throw errors.failure("formatted string is not null terminated")
+    # SAFETY: owned strings reserve a terminator immediately after countBytes.
+    unsafe:
+        if formattedPtr[formatted.countBytes()] != 0:
+            throw errors.failure("formatted string is not null terminated")
+        ..
     ..
 ..

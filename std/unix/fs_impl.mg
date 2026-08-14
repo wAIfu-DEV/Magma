@@ -51,13 +51,19 @@ pub Dir(
 )
 
 Dir.clearCurrent() void:
+    # SAFETY: hasCurrent is the occupancy bit for the uniquely owned currentName.
+    unsafe:
     if this.hasCurrent:
         this.currentName.free(this.allocator)
         this.hasCurrent = false
+      ..
     ..
 ..
 
 advance(directory Dir*) void:
+    # SAFETY: readdir returns a native dirent pointer whose platform layout has
+    # a name field at byte 19 for the lifetime of the directory handle.
+    unsafe:
     directory.nextEntry = ext_readdir(directory.handle)
     loop directory.nextEntry != none:
         raw u8* = directory.nextEntry
@@ -67,6 +73,7 @@ advance(directory Dir*) void:
             ret
         ..
         directory.nextEntry = ext_readdir(directory.handle)
+      ..
     ..
 ..
 
@@ -77,7 +84,7 @@ pub openDir(a allocator.Allocator, path str) !$Dir:
     ..
     result := Dir(allocator=a, handle=handle, nextEntry=none, open=true, currentName="", hasCurrent=false)
     advance(addrof result)
-    ret result
+    ret move result
 ..
 
 pub Dir.hasData() bool:
@@ -85,6 +92,9 @@ pub Dir.hasData() bool:
 ..
 
 pub Dir.next() !$Entry:
+    # SAFETY: hasData proves nextEntry is a live native dirent; byte 18 is its
+    # type field and byte 19 begins its null-terminated name.
+    unsafe:
     if this.hasData() == false:
         throw errors.notFound("directory iterator exhausted")
     ..
@@ -102,7 +112,8 @@ pub Dir.next() !$Entry:
         kind = 3
     ..
     advance(this)
-    ret Entry(name=this.currentName, kind=kind)
+      ret Entry(name=this.currentName, kind=kind)
+    ..
 ..
 
 destr Dir.close() !void:
@@ -117,6 +128,9 @@ destr Dir.close() !void:
 ..
 
 pub metadata(a allocator.Allocator, path str, followLinks bool) !NativeMetadata:
+    # SAFETY: the platform stat calls initialize the 256-byte buffer; offsets
+    # 24, 48, and 88 are the audited target ABI fields used below.
+    unsafe:
     data := array u8[256]
     result i32 = 0
     if followLinks:
@@ -153,7 +167,8 @@ pub metadata(a allocator.Allocator, path str, followLinks bool) !NativeMetadata:
     if *sizeValue > 0:
         size = cast.itou(*sizeValue)
     ..
-    ret NativeMetadata(kind=kind, size=size, permissions=permissions, modified=*modifiedValue)
+      ret NativeMetadata(kind=kind, size=size, permissions=permissions, modified=*modifiedValue)
+    ..
 ..
 
 pub setPermissions(a allocator.Allocator, path str, permissions u32) !void:
@@ -282,6 +297,9 @@ join(a allocator.Allocator, left str, right str) !$str:
 ..
 
 walkInner(a allocator.Allocator, root str, visit (str, bool) !void) !void:
+    # SAFETY: each readdir result is live until the next call and follows the
+    # same audited dirent layout used by Dir.next.
+    unsafe:
     directory := ext_opendir(strings.toCstrNoCopy(root))
     if directory == none:
         throw errors.failure("opendir failed")
@@ -303,6 +321,7 @@ walkInner(a allocator.Allocator, root str, visit (str, bool) !void) !void:
             child.free(a)
         ..
         entry = ext_readdir(directory)
+      ..
     ..
 ..
 

@@ -2,6 +2,9 @@ mod slices
 # Low-level slice construction, allocation, reinterpretation, and release.
 
 use "std:allocator" alc
+use "std:cast"      cast
+use "std:checked"   checked
+use "std:errors"    err
 
 # Returns element count of slice.
 # @complexity O(1).
@@ -10,8 +13,11 @@ use "std:allocator" alc
 # @example
 #   length := slices.count(values)
 pub count(s slice) u64:
-    llvm "  %l0 = extractvalue %type.slice %s, 1\n"
-    llvm "  ret i64 %l0\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %l0 = extractvalue %type.slice %s, 1\n"
+            llvm "  ret i64 %l0\n"
+    ..
 ..
 
 # Creates a slice from a pointer and element count.
@@ -23,9 +29,12 @@ pub count(s slice) u64:
 # @example
 #   view := slices.fromPtr(pointer, 16)
 pub fromPtr(p ptr, elemCount u64) slice:
-    llvm "  %s0 = insertvalue %type.slice zeroinitializer, ptr %p, 0\n"
-    llvm "  %s1 = insertvalue %type.slice %s0, i64 %elemCount, 1\n"
-    llvm "  ret %type.slice %s1\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %s0 = insertvalue %type.slice zeroinitializer, ptr %p, 0\n"
+            llvm "  %s1 = insertvalue %type.slice %s0, i64 %elemCount, 1\n"
+            llvm "  ret %type.slice %s1\n"
+    ..
 ..
 
 # Reinterprets a slice's backing memory as elements of another type.
@@ -49,8 +58,25 @@ pub reinterpret[T, R](in T[]) R[]:
 # @example
 #   pointer := slices.toPtr(values)
 pub toPtr(s slice) ptr:
-    llvm "  %l0 = extractvalue %type.slice %s, 0\n"
-    llvm "  ret ptr %l0\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %l0 = extractvalue %type.slice %s, 0\n"
+            llvm "  ret ptr %l0\n"
+    ..
+..
+
+# Returns a borrowed half-open subrange while preserving the source lifetime.
+# The raw descriptor construction remains localized in fromPtr.
+# @complexity O(1)
+# @throws outOfBounds when start > end or end exceeds the source count
+pub subslice[T](in T[], start u64, end u64) !T[]:
+    sourceCount u64 = count(in)
+    if start > end || end > sourceCount:
+        throw err.outOfBounds("subslice bounds are invalid")
+    ..
+    offset u64 = try checked.byteCount[T](start)
+    data ptr = cast.utop(cast.ptou(toPtr(in)) + offset)
+    ret fromPtr(data, end - start)
 ..
 
 # Allocates an owned, uninitialized slice of T values.

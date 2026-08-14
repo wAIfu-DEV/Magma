@@ -5,24 +5,34 @@ use "std:errors" errors
 use "std:heap" heap
 use "std:reader" reader
 use "std:strings" strings
+
 source(impl ptr, bytes u8[], count u64) !u64:
     if count > 0:
-        bytes[0] = 65
+        # SAFETY: reader callbacks receive at least count writable elements.
+        unsafe:
+            bytes[0] = 65
+        ..
         ret 1
     ..
     ret 0
 ..
+
+const implVtable := reader.Vtable(read=source)
+
 pub main() !void:
     a allocator.Allocator = heap.allocator()
-    input := reader.new(none, source)
+    input := reader.new(none, addrof implVtable)
     result := try input.read(a, 1)
     defer result.free(a)
     if strings.compare(result, "A") == false:
         throw errors.failure("reader behavior changed")
     ..
     resultPtr u8* = strings.toPtr(result)
-    if resultPtr[result.countBytes()] != 0:
-        throw errors.failure("read string is not null terminated")
+    # SAFETY: owned strings reserve a terminator immediately after countBytes.
+    unsafe:
+        if resultPtr[result.countBytes()] != 0:
+            throw errors.failure("read string is not null terminated")
+        ..
     ..
     buffer := array u8[2]
     readCount := try input.readToBuff(buffer, 2)

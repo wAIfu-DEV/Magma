@@ -17,7 +17,7 @@ pub main() !void:
     try value.appendBorrowed("checked ")
     try value.appendCopy("builder")
     owned := try strings.copy(a, "!")
-    try value.appendOwned(owned)
+    try value.appendOwned(move owned)
     if value.byteCount() != 16 || value.isEmpty():
         throw errors.failure("builder byte count changed")
     ..
@@ -27,14 +27,17 @@ pub main() !void:
         throw errors.failure("builder behavior changed")
     ..
     resultPtr u8* = strings.toPtr(result)
-    if resultPtr[result.countBytes()] != 0:
-        throw errors.failure("built string is not null terminated")
+    # SAFETY: strings.alloc reserves a trailing terminator after countBytes.
+    unsafe:
+        if resultPtr[result.countBytes()] != 0:
+            throw errors.failure("built string is not null terminated")
+        ..
     ..
     try value.reset()
     if value.isEmpty() == false || value.byteCount() != 0:
         throw errors.failure("builder reset changed")
     ..
-    try value.add("borrowed", false)
+    try value.addBorrowed("borrowed")
     value.releaseCopies()
     try value.reset()
 ..

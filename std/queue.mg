@@ -21,7 +21,7 @@ pub new[T](a alc.Allocator, cleanup (alc.Allocator, $T) void) !$Queue[T]:
     data := try arr.new[T](a)
     q Queue[T]
     q.allocator = a
-    q.data = data
+    q.data = move data
     q.cleanup = cleanup
     ret q
 ..
@@ -31,7 +31,7 @@ pub new[T](a alc.Allocator, cleanup (alc.Allocator, $T) void) !$Queue[T]:
 # @example
 #   try pending.enqueue(42)
 Queue[T].enqueue(item $T) !void:
-    try this.data.pushRight(this.allocator, item)
+    try this.data.pushRight(this.allocator, move item)
 ..
 
 # Removes and returns ownership of the oldest item.

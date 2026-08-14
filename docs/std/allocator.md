@@ -17,9 +17,9 @@ Defines the allocator interface used by allocating standard-library APIs.
 
 ```magma
 Vtable(
-    fn_alloc (ptr, u64) !u8*,
-    fn_realloc (ptr, u8*, u64) !u8*,
-    fn_free (ptr, u8*) void,
+    alloc (ptr, u64) !u8*,
+    realloc (ptr, u8*, u64) !u8*,
+    free (ptr, u8*) void,
 )
 
 Allocator(

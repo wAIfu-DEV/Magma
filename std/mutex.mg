@@ -48,12 +48,20 @@ destr Mutex.free() !void:
 ..
 
 lockerLock(raw ptr) !void:
-    impl Mutex* = raw
+    impl Mutex*
+    # SAFETY: locker vtable contexts are created from a live Mutex by asLocker.
+    unsafe:
+        impl = raw
+    ..
     try impl.lock()
 ..
 
 lockerUnlock(raw ptr) !void:
-    impl Mutex* = raw
+    impl Mutex*
+    # SAFETY: locker vtable contexts are created from a live Mutex by asLocker.
+    unsafe:
+        impl = raw
+    ..
     try impl.unlock()
 ..
 

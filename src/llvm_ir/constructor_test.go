@@ -2,6 +2,7 @@ package llvmir_test
 
 import (
 	"Magma/src/checker"
+	destroychecker "Magma/src/destroy_checker"
 	"Magma/src/join"
 	llvmir "Magma/src/llvm_ir"
 	"Magma/src/monomorph"
@@ -76,6 +77,9 @@ func compileSourceTarget(t *testing.T, source string, target *magmatarget.Target
 		return "", err
 	}
 	if err = checker.TypeChecker(state); err != nil {
+		return "", err
+	}
+	if err = destroychecker.Run(state, false); err != nil {
 		return "", err
 	}
 	ir, err := llvmir.IrWrite(state)
@@ -192,8 +196,10 @@ Pair[T, U](first T, second U)
 make(count u64) void:
     bytes := array u8[count]
     pairs := array Pair[u8, u64][count + 1]
-    bytes[0] = 7
-    pairs[0] = Pair[u8, u64](first=1, second=2)
+    bounded 0 < bytes.count(), 0 < pairs.count():
+        bytes[0] = 7
+        pairs[0] = Pair[u8, u64](first=1, second=2)
+    ..
     ret
 ..
 `)
@@ -429,7 +435,10 @@ func TestAddrofSubscriptLowers(t *testing.T) {
 	source := `mod main
 
 elementAddress(items u64[], index u64) ptr:
-    ret addrof items[index]
+    bounded index < items.count():
+        ret addrof items[index]
+    ..
+    ret none
 ..
 
 main() void:
@@ -518,13 +527,17 @@ func TestTypeErasedPointerConversions(t *testing.T) {
 	source := `mod main
 
 typedToErased(value u8*) ptr:
-    erased ptr = value
-    ret erased
+    unsafe:
+        erased ptr = value
+        ret erased
+    ..
 ..
 
 erasedToTyped(value ptr) u8*:
-    typed u8* = value
-    ret typed
+    unsafe:
+        typed u8* = value
+        ret typed
+    ..
 ..
 
 produceTyped() !u8*:
@@ -536,13 +549,17 @@ produceErased() !ptr:
 ..
 
 throwingTypedToErased() !ptr:
-    erased ptr = try produceTyped()
-    ret erased
+    unsafe:
+        erased ptr = try produceTyped()
+        ret erased
+    ..
 ..
 
 throwingErasedToTyped() !u8*:
-    typed u8* = try produceErased()
-    ret typed
+    unsafe:
+        typed u8* = try produceErased()
+        ret typed
+    ..
 ..
 
 main() void:
@@ -887,8 +904,9 @@ func TestFunctionArgumentAssignmentUsesStableStorage(t *testing.T) {
 
 change(value u64) u64:
     pointer u64* = addrof value
+    observed u64 = *pointer
     value = 42
-    ret *pointer
+    ret observed + value
 ..
 `
 	ir, err := compileSource(t, source)
@@ -1042,7 +1060,9 @@ Item.get() u64:
 ..
 
 read(box Box*) u64:
-    ret box.items[0].get()
+    unsafe:
+        ret box.items[0].get()
+    ..
 ..
 `
 	if _, err := compileSource(t, source); err != nil {
@@ -1056,8 +1076,10 @@ func TestSubscriptOnMemberThroughPointerLocal(t *testing.T) {
 Box(items u64*)
 
 read(raw ptr) u64:
-    box Box* = raw
-    ret box.items[0]
+    unsafe:
+        box Box* = raw
+        ret box.items[0]
+    ..
 ..
 `
 	if _, err := compileSource(t, source); err != nil {

@@ -225,8 +225,11 @@ pub encode(cp u32, output u16[]) !u64:
         ret 1
     ..
     pair := try unicode.splitSurrogate(cp)
-    output[0] = pair.high
-    output[1] = pair.low
+    # needed is two on this path and the capacity guard establishes both slots.
+    bounded 0 < slices.count(output), 1 < slices.count(output):
+        output[0] = pair.high
+        output[1] = pair.low
+    ..
     ret 2
 ..
 
@@ -285,9 +288,13 @@ pub toUtf8Lossy(a alc.Allocator, units u16[]) !$str:
         remaining := slices.fromPtr(cast.utop(cast.ptou(out) + outputIndex), maximum - outputIndex)
         outputIndex = outputIndex + try utf8.encode(cp, remaining)
     ..
-    out[outputIndex] = 0
+    # SAFETY: maximum includes the reserved trailing terminator and outputIndex
+    # never exceeds the encoded prefix computed above.
+    unsafe:
+        out[outputIndex] = 0
+    ..
     result := strings.fromPtrNoCopy(out, outputIndex)
-    footgun.drop[str](owned)
+    footgun.drop[str](move owned)
     ret result
 ..
 
@@ -358,12 +365,16 @@ pub decodeBytes(a alc.Allocator, bytes u8[], endian u8) !$u16[]:
     onerror slices.free(a, result)
     for i u64 = 0 to count:
         at := offset + i * 2
-        first := cast.u8to64(bytes[at])
-        second := cast.u8to64(bytes[at + 1])
-        if selected == ENDIAN_LITTLE:
-            result[i] = cast.u64to16(first | (second << 8))
-        else:
-            result[i] = cast.u64to16((first << 8) | second)
+        # count=(byteCount-offset)/2 establishes both source bytes; result was
+        # allocated with exactly count code-unit slots.
+        bounded at < slices.count(bytes), at + 1 < slices.count(bytes), i < slices.count(result):
+            first := cast.u8to64(bytes[at])
+            second := cast.u8to64(bytes[at + 1])
+            if selected == ENDIAN_LITTLE:
+                result[i] = cast.u64to16(first | (second << 8))
+            else:
+                result[i] = cast.u64to16((first << 8) | second)
+            ..
         ..
     ..
     if validate(result) == false:

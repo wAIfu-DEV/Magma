@@ -74,7 +74,7 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 	case *t.NodeExprVoid:
 		return &t.NodeExprVoid{VoidType: cloneType(n.VoidType)}
 	case *t.NodeExprUnary:
-		return &t.NodeExprUnary{Tk: n.Tk, Operator: n.Operator, Operand: cloneExpr(n.Operand), InfType: cloneType(n.InfType)}
+		return &t.NodeExprUnary{Tk: n.Tk, Operator: n.Operator, Operand: cloneExpr(n.Operand), InfType: cloneType(n.InfType), ProvenanceChecked: n.ProvenanceChecked}
 	case *t.NodeExprLit:
 		return &t.NodeExprLit{Tk: n.Tk, Value: n.Value, LitType: n.LitType, InfType: cloneType(n.InfType)}
 	case *t.NodeExprArray:
@@ -173,6 +173,8 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 		return &t.NodeExprSizeof{Tk: n.Tk, Type: cloneType(n.Type), InfType: cloneType(n.InfType)}
 	case *t.NodeExprAddrof:
 		return &t.NodeExprAddrof{Tk: n.Tk, Expr: cloneExpr(n.Expr), InfType: cloneType(n.InfType)}
+	case *t.NodeExprMove:
+		return &t.NodeExprMove{Tk: n.Tk, Expr: cloneExpr(n.Expr), InfType: cloneType(n.InfType)}
 	case *t.NodeExprDestructureAssign:
 		return &t.NodeExprDestructureAssign{
 			ValueDef: *cloneExpr(&n.ValueDef).(*t.NodeExprVarDef),
@@ -225,8 +227,16 @@ func cloneStmt(in t.NodeStatement) t.NodeStatement {
 			BoundExpr: cloneExpr(n.BoundExpr),
 			Body:      cloneBody(&n.Body),
 		}
+	case *t.NodeStmtBounded:
+		out := &t.NodeStmtBounded{Tk: n.Tk, Body: cloneBody(&n.Body)}
+		for _, predicate := range n.Predicates {
+			out.Predicates = append(out.Predicates, cloneExpr(predicate))
+		}
+		return out
+	case *t.NodeStmtUnsafe:
+		return &t.NodeStmtUnsafe{Tk: n.Tk, Body: cloneBody(&n.Body)}
 	case *t.NodeLlvm:
-		return &t.NodeLlvm{Text: n.Text}
+		return &t.NodeLlvm{Tk: n.Tk, Text: n.Text}
 	case *t.NodeStmtDefer:
 		return &t.NodeStmtDefer{
 			Expression: cloneExpr(n.Expression),
@@ -269,6 +279,7 @@ func cloneFuncDef(in *t.NodeFuncDef) *t.NodeFuncDef {
 		IsMember:       in.IsMember,
 		IsEntryPoint:   in.IsEntryPoint,
 		IsExternal:     in.IsExternal,
+		NoRetain:       in.NoRetain,
 		IsPublic:       in.IsPublic,
 		ExportName:     in.ExportName,
 		ExportABI:      in.ExportABI,

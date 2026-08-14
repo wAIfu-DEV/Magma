@@ -58,8 +58,11 @@ State(
 
 # TODO: remove this, apparently doesn't work on some systems
 cpuPause() void:
-    llvm "  call void asm sideeffect \"pause\", \"~{memory}\"()\n"
-    llvm "  ret void\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  call void asm sideeffect \"pause\", \"~{memory}\"()\n"
+            llvm "  ret void\n"
+    ..
 ..
 
 # Dynamically growing worker pool for independent pointer-context tasks.
@@ -69,7 +72,11 @@ pub ThreadPool(
 )
 
 executorSubmit(raw ptr, entry ptr, context ptr) !void:
-    pool ThreadPool* = raw
+    pool ThreadPool*
+    # SAFETY: executor() installs a live ThreadPool as the vtable context.
+    unsafe:
+        pool = raw
+    ..
     try pool.submit(entry, context)
 ..
 
@@ -89,28 +96,26 @@ ThreadPool.executor() executor.Executor:
     ret executor.Executor(impl=this, vtable=addrof executorVtable)
 ..
 
-# Makes ownership transfers into the heap-backed State explicit to the
-# destructor checker. It cannot infer a move through a raw-pointer assignment.
-claim[T](claimed $T) $T:
-    ret claimed
-..
-
 releaseIdle(value $wake.Wake) void:
     value.free()
 ..
 
 spawnWorkerInto(state State*, index u64) !bool:
+    # SAFETY: index selects a reserved worker slot; its zero state means both
+    # the handle and context slot are unoccupied before publication.
+    unsafe:
     destination thread.Thread* = workerAt(state, index)
     context WorkerContext* = try state.allocator.allocT[WorkerContext](1)
     onerror state.allocator.free(context)
     context.state = state
     context.index = index
     worker thread.Thread = try thread.new[WorkerContext](workerMain, context)
-    *destination = claim[thread.Thread](worker)
+    *destination = move worker
     *workerContextAt(state, index) = context
     state.workerStates[index] = 1
     state.activeWorkers = state.activeWorkers + 1
-    ret true
+      ret true
+    ..
 ..
 
 taskAt(state State*, index u64) Task*:
@@ -120,6 +125,9 @@ taskAt(state State*, index u64) Task*:
 # Doubles and linearizes a full queue. The caller holds state.lock. Allocation
 # happens before any state is changed, so a failure leaves the queue intact.
 growQueue(state State*) !bool:
+    # SAFETY: the caller holds the lock; count initialized ring entries are
+    # moved into a newCapacity allocation before old storage is released.
+    unsafe:
     maxU64 u64 = 0 - 1
     if state.capacity > maxU64 / 2:
         throw errors.wouldOverflow("thread pool queue capacity overflow")
@@ -136,7 +144,8 @@ growQueue(state State*) !bool:
     state.capacity = newCapacity
     state.head = 0
     state.tail = state.count
-    ret true
+      ret true
+    ..
 ..
 
 workerAt(state State*, index u64) thread.Thread*:
@@ -150,6 +159,9 @@ workerContextAt(state State*, index u64) WorkerContext**:
 # Expands worker bookkeeping geometrically. Worker contexts are individually
 # allocated so moving these arrays cannot invalidate pointers held by workers.
 growWorkerStorage(state State*) !bool:
+    # SAFETY: workerCapacity bounds every old array; new arrays contain
+    # newCapacity zeroed slots and uniquely receive each existing entry.
+    unsafe:
     if state.workerCapacity >= state.maxWorkers:
         ret false
     ..
@@ -189,13 +201,17 @@ growWorkerStorage(state State*) !bool:
     state.workerContexts = newContexts
     state.workerStates = newStates
     state.workerCapacity = newCapacity
-    ret true
+      ret true
+    ..
 ..
 
 # Reaps an exited worker slot and starts a replacement. The caller holds the
 # pool lock, so the new worker cannot inspect the queue until submission has
 # finished publishing its task.
 growWorkers(state State*) !bool:
+    # SAFETY: the caller holds the pool lock; workerStates is the occupancy
+    # metadata for worker handles and their separately allocated contexts.
+    unsafe:
     oldCapacity := state.workerCapacity
     for index u64 = 0 to oldCapacity:
         status u8 = state.workerStates[index]
@@ -213,7 +229,8 @@ growWorkers(state State*) !bool:
     if grown:
         ret try spawnWorkerInto(state, oldCapacity)
     ..
-    ret false
+      ret false
+    ..
 ..
 
 lockResult(state State*) !bool:
@@ -257,6 +274,9 @@ recordFatal(state State*, failure error) void:
 ..
 
 workerMain(context WorkerContext*) u64:
+    # SAFETY: spawnWorkerInto allocates context until this worker is joined;
+    # queue and worker-state raw accesses are serialized by the pool lock.
+    unsafe:
     state State* = context.state
     running bool = true
     loop running:
@@ -367,7 +387,8 @@ workerMain(context WorkerContext*) u64:
             ..
         ..
     ..
-    ret 0
+      ret 0
+    ..
 ..
 
 waitWorkResult(state State*, observed u32) !bool:
@@ -376,6 +397,9 @@ waitWorkResult(state State*, observed u32) !bool:
 ..
 
 newConfigured(a alc.Allocator, minWorkers u64, maxWorkers u64, queueCapacity u64, spinCount u64) !$ThreadPool:
+    # SAFETY: all raw arrays are allocated to their recorded capacities and
+    # zeroed before publication; cleanup counters cover only spawned workers.
+    unsafe:
     if minWorkers == 0 || maxWorkers < minWorkers || queueCapacity == 0:
         throw errors.invalidArgument("thread pool sizes or limits are invalid")
     ..
@@ -416,7 +440,7 @@ newConfigured(a alc.Allocator, minWorkers u64, maxWorkers u64, queueCapacity u64
     state.spinCount = spinCount
     state.lock = lock
     state.work = work
-    state.idle = claim[wake.Wake](idle)
+    state.idle = move idle
     onerror state.idle.free()
 
     i u64 = 0
@@ -433,7 +457,8 @@ newConfigured(a alc.Allocator, minWorkers u64, maxWorkers u64, queueCapacity u64
         try spawnWorkerInto(state, i)
         i = i + 1
     ..
-    ret ThreadPool(state=state)
+      ret ThreadPool(state=state)
+    ..
 ..
 
 # Creates a pool with explicit worker, queue, and idle-spinning limits.
@@ -471,6 +496,9 @@ pub newDefault(a alc.Allocator) !$ThreadPool:
 # @example
 #   try pool.submit(runTask, context)
 ThreadPool.submit(entry (ptr) u64, context ptr) !void:
+    # SAFETY: the pool lock protects queue occupancy; growQueue guarantees a
+    # free task slot and tail is always reduced modulo capacity.
+    unsafe:
     if this.state == none:
         throw errors.invalidArgument("failed to submit to pool, invalid state")
     ..
@@ -495,7 +523,8 @@ ThreadPool.submit(entry (ptr) u64, context ptr) !void:
     if state.count + 1 > idleWorkers && state.activeWorkers < state.maxWorkers:
         try growWorkers(state)
     ..
-    *taskAt(state, state.tail) = Task(entry=entry, context=context)
+    destination Task* = taskAt(state, state.tail)
+    *destination = Task(entry=entry, context=context)
     state.tail = (state.tail + 1) % state.capacity
     state.count = state.count + 1
     state.pending = state.pending + 1
@@ -508,6 +537,7 @@ ThreadPool.submit(entry (ptr) u64, context ptr) !void:
         generation_wait.wakeOne(addrof state.work, addrof state.workGeneration)
     elif state.spinCount != 0:
         generation_wait.signal(addrof state.workGeneration)
+      ..
     ..
 ..
 
@@ -544,6 +574,9 @@ ThreadPool.wait() !void:
 # @example
 #   try pool.close()
 destr ThreadPool.close() !void:
+    # SAFETY: stopping prevents new work; each occupied worker/context slot is
+    # joined/freed once before all capacity-sized arrays and State are released.
+    unsafe:
     if this.state == none:
         throw errors.invalidArgument("thread pool is not active")
     ..
@@ -569,5 +602,6 @@ destr ThreadPool.close() !void:
     state.allocator.free(state.workerStates)
     state.allocator.free(state.tasks)
     state.allocator.free(state)
-    this.state = none
+      this.state = none
+    ..
 ..

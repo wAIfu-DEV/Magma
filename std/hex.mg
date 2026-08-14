@@ -47,8 +47,11 @@ encodeToCase(input u8[], output u8[], uppercase bool) !u64:
         throw errors.invalidArgument("hexadecimal output buffer is too small")
     ..
     for i u64 = 0 to slices.count(input):
-        output[i * 2] = digit(input[i] >> 4, uppercase)
-        output[i * 2 + 1] = digit(input[i] & 0x0F, uppercase)
+        # encodedSize and the capacity guard establish both affine indices.
+        bounded i * 2 < slices.count(output), i * 2 + 1 < slices.count(output):
+            output[i * 2] = digit(input[i] >> 4, uppercase)
+            output[i * 2 + 1] = digit(input[i] & 0x0F, uppercase)
+        ..
     ..
     ret needed
 ..
@@ -67,10 +70,14 @@ pub decodeTo(text str, output u8[]) !u64:
         throw errors.invalidArgument("hexadecimal output buffer is too small")
     ..
     input := strings.toPtr(text)
-    for i u64 = 0 to needed:
-        high := try decodeNibble(input[i * 2])
-        low := try decodeNibble(input[i * 2 + 1])
-        output[i] = (high << 4) | low
+    # SAFETY: decodedSize proves text has exactly needed pairs of bytes; the
+    # output capacity guard proves every destination index below needed.
+    unsafe:
+        for i u64 = 0 to needed:
+            high := try decodeNibble(input[i * 2])
+            low := try decodeNibble(input[i * 2 + 1])
+            output[i] = (high << 4) | low
+        ..
     ..
     ret needed
 ..
@@ -81,7 +88,7 @@ encodeAllocated(a alc.Allocator, input u8[], uppercase bool) !$str:
     onerror result.free(a)
     output u8[] = slices.fromPtr(strings.toPtr(result), size)
     try encodeToCase(input, output, uppercase)
-    ret result
+    ret move result
 ..
 
 pub encode(a alc.Allocator, input u8[]) !$str:

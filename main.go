@@ -34,6 +34,7 @@ options:
   --emit, -e <kind>       llvm, object, or exe (default llvm)
   --opt, -O <0-3>         LLVM optimization level (default 3)
   --error-trace-slots <n> trace slots per runtime shard (default 1024)
+  --safety-warnings       downgrade memory-safety diagnostics to warnings
   --target <triple>       compilation target (default: Clang native target)
   --std <directory>       override the Magma standard-library directory
   --lsp                   run the Magma language server over stdio
@@ -47,8 +48,10 @@ type options struct {
 	emit            string
 	opt             int
 	errorTraceSlots uint64
+	safetyWarnings  bool
 	clangVersion    bool
 	target          string
+	targetOS        string
 	stdRoot         string
 	lsp             bool
 }
@@ -68,6 +71,7 @@ func parseArgs(args []string) (options, error) {
 	flags.IntVar(&opts.opt, "opt", 3, "optimization level")
 	flags.IntVar(&opts.opt, "O", 3, "optimization level")
 	flags.Uint64Var(&opts.errorTraceSlots, "error-trace-slots", 1024, "error trace slots per runtime shard")
+	flags.BoolVar(&opts.safetyWarnings, "safety-warnings", false, "downgrade memory-safety diagnostics to warnings")
 	flags.BoolVar(&opts.clangVersion, "clang-version", false, "print the resolved Clang version")
 	flags.BoolVar(&opts.clangVersion, "cv", false, "print the resolved Clang version")
 	flags.StringVar(&opts.target, "target", "", "target triple or architecture")
@@ -133,7 +137,7 @@ func wrappedMain() error {
 		opts.stdRoot = filepath.Join(filepath.Dir(executable), "std")
 	}
 	if opts.lsp {
-		return lsp.Serve(os.Stdin, os.Stdout, opts.stdRoot)
+		return lsp.ServeWithPolicy(os.Stdin, os.Stdout, opts.stdRoot, opts.safetyWarnings)
 	}
 	if opts.version {
 		fmt.Printf("Magma %s\n", compilerVersion())
@@ -159,6 +163,7 @@ func wrappedMain() error {
 		opts.out = defaultOutput(opts.emit, string(target.OS))
 	}
 	opts.target = target.Triple
+	opts.targetOS = string(target.OS)
 	debug.Printf("target: %s\n", target.Triple)
 	filePathArg := opts.inputFile
 
@@ -206,7 +211,10 @@ func wrappedMain() error {
 	if e != nil {
 		return e
 	}
-	ready := compilerpipeline.CheckOwnership(validated)
+	ready, e := compilerpipeline.CheckSafety(validated, opts.safetyWarnings)
+	if e != nil {
+		return e
+	}
 	for i := range s.Warnings {
 		comp_err.FprintDiagnostic(os.Stderr, &s.Warnings[i])
 	}
@@ -312,6 +320,7 @@ func emitOutput(opts options, ir []byte, nativeLibraries, bundles []string) erro
 				args = append(args, "-l"+library)
 			}
 		}
+		args = append(args, runtimeLibraryArgs(opts.targetOS)...)
 	}
 	if dir := filepath.Dir(opts.out); dir != "." {
 		if _, err := os.Stat(dir); err != nil {
@@ -332,6 +341,15 @@ func emitOutput(opts options, ir []byte, nativeLibraries, bundles []string) erro
 		}
 	}
 	return nil
+}
+
+func runtimeLibraryArgs(targetOS string) []string {
+	switch targetOS {
+	case "linux", "freebsd", "netbsd", "openbsd":
+		return []string{"-Wl,-rpath,$ORIGIN"}
+	default:
+		return nil
+	}
 }
 
 func copyBundles(output string, bundles []string) error {

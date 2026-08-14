@@ -22,6 +22,94 @@ func name(variable *types.NodeExprVarDef) *types.NodeExprName {
 	return &types.NodeExprName{Name: variable.Name, AssociatedNode: variable, InfType: variable.Type}
 }
 
+func aggregateFixture() (*analyzer, *types.NodeType, *types.NodeType, *types.StructDef) {
+	destructor := &types.NodeFuncDef{IsDestructor: true}
+	resource := &types.StructDef{Module: "test", Name: "Resource", Destructors: []*types.NodeFuncDef{destructor}}
+	resourceType := &types.NodeType{KindNode: &types.NodeTypeAbsolute{AbsoluteName: "test.Resource"}}
+	container := &types.StructDef{
+		Module:      "test",
+		Name:        "Container",
+		Destructors: []*types.NodeFuncDef{destructor},
+		FieldNb:     map[string]int{"left": 0, "right": 1, "count": 2},
+		Fields:      map[string]*types.NodeType{"left": resourceType, "right": resourceType, "count": {KindNode: &types.NodeTypeNamed{NameNode: &types.NodeNameSingle{Name: "u64"}}}},
+		FieldOrder:  []string{"left", "right", "count"},
+	}
+	global := &types.NodeGlobal{StructDefs: map[string]*types.StructDef{"Resource": resource, "Container": container}}
+	file := &types.FileCtx{FilePath: "test.mg", PackageName: "test", GlNode: global}
+	shared := &types.SharedState{Files: map[string]*types.FileCtx{"test.mg": file}}
+	a := &analyzer{shared: shared, file: file, seen: map[string]bool{}}
+	containerType := &types.NodeType{KindNode: &types.NodeTypeAbsolute{AbsoluteName: "test.Container"}}
+	return a, containerType, resourceType, container
+}
+
+func field(variable *types.NodeExprVarDef, owner *types.StructDef, fieldType *types.NodeType, fieldName string) *types.NodeExprName {
+	return &types.NodeExprName{
+		Name:           variable.Name,
+		AssociatedNode: variable,
+		InfType:        fieldType,
+		MemberAccesses: []*types.MemberAccess{{OwnerType: variable.Type, Type: fieldType, OwnerDef: owner, FieldNb: owner.FieldNb[fieldName]}},
+	}
+}
+
+func TestFieldMoveLeavesSiblingUsableButRejectsWholeAggregateUse(t *testing.T) {
+	a, containerType, resourceType, container := aggregateFixture()
+	value := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "value"}, Type: containerType}
+	out := flow{states: map[*types.NodeExprVarDef]State{value: stateLive}, absent: map[placeKey]types.Token{}, deferred: map[*types.NodeExprVarDef]bool{}}
+
+	a.transferValue(&out, &types.NodeExprMove{Expr: field(value, container, resourceType, "left")})
+	a.borrowExpr(&out, field(value, container, resourceType, "right"))
+	countType := container.Fields["count"]
+	a.borrowExpr(&out, field(value, container, countType, "count"))
+	if len(a.diagnostics) != 0 {
+		t.Fatalf("sibling use after field move produced diagnostics: %+v", a.diagnostics)
+	}
+	a.borrowExpr(&out, name(value))
+	if len(a.diagnostics) != 1 || !strings.Contains(a.diagnostics[0].Message, "after it was moved") {
+		t.Fatalf("whole aggregate use diagnostics = %+v", a.diagnostics)
+	}
+}
+
+func TestMovedFieldCanBeReinitialized(t *testing.T) {
+	a, containerType, resourceType, container := aggregateFixture()
+	value := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "value"}, Type: containerType}
+	out := flow{states: map[*types.NodeExprVarDef]State{value: stateLive}, absent: map[placeKey]types.Token{}, deferred: map[*types.NodeExprVarDef]bool{}}
+	left := field(value, container, resourceType, "left")
+
+	a.transferValue(&out, &types.NodeExprMove{Expr: left})
+	a.assignment(&out, &types.NodeExprAssign{Left: left, Right: callReturning(resourceType, true)})
+	a.borrowExpr(&out, name(value))
+
+	if len(a.diagnostics) != 0 {
+		t.Fatalf("reinitialized aggregate produced diagnostics: %+v", a.diagnostics)
+	}
+}
+
+func TestMovingEveryOwnedFieldCompletesDestructuring(t *testing.T) {
+	a, containerType, resourceType, container := aggregateFixture()
+	value := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "value"}, Type: containerType}
+	out := flow{states: map[*types.NodeExprVarDef]State{value: stateLive}, absent: map[placeKey]types.Token{}, deferred: map[*types.NodeExprVarDef]bool{}}
+
+	a.transferValue(&out, &types.NodeExprMove{Expr: field(value, container, resourceType, "left")})
+	a.transferValue(&out, &types.NodeExprMove{Expr: field(value, container, resourceType, "right")})
+
+	if out.states[value] != stateConsumed {
+		t.Fatalf("aggregate state = %v, want consumed after complete owned-field extraction", out.states[value])
+	}
+}
+
+func TestIndexedOwnershipMoveIsRejected(t *testing.T) {
+	a, resourceType := fixture()
+	value := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "value"}, Type: resourceType}
+	out := flow{states: map[*types.NodeExprVarDef]State{value: stateLive}, absent: map[placeKey]types.Token{}, deferred: map[*types.NodeExprVarDef]bool{}}
+	indexed := &types.NodeExprSubscript{Target: name(value), Expr: &types.NodeExprLit{LitType: types.TokLitNum, Value: "0"}, ElemType: resourceType}
+
+	a.transferValue(&out, &types.NodeExprMove{Expr: indexed})
+
+	if len(a.diagnostics) != 1 || !strings.Contains(a.diagnostics[0].Message, "checked container operation") {
+		t.Fatalf("indexed move diagnostics = %+v", a.diagnostics)
+	}
+}
+
 func callReturning(resourceType *types.NodeType, owned bool) *types.NodeExprCall {
 	returnType := *resourceType
 	returnType.Owned = owned
@@ -109,7 +197,7 @@ func TestErrorPredicateRefinesConditionalOwnership(t *testing.T) {
 	}
 }
 
-func TestPartialMoveDoesNotChangeAggregateOwnership(t *testing.T) {
+func TestImplicitFieldTransferRequiresMove(t *testing.T) {
 	a, resourceType := fixture()
 	aggregate := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "aggregate"}, Type: resourceType}
 	destination := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "destination"}, Type: resourceType}
@@ -117,31 +205,45 @@ func TestPartialMoveDoesNotChangeAggregateOwnership(t *testing.T) {
 		states:   map[*types.NodeExprVarDef]State{aggregate: stateLive},
 		deferred: map[*types.NodeExprVarDef]bool{},
 	}
-	field := &types.NodeExprMemberAccess{Target: name(aggregate), Member: "field", InfType: resourceType}
+	owner := a.shared.Files["test.mg"].GlNode.StructDefs["Resource"]
+	owner.FieldNb = map[string]int{"field": 0, "other": 1}
+	owner.Fields = map[string]*types.NodeType{"field": resourceType, "other": resourceType}
+	owner.FieldOrder = []string{"field", "other"}
+	field := &types.NodeExprMemberAccess{Target: name(aggregate), Member: "field", InfType: resourceType, Access: &types.MemberAccess{OwnerType: resourceType, Type: resourceType, OwnerDef: owner, FieldNb: 0}}
 
 	a.assignment(&out, &types.NodeExprAssign{Left: name(destination), Right: field})
 
 	if out.states[aggregate] != stateLive {
-		t.Fatalf("aggregate state = %v, partial moves must be ignored", out.states[aggregate])
+		t.Fatalf("aggregate state = %v, moving one field must leave the root partially live", out.states[aggregate])
+	}
+	if len(a.diagnostics) != 1 || !strings.Contains(a.diagnostics[0].Message, "requires 'move'") {
+		t.Fatalf("implicit field transfer diagnostics = %+v", a.diagnostics)
 	}
 }
 
-func TestExplicitOwnedLocalCanClaimUncheckedPartialValue(t *testing.T) {
+func TestOwnedLocalCannotSilentlyClaimField(t *testing.T) {
 	a, resourceType := fixture()
 	ownedType := *resourceType
 	ownedType.Owned = true
 	aggregate := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "aggregate"}, Type: resourceType}
 	destination := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "destination"}, Type: &ownedType}
 	out := flow{states: map[*types.NodeExprVarDef]State{aggregate: stateLive}, deferred: map[*types.NodeExprVarDef]bool{}}
-	field := &types.NodeExprMemberAccess{Target: name(aggregate), Member: "field", InfType: resourceType}
+	owner := a.shared.Files["test.mg"].GlNode.StructDefs["Resource"]
+	owner.FieldNb = map[string]int{"field": 0, "other": 1}
+	owner.Fields = map[string]*types.NodeType{"field": resourceType, "other": resourceType}
+	owner.FieldOrder = []string{"field", "other"}
+	field := &types.NodeExprMemberAccess{Target: name(aggregate), Member: "field", InfType: resourceType, Access: &types.MemberAccess{OwnerType: resourceType, Type: resourceType, OwnerDef: owner, FieldNb: 0}}
 
 	a.valueInto(&out, destination, field)
 
 	if out.states[destination] != stateLive {
-		t.Fatalf("explicit partial ownership state = %v, want live", out.states[destination])
+		t.Fatalf("field transfer destination state = %v, want live", out.states[destination])
 	}
 	if out.states[aggregate] != stateLive {
-		t.Fatal("unchecked partial ownership changed the aggregate state")
+		t.Fatal("single field transfer consumed the whole aggregate")
+	}
+	if len(a.diagnostics) != 1 || !strings.Contains(a.diagnostics[0].Message, "requires 'move'") {
+		t.Fatalf("implicit field transfer diagnostics = %+v", a.diagnostics)
 	}
 }
 
@@ -453,7 +555,7 @@ func TestOnErrorCleanupAllowsSuccessfulReturnTransfer(t *testing.T) {
 	body := types.NodeBody{Statements: []types.NodeStatement{
 		&types.NodeStmtExpr{Expression: &types.NodeExprVarDefAssign{VarDef: value, AssignExpr: callReturning(resourceType, true)}},
 		&types.NodeStmtDefer{Expression: destructorCall(value), OnError: true},
-		&types.NodeStmtRet{Expression: name(value), OwnerFuncType: &ownedType},
+		&types.NodeStmtRet{Expression: &types.NodeExprMove{Expr: name(value)}, OwnerFuncType: &ownedType},
 	}}
 
 	a.body(&out, &body)

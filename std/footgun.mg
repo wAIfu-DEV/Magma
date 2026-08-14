@@ -10,5 +10,10 @@ mod footgun
 #   footgun.drop[Resource](resource)
 pub drop[T](x $T) void:
     tmp := array T[1]
-    tmp[0] = x
+    # SAFETY: this API intentionally transfers ownership into abandoned storage.
+    unsafe:
+        bounded 0 < tmp.count():
+            tmp[0] = move x
+        ..
+    ..
 ..

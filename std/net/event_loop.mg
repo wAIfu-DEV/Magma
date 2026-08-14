@@ -3,7 +3,7 @@ mod net_event_loop
 # to an existing asynchronous worker pool.
 
 use "std:allocator" allocator
-use "std:async" async
+use "std:context" context
 use "std:atomic" atomic
 use "std:errors" errors
 use "std:future" future
@@ -59,10 +59,6 @@ pub RunningLoop(
     active bool
 )
 
-claim[T](value $T) $T:
-    ret value
-..
-
 pub new(a allocator.Allocator, capacity u64, commandCapacity u64) !$EventLoop:
     if capacity == 0 || commandCapacity == 0:
         throw errors.invalidArgument("event-loop capacities must be nonzero")
@@ -80,7 +76,7 @@ pub new(a allocator.Allocator, capacity u64, commandCapacity u64) !$EventLoop:
     commands Command* = try a.allocT[Command](commandCapacity)
     onerror a.free(commands)
     state.allocator = a
-    state.poller = claim[poll.Poller](nativePoller)
+    state.poller = move nativePoller
     state.events = events
     state.registrations = registrations
     state.capacity = capacity
@@ -93,24 +89,32 @@ pub new(a allocator.Allocator, capacity u64, commandCapacity u64) !$EventLoop:
 ..
 
 findByToken(state State*, token u64) u64:
+    # SAFETY: registrations contains capacity initialized slots.
+    unsafe:
     for i u64 = 0 to state.capacity:
         if state.registrations[i].active && state.registrations[i].token == token:
             ret i
         ..
     ..
-    ret state.capacity
+      ret state.capacity
+    ..
 ..
 
 findVacant(state State*) u64:
+    # SAFETY: registrations contains capacity initialized slots.
+    unsafe:
     for i u64 = 0 to state.capacity:
         if state.registrations[i].active == false:
             ret i
         ..
     ..
-    ret state.capacity
+      ret state.capacity
+    ..
 ..
 
 addNow(state State*, value socket.Socket*, token u64, flags u32, callback Callback, context ptr) !void:
+    # SAFETY: findVacant returns a free capacity-bounded registration slot.
+    unsafe:
     if callback == none:
         throw errors.invalidArgument("event callback cannot be none")
     ..
@@ -122,26 +126,33 @@ addNow(state State*, value socket.Socket*, token u64, flags u32, callback Callba
         throw errors.wouldOverflow("event-loop registration capacity reached")
     ..
     try state.poller.add(value, slot, flags)
-    state.registrations[slot] = Registration(socket=value, token=token, callback=callback, context=context, active=true)
+      state.registrations[slot] = Registration(socket=value, token=token, callback=callback, context=context, active=true)
+    ..
 ..
 
 modifyNow(state State*, token u64, flags u32) !void:
+    # SAFETY: findByToken returns an occupied capacity-bounded slot.
+    unsafe:
     slot := findByToken(state, token)
     if slot == state.capacity:
         throw errors.notFound("event token is not registered")
     ..
     registration Registration* = addrof state.registrations[slot]
-    try state.poller.modify(registration.socket, slot, flags)
+      try state.poller.modify(registration.socket, slot, flags)
+    ..
 ..
 
 removeNow(state State*, token u64) !void:
+    # SAFETY: findByToken returns an occupied capacity-bounded slot.
+    unsafe:
     slot := findByToken(state, token)
     if slot == state.capacity:
         throw errors.notFound("event token is not registered")
     ..
     registration Registration* = addrof state.registrations[slot]
     try state.poller.remove(registration.socket)
-    memory.zero(registration, sizeof Registration)
+      memory.zero(registration, sizeof Registration)
+    ..
 ..
 
 EventLoop.watch(value socket.Socket*, token u64, flags u32, callback Callback, context ptr) !void:
@@ -169,6 +180,9 @@ EventLoop.unwatch(token u64) !void:
 ..
 
 dequeue(state State*, output Command*) bool:
+    # SAFETY: commandLock protects the capacity-sized ring and commandCount
+    # proves commandHead is initialized.
+    unsafe:
     state.commandLock.lock()
     if state.commandCount == 0:
         state.commandLock.unlock()
@@ -178,7 +192,8 @@ dequeue(state State*, output Command*) bool:
     state.commandHead = (state.commandHead + 1) % state.commandCapacity
     state.commandCount = state.commandCount - 1
     state.commandLock.unlock()
-    ret true
+      ret true
+    ..
 ..
 
 processCommands(state State*) !void:
@@ -195,6 +210,9 @@ processCommands(state State*) !void:
 ..
 
 runOnceState(state State*, timeoutMs i64) !u64:
+    # SAFETY: events and registrations each contain capacity slots; poller.wait
+    # returns at most capacity events and tokens are checked before lookup.
+    unsafe:
     try processCommands(state)
     if state.stopping.loadAcquire() != 0:
         ret 0
@@ -211,13 +229,17 @@ runOnceState(state State*, timeoutMs i64) !u64:
             ..
         ..
     ..
-    ret count
+      ret count
+    ..
 ..
 
 slicesFromEvents(events poll.Event*, count u64) poll.Event[]:
-    llvm "  %s0 = insertvalue %type.slice zeroinitializer, ptr %events, 0\n"
-    llvm "  %s1 = insertvalue %type.slice %s0, i64 %count, 1\n"
-    llvm "  ret %type.slice %s1\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %s0 = insertvalue %type.slice zeroinitializer, ptr %events, 0\n"
+            llvm "  %s1 = insertvalue %type.slice %s0, i64 %count, 1\n"
+            llvm "  ret %type.slice %s1\n"
+    ..
 ..
 
 EventLoop.runOnce(timeoutMs i64) !u64:
@@ -247,6 +269,9 @@ EventLoop.stop() !void:
 ..
 
 enqueue(state State*, command Command) !void:
+    # SAFETY: commandLock protects the ring and the full check proves tail is a
+    # free slot before publishing the command.
+    unsafe:
     state.commandLock.lock()
     if state.commandCount == state.commandCapacity:
         state.commandLock.unlock()
@@ -256,15 +281,20 @@ enqueue(state State*, command Command) !void:
     state.commandTail = (state.commandTail + 1) % state.commandCapacity
     state.commandCount = state.commandCount + 1
     state.commandLock.unlock()
-    try state.poller.interrupt()
+      try state.poller.interrupt()
+    ..
 ..
 
 RunningLoop.watch(value socket.Socket*, token u64, flags u32, callback Callback, context ptr) !void:
     if this.active == false:
         throw errors.invalidArgument("running loop is not active")
     ..
-    command := Command(operation=1, socket=value, token=token, flags=flags, callback=callback, context=context)
-    try enqueue(this.state, command)
+    # SAFETY: Command stores the callback's opaque context without dereferencing
+    # it; the callback owner keeps it alive through await.
+    unsafe:
+        command := Command(operation=1, socket=value, token=token, flags=flags, callback=callback, context=context)
+        try enqueue(this.state, command)
+    ..
 ..
 
 RunningLoop.modify(token u64, flags u32) !void:
@@ -301,25 +331,29 @@ runWorker(task RunTask*) !bool:
     ret true
 ..
 
-destr EventLoop.runAsync(asc async.Async) !$RunningLoop:
+destr EventLoop.runAsync(ctx context.Ctx) !$RunningLoop:
     if this.state == none:
         throw errors.invalidArgument("event loop is not active")
     ..
     task := RunTask(state=this.state)
-    scheduler := asc.pool.executor()
-    completion := try future.new[bool, RunTask](asc.allocator, scheduler, runWorker, task)
+    scheduler := ctx.exec
+    completion := try future.new[bool, RunTask](ctx.alloc, scheduler, runWorker, task)
     state := this.state
     this.state = none
-    ret RunningLoop(state=state, completion=completion, active=true)
+    ret RunningLoop(state=state, completion=move completion, active=true)
 ..
 
 freeState(state State*) !void:
-    a := state.allocator
-    try state.poller.close()
-    a.free(state.events)
-    a.free(state.registrations)
-    a.free(state.commands)
-    a.free(state)
+    # SAFETY: runAsync transfers unique ownership of the allocation and all its
+    # fields to RunningLoop; freeState is called exactly once by await/close.
+    unsafe:
+        a := state.allocator
+        try state.poller.close()
+        a.free(state.events)
+        a.free(state.registrations)
+        a.free(state.commands)
+        a.free(state)
+    ..
 ..
 
 destr RunningLoop.await() !void:

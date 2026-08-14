@@ -11,5 +11,5 @@ makeOwned() !$Owned:
 
 pub main() !void:
     value := try makeOwned()
-    footgun.drop[Owned](value)
+    footgun.drop[Owned](move value)
 ..

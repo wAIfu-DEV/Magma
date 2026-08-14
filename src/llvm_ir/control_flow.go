@@ -353,12 +353,49 @@ func irStatement(ctx *IrCtx, stmtNode t.NodeStatement, fnDef *t.NodeFuncDef) err
 		e = irStmtWhile(ctx, s, fnDef)
 	case *t.NodeStmtFor:
 		e = irStmtFor(ctx, s, fnDef)
+	case *t.NodeStmtBounded:
+		e = irStmtBounded(ctx, s, fnDef)
+	case *t.NodeStmtUnsafe:
+		e = irBody(ctx, &s.Body, fnDef, false)
 	case *t.NodeStmtContinue:
 		e = irStmtContinue(ctx, s)
 	case *t.NodeStmtBreak:
 		e = irStmtBreak(ctx, s)
 	}
 	return e
+}
+
+func irStmtBounded(ctx *IrCtx, stmt *t.NodeStmtBounded, fnDef *t.NodeFuncDef) error {
+	if len(stmt.Predicates) == 0 || len(stmt.Proofs) == 0 {
+		return fmt.Errorf("cannot lower bounded statement without validated range facts")
+	}
+	var condition SsaName
+	for i, predicate := range stmt.Predicates {
+		value, err := irExpression(ctx, predicate.GetInferredType(), predicate, false)
+		if err != nil {
+			return err
+		}
+		if i == 0 {
+			condition = value
+			continue
+		}
+		combined := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = and i1 ", combined.Repr)
+		irPossibleLitSsa(ctx, condition)
+		irWrite(ctx, ", ")
+		irPossibleLitSsa(ctx, value)
+		irWrite(ctx, "\n")
+		condition = combined
+	}
+	bodyLabel, exitLabel := irSsaName(ctx), irSsaName(ctx)
+	irWrite(ctx, "  br i1 ")
+	irPossibleLitSsa(ctx, condition)
+	irWritef(ctx, ", label %%%s, label %%%s\n%s:\n", bodyLabel.Repr, exitLabel.Repr, bodyLabel.Repr)
+	if err := irBody(ctx, &stmt.Body, fnDef, false); err != nil {
+		return err
+	}
+	irWritef(ctx, "  br label %%%s\n%s:\n", exitLabel.Repr, exitLabel.Repr)
+	return nil
 }
 
 func irStmtIf(ctx *IrCtx, ifStmt *t.NodeStmtIf, fnDef *t.NodeFuncDef) error {

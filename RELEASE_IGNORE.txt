@@ -7,6 +7,7 @@
 .codex/*
 IGNORE/*
 out/*
+out
 out.exe
 out*.ll
 magma-*.zip
@@ -14,5 +15,6 @@ WIP.md
 .gitattributes
 .gitignore
 RELEASE.bat
+RELEASE.sh
 RELEASE_IGNORE.txt
 Magma.exe~

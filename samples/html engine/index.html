@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+
+<html lang='en'>
+    <head>
+        <meta charset='utf-8'>
+        <meta name='viewport' content='width=device-width, initial-scale=1'>
+        <title>HTML Engine Layout Test</title>
+    </head>
+    <body>
+        <header>
+            <h1>HTML Engine Layout Test</h1>
+            <p>A static document for testing nested boxes, text flow, and sibling elements.</p>
+            <nav>
+                <ul>
+                    <li><a href='#overview'>Overview</a></li>
+                    <li><a href='#content'>Content</a></li>
+                    <li><a href='#data'>Data</a></li>
+                    <li><a href='#form'>Form</a></li>
+                </ul>
+            </nav>
+        </header>
+
+        <main>
+            <section id='overview'>
+                <h2>Overview</h2>
+                <p>This paragraph is intentionally longer than the heading so the renderer can eventually test line measurement and wrapping across the available content width.</p>
+                <p>A second paragraph checks the vertical spacing between consecutive blocks inside the same parent section.</p>
+            </section>
+
+            <section id='content'>
+                <h2>Nested content</h2>
+                <article>
+                    <h3>First article</h3>
+                    <p>The first article contains ordinary text followed by a nested list.</p>
+                    <ol>
+                        <li>Measure the complete subtree.</li>
+                        <li>Draw the parent background.</li>
+                        <li>Draw each child in document order.</li>
+                    </ol>
+                </article>
+                <article>
+                    <h3>Second article</h3>
+                    <blockquote>
+                        <p>Nested elements should contribute their full height to every ancestor.</p>
+                    </blockquote>
+                    <details>
+                        <summary>Additional static details</summary>
+                        <p>This content adds another level of nesting without scripts or styles.</p>
+                    </details>
+                </article>
+            </section>
+
+            <section id='data'>
+                <h2>Tabular data</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Element</th>
+                            <th>Purpose</th>
+                            <th>Expected height</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Heading</td>
+                            <td>Short text block</td>
+                            <td>One line plus padding</td>
+                        </tr>
+                        <tr>
+                            <td>Paragraph</td>
+                            <td>Potentially wrapped text</td>
+                            <td>One or more lines plus padding</td>
+                        </tr>
+                        <tr>
+                            <td>Section</td>
+                            <td>Nested container</td>
+                            <td>Children plus padding</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <section id='form'>
+                <h2>Form controls</h2>
+                <form action='/submit' method='post'>
+                    <fieldset>
+                        <legend>Contact information</legend>
+                        <label for='name'>Name</label>
+                        <input id='name' name='name' type='text'>
+                        <label for='email'>Email</label>
+                        <input id='email' name='email' type='email'>
+                        <label for='message'>Message</label>
+                        <textarea id='message' name='message'>A static initial value</textarea>
+                        <button type='submit'>Submit example</button>
+                    </fieldset>
+                </form>
+            </section>
+        </main>
+
+        <footer>
+            <p>End of the static layout test document.</p>
+            <small>No CSS or JavaScript is included.</small>
+        </footer>
+    </body>
+</html>

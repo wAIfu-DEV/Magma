@@ -69,18 +69,22 @@ decodedSizeFor(text str, urlSafe bool) !u64:
     ..
     input := strings.toPtr(text)
     padding u64 = 0
-    if input[count - 1] == 61:
-        padding = 1
-        if input[count - 2] == 61:
-            padding = 2
+    # SAFETY: nonzero, four-byte-aligned count is at least four; input points
+    # to all count bytes of text and padding never exceeds two.
+    unsafe:
+        if input[count - 1] == 61:
+            padding = 1
+            if input[count - 2] == 61:
+                padding = 2
+            ..
         ..
-    ..
-    for i u64 = 0 to count - padding:
-        ignored := try decodeValue(input[i], urlSafe)
-    ..
-    for i u64 = count - padding to count:
-        if input[i] != 61:
-            throw errors.invalidArgument("Base64 padding is misplaced")
+        for i u64 = 0 to count - padding:
+            ignored := try decodeValue(input[i], urlSafe)
+        ..
+        for i u64 = count - padding to count:
+            if input[i] != 61:
+                throw errors.invalidArgument("Base64 padding is misplaced")
+            ..
         ..
     ..
     size := try checked.uMul(count / 4, 3)
@@ -104,30 +108,38 @@ encodeToKind(input u8[], output u8[], urlSafe bool) !u64:
     outputIndex u64 = 0
     count := slices.count(input)
     loop inputIndex + 3 <= count:
-        a := input[inputIndex]
-        b := input[inputIndex + 1]
-        c := input[inputIndex + 2]
-        output[outputIndex] = alphabet(a >> 2, urlSafe)
-        output[outputIndex + 1] = alphabet(((a & 3) << 4) | (b >> 4), urlSafe)
-        output[outputIndex + 2] = alphabet(((b & 15) << 2) | (c >> 6), urlSafe)
-        output[outputIndex + 3] = alphabet(c & 63, urlSafe)
+        # Three input bytes map to four output bytes; encodedSize and the
+        # capacity guard establish the output predicates.
+        bounded inputIndex < count, inputIndex + 1 < count, inputIndex + 2 < count, outputIndex < slices.count(output), outputIndex + 1 < slices.count(output), outputIndex + 2 < slices.count(output), outputIndex + 3 < slices.count(output):
+            a := input[inputIndex]
+            b := input[inputIndex + 1]
+            c := input[inputIndex + 2]
+            output[outputIndex] = alphabet(a >> 2, urlSafe)
+            output[outputIndex + 1] = alphabet(((a & 3) << 4) | (b >> 4), urlSafe)
+            output[outputIndex + 2] = alphabet(((b & 15) << 2) | (c >> 6), urlSafe)
+            output[outputIndex + 3] = alphabet(c & 63, urlSafe)
+        ..
         inputIndex = inputIndex + 3
         outputIndex = outputIndex + 4
     ..
     remaining := count - inputIndex
     if remaining == 1:
-        a := input[inputIndex]
-        output[outputIndex] = alphabet(a >> 2, urlSafe)
-        output[outputIndex + 1] = alphabet((a & 3) << 4, urlSafe)
-        output[outputIndex + 2] = 61
-        output[outputIndex + 3] = 61
+        bounded inputIndex < count, outputIndex < slices.count(output), outputIndex + 1 < slices.count(output), outputIndex + 2 < slices.count(output), outputIndex + 3 < slices.count(output):
+            a := input[inputIndex]
+            output[outputIndex] = alphabet(a >> 2, urlSafe)
+            output[outputIndex + 1] = alphabet((a & 3) << 4, urlSafe)
+            output[outputIndex + 2] = 61
+            output[outputIndex + 3] = 61
+        ..
     elif remaining == 2:
-        a := input[inputIndex]
-        b := input[inputIndex + 1]
-        output[outputIndex] = alphabet(a >> 2, urlSafe)
-        output[outputIndex + 1] = alphabet(((a & 3) << 4) | (b >> 4), urlSafe)
-        output[outputIndex + 2] = alphabet((b & 15) << 2, urlSafe)
-        output[outputIndex + 3] = 61
+        bounded inputIndex < count, inputIndex + 1 < count, outputIndex < slices.count(output), outputIndex + 1 < slices.count(output), outputIndex + 2 < slices.count(output), outputIndex + 3 < slices.count(output):
+            a := input[inputIndex]
+            b := input[inputIndex + 1]
+            output[outputIndex] = alphabet(a >> 2, urlSafe)
+            output[outputIndex + 1] = alphabet(((a & 3) << 4) | (b >> 4), urlSafe)
+            output[outputIndex + 2] = alphabet((b & 15) << 2, urlSafe)
+            output[outputIndex + 3] = 61
+        ..
     ..
     ret needed
 ..
@@ -149,7 +161,10 @@ decodeToKind(text str, output u8[], urlSafe bool) !u64:
     inputIndex u64 = 0
     outputIndex u64 = 0
     count := text.countBytes()
-    loop inputIndex < count:
+    # SAFETY: decodedSizeFor validates four-byte groups and padding; needed and
+    # its capacity guard bound every produced output byte.
+    unsafe:
+      loop inputIndex < count:
         a := try decodeValue(input[inputIndex], urlSafe)
         b := try decodeValue(input[inputIndex + 1], urlSafe)
         thirdPadding := input[inputIndex + 2] == 61
@@ -181,7 +196,8 @@ decodeToKind(text str, output u8[], urlSafe bool) !u64:
             output[outputIndex] = (c << 6) | d
             outputIndex = outputIndex + 1
         ..
-        inputIndex = inputIndex + 4
+          inputIndex = inputIndex + 4
+      ..
     ..
     ret outputIndex
 ..
@@ -200,7 +216,7 @@ encodeAllocated(a alc.Allocator, input u8[], urlSafe bool) !$str:
     onerror result.free(a)
     output u8[] = slices.fromPtr(strings.toPtr(result), size)
     try encodeToKind(input, output, urlSafe)
-    ret result
+    ret move result
 ..
 
 pub encode(a alc.Allocator, input u8[]) !$str:

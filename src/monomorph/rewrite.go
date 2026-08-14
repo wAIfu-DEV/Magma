@@ -180,7 +180,7 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 
 					_, ownerModule, ownerSpecName, e := m.inferOwnerTypeFromCallee(module, gl, ownerParts, env)
 					if e != nil {
-						return e
+						return fmt.Errorf("generic member call at line %d, column %d: %w", n.Tk.Pos.Line, n.Tk.Pos.Col, e)
 					}
 
 					specMemberName, e := m.instantiateMemberFunc(ownerModule, ownerSpecName, memberName, n.GenericArgs)
@@ -198,7 +198,7 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 			}
 			targetModule, baseName, e := resolveQualifiedName(m.modules, module, gl, nameExpr.Name)
 			if e != nil {
-				return e
+				return m.genericInstantiationError(gl, &n.Tk, e)
 			}
 			if target := m.modules[targetModule]; targetModule != module && target != nil {
 				if definition := target.FuncDefs[baseName]; definition != nil && !definition.IsPublic {
@@ -219,7 +219,7 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 		case *t.NodeNameSingle:
 			targetModule, baseName, e := resolveQualifiedName(m.modules, module, gl, nameExpr.Name)
 			if e != nil {
-				return e
+				return m.genericInstantiationError(gl, &n.Tk, e)
 			}
 			specName, e := m.instantiateFunc(targetModule, baseName, n.GenericArgs)
 			if e != nil {
@@ -274,6 +274,11 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 		return m.rewriteType(module, gl, n.Type)
 	case *t.NodeExprAddrof:
 		return m.rewriteExpr(module, gl, n.Expr, env)
+	case *t.NodeExprMove:
+		if e := m.rewriteType(module, gl, n.InfType); e != nil {
+			return e
+		}
+		return m.rewriteExpr(module, gl, n.Expr, env)
 	case *t.NodeExprDestructureAssign:
 		if e := m.rewriteType(module, gl, n.ValueDef.Type); e != nil {
 			return e
@@ -294,7 +299,7 @@ func (m *monoCtx) rewriteStmt(module string, gl *t.NodeGlobal, stmt t.NodeStatem
 		if e := m.rewriteExpr(module, gl, n.Expression, env); e != nil {
 			return e
 		}
-		trackExprVarDefs(n.Expression, env)
+		m.trackExprVarDefs(module, gl, n.Expression, env)
 		return nil
 	case *t.NodeStmtThrow:
 		return m.rewriteExpr(module, gl, n.Expression, env)
@@ -333,12 +338,31 @@ func (m *monoCtx) rewriteStmt(module string, gl *t.NodeGlobal, stmt t.NodeStatem
 		if e := m.rewriteExpr(module, gl, n.DeclExpr, loopEnv); e != nil {
 			return e
 		}
-		trackExprVarDefs(n.DeclExpr, loopEnv)
+		m.trackExprVarDefs(module, gl, n.DeclExpr, loopEnv)
 		if e := m.rewriteExpr(module, gl, n.BoundExpr, loopEnv); e != nil {
 			return e
 		}
 		for _, s := range n.Body.Statements {
 			if e := m.rewriteStmt(module, gl, s, loopEnv); e != nil {
+				return e
+			}
+		}
+	case *t.NodeStmtBounded:
+		for _, predicate := range n.Predicates {
+			if e := m.rewriteExpr(module, gl, predicate, env); e != nil {
+				return e
+			}
+		}
+		boundedEnv := cloneEnv(env)
+		for _, s := range n.Body.Statements {
+			if e := m.rewriteStmt(module, gl, s, boundedEnv); e != nil {
+				return e
+			}
+		}
+	case *t.NodeStmtUnsafe:
+		unsafeEnv := cloneEnv(env)
+		for _, s := range n.Body.Statements {
+			if e := m.rewriteStmt(module, gl, s, unsafeEnv); e != nil {
 				return e
 			}
 		}

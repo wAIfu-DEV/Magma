@@ -30,7 +30,11 @@ type MemberAccess struct {
 	// later stages from having to reconstruct pointer transitions in a chain.
 	OwnerType *NodeType
 	Type      *NodeType
-	FieldNb   int
+	// OwnerDef is the resolved declaration which owns the field.  FieldNb is
+	// only unique within this declaration, so place analysis uses the pair as
+	// the canonical field identity rather than source spelling.
+	OwnerDef *StructDef
+	FieldNb  int
 
 	PtrDeref    bool
 	ResultIsPtr bool
@@ -103,6 +107,9 @@ const (
 // adapters, not to compiler passes.
 type Diagnostic struct {
 	Severity DiagnosticSeverity
+	// Code is a stable machine-readable identifier shared by CLI and editor
+	// consumers. Human-readable wording may improve without invalidating tools.
+	Code     string
 	Stage    string
 	Ctx      *FileCtx
 	FilePath string
@@ -112,6 +119,15 @@ type Diagnostic struct {
 	ShortDesc  string
 	Additional string
 	Cause      error
+	Related    []DiagnosticRelated
+}
+
+// DiagnosticRelated points at an earlier operation which caused a later
+// diagnostic, such as the move or destruction preceding a use-after-move.
+type DiagnosticRelated struct {
+	FilePath string
+	Token    Token
+	Message  string
 }
 
 func (d *Diagnostic) Error() string {

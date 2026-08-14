@@ -30,6 +30,7 @@ type ParseCtx struct {
 	CurrentFunction *t.NodeFuncDef
 	NextExportName  string
 	NextExportABI   string
+	NextNoRetain    bool
 
 	PruneNext  bool
 	ModuleSeen bool

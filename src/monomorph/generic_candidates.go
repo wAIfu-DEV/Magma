@@ -61,6 +61,13 @@ func (m *monoCtx) resolveCandidateStmt(module string, gl *t.NodeGlobal, stmt t.N
 		node.DeclExpr = m.resolveCandidateExpr(module, gl, node.DeclExpr)
 		node.BoundExpr = m.resolveCandidateExpr(module, gl, node.BoundExpr)
 		m.resolveCandidateBody(module, gl, &node.Body)
+	case *t.NodeStmtBounded:
+		for i, predicate := range node.Predicates {
+			node.Predicates[i] = m.resolveCandidateExpr(module, gl, predicate)
+		}
+		m.resolveCandidateBody(module, gl, &node.Body)
+	case *t.NodeStmtUnsafe:
+		m.resolveCandidateBody(module, gl, &node.Body)
 	case *t.NodeStmtDefer:
 		if node.IsBody {
 			m.resolveCandidateBody(module, gl, &node.Body)
@@ -116,6 +123,8 @@ func (m *monoCtx) resolveCandidateExpr(module string, gl *t.NodeGlobal, expr t.N
 	case *t.NodeExprTry:
 		node.Call = m.resolveCandidateExpr(module, gl, node.Call)
 	case *t.NodeExprAddrof:
+		node.Expr = m.resolveCandidateExpr(module, gl, node.Expr)
+	case *t.NodeExprMove:
 		node.Expr = m.resolveCandidateExpr(module, gl, node.Expr)
 	case *t.NodeExprDestructureAssign:
 		if call, ok := m.resolveCandidateExpr(module, gl, node.Call).(*t.NodeExprCall); ok {

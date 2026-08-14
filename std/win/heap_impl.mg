@@ -76,9 +76,9 @@ heapFree(impl ptr, in u8*) void:
 ..
 
 const gl_heapVtable := a.Vtable(
-    fn_alloc =   heapAlloc,
-    fn_realloc = heapRealloc,
-    fn_free =    heapFree,
+    alloc =   heapAlloc,
+    realloc = heapRealloc,
+    free =    heapFree,
 )
 
 # Returns an allocator object that uses Windows heap allocation.

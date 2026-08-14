@@ -8,9 +8,9 @@ use "std:checked" checked
 # Function table shared by allocator handles whose implementation and vtable
 # lifetimes are managed externally.
 pub Vtable(
-    fn_alloc   (ptr, u64) !u8*
-    fn_realloc (ptr, u8*, u64) !u8*
-    fn_free    (ptr, u8*) void
+    alloc   (ptr, u64) !u8*
+    realloc (ptr, u8*, u64) !u8*
+    free    (ptr, u8*) void
 )
 
 # Generic allocator interface backed by a shared, immutable vtable.
@@ -30,7 +30,7 @@ pub Allocator(
 #   block := try a.alloc(64)
 #   a.free(block)
 Allocator.alloc(byteCount u64) !$u8*:
-    ret try this.vtable.fn_alloc(this.impl, byteCount)
+    ret try this.vtable.alloc(this.impl, byteCount)
 ..
 
 # Allocates a new block of size count * sizeof T.
@@ -43,7 +43,7 @@ Allocator.alloc(byteCount u64) !$u8*:
 #   values := try a.allocT[u64](16)
 #   a.free(values)
 Allocator.allocT[T](count u64) !$T*:
-    ret try this.vtable.fn_alloc(this.impl, try checked.byteCount[T](count))
+    ret try this.vtable.alloc(this.impl, try checked.byteCount[T](count))
 ..
 
 # Reallocates a block of byteCount bytes.
@@ -56,7 +56,7 @@ Allocator.allocT[T](count u64) !$T*:
 # @example
 #   block = try a.realloc(block, 128)
 Allocator.realloc(block u8*, byteCount u64) !$u8*:
-    ret try this.vtable.fn_realloc(this.impl, block, byteCount)
+    ret try this.vtable.realloc(this.impl, block, byteCount)
 ..
 
 # Reallocates a block of size count * sizeof T.
@@ -67,7 +67,7 @@ Allocator.realloc(block u8*, byteCount u64) !$u8*:
 # @throws outOfMemory when the block cannot be resized
 # @ownership The returned pointer replaces block and remains owned by the caller.
 Allocator.reallocT[T](block T*, count u64) !$T*:
-    ret try this.vtable.fn_realloc(this.impl, block, try checked.byteCount[T](count))
+    ret try this.vtable.realloc(this.impl, block, try checked.byteCount[T](count))
 ..
 
 # Frees a previously allocated block.
@@ -77,5 +77,5 @@ Allocator.reallocT[T](block T*, count u64) !$T*:
 # @example
 #   a.free(block)
 Allocator.free(block u8*) void:
-    this.vtable.fn_free(this.impl, block)
+    this.vtable.free(this.impl, block)
 ..

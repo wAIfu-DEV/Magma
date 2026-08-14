@@ -53,6 +53,9 @@ Decoder.appendPending(byte u8) void:
 ..
 
 Decoder.emitPending(output u32[], written u64*) !void:
+    # SAFETY: Decoder.push calls this only after proving written is below the
+    # caller-provided output count; pendingCount is limited to four bytes.
+    unsafe:
     bytes := array u8[4]
     for i u64 = 0 to cast.u8to64(this.pendingCount):
         shift u32 = cast.u64to32(i * 8)
@@ -67,7 +70,8 @@ Decoder.emitPending(output u32[], written u64*) !void:
         throw e
     ..
     output[*written] = cp.value
-    *written = *written + 1
+      *written = *written + 1
+    ..
 ..
 
 # Decodes complete scalars from a chunk into caller-provided u32 storage.
@@ -206,6 +210,9 @@ Utf8Iterator.hasData() bool:
 # Keep bloat out of it, no defers or error return as those will increase
 # complexity and obfuscate the happy path.
 decodeFirst(start u8*, end u8*) Codepoint:
+    # SAFETY: start/end delimit one live UTF-8 byte range; width is validated
+    # against their difference before continuation-byte indexing.
+    unsafe:
     outCp := Codepoint(value=0, width=0)
 
     if cast.ptou(start) >= cast.ptou(end):
@@ -278,7 +285,8 @@ decodeFirst(start u8*, end u8*) Codepoint:
     ..
 
     # If we get here, validation passed
-    ret Codepoint(value=codepoint, width=width)
+      ret Codepoint(value=codepoint, width=width)
+    ..
 ..
 
 # Decodes the first scalar from a byte slice.
@@ -340,6 +348,9 @@ utf8to16size(s str) !u64:
 # @example
 #   wide := try utf8.utf8To16(a, text)
 pub utf8To16(a alc.Allocator, s str) !$u16[]:
+    # SAFETY: utf8to16size computes the exact code-unit allocation and the
+    # validated iterator emits exactly that many units.
+    unsafe:
     it Utf8Iterator = iterator(s)
 
     elemCount u64 = try utf8to16size(s)
@@ -370,7 +381,8 @@ pub utf8To16(a alc.Allocator, s str) !$u16[]:
             i = i + 1
         ..
     ..
-    ret slices.fromPtr(outPtr, elemCount)
+      ret slices.fromPtr(outPtr, elemCount)
+    ..
 ..
 
 # Converts UTF-8 string to null-terminated UTF-16 code units.
@@ -385,6 +397,9 @@ pub utf8To16(a alc.Allocator, s str) !$u16[]:
 # @example
 #   wideC := try utf8.utf8To16NT(a, text)
 pub utf8To16NT(a alc.Allocator, s str) !$u16[]:
+    # SAFETY: allocationCount includes the terminator and utf8to16size exactly
+    # bounds all code units emitted by the validated iterator.
+    unsafe:
     it Utf8Iterator = iterator(s)
 
     elemCount u64 = try utf8to16size(s)
@@ -415,12 +430,16 @@ pub utf8To16NT(a alc.Allocator, s str) !$u16[]:
             i = i + 1
         ..
     ..
-    ret slices.fromPtr(outPtr, elemCount)
+      ret slices.fromPtr(outPtr, elemCount)
+    ..
 ..
 
 # Encodes a single codepoint into UTF-8.
 # @complexity O(1).
 encodeUtf8(cp u32, out u8*) !u64:
+    # SAFETY: callers reserve four writable bytes at out; each scalar branch
+    # writes only its returned UTF-8 width.
+    unsafe:
     if cp <= 127:
         *out = u32to8(cp)
         ret 1
@@ -445,7 +464,8 @@ encodeUtf8(cp u32, out u8*) !u64:
     else:
         throw errors.failure("invalid unicode codepoint")
     ..
-    ret 0
+      ret 0
+    ..
 ..
 
 # Returns the UTF-8 width of a Unicode scalar.
@@ -550,6 +570,9 @@ codepointUtf8Size(cp u32) u64:
 # Encodes one UTF-16 codepoint (or surrogate pair) to UTF-8.
 # @complexity O(1) for a single codepoint or surrogate pair.
 utf16to8iter(in u16[], out u8*, i u64*, n u64) !u64:
+    # SAFETY: callers pass n = count(in), keep *i <= n, and reserve four output
+    # bytes; the surrogate lookahead explicitly checks *i < n.
+    unsafe:
     w1 u16 = in[*i]
     *i = *i + 1
 
@@ -576,7 +599,8 @@ utf16to8iter(in u16[], out u8*, i u64*, n u64) !u64:
         ret try encodeUtf8(cp, out)
     ..
 
-    throw errors.failure("unexpected low utf16 surrogate")
+      throw errors.failure("unexpected low utf16 surrogate")
+    ..
 ..
 
 # Converts UTF-16 code units to a UTF-8 string.
@@ -613,7 +637,7 @@ pub utf16to8(a alc.Allocator, in u16[]) !$str:
         writePtr = cast.utop(cast.ptou(writePtr) + writeSize)
     ..
 
-    ret result
+    ret move result
 ..
 
 # Returns size in bytes of string, for UTF8 strings codepoint (UTF8 character) count may be

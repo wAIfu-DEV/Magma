@@ -14,11 +14,14 @@ use "std:utf8" utf8
 link "ole32"
 link "shell32"
 
-llvm "@magma.filedialog.clsid.open = private constant { i32, i16, i16, [8 x i8] } { i32 -602121572, i16 -6006, i16 19934, [8 x i8] [i8 -91, i8 -95, i8 96, i8 -8, i8 42, i8 32, i8 -82, i8 -9] }\n"
-llvm "@magma.filedialog.clsid.save = private constant { i32, i16, i16, [8 x i8] } { i32 -1061887245, i16 -17887, i16 18291, [8 x i8] [i8 -115, i8 -70, i8 51, i8 94, i8 -55, i8 70, i8 -21, i8 -117] }\n"
-llvm "@magma.filedialog.iid.open = private constant { i32, i16, i16, [8 x i8] } { i32 -713264504, i16 -11091, i16 18280, [8 x i8] [i8 -66, i8 2, i8 -99, i8 -106, i8 -107, i8 50, i8 -39, i8 96] }\n"
-llvm "@magma.filedialog.iid.save = private constant { i32, i16, i16, [8 x i8] } { i32 -2068001501, i16 24542, i16 19675, [8 x i8] [i8 -82, i8 -92, i8 -81, i8 100, i8 -72, i8 61, i8 120, i8 -85] }\n"
-llvm "@magma.filedialog.iid.shellitem = private constant { i32, i16, i16, [8 x i8] } { i32 1132621086, i16 -6376, i16 17134, [8 x i8] [i8 -68, i8 85, i8 -95, i8 -30, i8 97, i8 -61, i8 123, i8 -2] }\n"
+# SAFETY: this audited implementation injects the required low-level IR.
+unsafe:
+    llvm "@magma.filedialog.clsid.open = private constant { i32, i16, i16, [8 x i8] } { i32 -602121572, i16 -6006, i16 19934, [8 x i8] [i8 -91, i8 -95, i8 96, i8 -8, i8 42, i8 32, i8 -82, i8 -9] }\n"
+    llvm "@magma.filedialog.clsid.save = private constant { i32, i16, i16, [8 x i8] } { i32 -1061887245, i16 -17887, i16 18291, [8 x i8] [i8 -115, i8 -70, i8 51, i8 94, i8 -55, i8 70, i8 -21, i8 -117] }\n"
+    llvm "@magma.filedialog.iid.open = private constant { i32, i16, i16, [8 x i8] } { i32 -713264504, i16 -11091, i16 18280, [8 x i8] [i8 -66, i8 2, i8 -99, i8 -106, i8 -107, i8 50, i8 -39, i8 96] }\n"
+    llvm "@magma.filedialog.iid.save = private constant { i32, i16, i16, [8 x i8] } { i32 -2068001501, i16 24542, i16 19675, [8 x i8] [i8 -82, i8 -92, i8 -81, i8 100, i8 -72, i8 61, i8 120, i8 -85] }\n"
+    llvm "@magma.filedialog.iid.shellitem = private constant { i32, i16, i16, [8 x i8] } { i32 1132621086, i16 -6376, i16 17134, [8 x i8] [i8 -68, i8 85, i8 -95, i8 -30, i8 97, i8 -61, i8 123, i8 -2] }\n"
+..
 
 ext ext_CoInitializeEx CoInitializeEx(reserved win.LPVOID, flags win.DWORD) win.HRESULT
 ext ext_CoUninitialize CoUninitialize() void
@@ -27,19 +30,34 @@ ext ext_CoTaskMemFree CoTaskMemFree(value win.LPVOID) void
 ext ext_SHCreateItemFromParsingName SHCreateItemFromParsingName(path win.LPCWSTR, context win.LPVOID, interfaceId win.LPCVOID, result win.LPVOID*) win.HRESULT
 
 guidOpenClass() ptr:
-    llvm "ret ptr @magma.filedialog.clsid.open\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "ret ptr @magma.filedialog.clsid.open\n"
+    ..
 ..
 guidSaveClass() ptr:
-    llvm "ret ptr @magma.filedialog.clsid.save\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "ret ptr @magma.filedialog.clsid.save\n"
+    ..
 ..
 guidOpenInterface() ptr:
-    llvm "ret ptr @magma.filedialog.iid.open\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "ret ptr @magma.filedialog.iid.open\n"
+    ..
 ..
 guidSaveInterface() ptr:
-    llvm "ret ptr @magma.filedialog.iid.save\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "ret ptr @magma.filedialog.iid.save\n"
+    ..
 ..
 guidShellItem() ptr:
-    llvm "ret ptr @magma.filedialog.iid.shellitem\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "ret ptr @magma.filedialog.iid.shellitem\n"
+    ..
 ..
 
 InputFilter(

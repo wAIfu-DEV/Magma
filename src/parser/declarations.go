@@ -161,7 +161,9 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 		IsMember:     isMemberFunc && alias == "",
 		IsEntryPoint: !isMemberFunc && alias == "" && fnNameSimple == "main",
 		IsExternal:   alias != "",
+		NoRetain:     ctx.NextNoRetain,
 	}
+	ctx.NextNoRetain = false
 	if ctx.NextExportName != "" {
 		if alias != "" {
 			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &nameTk, "syntax error: 'export_name' cannot be applied to an external declaration", "apply it to a function definition")

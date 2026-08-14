@@ -1,7 +1,7 @@
 mod main
 
 use "std:allocator" allocator
-use "std:async" async
+use "std:context" context
 use "std:atomic" atomic
 use "std:builder" builder
 use "std:cast" cast
@@ -28,7 +28,11 @@ AcceptContext(calls atomic.U64)
 HttpContext(calls atomic.U64, accepts atomic.U64)
 
 onReadable(raw ptr, token u64, flags u32) !void:
-    context CallbackContext* = raw
+    # SAFETY: registrations pass a live CallbackContext until loop await.
+    context CallbackContext*
+    unsafe:
+        context = raw
+    ..
     bytes := array u8[8]
     count := try context.socket.recv(bytes, 8)
     if token != 91 || (flags & poll.READ) == 0 || count != 1:
@@ -38,13 +42,22 @@ onReadable(raw ptr, token u64, flags u32) !void:
 ..
 
 onAccept(raw ptr, stream $tcp.Stream) !void:
-    context AcceptContext* = raw
+    # SAFETY: the listener retains a live AcceptContext until await.
+    context AcceptContext*
+    unsafe:
+        context = raw
+    ..
     try stream.close()
     context.calls.fetchAdd(1)
 ..
 
 onHttpAccept(raw ptr, stream $tcp.Stream) !void:
-    context HttpContext* = raw
+    # SAFETY: the listener retains a live HttpContext until await.
+    context HttpContext*
+    unsafe:
+        context = raw
+    ..
+    defer stream.close()
     context.accepts.fetchAdd(1)
     requestNumber u64 = 0
     loop requestNumber < 2:
@@ -75,7 +88,6 @@ onHttpAccept(raw ptr, stream $tcp.Stream) !void:
         context.calls.fetchAdd(1)
         requestNumber = requestNumber + 1
     ..
-    try stream.close()
 ..
 
 testAddress() !void:
@@ -92,43 +104,40 @@ testAddress() !void:
 
 testDns(a allocator.Allocator) !void:
     resolver := try dns.new(a, dns.defaultOptions())
-    onerror resolver.close()
+    defer resolver.close()
     output := array address.Endpoint[16]
     first := try resolver.resolveTo("localhost", "80", address.FAMILY_UNSPECIFIED, output)
     second := try resolver.resolveTo("localhost", "80", address.FAMILY_UNSPECIFIED, output)
     if first == 0 || second != first:
         throw errors.failure("DNS cache returned inconsistent results")
     ..
-    try resolver.close()
 ..
 
 testUdp() !void:
     receiver := try udp.bind(address.loopbackIpv4(0))
-    onerror receiver.close()
+    defer receiver.close()
     endpoint := try receiver.localEndpoint()
     sender := try udp.open(address.FAMILY_IPV4)
-    onerror sender.close()
+    defer sender.close()
     sent := try sender.sendTo("udp", endpoint)
     bytes := array u8[8]
     received := try receiver.recvFrom(bytes, 8)
     if sent != 3 || received.count != 3 || received.source.address.isIpv4() == false:
         throw errors.failure("UDP loopback transfer failed")
     ..
-    try sender.close()
-    try receiver.close()
 ..
 
 testTcpPollAndAsync(a allocator.Allocator) !void:
     listener := try tcp.listen(address.loopbackIpv4(0), 16)
-    onerror listener.close()
+    defer listener.close()
     endpoint := try listener.localEndpoint()
     client := try tcp.connect(endpoint)
-    onerror client.close()
+    defer client.close()
     server := try listener.accept()
-    onerror server.close()
+    defer server.close()
 
     poller := try poll.new(a, 8)
-    onerror poller.close()
+    defer poller.close()
     try poller.add(addrof server.socket, 77, poll.READ)
     try client.socket.send("p")
     events := array poll.Event[8]
@@ -141,75 +150,70 @@ testTcpPollAndAsync(a allocator.Allocator) !void:
         throw errors.failure("TCP loopback transfer failed")
     ..
     try poller.remove(addrof server.socket)
-    try poller.close()
 
-    loop := try event_loop.new(a, 8, 8)
-    onerror loop.close()
-    context := CallbackContext(socket=addrof server.socket, calls=atomic.newU64(0))
+    evloop := try event_loop.new(a, 8, 8)
+    cbcontext := CallbackContext(socket=addrof server.socket, calls=atomic.newU64(0))
     pool := try thread_pool.new(a, 1, 1, 8, 64)
-    onerror pool.close()
-    asc := async.new(pool, a)
-    running := try loop.runAsync(asc)
-    onerror:
+    defer pool.close()
+    ctx := context.new(a, pool.executor())
+    running := try evloop.runAsync(ctx)
+    defer:
         running.stop()
         running.await()
     ..
-    try running.watch(addrof server.socket, 91, poll.READ, onReadable, addrof context)
+    try running.watch(addrof server.socket, 91, poll.READ, onReadable, addrof cbcontext)
     try client.socket.send("e")
     deadline := time.ticks() + time.msToTicks(2000)
-    loop context.calls.loadAcquire() == 0 && time.ticks() < deadline:
+    loop cbcontext.calls.loadAcquire() == 0 && time.ticks() < deadline:
         thread.yield()
     ..
-    if context.calls.loadAcquire() != 1:
-        try running.stop()
-        try running.await()
-        try pool.close()
+    if cbcontext.calls.loadAcquire() != 1:
         throw errors.failure("asynchronous event loop did not dispatch")
     ..
-    try running.stop()
-    try running.await()
-    try pool.close()
-    try server.close()
-    try client.close()
-    try listener.close()
 ..
 
 testAsyncListener(a allocator.Allocator) !void:
-    context := AcceptContext(calls=atomic.newU64(0))
-    listener := try net_listener.new(a, address.loopbackIpv4(0), 16, 8, 8, onAccept, addrof context)
-    onerror listener.close()
+    accontext AcceptContext* = try a.allocT[AcceptContext](1)
+    # SAFETY: allocT returned one writable AcceptContext slot exclusively owned
+    # by this test until after the running listener is awaited.
+    unsafe:
+        *accontext = AcceptContext(calls=atomic.newU64(0))
+    ..
+    listener := try net_listener.new(a, address.loopbackIpv4(0), 16, 8, 8, onAccept, accontext)
     endpoint := try listener.localEndpoint()
     pool := try thread_pool.new(a, 1, 1, 8, 64)
-    onerror pool.close()
-    running := try listener.runAsync(async.new(pool, a))
-    onerror:
-        running.stop()
-        running.await()
-    ..
+    running := try listener.runAsync(context.new(a, pool.executor()))
     client := try tcp.connect(endpoint)
     try client.close()
     deadline := time.ticks() + time.msToTicks(2000)
-    loop context.calls.loadAcquire() == 0 && time.ticks() < deadline:
+    loop accontext.calls.loadAcquire() == 0 && time.ticks() < deadline:
         thread.yield()
     ..
     try running.stop()
     try running.await()
     try pool.close()
-    if context.calls.loadAcquire() != 1:
+    if accontext.calls.loadAcquire() != 1:
+        a.free(accontext)
         throw errors.failure("asynchronous listener did not accept")
     ..
+    a.free(accontext)
 ..
 
 testHttpClient(a allocator.Allocator) !void:
-    context := HttpContext(calls=atomic.newU64(0), accepts=atomic.newU64(0))
-    listener := try net_listener.new(a, address.loopbackIpv4(0), 16, 8, 8, onHttpAccept, addrof context)
-    onerror listener.close()
+    htcontext HttpContext* = try a.allocT[HttpContext](1)
+    defer a.free(htcontext)
+    # SAFETY: allocT returned one writable HttpContext slot exclusively owned
+    # by this test until after the running listener is awaited.
+    unsafe:
+        *htcontext = HttpContext(calls=atomic.newU64(0), accepts=atomic.newU64(0))
+    ..
+    listener := try net_listener.new(a, address.loopbackIpv4(0), 16, 8, 8, onHttpAccept, htcontext)
     endpoint := try listener.localEndpoint()
     pool := try thread_pool.new(a, 2, 2, 8, 64)
-    onerror pool.close()
-    asc := async.new(pool, a)
-    running := try listener.runAsync(asc)
-    onerror:
+    defer pool.close()
+    ctx := context.new(a, pool.executor())
+    running := try listener.runAsync(ctx)
+    defer:
         running.stop()
         running.await()
     ..
@@ -223,34 +227,29 @@ testHttpClient(a allocator.Allocator) !void:
     url := try urlBuilder.build()
     defer url.free(a)
     client := try http_client.new(a, http_client.defaultOptions())
-    onerror client.close()
+    defer client.close()
     headers http_client.Header[] = slices.fromPtr(none, 0)
     request := http_client.noBody("GET", url, headers)
 
     exchange := try client.start(request)
-    onerror exchange.close()
     loop try exchange.poll(2000) == false:
     ..
     response := try exchange.finish()
+    defer response.close()
+    exchange.releaseFinished()
     if response.statusCode != 200 || strings.compare(response.body, "ok") == false:
         throw errors.failure("polled HTTP response was invalid")
     ..
-    response.close()
-
-    pending := try client.sendAsync(asc, request)
+    pending := try client.sendAsync(ctx, request)
     asyncResponse := try pending.await()
+    defer asyncResponse.close()
     if asyncResponse.statusCode != 200 || strings.compare(asyncResponse.body, "ok") == false:
         throw errors.failure("async HTTP response was invalid")
     ..
-    asyncResponse.close()
-    try client.close()
-    try running.stop()
-    try running.await()
-    try pool.close()
-    if context.calls.loadAcquire() != 2:
+    if htcontext.calls.loadAcquire() != 2:
         throw errors.failure("HTTP test server did not receive both requests")
     ..
-    if context.accepts.loadAcquire() != 1:
+    if htcontext.accepts.loadAcquire() != 1:
         throw errors.failure("HTTP client did not reuse its connection")
     ..
 ..

@@ -207,6 +207,7 @@ func clResolveFieldAccess(c *ctx, ownerType *t.NodeType, member string, lvalue b
 	return &t.MemberAccess{
 		OwnerType:   ownerType,
 		Type:        fieldType,
+		OwnerDef:    structDef,
 		FieldNb:     structDef.FieldNb[member],
 		PtrDeref:    ptrDeref,
 		ResultIsPtr: isPointerType(fieldType),

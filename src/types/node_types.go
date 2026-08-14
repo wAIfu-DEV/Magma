@@ -208,6 +208,8 @@ type NodeExprUnary struct {
 	Operand  NodeExpr
 
 	InfType *NodeType
+	// ProvenanceChecked is a compiler-only lowering-contract marker.
+	ProvenanceChecked bool
 }
 
 func (n *NodeExprUnary) GetInferredType() *NodeType {
@@ -275,6 +277,7 @@ func (n *NodeExprLit) Print(indent int) {
 }
 
 type NodeLlvm struct {
+	Tk   Token
 	Text string
 }
 
@@ -403,6 +406,16 @@ type NodeExprSubscript struct {
 	ElemType *NodeType
 	// IndexType is the checker-resolved representation consumed by lowering.
 	IndexType *NodeType
+	// RangeProof is set by safety analysis. LLVM lowering refuses ordinary
+	// slice subscripts for which no dominating proof was established.
+	RangeProof *RangeProof
+}
+
+// RangeProof is compiler-only evidence authorizing an unchecked address
+// calculation. Guarded is true for an explicit bounded entry guard.
+type RangeProof struct {
+	ID      uint64
+	Guarded bool
 }
 
 type NodeExprMemberAccess struct {
@@ -632,6 +645,21 @@ type NodeExprAddrof struct {
 	InfType *NodeType
 }
 
+// NodeExprMove marks an explicit ownership transfer. It has no runtime
+// representation; lowering emits the wrapped value after safety validation.
+type NodeExprMove struct {
+	Tk      Token
+	Expr    NodeExpr
+	InfType *NodeType
+}
+
+func (n *NodeExprMove) GetInferredType() *NodeType { return n.InfType }
+func (n *NodeExprMove) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprMove\n")
+	n.Expr.Print(indent + 1)
+}
+
 func (n *NodeExprAddrof) GetInferredType() *NodeType {
 	//fmt.Println("ExprAddrof")
 	return n.InfType
@@ -744,6 +772,37 @@ type NodeStmtFor struct {
 	DeclExpr  NodeExpr
 	BoundExpr NodeExpr
 	Body      NodeBody
+}
+
+// NodeStmtBounded establishes its comparison list once on entry and makes the
+// resulting range facts available only throughout Body.
+type NodeStmtBounded struct {
+	Tk         Token
+	Predicates []NodeExpr
+	Body       NodeBody
+	Proofs     []*RangeProof
+}
+
+// NodeStmtUnsafe is a lexical permission boundary for unverifiable operations.
+// Normal type, ownership, range, and control-flow checking remains active.
+type NodeStmtUnsafe struct {
+	Tk   Token
+	Body NodeBody
+}
+
+func (n *NodeStmtUnsafe) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("StmtUnsafe\n")
+	n.Body.Print(indent + 1)
+}
+
+func (n *NodeStmtBounded) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("StmtBounded\n")
+	for _, predicate := range n.Predicates {
+		predicate.Print(indent + 1)
+	}
+	n.Body.Print(indent + 1)
 }
 
 func (n *NodeStmtFor) Print(indent int) {
@@ -918,6 +977,9 @@ type NodeFuncDef struct {
 	IsEntryPoint   bool
 	IsExternal     bool
 	IsPublic       bool
+	// NoRetain declares that pointer/slice arguments are used only for the
+	// duration of the call and are not retained by its owned result.
+	NoRetain       bool
 	ExportName     string
 	ExportABI      string
 	ErrorPredicate ErrorPredicateKind
@@ -1020,6 +1082,7 @@ func (*NodeExprDestructureAssign) IsExpr() {}
 func (*NodeExprDestructor) IsExpr()        {}
 func (*NodeExprSizeof) IsExpr()            {}
 func (*NodeExprAddrof) IsExpr()            {}
+func (*NodeExprMove) IsExpr()              {}
 func (*NodeTypeNamed) IsType()             {}
 func (*NodeTypePointer) IsType()           {}
 func (*NodeTypeRfc) IsType()               {}
@@ -1038,6 +1101,8 @@ func (*NodeStmtIf) IsStatement()           {}
 func (*NodeStmtElse) IsStatement()         {}
 func (*NodeStmtWhile) IsStatement()        {}
 func (*NodeStmtFor) IsStatement()          {}
+func (*NodeStmtBounded) IsStatement()      {}
+func (*NodeStmtUnsafe) IsStatement()       {}
 func (*NodeLlvm) IsStatement()             {}
 func (*NodeStmtDefer) IsStatement()        {}
 func (*NodeExprVarDef) IsGlobalDecl()      {}

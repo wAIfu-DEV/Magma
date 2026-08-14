@@ -179,7 +179,7 @@ pub Dir(
 
 pub openDir(a alc.Allocator, path str) !$Dir:
     native := try impl_fs.openDir(a, path)
-    ret Dir(native=native)
+    ret Dir(native=move native)
 ..
 
 pub Dir.hasData() bool:
@@ -195,13 +195,19 @@ pub Dir.next() !$Entry:
 ..
 
 dirIteratorHasData(implementation ptr, index u64) bool:
-    directory Dir* = implementation
-    ret directory.hasData()
+    # SAFETY: Dir.iterator stores its live receiver as the iterator context.
+    unsafe:
+        directory Dir* = implementation
+        ret directory.hasData()
+    ..
 ..
 
 dirIteratorNext(implementation ptr, index u64) !Entry:
-    directory Dir* = implementation
-    ret try directory.next()
+    # SAFETY: Dir.iterator stores its live receiver as the iterator context.
+    unsafe:
+        directory Dir* = implementation
+        ret try directory.next()
+    ..
 ..
 
 # Returns a generic iterator borrowing this open directory. The Dir must remain

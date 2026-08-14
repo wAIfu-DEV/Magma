@@ -41,14 +41,21 @@ decodeStatus(status i32) u32:
 ..
 
 freeArguments(argv u8**, count u64) void:
+    # SAFETY: argv contains count initialized owned C-string pointers followed
+    # by storage allocated from the same allocator.
+    unsafe:
     a := heap.allocator()
     for i u64 = 0 to count:
         a.free(argv[i])
     ..
-    a.free(argv)
+      a.free(argv)
+    ..
 ..
 
 pub spawn(executable str, arguments str[]) !$Process:
+    # SAFETY: argv is allocated for count + 2 entries; initialized tracks the
+    # owned prefix and the final slot is reserved for the null terminator.
+    unsafe:
     if executable.countBytes() == 0 || containsNull(executable):
         throw errors.invalidArgument("process executable is empty or contains a null byte")
     ..
@@ -85,10 +92,14 @@ pub spawn(executable str, arguments str[]) !$Process:
     if pid < 0:
         throw errors.failure("fork failed")
     ..
-    ret Process(pid=pid, finished=false, exitCode=0)
+      ret Process(pid=pid, finished=false, exitCode=0)
+    ..
 ..
 
 pub spawnWithEnv(executable str, arguments str[], environment str[]) !$Process:
+    # SAFETY: argv/envp allocations include their terminator slots and their
+    # initialized counters precisely track owned C strings for cleanup.
+    unsafe:
     if executable.countBytes() == 0 || containsNull(executable):
         throw errors.invalidArgument("process executable is empty or contains a null byte")
     ..
@@ -122,7 +133,8 @@ pub spawnWithEnv(executable str, arguments str[], environment str[]) !$Process:
     freeArguments(argv, initialized)
     freeArguments(envp, envInitialized)
     if pid < 0: throw errors.failure("fork failed") ..
-    ret Process(pid=pid, finished=false, exitCode=0)
+      ret Process(pid=pid, finished=false, exitCode=0)
+    ..
 ..
 
 pub isFinished(process Process*) !bool:

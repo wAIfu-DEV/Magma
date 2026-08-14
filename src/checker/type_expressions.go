@@ -198,6 +198,12 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 		}
 		n.InfType = makeNamedType("ptr")
 		return nil
+	case *t.NodeExprMove:
+		if err := ctExpr(c, n.Expr); err != nil {
+			return err
+		}
+		n.InfType = n.Expr.GetInferredType()
+		return nil
 	case *t.NodeExprCall:
 		//fmt.Printf("call: %s\n", flattenCallee(n.Callee))
 

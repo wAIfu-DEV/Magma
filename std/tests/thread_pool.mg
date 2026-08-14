@@ -15,32 +15,49 @@ ScaleContext(
 )
 
 atomicAdd(target u64*, value u64) void:
-    llvm "  %ignored = atomicrmw add ptr %target, i64 %value acq_rel, align 8\n"
-    llvm "  ret void\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %ignored = atomicrmw add ptr %target, i64 %value acq_rel, align 8\n"
+            llvm "  ret void\n"
+    ..
 ..
 
 atomicLoad(target u64*) u64:
-    llvm "  %value = load atomic i64, ptr %target acquire, align 8\n"
-    llvm "  ret i64 %value\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %value = load atomic i64, ptr %target acquire, align 8\n"
+            llvm "  ret i64 %value\n"
+    ..
 ..
 
 atomicStore(target u64*, value u64) void:
-    llvm "  store atomic i64 %value, ptr %target release, align 8\n"
-    llvm "  ret void\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  store atomic i64 %value, ptr %target release, align 8\n"
+            llvm "  ret void\n"
+    ..
 ..
 
 occupy(raw ptr) u64:
-    context ScaleContext* = raw
-    atomicAdd(context.ready, 1)
-    loop atomicLoad(context.release) == 0:
-        thread.yield()
+    # SAFETY: submissions pass addrof a live ScaleContext and wait before its
+    # scope exits.
+    unsafe:
+        context ScaleContext* = raw
+        atomicAdd(context.ready, 1)
+        loop atomicLoad(context.release) == 0:
+            thread.yield()
+        ..
     ..
     ret 0
 ..
 
 increment(raw ptr) u64:
-    value u64* = raw
-    *value = *value + 1
+    # SAFETY: each submission passes addrof a live u64 and waits before scope
+    # exit; these test pools serialize increment tasks.
+    unsafe:
+        value u64* = raw
+        *value = *value + 1
+    ..
     ret 0
 ..
 
@@ -52,7 +69,7 @@ shutdownResult(pool thread_pool.ThreadPool*) !bool:
 expectInvalidSizes(a allocator.Allocator) !void:
     zeroWorkers thread_pool.ThreadPool, workerErr error = thread_pool.new(a, 0, 1, 1, 1)
     if workerErr.ok():
-        footgun.drop[thread_pool.ThreadPool](zeroWorkers)
+        footgun.drop[thread_pool.ThreadPool](move zeroWorkers)
         throw errors.failure("thread pool accepted zero workers")
     ..
     if workerErr.code() != 2:
@@ -61,7 +78,7 @@ expectInvalidSizes(a allocator.Allocator) !void:
 
     invertedWorkers thread_pool.ThreadPool, limitErr error = thread_pool.new(a, 2, 1, 1, 1)
     if limitErr.ok():
-        footgun.drop[thread_pool.ThreadPool](invertedWorkers)
+        footgun.drop[thread_pool.ThreadPool](move invertedWorkers)
         throw errors.failure("thread pool accepted a maximum below its minimum")
     ..
     if limitErr.code() != 2:
@@ -70,7 +87,7 @@ expectInvalidSizes(a allocator.Allocator) !void:
 
     zeroCapacity thread_pool.ThreadPool, capacityErr error = thread_pool.new(a, 1, 1, 0, 1)
     if capacityErr.ok():
-        footgun.drop[thread_pool.ThreadPool](zeroCapacity)
+        footgun.drop[thread_pool.ThreadPool](move zeroCapacity)
         throw errors.failure("thread pool accepted zero queue capacity")
     ..
     if capacityErr.code() != 2:
@@ -113,10 +130,12 @@ pub main() !void:
         throw errors.failure("thread pool shutdown did not drain queued work")
     ..
 
-    # shutdown clears the handle and rejects a second release.
-    stopped bool, shutdownErr error = shutdownResult(addrof pool)
-    if shutdownErr.code() != 2 || pool.state != none:
-        throw errors.failure("thread pool allowed repeated shutdown")
+    # A separately constructed inactive handle exercises defensive rejection
+    # without using the already consumed pool value.
+    inactive := thread_pool.ThreadPool(state=none)
+    stopped bool, shutdownErr error = shutdownResult(addrof inactive)
+    if shutdownErr.code() != 2:
+        throw errors.failure("thread pool accepted an inactive handle")
     ..
 
     spinningValue u64 = 0

@@ -174,7 +174,7 @@ valueCleanup(a alc.Allocator, val $Value) void:
 pub newObject(a alc.Allocator) !$Object:
     entries := try linear_map.new[Value](a, valueCleanup)
     object Object
-    object.entries = entries
+    object.entries = move entries
     ret object
 ..
 
@@ -187,7 +187,7 @@ pub newArray(a alc.Allocator) !$Array:
     values := try arr.new[Value](a)
     array Array
     array.allocator = a
-    array.values = values
+    array.values = move values
     ret array
 ..
 
@@ -259,7 +259,7 @@ pub stringOwned(a alc.Allocator, value $str) Value:
     out.owned = true
     out.allocator = a
     r str* = cast.reinterpret[str](addrof out.value)
-    *r = value
+    *r = move value
     ret out
 ..
 
@@ -270,7 +270,7 @@ pub stringOwned(a alc.Allocator, value $str) Value:
 #   value := try json.stringCopy(a, input)
 pub stringCopy(a alc.Allocator, value str) !$Value:
     owned str = try strings.copy(a, value)
-    ret stringOwned(a, owned)
+    ret stringOwned(a, move owned)
 ..
 
 # Wraps a borrowed object. The caller remains responsible for freeing it.
@@ -385,7 +385,7 @@ destr Object.free() void:
 # @example
 #   try items.append(json.numberInt(1))
 Array.append(value $Value) !void:
-    try this.values.pushRight(this.allocator, value)
+    try this.values.pushRight(this.allocator, move value)
 ..
 
 # Returns the number of array elements.
@@ -406,8 +406,10 @@ Array.get(index u64) !Value:
         throw errors.invalidArgument("JSON array index out of bounds")
     ..
     values := this.values.view()
-    value := values[index]
-    ret value.borrowed()
+    bounded index < values.count():
+        value := values[index]
+        ret value.borrowed()
+    ..
 ..
 
 # Frees all owned values and array storage.
@@ -536,12 +538,14 @@ Object.write(w writer.Writer, precision u64) !void:
     keys := this.entries.keysView()
     values := this.entries.valuesView()
     for i u64 = 0 to this.count():
-        if i != 0:
-            try w.writeAll(",")
+        bounded i < keys.count(), i < values.count():
+            if i != 0:
+                try w.writeAll(",")
+            ..
+            try writeEscaped(w, keys[i])
+            try w.writeAll(":")
+            try writeValue(w, values[i], precision)
         ..
-        try writeEscaped(w, keys[i])
-        try w.writeAll(":")
-        try writeValue(w, values[i], precision)
     ..
     try w.writeAll("}")
 ..
@@ -554,10 +558,12 @@ Array.write(w writer.Writer, precision u64) !void:
     try w.writeAll("[")
     values := this.values.view()
     for i u64 = 0 to this.count():
-        if i != 0:
-            try w.writeAll(",")
+        bounded i < values.count():
+            if i != 0:
+                try w.writeAll(",")
+            ..
+            try writeValue(w, values[i], precision)
         ..
-        try writeValue(w, values[i], precision)
     ..
     try w.writeAll("]")
 ..

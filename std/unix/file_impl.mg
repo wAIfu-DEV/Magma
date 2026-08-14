@@ -59,7 +59,11 @@ pub write(handle ptr, bytes str) !u64:
         ret 0
     ..
 
-    p ptr = strings.toPtr(bytes)
+    p ptr
+    # SAFETY: p is traversed only up to bytes.countBytes().
+    unsafe:
+        p = strings.toPtr(bytes)
+    ..
     total u64 = 0
 
     loop total < bound:
@@ -153,10 +157,12 @@ pub stderr() writer.Writer:
     ret writer.new(cast.utop(2), write)
 ..
 
+const gl_stdinVtable := reader.Vtable(read=read)
+
 # Returns a reader for standard input.
 # O(1).
 pub stdin() reader.Reader:
-    ret reader.new(none, read)
+    ret reader.new(none, addrof gl_stdinVtable)
 ..
 
 # Closes a unix file handle.

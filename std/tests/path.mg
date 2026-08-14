@@ -27,18 +27,27 @@ pub main() !void:
     ..
     base := try path.base(a, "one/two.txt")
     defer base.free(a)
-    if strings.compare(base, "two.txt") == false || strings.toPtr(base)[base.countBytes()] != 0:
-        throw errors.failure("path base changed")
+    # SAFETY: owned strings reserve a terminator immediately after countBytes.
+    unsafe:
+        if strings.compare(base, "two.txt") == false || strings.toPtr(base)[base.countBytes()] != 0:
+            throw errors.failure("path base changed")
+        ..
     ..
     extension := try path.extension(a, "one/two.txt")
     defer extension.free(a)
-    if strings.compare(extension, ".txt") == false || strings.toPtr(extension)[extension.countBytes()] != 0:
-        throw errors.failure("path extension changed")
+    # SAFETY: owned strings reserve a terminator immediately after countBytes.
+    unsafe:
+        if strings.compare(extension, ".txt") == false || strings.toPtr(extension)[extension.countBytes()] != 0:
+            throw errors.failure("path extension changed")
+        ..
     ..
     noExtension := try path.extension(a, "README")
     defer noExtension.free(a)
-    if noExtension.countBytes() != 0 || *strings.toPtr(noExtension) != 0:
-        throw errors.failure("empty path extension is not null terminated")
+    # SAFETY: even an empty owned string has its allocated terminator byte.
+    unsafe:
+        if noExtension.countBytes() != 0 || *strings.toPtr(noExtension) != 0:
+            throw errors.failure("empty path extension is not null terminated")
+        ..
     ..
 
     parts := array str[3]

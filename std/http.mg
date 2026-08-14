@@ -2,7 +2,7 @@ mod http
 # Portable HTTP/1.1 client over std/net with client-owned connection pooling.
 
 use "std:allocator" allocator
-use "std:async" async
+use "std:context" context
 use "std:builder" builder
 use "std:cast" cast
 use "std:errors" errors
@@ -112,10 +112,6 @@ SendTask(
     request Request
 )
 
-claim[T](value $T) $T:
-    ret value
-..
-
 pub new(a allocator.Allocator, options Options) !$Client:
     if options.ioTimeoutMs < 0 || options.maxResponseBytes == 0 || options.readBufferBytes == 0 || options.dns.maxResults > 16 || options.connectionCapacity == 0:
         throw errors.invalidArgument("invalid HTTP client limits")
@@ -133,11 +129,11 @@ pub new(a allocator.Allocator, options Options) !$Client:
     guard := try mutex.new()
     client Client
     client.allocator = a
-    client.resolver = claim[dns.Resolver](resolver)
-    client.tlsContext = claim[tls.Context](tlsContext)
+    client.resolver = move resolver
+    client.tlsContext = move tlsContext
     client.connections = connections
     client.connectionCapacity = options.connectionCapacity
-    client.connectionLock = guard
+    client.connectionLock = move guard
     client.options = options
     client.active = true
     ret client
@@ -191,6 +187,7 @@ parseUrl(a allocator.Allocator, url str) !$ParsedUrl:
     service str
     if colon < authorityEnd:
         service = try strings.substring(a, url, colon + 1, authorityEnd)
+        onerror service.free(a)
         parsedPort := try strconv.parseUint(service)
         if parsedPort == 0 || parsedPort > 65535:
             throw errors.invalidArgument("HTTP port is out of range")
@@ -210,13 +207,13 @@ parseUrl(a allocator.Allocator, url str) !$ParsedUrl:
     else:
         target = try strings.substring(a, url, authorityEnd, n)
     ..
-    ret ParsedUrl(host=host, service=service, target=target, secure=secure)
+    ret ParsedUrl(host=move host, service=move service, target=move target, secure=secure)
 ..
 
-freeParsed(a allocator.Allocator, parsed ParsedUrl*) void:
-    parsed.host.free(a)
-    parsed.service.free(a)
-    parsed.target.free(a)
+destr ParsedUrl.free(a allocator.Allocator) void:
+    this.host.free(a)
+    this.service.free(a)
+    this.target.free(a)
 ..
 
 buildRequest(a allocator.Allocator, request Request, parsed ParsedUrl*) !$str:
@@ -240,10 +237,10 @@ buildRequest(a allocator.Allocator, request Request, parsed ParsedUrl*) !$str:
         try output.appendBorrowed(parsed.service)
     ..
     try output.appendBorrowed("\r\nConnection: keep-alive\r\n")
-    if request.body.fn_read != none:
+    if request.body.vtable != none:
         length := try strconv.formatUint(a, request.bodyLength)
         try output.appendBorrowed("Content-Length: ")
-        try output.appendOwned(length)
+        try output.appendOwned(move length)
         try output.appendBorrowed("\r\n")
     ..
 
@@ -254,37 +251,47 @@ buildRequest(a allocator.Allocator, request Request, parsed ParsedUrl*) !$str:
         try output.appendBorrowed("\r\n")
     ..
     try output.appendBorrowed("\r\n")
-    if request.body.fn_read != none && request.bodyLength > 0:
+    if request.body.vtable != none && request.bodyLength > 0:
         contents := try request.body.read(a, request.bodyLength)
         if contents.countBytes() != request.bodyLength:
             contents.free(a)
             throw errors.failure("HTTP request body ended before its declared length")
         ..
-        try output.appendOwned(contents)
+        try output.appendOwned(move contents)
     ..
     ret try output.build()
 ..
 
 findReusable(client Client*, host str, service str, secure bool) u64:
+    # SAFETY: connections contains connectionCapacity initialized slots and the
+    # active flag guards all owned fields.
+    unsafe:
     for i u64 = 0 to client.connectionCapacity:
         connection Connection* = addrof client.connections[i]
         if connection.active && connection.reusable && connection.inUse == false && connection.secure == secure && strings.compare(connection.host, host) && strings.compare(connection.service, service):
             ret i
         ..
     ..
-    ret client.connectionCapacity
+      ret client.connectionCapacity
+    ..
 ..
 
 findEmpty(client Client*) u64:
+    # SAFETY: connections contains exactly connectionCapacity initialized slots.
+    unsafe:
     for i u64 = 0 to client.connectionCapacity:
         if client.connections[i].active == false:
             ret i
         ..
     ..
-    ret client.connectionCapacity
+      ret client.connectionCapacity
+    ..
 ..
 
 Client.acquire(host str, service str, secure bool) !u64:
+    # SAFETY: connectionLock serializes occupancy metadata; active/inUse are the
+    # slot state, and owned transport/host/service values are published once.
+    unsafe:
     try this.connectionLock.lock()
     existing := findReusable(this, host, service, secure)
     if existing < this.connectionCapacity:
@@ -332,39 +339,42 @@ Client.acquire(host str, service str, secure bool) !u64:
         throw errors.notFound("HTTP host has no addresses")
     ..
     transport socket.Socket, connectError error = socket.open(endpoints[0].address.family, socket.TYPE_STREAM)
-    if connectError.ok():
-        connectResult bool, captured error = connectSocket(addrof transport, endpoints[0])
-        connectError = captured
-    ..
     if connectError.nok():
-        if transport.open:
-            transport.close()
-        ..
         ownedHost.free(this.allocator)
         ownedService.free(this.allocator)
         this.connections[slot].active = false
         this.connections[slot].inUse = false
         throw connectError
     ..
+    connectResult bool, connectFailure error = connectSocket(addrof transport, endpoints[0])
+    if connectFailure.nok():
+        transport.close()
+        ownedHost.free(this.allocator)
+        ownedService.free(this.allocator)
+        this.connections[slot].active = false
+        this.connections[slot].inUse = false
+        throw connectFailure
+    ..
     connection Connection* = addrof this.connections[slot]
-    connection.host = ownedHost
-    connection.service = ownedService
-    connection.socket = claim[socket.Socket](transport)
+    connection.host = move ownedHost
+    connection.service = move ownedService
+    connection.socket = move transport
     connection.secure = secure
     if secure:
         secured tls.Session, tlsError error = this.tlsContext.open(this.allocator, addrof connection.socket, host)
         if tlsError.nok():
             connection.socket.close()
-            ownedHost.free(this.allocator)
-            ownedService.free(this.allocator)
+            connection.host.free(this.allocator)
+            connection.service.free(this.allocator)
             connection.active = false
             connection.inUse = false
             throw tlsError
         ..
-        connection.tls = claim[tls.Session](secured)
+        connection.tls = move secured
     ..
     connection.reusable = true
-    ret slot
+      ret slot
+    ..
 ..
 
 connectSocket(transport socket.Socket*, endpoint address.Endpoint) !bool:
@@ -374,20 +384,27 @@ connectSocket(transport socket.Socket*, endpoint address.Endpoint) !bool:
 ..
 
 Client.release(index u64, reusable bool) !void:
+    # SAFETY: the lock protects the capacity-sized connection table and the
+    # explicit index check precedes every access.
+    unsafe:
     try this.connectionLock.lock()
     if index < this.connectionCapacity && this.connections[index].active:
         this.connections[index].reusable = this.connections[index].reusable && reusable
         this.connections[index].inUse = false
     ..
-    try this.connectionLock.unlock()
+      try this.connectionLock.unlock()
+    ..
 ..
 
 Client.start(request Request) !$Exchange:
+    # SAFETY: acquire returns an occupied connection index and every raw buffer
+    # allocation is paired with its recorded capacity and failure cleanup.
+    unsafe:
     if this.active == false:
         throw errors.invalidArgument("HTTP client is closed")
     ..
     parsed := try parseUrl(this.allocator, request.url)
-    defer freeParsed(this.allocator, addrof parsed)
+    defer parsed.free(this.allocator)
     
     connectionIndex := try this.acquire(parsed.host, parsed.service, parsed.secure)
     onerror this.release(connectionIndex, false)
@@ -413,9 +430,9 @@ Client.start(request Request) !$Exchange:
     exchange.client = this
     exchange.connection = connectionIndex
     exchange.socket = transport
-    exchange.poller = claim[poll.Poller](nativePoller)
+    exchange.poller = move nativePoller
     exchange.events = events
-    exchange.request = requestBytes
+    exchange.request = move requestBytes
     exchange.sent = 0
     exchange.received = received
     exchange.receivedCount = 0
@@ -428,10 +445,13 @@ Client.start(request Request) !$Exchange:
     exchange.closeDelimited = false
     exchange.complete = false
     exchange.active = true
-    ret exchange
+      ret exchange
+    ..
 ..
 
 Exchange.desiredEvents() u32:
+    # SAFETY: an active Exchange retains a valid occupied client connection.
+    unsafe:
     connection Connection* = addrof this.client.connections[this.connection]
     if connection.secure && connection.tls.handshaken == false:
         if connection.tls.want == tls.WANT_READ:
@@ -448,23 +468,32 @@ Exchange.desiredEvents() u32:
     if connection.secure && connection.tls.want == tls.WANT_WRITE:
         ret poll.WRITE
     ..
-    ret poll.READ
+      ret poll.READ
+    ..
 ..
 
 Exchange.transportSend(bytes str) !u64:
-    connection Connection* = addrof this.client.connections[this.connection]
-    if connection.secure:
-        ret try connection.tls.send(bytes)
+    # SAFETY: an active exchange holds an in-use connection index below the
+    # client's fixed connectionCapacity until release.
+    unsafe:
+        connection Connection* = addrof this.client.connections[this.connection]
+        if connection.secure:
+            ret try connection.tls.send(bytes)
+        ..
+        ret try this.socket.send(bytes)
     ..
-    ret try this.socket.send(bytes)
 ..
 
 Exchange.transportRecv(buffer u8[], count u64) !u64:
-    connection Connection* = addrof this.client.connections[this.connection]
-    if connection.secure:
-        ret try connection.tls.recv(buffer, count)
+    # SAFETY: an active exchange holds an in-use connection index below the
+    # client's fixed connectionCapacity until release.
+    unsafe:
+        connection Connection* = addrof this.client.connections[this.connection]
+        if connection.secure:
+            ret try connection.tls.recv(buffer, count)
+        ..
+        ret try this.socket.recv(buffer, count)
     ..
-    ret try this.socket.recv(buffer, count)
 ..
 
 eventSlice(event poll.Event*) poll.Event[]:
@@ -491,6 +520,9 @@ lowerAscii(value u8) u8:
 ..
 
 matchesAscii(bytes u8*, start u64, end u64, text str) bool:
+    # SAFETY: callers provide start <= end within their live byte buffer; the
+    # length equality bounds start+i below end.
+    unsafe:
     if end - start != text.countBytes():
         ret false
     ..
@@ -499,7 +531,8 @@ matchesAscii(bytes u8*, start u64, end u64, text str) bool:
             ret false
         ..
     ..
-    ret true
+      ret true
+    ..
 ..
 
 containsAscii(bytes u8*, start u64, end u64, text str) bool:
@@ -531,6 +564,9 @@ ChunkScan(
 )
 
 scanChunks(bytes u8*, start u64, count u64) !ChunkScan:
+    # SAFETY: bytes spans count bytes; every lookahead and chunk payload is
+    # guarded against count before access.
+    unsafe:
     position := start
     decoded u64 = 0
     loop position < count:
@@ -578,10 +614,14 @@ scanChunks(bytes u8*, start u64, count u64) !ChunkScan:
         decoded = decoded + size
         position = position + size + 2
     ..
-    ret ChunkScan(complete=false, decodedBytes=decoded)
+      ret ChunkScan(complete=false, decodedBytes=decoded)
+    ..
 ..
 
 Exchange.updateFraming() !bool:
+    # SAFETY: received spans receivedCapacity and receivedCount never exceeds
+    # it; header/chunk scanners validate all computed offsets.
+    unsafe:
     if this.headerEnd == 0:
         end := findHeaderEnd(this.received, this.receivedCount)
         if end == 0:
@@ -644,12 +684,16 @@ Exchange.updateFraming() !bool:
         scan := try scanChunks(this.received, this.headerEnd, this.receivedCount)
         this.complete = scan.complete
     ..
-    ret this.complete
+      ret this.complete
+    ..
 ..
 
 # Advances one readiness cycle and completes at the HTTP message boundary,
 # leaving a keep-alive socket open in the owning client.
 Exchange.poll(timeoutMs i64) !bool:
+    # SAFETY: an active exchange owns capacity-tracked request/response/event
+    # buffers and a valid occupied client connection for this polling cycle.
+    unsafe:
     if this.active == false:
         throw errors.invalidArgument("HTTP exchange is closed")
     ..
@@ -770,10 +814,13 @@ Exchange.poll(timeoutMs i64) !bool:
         this.receivedCount = this.receivedCount + read
         ret try this.updateFraming()
     ..
-    ret false
+      ret false
+    ..
 ..
 
 findHeaderEnd(bytes u8*, count u64) u64:
+    # SAFETY: bytes spans count and the loop proves i+3 < count.
+    unsafe:
     i u64 = 0
     loop i + 3 < count:
         if bytes[i] == 13 && bytes[i + 1] == 10 && bytes[i + 2] == 13 && bytes[i + 3] == 10:
@@ -781,10 +828,13 @@ findHeaderEnd(bytes u8*, count u64) u64:
         ..
         i = i + 1
     ..
-    ret 0
+      ret 0
+    ..
 ..
 
 parseStatus(bytes u8*, count u64) !u16:
+    # SAFETY: the minimum-count guard precedes fixed status-line byte accesses.
+    unsafe:
     if count < 12 || bytes[0] != 72 || bytes[1] != 84 || bytes[2] != 84 || bytes[3] != 80 || bytes[8] != 32:
         throw errors.failure("invalid HTTP response status line")
     ..
@@ -795,10 +845,14 @@ parseStatus(bytes u8*, count u64) !u16:
         ..
         value = value * 10 + bytes[i] - 48
     ..
-    ret cast.u64to16(value)
+      ret cast.u64to16(value)
+    ..
 ..
 
 decodeChunks(a allocator.Allocator, bytes u8*, start u64, count u64) !$str:
+    # SAFETY: scanChunks validates framing within count; decodedBytes sizes the
+    # destination exactly and the second pass copies only validated chunks.
+    unsafe:
     scan := try scanChunks(bytes, start, count)
     if scan.complete == false:
         throw errors.failure("incomplete chunked HTTP body")
@@ -820,16 +874,20 @@ decodeChunks(a allocator.Allocator, bytes u8*, start u64, count u64) !$str:
         ..
         position = lineEnd + 2
         if size == 0:
-            ret output
+            ret move output
         ..
         memory.copy(cast.utop(cast.ptou(bytes) + position), cast.utop(cast.ptou(destination) + written), size)
         written = written + size
         position = position + size + 2
     ..
-    ret output
+      ret move output
+    ..
 ..
 
-destr Exchange.finish() !$Response:
+Exchange.finish() !$Response:
+    # SAFETY: complete framing validates all response offsets; active uniquely
+    # owns the poller and buffers transferred or released on this path.
+    unsafe:
     if this.active == false || this.complete == false:
         throw errors.invalidArgument("HTTP exchange is not complete")
     ..
@@ -857,7 +915,13 @@ destr Exchange.finish() !$Response:
     this.allocator.free(this.received)
     this.allocator.free(this.events)
     this.active = false
-    ret Response(allocator=this.allocator, statusCode=status, rawHeaders=raw, body=contents, active=true)
+      ret Response(allocator=this.allocator, statusCode=status, rawHeaders=move raw, body=move contents, active=true)
+    ..
+..
+
+# Consumes the inactive exchange wrapper after finish released its resources.
+destr Exchange.releaseFinished() void:
+    this.active = false
 ..
 
 Client.send(request Request) !$Response:
@@ -865,7 +929,9 @@ Client.send(request Request) !$Response:
     onerror exchange.close()
     loop try exchange.poll(this.options.ioTimeoutMs) == false:
     ..
-    ret try exchange.finish()
+    response := try exchange.finish()
+    exchange.releaseFinished()
+    ret move response
 ..
 
 runSend(task SendTask*) !$Response:
@@ -873,12 +939,12 @@ runSend(task SendTask*) !$Response:
 ..
 
 # Runs the polling state machine on the Async worker pool and returns an awaitable response.
-Client.sendAsync(asc async.Async, request Request) !$future.Future[Response]:
+Client.sendAsync(ctx context.Ctx, request Request) !$future.Future[Response]:
     if this.active == false:
         throw errors.invalidArgument("HTTP client is closed")
     ..
     task := SendTask(client=this, request=request)
-    ret try future.new[Response, SendTask](asc.allocator, asc.pool.executor(), runSend, task)
+    ret try future.new[Response, SendTask](ctx.alloc, ctx.exec, runSend, task)
 ..
 
 destr Exchange.close() !void:
@@ -901,6 +967,9 @@ destr Response.close() void:
 ..
 
 destr Client.close() !void:
+    # SAFETY: connections has connectionCapacity slots; active is their
+    # ownership bit and each live connection is closed and cleared once.
+    unsafe:
     if this.active:
         for i u64 = 0 to this.connectionCapacity:
             connection Connection* = addrof this.connections[i]
@@ -920,5 +989,6 @@ destr Client.close() !void:
         try this.tlsContext.close()
         this.connections = none
         this.active = false
+      ..
     ..
 ..

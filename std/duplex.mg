@@ -43,5 +43,5 @@ Duplex.writer() wr.Writer:
 # @example
 #   input := stream.reader()
 Duplex.reader() rd.Reader:
-    ret rd.new(this.impl, this.vtable.fn_read)
+    ret rd.new(this.impl, addrof this.vtable.fn_read)
 ..

@@ -256,6 +256,19 @@ func bldBody(ctx *lcx, bdy *t.NodeBody, makeScope bool) error {
 				return e
 			}
 			ctx.CurrScope = scope.Parent
+		case *t.NodeStmtBounded:
+			for _, predicate := range n.Predicates {
+				if e := bldExpr(ctx, predicate); e != nil {
+					return e
+				}
+			}
+			if e := bldBody(ctx, &n.Body, true); e != nil {
+				return e
+			}
+		case *t.NodeStmtUnsafe:
+			if e := bldBody(ctx, &n.Body, true); e != nil {
+				return e
+			}
 		case *t.NodeStmtDefer:
 			if n.IsBody {
 				if e := bldBody(ctx, &n.Body, true); e != nil {

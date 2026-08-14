@@ -12,10 +12,12 @@ link "vendor/raylib/win/raylibdll.lib"
 bundle "vendor/raylib/win/raylib.dll"
 
 @platform("linux", "freebsd", "netbsd", "openbsd")
-link "vendor/raylib/linux/raylib.so" 
+link "vendor/raylib/linux/libraylib.so.550"
+@platform("linux", "freebsd", "netbsd", "openbsd")
+bundle "vendor/raylib/linux/libraylib.so.550"
 
 @platform("darwin")
-link "vendor/raylib/mac/raylib.dylib" 
+link "vendor/raylib/mac/libraylib.dylib"
 
 use "std:allocator" alc
 use "std:strings"   strings

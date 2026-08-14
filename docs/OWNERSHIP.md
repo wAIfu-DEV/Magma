@@ -1,9 +1,10 @@
 # Ownership and Destruction
 
-Magma has a warning-only destroy/borrow checker for structs that declare at
-least one destructor and for primitives with a registered destructor, currently
-including `str`. It emits warnings for the ownership conditions documented
-below.
+Magma checks whole-local ownership for structs that declare at least one
+destructor and for primitives with a registered destructor, currently including
+`str`. Definite invalid use is a compilation error. `--safety-warnings`
+downgrades safety diagnostics for migration; cleanup and leak findings remain
+warnings in either mode.
 
 ## Owned and borrowed values
 
@@ -16,11 +17,16 @@ consume(file $File) void      # takes ownership
 inspect(file File) void       # borrows for the call
 ```
 
-An owned return initializes an owned local. Passing a direct local to a `$T`
-parameter or returning it from a `$T` function transfers ownership and consumes
-the source. A plain `T` parameter or return is borrowed. Function-pointer
+An owned return initializes an owned local. Transferring an already named owner
+requires an explicit `move`, which consumes the source. Fresh owned temporaries
+can flow directly. A plain `T` parameter or return is borrowed. Function-pointer
 parameters use the same rule. External function parameters are treated as
 borrowing even if annotated.
+
+```magma
+resource $Resource = openResource()
+consume(move resource)
+```
 
 Assignments between direct locals transfer tracked ownership. Assigning an
 owned value into a field or indexed location is treated as an ownership escape:
@@ -91,17 +97,57 @@ live: it exists only on the success path. The built-in `err.ok()` and `err.nok()
 predicates refine that state, so cleanup is required on success but not on
 failure. Equivalent-looking user predicates are not recognized.
 
-## Analysis scope
+## Pointer provenance and local lifetimes
 
-This is not a full memory-safety or lifetime system. It tracks direct local
-variables only. It does not prove alias validity, pointer lifetimes, bounds,
-field or indexed ownership, aggregate contents, or partial moves. Address-taking
-and raw pointer escapes are outside its model. Warnings do not fail the build.
+`addrof` records the source place of the resulting pointer as compiler metadata;
+the runtime pointer remains one machine word. Provenance follows local
+assignments and returns from visible helpers such as an identity function.
+Returning a pointer to a body local, directly or through such a helper, is a
+fatal safety error. Slices created by `array T[n]` are stack-backed and likewise
+cannot be returned from their source frame.
+
+Pointer loans are place-sensitive and end at the pointer's last reachable use.
+A live pointer to `state.counter` prevents mutation, movement, or destruction of
+that field, but does not freeze `state.status`. After the pointer's final use,
+the source can be changed normally. Opaque pointer provenance is retained for
+the lexical-unsafe stage rather than changing pointer layout or syntax.
+
+## Completion-bearing handles
+
+An owned destructible result constructed from a pointer or stack-backed view
+carries that source dependency until its destructor consumes the handle. This
+models joinable threads, futures, registrations, and similar wrappers without
+source-level lifetime annotations. The dependency follows explicit handle
+moves and control-flow joins.
+
+A handle retaining local storage must be joined, awaited, removed, or otherwise
+consumed before that storage leaves scope. It cannot be discarded or returned
+from the source frame. A deferred destructor is also a valid completion boundary.
+This checks storage lifetime only; it does not impose data-race rules.
+
+The safety checker also proves ordinary slice bounds and tracks projected
+aggregate ownership. Safety violations are fatal by default and are downgraded,
+not suppressed, by `--safety-warnings`. Opaque native retention contracts and
+exceptional opaque native retention contracts are handled by a later stage.
+
+## Lexical unsafe blocks
+
+Operations whose validity cannot be established from compiler provenance must
+be placed in a lexical `unsafe:` body. This includes dereferencing an unknown
+pointer, subscripting a pointer without a proven extent, and inline LLVM.
+Unsafe permits the specific low-level operation; it does not disable known
+ownership, bounds, escape, or control-flow errors in the body. A function that
+contains an unsafe block remains callable from ordinary safe code.
 
 External calls always borrow their arguments for this analysis, even if an
 external declaration is annotated with `$`; ownership across a foreign API must
-be handled explicitly. The checker also does not infer ownership through pointer
-aliases or callbacks whose function type lacks an owned parameter.
+be handled explicitly. Pointer arguments use a call-only, non-retaining default,
+and pointer results have opaque provenance rather than being inferred as aliases
+of those arguments. A native operation that returns owned pointer-backed state
+must be called inside an audited unsafe Magma wrapper; the wrapper exposes an
+owning or completion-bearing value to ordinary safe callers. The checker also
+does not infer ownership through callbacks whose function type lacks an owned
+parameter.
 
 The sample [destroy_checker.mg](../samples/destroy_checker.mg) demonstrates
 transfers, borrows, destructors, branches, and expected warnings.

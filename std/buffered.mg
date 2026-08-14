@@ -9,7 +9,6 @@ use "std:slices"    slices
 use "std:strings"   strings
 use "std:cast"      cast
 use "std:memory"    mem
-use "std:footgun"   footgun
 
 const DEFAULT_BUFFER_SIZE u64 = 8192
 const EOF_MASK u64 = 0x8000000000000000
@@ -56,7 +55,11 @@ Writer.flush() !u64:
     
     totalWritten u64 = 0
     remaining u64 = this.position
-    writePtr ptr = this.buffer
+    writePtr ptr
+    # SAFETY: buffer owns DEFAULT_BUFFER_SIZE bytes and position never exceeds it.
+    unsafe:
+        writePtr = this.buffer
+    ..
     
     loop remaining > 0:
         toWrite str = strings.fromPtrNoCopy(writePtr, remaining)
@@ -78,7 +81,10 @@ Writer.flush() !u64:
             unwrittenPtr ptr = cast.utop(cast.ptou(this.buffer) + written)
             mem.move(unwrittenPtr, this.buffer, remaining)
             this.position = remaining
-            writePtr = this.buffer
+            # SAFETY: reset to the start of the same owned buffer.
+            unsafe:
+                writePtr = this.buffer
+            ..
         else:
             this.position = remaining
             throw errors.failure("flush failed: underlying writer wrote 0 bytes")
@@ -112,7 +118,11 @@ bufferedWrite(bw Writer*, bytes str) !u64:
     ..
     
     # Copy to buffer
-    srcPtr ptr = strings.toPtr(bytes)
+    srcPtr ptr
+    # SAFETY: bytesLen is the exact readable extent of bytes.
+    unsafe:
+        srcPtr = strings.toPtr(bytes)
+    ..
     dstPtr ptr = cast.utop(cast.ptou(bw.buffer) + bw.position)
     mem.copy(srcPtr, dstPtr, bytesLen)
     bw.position = bw.position + bytesLen
@@ -353,6 +363,10 @@ bufferedRead(br Reader*, buff u8[], nBytes u64) !u64:
     ret totalRead
 ..
 
+const gl_reader_vtable := reader.Vtable(
+    read=bufferedRead,
+)
+
 # Returns a Reader interface for this buffered reader.
 # @complexity O(1).
 # @returns reader interface
@@ -360,11 +374,10 @@ bufferedRead(br Reader*, buff u8[], nBytes u64) !u64:
 # @example
 #   input := bufferedReader.reader()
 Reader.reader() reader.Reader:
-    ret reader.new(this, bufferedRead)
+    ret reader.new(this, addrof gl_reader_vtable)
 ..
 
 resizeLineBuffer(a alc.Allocator, old u8*, newCapacity u64) !$u8*:
-    onerror a.free(old)
     if newCapacity == 0 - 1:
         throw errors.wouldOverflow("line buffer capacity overflow")
     ..
@@ -385,12 +398,9 @@ Reader.readLn(a alc.Allocator) !$str:
     # Initial capacity for line buffer
     capacity u64 = 128
     line $str = try strings.alloc(a, capacity)
-
-    # Compiler warning suppression
-    defer footgun.drop[str](line)
+    onerror line.free(a)
 
     lineBuffer u8* = strings.toPtr(line)
-    onerror a.free(lineBuffer)
     lineLen u64 = 0
     dstPtr ptr = none
     newCapacity u64 = 0
@@ -404,6 +414,7 @@ Reader.readLn(a alc.Allocator) !$str:
             newCapacity = capacity * 2
             lineBuffer = try resizeLineBuffer(a, lineBuffer, newCapacity)
             capacity = newCapacity
+            strings.updateAfterRealloc(addrof line, lineBuffer, capacity)
         ..
         
         # Look for newline in current buffer
@@ -419,24 +430,27 @@ Reader.readLn(a alc.Allocator) !$str:
             nlLen u64 = 1
             nextPos u64 = 0
             
-            loop i < available:
-                if searchPtr[i] == 10:  # '\n'
-                    found = true
-                    foundPos = i
-                    break
-                ..
-
-                if searchPtr[i] == 13 && i+1 < available: # '\r'
-                    nextPos = i + 1
-                    if searchPtr[nextPos] == 10:  # '\n'
+            # SAFETY: searchPtr spans exactly available initialized buffer bytes.
+            unsafe:
+                loop i < available:
+                    if searchPtr[i] == 10:  # '\n'
                         found = true
                         foundPos = i
-                        nlLen = 2
                         break
                     ..
-                ..
 
-                i = i + 1
+                    if searchPtr[i] == 13 && i+1 < available: # '\r'
+                        nextPos = i + 1
+                        if searchPtr[nextPos] == 10:  # '\n'
+                            found = true
+                            foundPos = i
+                            nlLen = 2
+                            break
+                        ..
+                    ..
+
+                    i = i + 1
+                ..
             ..
             
             if found:
@@ -447,6 +461,7 @@ Reader.readLn(a alc.Allocator) !$str:
                         newCapacity = lineLen + foundPos
                         lineBuffer = try resizeLineBuffer(a, lineBuffer, newCapacity)
                         capacity = newCapacity
+                        strings.updateAfterRealloc(addrof line, lineBuffer, capacity)
                     ..
                     
                     dstPtr = cast.utop(cast.ptou(lineBuffer) + lineLen)
@@ -456,8 +471,14 @@ Reader.readLn(a alc.Allocator) !$str:
                 
                 # Skip past newline
                 this.position = this.position + foundPos + nlLen
-                lineBuffer[lineLen] = 0
-                ret strings.fromPtrNoCopy(lineBuffer, lineLen)
+                # SAFETY: allocated string storage includes its trailing terminator.
+                unsafe:
+                    lineBuffer[lineLen] = 0
+                ..
+                if strings.truncate(addrof line, lineLen) == false:
+                    throw errors.failure("buffered reader produced an invalid line length")
+                ..
+                ret move line
             ..
             
             # No newline found, copy all available
@@ -465,6 +486,7 @@ Reader.readLn(a alc.Allocator) !$str:
                 newCapacity = lineLen + available
                 lineBuffer = try resizeLineBuffer(a, lineBuffer, newCapacity)
                 capacity = newCapacity
+                strings.updateAfterRealloc(addrof line, lineBuffer, capacity)
             ..
             
             dstPtr = cast.utop(cast.ptou(lineBuffer) + lineLen)
@@ -477,8 +499,14 @@ Reader.readLn(a alc.Allocator) !$str:
         if this.isEof():
             # Return what we have (even if no newline)
             if lineLen > 0:
-                lineBuffer[lineLen] = 0
-                ret strings.fromPtrNoCopy(lineBuffer, lineLen)
+                # SAFETY: allocated string storage includes its trailing terminator.
+                unsafe:
+                    lineBuffer[lineLen] = 0
+                ..
+                if strings.truncate(addrof line, lineLen) == false:
+                    throw errors.failure("buffered reader produced an invalid line length")
+                ..
+                ret move line
             ..
             throw errors.endOfFile("end of file")
         ..

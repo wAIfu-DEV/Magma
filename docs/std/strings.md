@@ -21,6 +21,11 @@ Byte-level string, pointer, and C-string utilities. Magma `str` values are byte 
 - `pub toPtr(s str) u8*` returns a borrowed pointer to string data.
 - `pub byteAt(s str, idx u64) u8` returns one byte; it is not UTF-8-aware and requires a valid index.
 - `pub copy(a alc.Allocator, s str) !$str` returns an owned copy.
+- `pub truncate(value str*, byteCount u64) bool` shortens an existing string
+  descriptor without changing its allocation; it returns false if the requested
+  length exceeds the current length.
+- `pub updateAfterRealloc(value str*, data ptr, capacity u64) void` updates an
+  owned string descriptor after its backing allocation has been resized.
 - `pub toLower(a, s) !$str` and `toUpper(a, s) !$str` return owned ASCII-case
   conversions; non-ASCII bytes are unchanged.
 - Owned strings are released with the intrinsic `s.free(a)` destructor.

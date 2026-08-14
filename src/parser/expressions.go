@@ -731,6 +731,19 @@ func parsePrimaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
 }
 
 func parseUnaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
+	// `move` is contextual so existing functions and members named move remain
+	// source-compatible. A call such as `move(...)` is still an ordinary name.
+	if tk.Type == t.TokName && tk.Repr == "move" {
+		next, e := peekNth(ctx, 1)
+		if e == nil && next.KeywType != t.KwParenOp && next.KeywType != t.KwDot && next.KeywType != t.KwEqual && next.KeywType != t.KwInfer {
+			consume(ctx)
+			exprNd, e := parseUnaryExpr(ctx, next)
+			if e != nil {
+				return nil, e
+			}
+			return &t.NodeExprMove{Tk: tk, Expr: exprNd}, nil
+		}
+	}
 	if tk.Type == t.TokKeyword {
 		switch tk.KeywType {
 		case t.KwSizeof:

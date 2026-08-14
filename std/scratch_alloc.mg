@@ -34,7 +34,11 @@ nextBlock(scratch Scratch*, block Block*) Block*:
 ..
 
 scratchAlloc(raw ptr, byteCount u64) !u8*:
-    scratch Scratch* = raw
+    scratch Scratch* = none
+    # SAFETY: allocator() stores addrof its live Scratch as the vtable context.
+    unsafe:
+        scratch = raw
+    ..
     if byteCount == 0:
         throw errors.invalidArgument("scratch allocation size must be greater than zero")
     ..
@@ -84,7 +88,11 @@ scratchFree(raw ptr, pointer u8*) void:
     if pointer == none:
         ret
     ..
-    scratch Scratch* = raw
+    scratch Scratch* = none
+    # SAFETY: allocator() stores addrof its live Scratch as the vtable context.
+    unsafe:
+        scratch = raw
+    ..
     block := findBlock(scratch, pointer)
     if block == none || block.free:
         ret
@@ -100,7 +108,11 @@ scratchRealloc(raw ptr, pointer u8*, byteCount u64) !u8*:
     if byteCount == 0:
         throw errors.invalidArgument("scratch allocation size must be greater than zero")
     ..
-    scratch Scratch* = raw
+    scratch Scratch* = none
+    # SAFETY: allocator() stores addrof its live Scratch as the vtable context.
+    unsafe:
+        scratch = raw
+    ..
     block := findBlock(scratch, pointer)
     if block == none || block.free:
         throw errors.invalidArgument("block does not belong to scratch allocator")
@@ -128,9 +140,9 @@ scratchRealloc(raw ptr, pointer u8*, byteCount u64) !u8*:
 ..
 
 const vtable := allocator.Vtable(
-    fn_alloc=scratchAlloc,
-    fn_realloc=scratchRealloc,
-    fn_free=scratchFree,
+    alloc=scratchAlloc,
+    realloc=scratchRealloc,
+    free=scratchFree,
 )
 
 initialize(a allocator.Allocator, bytes u8*, capacity u64, ownsBytes bool) !Scratch:

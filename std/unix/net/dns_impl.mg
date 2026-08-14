@@ -39,6 +39,9 @@ nativeIpv6Family() i32:
 ..
 
 decode(native ptr) !address.Endpoint:
+    # SAFETY: getaddrinfo supplies sockaddr storage and its family field selects
+    # the corresponding IPv4 or IPv6 native layout.
+    unsafe:
     ipv4 SockAddrIn* = native
     if ipv4.family == 2:
         word u32 = ext_ntohl(ipv4.addr)
@@ -50,10 +53,14 @@ decode(native ptr) !address.Endpoint:
         throw errors.failure("DNS returned an unsupported address family")
     ..
     ip6 := address.ipv6(ext_ntohl(ipv6.addr0), ext_ntohl(ipv6.addr1), ext_ntohl(ipv6.addr2), ext_ntohl(ipv6.addr3))
-    ret address.Endpoint(address=ip6, port=ext_ntohs(ipv6.port))
+      ret address.Endpoint(address=ip6, port=ext_ntohs(ipv6.port))
+    ..
 ..
 
 pub resolve(a allocator.Allocator, host str, service str, family u8, maxResults u64) !Resolved:
+    # SAFETY: getaddrinfo owns cursor nodes until freeaddrinfo; endpoints has
+    # count slots and index is checked before every write.
+    unsafe:
     hints AddrInfo
     hints.flags = 0
     hints.family = 0
@@ -96,5 +103,6 @@ pub resolve(a allocator.Allocator, host str, service str, family u8, maxResults 
         ..
         cursor = cursor.next
     ..
-    ret Resolved(endpoints=endpoints, count=count)
+      ret Resolved(endpoints=endpoints, count=count)
+    ..
 ..

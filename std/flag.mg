@@ -41,7 +41,7 @@ pub Result(
 
 pub new(a allocator.Allocator, program str) !$Parser:
     defs := try array.new[Definition](a)
-    ret Parser(allocator=a, program=program, definitions=defs)
+    ret Parser(allocator=a, program=program, definitions=move defs)
 ..
 
 Parser.add(name str, short u8, help str, kind u8, destination ptr) !void:
@@ -115,10 +115,17 @@ parseInteger(value str) !i64:
 appendBorrowed(values array.Array[str]*, a allocator.Allocator, value str) !void:
     index := try values.expandRight(a)
     items := values.view()
-    items[index] = value
+    # expandRight returns the newly initialized final slot.
+    bounded index < items.count():
+        items[index] = value
+    ..
 ..
 
 apply(parser Parser*, def Definition*, value str, hasValue bool) !void:
+    # SAFETY: Definition.kind records the concrete type of destination, which
+    # was captured from the matching typed registration API and remains live
+    # for the parser's use.
+    unsafe:
     if def.kind != KIND_STRINGS && def.kind != KIND_UNSIGNEDS && def.kind != KIND_INTEGERS && def.seen:
         throw errors.invalidArgument("duplicate command-line option")
     ..
@@ -148,7 +155,8 @@ apply(parser Parser*, def Definition*, value str, hasValue bool) !void:
             try target.pushRight(parser.allocator, try parseInteger(value))
         ..
     ..
-    def.seen = true
+      def.seen = true
+    ..
 ..
 
 Parser.parse(arguments str[]) !$Result:
@@ -213,7 +221,7 @@ Parser.parse(arguments str[]) !$Result:
         ..
         i = i + 1
     ..
-    ret Result(allocator=this.allocator, values=positional)
+    ret Result(allocator=this.allocator, values=move positional)
 ..
 
 Result.positionals() str[]: ret this.values.view() ..

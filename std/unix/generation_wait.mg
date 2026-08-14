@@ -9,17 +9,23 @@ pub Wait(
 
 pub new() !$Wait:
     value wake_mod.Wake = try wake_mod.new(wake_mod.condition())
-    ret Wait(wake=value)
+    ret Wait(wake=move value)
 ..
 
 pub observe(generation u32*) u32:
-    llvm "  %value = load atomic i32, ptr %generation acquire, align 4\n"
-    llvm "  ret i32 %value\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %value = load atomic i32, ptr %generation acquire, align 4\n"
+            llvm "  ret i32 %value\n"
+    ..
 ..
 
 advance(generation u32*) void:
-    llvm "  %previous = atomicrmw add ptr %generation, i32 1 release, align 4\n"
-    llvm "  ret void\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %previous = atomicrmw add ptr %generation, i32 1 release, align 4\n"
+            llvm "  ret void\n"
+    ..
 ..
 
 pub signal(generation u32*) void:
@@ -46,5 +52,8 @@ pub wakeAll(waiter Wait*, generation u32*, count u64) void:
 ..
 
 pub free(waiter Wait*) void:
-    waiter.wake.free()
+    # SAFETY: free consumes the embedded wake object through its owning Wait pointer.
+    unsafe:
+        waiter.wake.free()
+    ..
 ..

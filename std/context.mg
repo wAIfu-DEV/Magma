@@ -1,10 +1,17 @@
 mod context
 
 use "std:allocator" alc
-use "std:executor" exec
+use "std:executor" exe
 
 pub Ctx(
-    allocator alc.Allocator
-    executor exec.Executor
+    alloc alc.Allocator
+    exec exe.Executor
 )
+
+pub new(allocator alc.Allocator, executor exe.Executor) Ctx:
+    ret Ctx(
+        alloc=allocator,
+        exec=executor,
+    )
+..
 

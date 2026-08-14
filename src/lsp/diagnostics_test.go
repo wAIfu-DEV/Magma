@@ -45,6 +45,22 @@ func TestDiagnosticsForFileIncludesWarnings(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsIncludeCodeAndRelatedLocation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "main.mg")
+	warnings := []types.Diagnostic{{
+		Severity: types.SeverityWarning, FilePath: path, Code: "use-after-move",
+		Token: types.Token{Pos: types.FilePos{Line: 4, Col: 5}, Repr: "value"}, Message: "used after move",
+		Related: []types.DiagnosticRelated{{FilePath: path, Token: types.Token{Pos: types.FilePos{Line: 2, Col: 3}, Repr: "move"}, Message: "moved here"}},
+	}}
+	got := diagnosticsForFile(nil, warnings, path)
+	if len(got) != 1 || got[0].Code != "use-after-move" || len(got[0].RelatedInformation) != 1 {
+		t.Fatalf("diagnostic metadata = %#v", got)
+	}
+	if got[0].RelatedInformation[0].Location.Range.Start != (position{Line: 1, Character: 2}) {
+		t.Fatalf("related location = %#v", got[0].RelatedInformation[0])
+	}
+}
+
 func TestDidOpenPublishesCompilerDiagnostics(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "broken.mg")

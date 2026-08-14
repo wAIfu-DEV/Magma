@@ -69,7 +69,11 @@ ext ext_errno_location __errno_location() i32*
 ext ext_errno_location __error() i32*
 
 lastFailure(message str) error:
-    code i32 = *ext_errno_location()
+    code i32 = 0
+    # SAFETY: errno_location returns the platform thread-local errno pointer.
+    unsafe:
+        code = *ext_errno_location()
+    ..
     if code == 11 || code == 35:
         ret errors.wouldBlock(message)
     elif code == 110 || code == 60:
@@ -187,7 +191,7 @@ pub bind(handle ptr, endpoint address.Endpoint) !void:
 ..
 
 pub listen(handle ptr, backlog u32) !void:
-    if ext_listen(ptrToFd(handle), cast.u64to32(backlog)) != 0:
+    if ext_listen(ptrToFd(handle), cast.u32toi32(cast.u64to32(backlog))) != 0:
         throw lastFailure("socket listen failed")
     ..
 ..

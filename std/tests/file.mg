@@ -3,6 +3,7 @@ use "std:allocator" allocator
 use "std:file" file
 use "std:heap" heap
 use "std:errors" errors
+use "std:fs" fs
 pub main() !void:
     a allocator.Allocator = heap.allocator()
     output := try file.open(a, "std_checked_test_file.tmp", file.mode().read().write().create().truncate())
@@ -39,4 +40,5 @@ pub main() !void:
         throw errors.failure("truncate mode did not clear the file")
     ..
     try truncating.close()
+    try fs.removeFile(a, "std_checked_test_file.tmp")
 ..

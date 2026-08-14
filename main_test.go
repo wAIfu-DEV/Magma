@@ -50,6 +50,25 @@ func TestCopyBundlesRejectsOutputNameCollision(t *testing.T) {
 	}
 }
 
+func TestRuntimeLibraryArgs(t *testing.T) {
+	for _, targetOS := range []string{"linux", "freebsd", "netbsd", "openbsd"} {
+		t.Run(targetOS, func(t *testing.T) {
+			got := runtimeLibraryArgs(targetOS)
+			if len(got) != 1 || got[0] != "-Wl,-rpath,$ORIGIN" {
+				t.Fatalf("runtimeLibraryArgs(%q) = %q, want [-Wl,-rpath,$ORIGIN]", targetOS, got)
+			}
+		})
+	}
+
+	for _, targetOS := range []string{"windows", "darwin"} {
+		t.Run(targetOS, func(t *testing.T) {
+			if got := runtimeLibraryArgs(targetOS); len(got) != 0 {
+				t.Fatalf("runtimeLibraryArgs(%q) = %q, want no arguments", targetOS, got)
+			}
+		})
+	}
+}
+
 func TestErrorTraceSlotsOption(t *testing.T) {
 	opts, err := parseArgs([]string{"--std", "std", "--error-trace-slots", "512", "input.mg"})
 	if err != nil {
@@ -57,6 +76,26 @@ func TestErrorTraceSlotsOption(t *testing.T) {
 	}
 	if opts.errorTraceSlots != 512 {
 		t.Fatalf("errorTraceSlots = %d, want 512", opts.errorTraceSlots)
+	}
+}
+
+func TestSafetyWarningsOption(t *testing.T) {
+	opts, err := parseArgs([]string{"--safety-warnings", "input.mg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.safetyWarnings {
+		t.Fatal("--safety-warnings was not retained")
+	}
+}
+
+func TestLanguageServerAcceptsSafetyWarningsPolicy(t *testing.T) {
+	opts, err := parseArgs([]string{"--safety-warnings", "--lsp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.lsp || !opts.safetyWarnings {
+		t.Fatalf("options = %#v, want LSP warning policy", opts)
 	}
 }
 

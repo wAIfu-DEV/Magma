@@ -87,8 +87,10 @@ pub main() !void:
         i = i + 1
     ..
     view := zeros.view()
-    if view[0] != 42:
-        throw errors.failure("array view changed")
+    bounded 0 < view.count():
+        if view[0] != 42:
+            throw errors.failure("array view changed")
+        ..
     ..
     iterator := zeros.iterator()
     if try iterator.next() != 42:
@@ -97,6 +99,10 @@ pub main() !void:
     takenZero := try zeros.take(0)
     if takenZero != 42 || try zeros.get(0) != 0:
         throw errors.failure("array take changed")
+    ..
+    replaced := try zeros.replace(1, 9)
+    if replaced != 0 || try zeros.get(1) != 9:
+        throw errors.failure("array replace changed")
     ..
     try zeros.pushLeft(a, 7)
     if try zeros.popLeft(a) != 7:
@@ -110,5 +116,15 @@ pub main() !void:
     try zeros.clearShrink(a, none)
     if zeros.count() != 0:
         throw errors.failure("array clearShrink changed")
+    ..
+
+    wide := try array.new[u128](a)
+    defer wide.free(a, none)
+    try wide.pushRight(a, 1)
+    wideView := wide.view()
+    bounded 0 < wideView.count():
+        if cast.ptou(addrof wideView[0]) % 16 != 0:
+            throw errors.failure("array element storage is not 16-byte aligned")
+        ..
     ..
 ..

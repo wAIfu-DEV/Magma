@@ -12,10 +12,16 @@ pub main() !void:
 
     first := try a.alloc(16)
     second := try a.alloc(32)
-    first[0] = 91
+    # SAFETY: first names a live writable 16-byte allocation.
+    unsafe:
+        first[0] = 91
+    ..
     first = try a.realloc(first, 48)
-    if first[0] != 91:
-        throw errors.failure("debug realloc did not preserve data")
+    # SAFETY: successful realloc returned 48 bytes and preserves the prefix.
+    unsafe:
+        if first[0] != 91:
+            throw errors.failure("debug realloc did not preserve data")
+        ..
     ..
 
     stats := debug.stats()

@@ -10,10 +10,16 @@ pub main() !void:
     a := arena.allocator()
 
     first := try a.alloc(32)
-    first[0] = 41
+    # SAFETY: alloc returned a writable 32-byte allocation.
+    unsafe:
+        first[0] = 41
+    ..
     first = try a.realloc(first, 64)
-    if first[0] != 41 || arena.used() == 0:
-        throw errors.failure("arena realloc did not preserve data")
+    # SAFETY: successful realloc returned 64 bytes and preserves the prefix.
+    unsafe:
+        if first[0] != 41 || arena.used() == 0:
+            throw errors.failure("arena realloc did not preserve data")
+        ..
     ..
 
     a.free(first)

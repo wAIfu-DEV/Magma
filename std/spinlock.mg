@@ -49,12 +49,20 @@ SpinLock.unlock() void:
 ..
 
 lockerLock(raw ptr) !void:
-    impl SpinLock* = raw
+    impl SpinLock*
+    # SAFETY: locker vtable contexts are created from a live SpinLock by asLocker.
+    unsafe:
+        impl = raw
+    ..
     impl.lock()
 ..
 
 lockerUnlock(raw ptr) !void:
-    impl SpinLock* = raw
+    impl SpinLock*
+    # SAFETY: locker vtable contexts are created from a live SpinLock by asLocker.
+    unsafe:
+        impl = raw
+    ..
     impl.unlock()
 ..
 

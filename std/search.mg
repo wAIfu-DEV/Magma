@@ -37,13 +37,16 @@ pub binary[T](in T[], value T, compare (T, T) i64) !u64:
     high := slices.count(in)
     loop low < high:
         mid := low + (high - low) / 2
-        order := compare(in[mid], value)
-        if order < 0:
-            low = mid + 1
-        elif order > 0:
-            high = mid
-        else:
-            ret mid
+        # low <= mid < high <= count(in) is the binary-search invariant.
+        bounded mid < slices.count(in):
+            order := compare(in[mid], value)
+            if order < 0:
+                low = mid + 1
+            elif order > 0:
+                high = mid
+            else:
+                ret mid
+            ..
         ..
     ..
     throw errors.failure("value not found")

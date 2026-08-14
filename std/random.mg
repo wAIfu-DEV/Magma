@@ -37,8 +37,8 @@ Random.next() u64:
 # @complexity O(1)
 # @warning Modulo reduction introduces bias unless bound divides the u64 range.
 # @example
-#   dieRoll := rng.bounded(6) + 1
-Random.bounded(bound u64) u64:
+#   dieRoll := rng.below(6) + 1
+Random.below(bound u64) u64:
     if bound == 0:
         ret 0
     ..

@@ -26,8 +26,11 @@ pub Trace(
 
 # Internal bridge from the built-in error representation.
 traceHandle(e error) u64:
-    llvm "  %t = call i64 @magma.error.trace(%type.error %e)\n"
-    llvm "  ret i64 %t\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %t = call i64 @magma.error.trace(%type.error %e)\n"
+        llvm "  ret i64 %t\n"
+    ..
 ..
 
 # Returns an allocation-free cursor over the propagation trace.
@@ -39,8 +42,11 @@ pub trace(e error) Trace:
 ..
 
 traceStatus(handle u64) u32:
-    llvm "  %status = call i32 @magma.error.trace.status(i64 %handle)\n"
-    llvm "  ret i32 %status\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %status = call i32 @magma.error.trace.status(i64 %handle)\n"
+        llvm "  ret i32 %status\n"
+    ..
 ..
 
 # Reports whether the cursor has no current propagation site.
@@ -57,8 +63,11 @@ pub Trace.isTruncated() bool:
 ..
 
 traceNext(handle u64) u64:
-    llvm "  %next = call i64 @magma.error.trace.next(i64 %handle)\n"
-    llvm "  ret i64 %next\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %next = call i64 @magma.error.trace.next(i64 %handle)\n"
+        llvm "  ret i64 %next\n"
+    ..
 ..
 
 # Advances toward the error's origin. Calling this on an empty cursor is invalid.
@@ -69,8 +78,11 @@ pub Trace.next() Trace:
 
 # The following accessors are valid only for a non-empty cursor.
 traceFunction(handle u64) str:
-    llvm "  %value = call %type.str @magma.error.trace.function(i64 %handle)\n"
-    llvm "  ret %type.str %value\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %value = call %type.str @magma.error.trace.function(i64 %handle)\n"
+        llvm "  ret %type.str %value\n"
+    ..
 ..
 
 # Returns the function name at the current trace site.
@@ -81,8 +93,11 @@ pub Trace.function() str:
 ..
 
 traceFile(handle u64) str:
-    llvm "  %value = call %type.str @magma.error.trace.file(i64 %handle)\n"
-    llvm "  ret %type.str %value\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %value = call %type.str @magma.error.trace.file(i64 %handle)\n"
+        llvm "  ret %type.str %value\n"
+    ..
 ..
 
 # Returns the source file at the current trace site.
@@ -93,8 +108,11 @@ pub Trace.file() str:
 ..
 
 traceLine(handle u64) u32:
-    llvm "  %value = call i32 @magma.error.trace.line(i64 %handle)\n"
-    llvm "  ret i32 %value\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %value = call i32 @magma.error.trace.line(i64 %handle)\n"
+        llvm "  ret i32 %value\n"
+    ..
 ..
 
 # Returns the one-based source line at the current trace site.
@@ -105,8 +123,11 @@ pub Trace.line() u32:
 ..
 
 traceColumn(handle u64) u32:
-    llvm "  %value = call i32 @magma.error.trace.column(i64 %handle)\n"
-    llvm "  ret i32 %value\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %value = call i32 @magma.error.trace.column(i64 %handle)\n"
+        llvm "  ret i32 %value\n"
+    ..
 ..
 
 # Returns the one-based source column at the current trace site.
@@ -121,8 +142,11 @@ pub Trace.column() u32:
 # @example
 #   errors.printTrace(failure)
 pub printTrace(e error) void:
-    llvm "  call void @magma.error.printTrace(%type.error %e)\n"
-    llvm "  ret void\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  call void @magma.error.printTrace(%type.error %e)\n"
+        llvm "  ret void\n"
+    ..
 ..
 
 # Reports whether two errors belong to the same numeric category.
@@ -189,15 +213,18 @@ pub toStr(e error) str:
 # bytes retain their first 65,535 bytes.
 # @complexity O(1).
 makeErr(errorCode u32, msg str) error:
-	llvm "  %mp = extractvalue %type.str %msg, 0\n"
-	llvm "  %ml64 = extractvalue %type.str %msg, 1\n"
-	llvm "  %too.long = icmp ugt i64 %ml64, 65535\n"
-	llvm "  %bounded = select i1 %too.long, i64 65535, i64 %ml64\n"
-	llvm "  %ml = trunc i64 %bounded to i16\n"
-	llvm "  %e0 = insertvalue %type.error zeroinitializer, ptr %mp, 0\n"
-	llvm "  %e1 = insertvalue %type.error %e0, i32 %errorCode, 1\n"
-	llvm "  %e2 = insertvalue %type.error %e1, i16 %ml, 3\n"
-	llvm "  ret %type.error %e2\n"
+	# SAFETY: this audited implementation injects the required low-level IR.
+	unsafe:
+        llvm "  %mp = extractvalue %type.str %msg, 0\n"
+        llvm "  %ml64 = extractvalue %type.str %msg, 1\n"
+        llvm "  %too.long = icmp ugt i64 %ml64, 65535\n"
+        llvm "  %bounded = select i1 %too.long, i64 65535, i64 %ml64\n"
+        llvm "  %ml = trunc i64 %bounded to i16\n"
+        llvm "  %e0 = insertvalue %type.error zeroinitializer, ptr %mp, 0\n"
+        llvm "  %e1 = insertvalue %type.error %e0, i32 %errorCode, 1\n"
+        llvm "  %e2 = insertvalue %type.error %e1, i16 %ml, 3\n"
+        llvm "  ret %type.error %e2\n"
+	..
 ..
 
 # Wraps a platform error code without allocating a formatted message. The high
@@ -229,7 +256,10 @@ pub nativeCode(e error) u32:
 # @example
 #   ret errors.ok()
 pub ok() error:
-    llvm "  ret %type.error zeroinitializer\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  ret %type.error zeroinitializer\n"
+    ..
 ..
 
 # Returns an error with code 1 indicating an opaque error.

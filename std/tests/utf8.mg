@@ -28,8 +28,12 @@ pub main() !void:
     wideNt := try utf8.utf8To16NT(a, "A")
     defer slices.free(a, wideNt)
     wideNtPtr u16* = slices.toPtr(wideNt)
-    if slices.count(wideNt) != 1 || wideNtPtr[0] != 65 || wideNtPtr[1] != 0:
-        throw errors.failure("null-terminated UTF-16 conversion changed")
+    # SAFETY: utf8To16NT allocates one trailing code unit beyond the returned
+    # logical count for the null terminator.
+    unsafe:
+        if slices.count(wideNt) != 1 || wideNtPtr[0] != 65 || wideNtPtr[1] != 0:
+            throw errors.failure("null-terminated UTF-16 conversion changed")
+        ..
     ..
     if try utf8.utf16to8size(wide) != "hé".countBytes():
         throw errors.failure("UTF-16 size calculation changed")
@@ -37,8 +41,11 @@ pub main() !void:
     roundTrip := try utf8.utf16to8(a, wide)
     defer roundTrip.free(a)
     roundTripPtr u8* = strings.toPtr(roundTrip)
-    if roundTripPtr[roundTrip.countBytes()] != 0:
-        throw errors.failure("UTF-8 result is not null terminated")
+    # SAFETY: owned strings reserve a terminator immediately after countBytes.
+    unsafe:
+        if roundTripPtr[roundTrip.countBytes()] != 0:
+            throw errors.failure("UTF-8 result is not null terminated")
+        ..
     ..
     encoded := array u8[4]
     encodedView u8[] = slices.fromPtr(slices.toPtr(encoded), 4)

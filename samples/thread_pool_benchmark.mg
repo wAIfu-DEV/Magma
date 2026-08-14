@@ -12,8 +12,12 @@ TASKS u64 = 1000000
 ROUNDS u64 = 5
 
 increment(raw ptr) u64:
-    llvm "  %ignored = atomicrmw add ptr %raw, i64 1 monotonic, align 8\n"
-    llvm "  ret i64 0\n"
+    # SAFETY: submit passes the address of the live, aligned u64 counter and
+    # pool.close joins every task before that counter leaves scope.
+    unsafe:
+        llvm "  %ignored = atomicrmw add ptr %raw, i64 1 monotonic, align 8\n"
+        llvm "  ret i64 0\n"
+    ..
 ..
 
 makePool(a allocator.Allocator, spinning bool, workers u64) !$thread_pool.ThreadPool:

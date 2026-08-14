@@ -135,6 +135,19 @@ func clBody(c *ctx, bdy *t.NodeBody) error {
 			if e := clFor(c, n); e != nil {
 				return e
 			}
+		case *t.NodeStmtBounded:
+			for _, predicate := range n.Predicates {
+				if e := clExpr(c, predicate, false); e != nil {
+					return e
+				}
+			}
+			if e := clBody(c, &n.Body); e != nil {
+				return e
+			}
+		case *t.NodeStmtUnsafe:
+			if e := clBody(c, &n.Body); e != nil {
+				return e
+			}
 		case *t.NodeStmtDefer:
 			e := clDefer(c, n)
 			if e != nil {

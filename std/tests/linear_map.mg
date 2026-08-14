@@ -16,8 +16,12 @@ pub main() !void:
     if answer != 42 || values.count() != 1:
         throw errors.failure("linear map behavior changed")
     ..
-    if try values.indexOf("answer") != 0 || strings.compare(values.keysView()[0], "answer") == false || values.valuesView()[0] != 42:
-        throw errors.failure("linear map views changed")
+    keys := values.keysView()
+    entries := values.valuesView()
+    bounded 0 < keys.count(), 0 < entries.count():
+        if try values.indexOf("answer") != 0 || strings.compare(keys[0], "answer") == false || entries[0] != 42:
+            throw errors.failure("linear map views changed")
+        ..
     ..
     taken := try values.take("answer")
     if taken != 42 || values.count() != 0:

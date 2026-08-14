@@ -7,7 +7,6 @@ use "std:slices" slices
 use "std:memory" mem
 use "std:cast" cast
 use "std:errors" errors
-use "std:footgun" footgun
 use "std:checked" checked
 
 const FLAG_OWNED u8 = 1
@@ -66,33 +65,48 @@ Builder.ensureCapacity() !void:
     this.capacity = newCapacity
 ..
 
-Builder.add(s str, owned bool) !void:
+Builder.addBorrowed(s str) !void:
     byteCount u64 = s.countBytes()
     newTotal := try checked.uAdd(this.totalBytes, byteCount)
     try this.ensureCapacity()
-    segments Segment* = this.segments
-    ownedBits u8 = 0
-
-    if owned:
-        ownedBits = FLAG_OWNED
+    # SAFETY: ensureCapacity guarantees segments has capacity for count + 1.
+    unsafe:
+        segments Segment* = this.segments
+        segment := Segment(value=s, flags=0)
+        segments[this.count] = segment
     ..
-    segment := Segment(value=s, flags=ownedBits)
-    segments[this.count] = segment
+    this.count = this.count + 1
+    this.totalBytes = newTotal
+..
+
+Builder.addOwned(s $str) !void:
+    onerror s.free(this.allocator)
+    byteCount u64 = s.countBytes()
+    newTotal := try checked.uAdd(this.totalBytes, byteCount)
+    try this.ensureCapacity()
+    # SAFETY: ensureCapacity guarantees an unoccupied slot at count; the flag
+    # records that releaseCopies owns the transferred string in that slot.
+    unsafe:
+        segments Segment* = this.segments
+        segment := Segment(value=move s, flags=FLAG_OWNED)
+        segments[this.count] = segment
+    ..
     this.count = this.count + 1
     this.totalBytes = newTotal
 ..
 
 Builder.addByte(b u8) !void:
     try this.ensureCapacity()
-    segments Segment* = this.segments
-
-    # write the byte directly within the pointer
-    val ptr = none
-    p u8* = cast.reinterpret[u8](addrof val)
-    *p = b
-
-    segment := Segment(value=strings.fromPtrNoCopy(val, 0), flags=FLAG_BYTE)
-    segments[this.count] = segment
+    # SAFETY: ensureCapacity reserves the slot, and FLAG_BYTE makes the ptr-sized
+    # inline payload a byte value rather than an address to dereference.
+    unsafe:
+        segments Segment* = this.segments
+        val ptr = none
+        p u8* = cast.reinterpret[u8](addrof val)
+        *p = b
+        segment := Segment(value=strings.fromPtrNoCopy(val, 0), flags=FLAG_BYTE)
+        segments[this.count] = segment
+    ..
     this.count = this.count + 1
     this.totalBytes = this.totalBytes + 1
 ..
@@ -103,7 +117,7 @@ Builder.addByte(b u8) !void:
 # @example
 #   try output.appendBorrowed("prefix: ")
 Builder.appendBorrowed(s str) !void:
-    try this.add(s, false)
+    try this.addBorrowed(s)
 ..
 
 # Transfers an owned string into the builder.
@@ -112,8 +126,7 @@ Builder.appendBorrowed(s str) !void:
 # @example
 #   try output.appendOwned(ownedText)
 Builder.appendOwned(s $str) !void:
-    try this.add(s, true)
-    footgun.drop[str](s)
+    try this.addOwned(move s)
 ..
 
 # Copies and appends a string, making the segment independent of s.
@@ -130,9 +143,13 @@ Builder.appendCopy(s str) !void:
     # fallible operation before committing the segment.
     try this.ensureCapacity()
     owned str = try strings.copy(this.allocator, s)
-    segments Segment* = this.segments
-    segment := Segment(value=owned, flags=FLAG_OWNED)
-    segments[this.count] = segment
+    # SAFETY: ensureCapacity reserves slot count and FLAG_OWNED records its
+    # transferred string for exactly-once cleanup by releaseCopies.
+    unsafe:
+        segments Segment* = this.segments
+        segment := Segment(value=move owned, flags=FLAG_OWNED)
+        segments[this.count] = segment
+    ..
     this.count = this.count + 1
     this.totalBytes = newTotal
 ..
@@ -149,30 +166,33 @@ Builder.build() !$str:
     ..
     result str = try strings.alloc(this.allocator, this.totalBytes)
     out u8* = strings.toPtr(result)
-    segments Segment* = this.segments
     offset u64 = 0
     i u64 = 0
 
     byteBuff := array u8[2]
     byteBuff[1] = 0
 
-    loop i < this.count:
-        seg Segment = segments[i]
-        s := seg.value
+    # SAFETY: segments contains count initialized entries, totalBytes is their
+    # checked byte sum, and result has exactly totalBytes writable bytes.
+    unsafe:
+        segments Segment* = this.segments
+        loop i < this.count:
+            seg Segment = segments[i]
+            s := seg.value
 
-        if (seg.flags & FLAG_BYTE) != 0:
-            # unpack byte
-            p := strings.toPtr(s)
-            byteBuff[0] = *(cast.reinterpret[u8](addrof p))
-            s = strings.fromPtrNoCopy(slices.toPtr(byteBuff), 1)
+            if (seg.flags & FLAG_BYTE) != 0:
+                p := strings.toPtr(s)
+                byteBuff[0] = *(cast.reinterpret[u8](addrof p))
+                s = strings.fromPtrNoCopy(slices.toPtr(byteBuff), 1)
+            ..
+
+            byteCount := s.countBytes()
+            mem.copy(strings.toPtr(s), cast.utop(cast.ptou(out) + offset), byteCount)
+            offset = offset + byteCount
+            i = i + 1
         ..
-
-        byteCount := s.countBytes()
-        mem.copy(strings.toPtr(s), cast.utop(cast.ptou(out) + offset), byteCount)
-        offset = offset + byteCount
-        i = i + 1
     ..
-    ret result
+    ret move result
 ..
 
 # Returns the byte length of the string that build would produce.
@@ -188,10 +208,14 @@ Builder.isEmpty() bool:
 ..
 
 Builder.releaseCopies() void:
-    segments Segment* = this.segments
-    for i u64 = 0 to this.count:
-        if (segments[i].flags & FLAG_OWNED) != 0:
-            segments[i].value.free(this.allocator)
+    # SAFETY: slots below count are initialized; FLAG_OWNED is the occupancy
+    # bit for strings owned uniquely by this builder.
+    unsafe:
+        segments Segment* = this.segments
+        for i u64 = 0 to this.count:
+            if (segments[i].flags & FLAG_OWNED) != 0:
+                segments[i].value.free(this.allocator)
+            ..
         ..
     ..
 ..

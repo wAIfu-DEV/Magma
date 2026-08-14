@@ -20,7 +20,7 @@ pub main() !void:
 
     invalid wake.Wake, invalidErr error = wake.new(255)
     if invalidErr.ok():
-        footgun.drop[wake.Wake](invalid)
+        footgun.drop[wake.Wake](move invalid)
         throw errors.failure("wake accepted an invalid strategy")
     ..
     if invalidErr.code() != 2:

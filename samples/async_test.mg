@@ -6,21 +6,19 @@ use "std:io" io
 use "std:heap" heap
 use "std:thread_pool" tp
 use "std:file" file
-use "std:async" async
+use "std:context_default" context
 
 pub main() !void:
-    a := heap.allocator()
+    ctx := try context.newDefault()
 
-    pool := try tp.newDefault(a)
-    defer pool.close()
-    as := async.new(pool, fake.allocator())
-
-    f := try file.open(a, "main.go", file.mode().read())
+    f := try file.open(ctx.alloc, "main.go", file.mode().read())
     defer f.close()
 
-    future := try as.read(try f.reader(), try f.count())
+    reader := try f.reader()
+
+    future := try reader.readAsync(ctx, try f.count())
     contents := try future.await()
-    defer contents.free(a)
+    defer contents.free(ctx.alloc)
 
     io.printLn(contents)
 ..

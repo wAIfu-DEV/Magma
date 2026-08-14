@@ -11,25 +11,37 @@ pub main() !void:
         throw errors.failure("strings behavior changed")
     ..
     copyPtr u8* = strings.toPtr(copy)
-    if copyPtr[copy.countBytes()] != 0:
-        throw errors.failure("copied string is not null terminated")
+    # SAFETY: copy allocates a trailing terminator at index countBytes.
+    unsafe:
+        if copyPtr[copy.countBytes()] != 0:
+            throw errors.failure("copied string is not null terminated")
+        ..
     ..
     empty := try strings.alloc(a, 0)
     defer empty.free(a)
     emptyPtr u8* = strings.toPtr(empty)
-    if *emptyPtr != 0:
-        throw errors.failure("empty allocated string is not null terminated")
+    # SAFETY: strings.alloc always returns a terminated allocation.
+    unsafe:
+        if *emptyPtr != 0:
+            throw errors.failure("empty allocated string is not null terminated")
+        ..
     ..
     filled := try strings.allocFill(a, 3, 65)
     defer filled.free(a)
     filledPtr u8* = strings.toPtr(filled)
-    if strings.byteAt(filled, 0) != 65 || filledPtr[3] != 0:
-        throw errors.failure("filled string is not null terminated")
+    # SAFETY: allocFill appends a terminator after the requested payload.
+    unsafe:
+        if strings.byteAt(filled, 0) != 65 || filledPtr[3] != 0:
+            throw errors.failure("filled string is not null terminated")
+        ..
     ..
     cstr := try strings.toCstr(a, "magma")
     defer a.free(cstr)
-    if cstr[5] != 0:
-        throw errors.failure("C string is not null terminated")
+    # SAFETY: toCstr returns count+1 addressable bytes including the terminator.
+    unsafe:
+        if cstr[5] != 0:
+            throw errors.failure("C string is not null terminated")
+        ..
     ..
 
     noCopy := strings.toCstrNoCopy(copy)
@@ -40,9 +52,12 @@ pub main() !void:
     unterminated u8* = try a.alloc(5)
     defer a.free(unterminated)
     i u64 = 0
-    loop i < 5:
-        unterminated[i] = 65
-        i = i + 1
+    # SAFETY: unterminated points to the five bytes allocated immediately above.
+    unsafe:
+        loop i < 5:
+            unterminated[i] = 65
+            i = i + 1
+        ..
     ..
     borrowed str = strings.fromPtrNoCopy(unterminated, 5)
     borrowedPtr := strings.toCstrNoCopy(borrowed)
@@ -86,8 +101,13 @@ pub main() !void:
     ..
 
     splitPair := try strings.splitOnce(a, "left=right", "=")
-    defer splitPair.first.free(a)
-    defer splitPair.second.free(a)
+    defer:
+        # SAFETY: splitOnce returns two uniquely owned string fields.
+        unsafe:
+            splitPair.first.free(a)
+            splitPair.second.free(a)
+        ..
+    ..
     if strings.compare(splitPair.first, "left") == false || strings.compare(splitPair.second, "right") == false:
         throw errors.failure("splitOnce changed")
     ..

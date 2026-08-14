@@ -64,6 +64,8 @@ read(f File*, buff u8[], n u64) !u64:
     ret try impl_file.read(f.handle, buff, n)
 ..
 
+const gl_reader_vtable := r.Vtable(read=read)
+
 # Returns a reader for this file.
 # @complexity O(1).
 # @throws invalidArgument when the file is closed or lacks read access
@@ -74,7 +76,7 @@ File.reader() !r.Reader:
     if this.open == false || (this.openMode.bits & fopm.FLAG_READ) == 0:
         throw errors.invalidArgument("file not open in read mode")
     ..
-    ret r.new(this, read)
+    ret r.new(this, addrof gl_reader_vtable)
 ..
 
 # Advances the file pointer to the desired position.

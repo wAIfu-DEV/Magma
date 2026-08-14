@@ -63,8 +63,11 @@ pub formatUint(a alc.Allocator, value u64) !$str:
     i := digits
     loop i > 0:
         i = i - 1
-        out[i] = cast.u64to8((remaining % 10) + 48)
+        # SAFETY: out spans digits bytes and the loop maintains i < digits.
+        unsafe:
+            out[i] = cast.u64to8((remaining % 10) + 48)
+        ..
         remaining = remaining / 10
     ..
-    ret result
+    ret move result
 ..

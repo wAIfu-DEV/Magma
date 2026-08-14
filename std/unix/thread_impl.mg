@@ -26,17 +26,27 @@ Launch(
 )
 
 storeCompleted(value u8*) void:
-    llvm "  store atomic i8 1, ptr %value release, align 1\n"
-    llvm "  ret void\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  store atomic i8 1, ptr %value release, align 1\n"
+            llvm "  ret void\n"
+    ..
 ..
 
 loadCompleted(value u8*) u8:
-    llvm "  %done = load atomic i8, ptr %value acquire, align 1\n"
-    llvm "  ret i8 %done\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %done = load atomic i8, ptr %value acquire, align 1\n"
+            llvm "  ret i8 %done\n"
+    ..
 ..
 
 threadMain(raw ptr) u64:
-    launch Launch* = raw
+    launch Launch*
+    # SAFETY: spawn passes a live heap-allocated Launch as this thread context.
+    unsafe:
+        launch = raw
+    ..
     result u64 = launch.entry(launch.context)
     storeCompleted(addrof launch.completed)
     ret result
@@ -50,7 +60,10 @@ pub spawn(entry (ptr) u64, context ptr) !$Thread:
     launch Launch* = try heap.alloc(sizeof Launch)
     onerror heap.free(launch)
     launch.entry = entry
-    launch.context = context
+    # SAFETY: Launch stores the opaque context required by its matching entry callback.
+    unsafe:
+        launch.context = context
+    ..
     launch.completed = 0
 
     handle u64 = 0

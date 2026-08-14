@@ -97,6 +97,22 @@ func ctForStmt(c *ctx, forStmt *t.NodeStmtFor) error {
 	c.LoopDepth--
 	return e
 }
+
+func ctBoundedStmt(c *ctx, stmt *t.NodeStmtBounded) error {
+	for _, predicate := range stmt.Predicates {
+		if e := ctExpr(c, predicate); e != nil {
+			return e
+		}
+		binary, ok := predicate.(*t.NodeExprBinary)
+		if !ok || (binary.Operator != t.KwCmpLt && binary.Operator != t.KwCmpLtEq) {
+			return comp_err.CompilationErrorToken(c.FileCtx, &stmt.Tk, "bounded predicates must use '<' or '<='", "example: bounded i < values.count():")
+		}
+		if !isBoolType(predicate.GetInferredType()) {
+			return comp_err.CompilationErrorToken(c.FileCtx, &stmt.Tk, "bounded predicate must be a boolean comparison", "")
+		}
+	}
+	return ctBody(c, &stmt.Body)
+}
 func ctThrow(c *ctx, throw *t.NodeStmtThrow) error {
 	if c.CurrentTypeFunc != nil && (c.CurrentTypeFunc.ReturnType == nil || !c.CurrentTypeFunc.ReturnType.Throws) {
 		return comp_err.CompilationErrorToken(
@@ -190,6 +206,10 @@ func ctBody(c *ctx, bdy *t.NodeBody) error {
 			e = ctWhileStmt(c, n)
 		case *t.NodeStmtFor:
 			e = ctForStmt(c, n)
+		case *t.NodeStmtBounded:
+			e = ctBoundedStmt(c, n)
+		case *t.NodeStmtUnsafe:
+			e = ctBody(c, &n.Body)
 		case *t.NodeStmtBreak:
 			if c.LoopDepth == 0 {
 				e = comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, "cannot use 'break' outside a loop", "place 'break' inside a loop")

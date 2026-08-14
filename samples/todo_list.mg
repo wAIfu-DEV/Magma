@@ -50,8 +50,12 @@ main() !void:
 
     cleanupIndex u64 = 0
 
+    # SAFETY: entries below count were initialized exactly once and this final
+    # loop uniquely destroys each owned task string.
+    unsafe:
     loop cleanupIndex < count:
         tasks[cleanupIndex].free(a)
         cleanupIndex = cleanupIndex + 1
+    ..
     ..
 ..

@@ -119,11 +119,14 @@ decodeFlags(native u32) u32:
 ..
 
 pub wait(poller Poller*, limit u64, timeoutMs i64) !u64:
+    # SAFETY: raw and decoded each contain capacity event slots; epoll_wait is
+    # limited accordingly and outputIndex never exceeds the returned count.
+    unsafe:
     if limit == 0:
         ret 0
     ..
     timeout i32 = cast.i64to32(timeoutMs)
-    count i32 = ext_epoll_wait(poller.epollFd, poller.raw, cast.u64to32(limit), timeout)
+    count i32 = ext_epoll_wait(poller.epollFd, poller.raw, cast.u32toi32(cast.u64to32(limit)), timeout)
     if count < 0:
         throw errors.failure("epoll_wait failed")
     ..
@@ -143,11 +146,16 @@ pub wait(poller Poller*, limit u64, timeoutMs i64) !u64:
         ..
         sourceIndex = sourceIndex + 1
     ..
-    ret outputIndex
+      ret outputIndex
+    ..
 ..
 
 pub eventAt(poller Poller*, index u64) NativeEvent:
-    ret poller.decoded[index]
+    # SAFETY: callers only use indices below the count returned by wait, whose
+    # decoded output is stored in this capacity-sized array.
+    unsafe:
+        ret poller.decoded[index]
+    ..
 ..
 
 pub interrupt(poller Poller*) !void:

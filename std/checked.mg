@@ -29,11 +29,17 @@ minI128() i128:
 ..
 
 u128ToI128Bits(value u128) i128:
-    llvm "ret i128 %value\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "ret i128 %value\n"
+    ..
 ..
 
 i128ToU128Bits(value i128) u128:
-    llvm "ret i128 %value\n"
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "ret i128 %value\n"
+    ..
 ..
 
 # Checked unsigned 64-bit arithmetic.

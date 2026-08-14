@@ -14,14 +14,18 @@ Capture(
 )
 
 captureWrite(impl ptr, bytes str) !u64:
-    capture Capture* = impl
     count := bytes.countBytes()
-    i u64 = 0
-    loop i < count:
-        capture.buffer[capture.count + i] = strings.byteAt(bytes, i)
-        i = i + 1
+    # SAFETY: impl is a Capture and main provides a 128-byte buffer, larger
+    # than every write made by this test.
+    unsafe:
+        capture Capture* = impl
+        i u64 = 0
+        loop i < count:
+            capture.buffer[capture.count + i] = strings.byteAt(bytes, i)
+            i = i + 1
+        ..
+        capture.count = capture.count + count
     ..
-    capture.count = capture.count + count
     ret count
 ..
 

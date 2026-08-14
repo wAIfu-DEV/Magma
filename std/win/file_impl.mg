@@ -187,10 +187,12 @@ pub stderr() writer.Writer:
    ret writer.new(ext_win32_GetStdHandle(-12), write)
 ..
 
+const gl_stdinVtable := reader.Vtable(read=read)
+
 # Returns a reader for the Win32 standard input handle.
 # O(1).
 pub stdin() reader.Reader:
-   ret reader.new(ext_win32_GetStdHandle(-10), read)
+   ret reader.new(ext_win32_GetStdHandle(-10), addrof gl_stdinVtable)
 ..
 
 # Closes a Win32 file handle.

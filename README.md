@@ -200,6 +200,7 @@ usage: magma [options] <input-file>
   --emit, -e <kind>       llvm, object, or exe (default exe)
   --opt, -O <0-3>         LLVM optimization level (default 3)
   --error-trace-slots <n> trace slots per runtime shard (default 1024)
+  --safety-warnings       downgrade memory-safety diagnostics to warnings
   --target <triple>       compilation target (default: Clang native target)
   --std <directory>       override the Magma standard-library directory
   --lsp                   run the Magma language server over stdio
@@ -222,8 +223,9 @@ standard library:
 uses 64 runtime trace shards, each with the configured number of slots.
 
 `--lsp` runs the built-in language server over standard input and output. It
-provides diagnostics, completion, hover documentation, definition lookup, and
-import-path completion.
+provides diagnostics, completion, hover documentation, definition lookup,
+import-path completion, safety quick fixes, and semantic highlighting. Use
+`--safety-warnings --lsp` for migration-mode diagnostics in the editor.
 
 ## Building from Source
 
