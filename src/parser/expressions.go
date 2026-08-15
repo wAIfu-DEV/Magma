@@ -550,6 +550,62 @@ func parsePostfixMemberExpr(ctx *ParseCtx, tk t.Token, targetExpr t.NodeExpr) (*
 	}, nil
 }
 
+func parsePostfixProtoView(ctx *ParseCtx, member *t.NodeExprMemberAccess) (*t.NodeExprProtoView, error) {
+	typeArgs, err := parseTypeArgList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(typeArgs) != 1 {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &member.Tk, "proto view requires exactly one prototype type", "expected: `value.proto[Prototype]()`")
+	}
+	open, err := peek(ctx)
+	if err != nil || open.KeywType != t.KwParenOp {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &member.Tk, "proto view must be called", "expected: `value.proto[Prototype]()`")
+	}
+	consume(ctx)
+	close, err := peek(ctx)
+	if err != nil || close.KeywType != t.KwParenCl {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &member.Tk, "proto view takes no value arguments", "expected: `value.proto[Prototype]()`")
+	}
+	consume(ctx)
+	return &t.NodeExprProtoView{Tk: member.Tk, Target: member.Target, ProtoType: typeArgs[0]}, nil
+}
+
+func protoMemberFromExpr(expr t.NodeExpr) (*t.NodeExprMemberAccess, bool) {
+	if member, ok := expr.(*t.NodeExprMemberAccess); ok && member.Member == "proto" {
+		return member, true
+	}
+	nameExpr, ok := expr.(*t.NodeExprName)
+	if !ok {
+		return nil, false
+	}
+	composite, ok := nameExpr.Name.(*t.NodeNameComposite)
+	if !ok || len(composite.Parts) < 2 || composite.Parts[len(composite.Parts)-1] != "proto" {
+		return nil, false
+	}
+	ownerParts := append([]string(nil), composite.Parts[:len(composite.Parts)-1]...)
+	ownerTokens := append([]t.Token(nil), composite.Tokens[:len(composite.Tokens)-1]...)
+	var ownerName t.NodeName
+	if len(ownerParts) == 1 {
+		ownerName = &t.NodeNameSingle{Name: ownerParts[0], Tk: ownerTokens[0]}
+	} else {
+		ownerName = &t.NodeNameComposite{Parts: ownerParts, Tokens: ownerTokens}
+	}
+	return &t.NodeExprMemberAccess{
+		Tk: composite.Tokens[len(composite.Tokens)-1], Target: &t.NodeExprName{Tk: nameExpr.Tk, Name: ownerName}, Member: "proto",
+	}, true
+}
+
+func parseInferredProtoView(ctx *ParseCtx, member *t.NodeExprMemberAccess) (*t.NodeExprProtoView, error) {
+	consume(ctx) // '('
+	close, err := peek(ctx)
+	if err != nil || close.KeywType != t.KwParenCl {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &member.Tk, "proto view takes no value arguments", "expected: `value.proto()`")
+	}
+	consume(ctx)
+	return &t.NodeExprProtoView{Tk: member.Tk, Target: member.Target}, nil
+}
+
 func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExpr, error) {
 	expr := baseExpr
 
@@ -572,6 +628,13 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 		}
 
 		if next.KeywType == t.KwParenOp {
+			if member, ok := protoMemberFromExpr(expr); ok {
+				expr, e = parseInferredProtoView(ctx, member)
+				if e != nil {
+					return nil, e
+				}
+				continue
+			}
 			// A parenthesized token sequence after a name is normally a call, but
 			// function types use the same opening syntax. Speculatively parse a
 			// function type and only keep it when the following token proves this
@@ -610,6 +673,31 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 		}
 
 		if next.KeywType == t.KwBrackOp {
+			if member, ok := expr.(*t.NodeExprMemberAccess); ok && member.Member == "proto" {
+				expr, e = parsePostfixProtoView(ctx, member)
+				if e != nil {
+					return nil, e
+				}
+				continue
+			}
+			if nameExpr, ok := expr.(*t.NodeExprName); ok {
+				if composite, compositeOK := nameExpr.Name.(*t.NodeNameComposite); compositeOK && len(composite.Parts) >= 2 && composite.Parts[len(composite.Parts)-1] == "proto" {
+					ownerParts := append([]string(nil), composite.Parts[:len(composite.Parts)-1]...)
+					ownerTokens := append([]t.Token(nil), composite.Tokens[:len(composite.Tokens)-1]...)
+					var ownerName t.NodeName
+					if len(ownerParts) == 1 {
+						ownerName = &t.NodeNameSingle{Name: ownerParts[0], Tk: ownerTokens[0]}
+					} else {
+						ownerName = &t.NodeNameComposite{Parts: ownerParts, Tokens: ownerTokens}
+					}
+					member := &t.NodeExprMemberAccess{Tk: composite.Tokens[len(composite.Tokens)-1], Target: &t.NodeExprName{Tk: nameExpr.Tk, Name: ownerName}, Member: "proto"}
+					expr, e = parsePostfixProtoView(ctx, member)
+					if e != nil {
+						return nil, e
+					}
+					continue
+				}
+			}
 			if nameExpr, ok := expr.(*t.NodeExprName); ok {
 				typeArgs, isGenericCall := tryParseGenericCallTypeArgs(ctx)
 				if isGenericCall {

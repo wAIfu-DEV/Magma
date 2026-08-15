@@ -348,3 +348,33 @@ func irExprStructInit(ctx *IrCtx, init *t.NodeExprStructInit) (SsaName, error) {
 	}
 	return current, nil
 }
+
+func irExprProtoView(ctx *IrCtx, view *t.NodeExprProtoView) (SsaName, error) {
+	if view.Implementation == nil || view.Implementation.Owner == nil || view.Implementation.Proto == nil {
+		return SsaName{}, fmt.Errorf("cannot lower unresolved prototype view")
+	}
+	var target SsaName
+	var err error
+	if view.TargetIsPointer {
+		target, err = irExpression(ctx, view.Target.GetInferredType(), view.Target, false)
+	} else {
+		target, err = irExpressionLvalue(ctx, view.Target)
+	}
+	if err != nil {
+		return SsaName{}, err
+	}
+	current := SsaName{Repr: "zeroinitializer", IsLiteral: true}
+	withImpl := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = insertvalue ", withImpl.Repr)
+	if err := irType(ctx, view.ProtoType); err != nil {
+		return SsaName{}, err
+	}
+	irWritef(ctx, " %s, ptr %s, 0\n", current.Repr, target.Repr)
+	withTable := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = insertvalue ", withTable.Repr)
+	if err := irType(ctx, view.ProtoType); err != nil {
+		return SsaName{}, err
+	}
+	irWritef(ctx, " %s, ptr @%s, 1\n", withImpl.Repr, t.ProtoVtableSymbol(view.Implementation.Owner, view.Implementation.Proto))
+	return withTable, nil
+}

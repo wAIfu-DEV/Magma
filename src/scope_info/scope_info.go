@@ -155,6 +155,8 @@ func bldExpr(ctx *lcx, expr t.NodeExpr) error {
 				return e
 			}
 		}
+	case *t.NodeExprProtoView:
+		return bldExpr(ctx, n.Target)
 	}
 	return nil
 }

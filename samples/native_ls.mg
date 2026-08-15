@@ -7,10 +7,10 @@ use "std:heap" heap
 use "std:io" io
 
 pub main() !void:
-    a allocator.Allocator = heap.allocator()
+    a := heap.allocator()
 
     configuration := dialog.defaultOptions()
-    selectedDir str, dialogError error = dialog.openDir(a, configuration)
+    selectedDir, dialogError := dialog.openDir(a, configuration)
     if dialogError.nok():
         if errors.is(dialogError, errors.cancelled("")):
             try io.printLn("cancelled")

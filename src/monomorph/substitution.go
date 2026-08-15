@@ -89,6 +89,10 @@ func substituteExpr(expr t.NodeExpr, subst map[string]*t.NodeType) {
 			n.Fields[i].FieldType = substituteType(n.Fields[i].FieldType, subst)
 			substituteExpr(n.Fields[i].Expression, subst)
 		}
+	case *t.NodeExprProtoView:
+		n.ProtoType = substituteType(n.ProtoType, subst)
+		n.InfType = substituteType(n.InfType, subst)
+		substituteExpr(n.Target, subst)
 	case *t.NodeExprSubscript:
 		substituteExpr(n.Target, subst)
 		substituteExpr(n.Expr, subst)

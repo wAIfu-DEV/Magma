@@ -9,25 +9,11 @@ use "std:errors"    errors
 use "std:cast"      cast
 use "std:future"    future
 
-pub Vtable(
-    read (ptr, u8[], u64) !u64,
-)
-
 # Reader interface for pulling bytes into strings or buffers.
 # @complexity O(1) wrapper calls; underlying reader decides cost.
-pub Reader(
-    impl ptr,
-    vtable Vtable*,
+pub proto Reader(
+    readRaw(buff u8[], nBytes u64) !u64
 )
-
-# Creates a reader over caller-owned state.
-# @complexity O(1)
-# @ownership impl must remain valid while the Reader is used.
-# @example
-#   input := reader.new(state, addrof constVtable)
-pub new(impl ptr, vtable Vtable*) Reader:
-    ret Reader(impl=impl, vtable=vtable)
-..
 
 # Reads up to nBytes and returns a string containing the bytes read.
 # @warning returned string is backed by allocator-owned memory.
@@ -72,7 +58,7 @@ Reader.readToBuff(buff u8[], nBytes u64) !u64:
     if slices.count(buff) < nBytes:
         throw errors.invalidArgument("would overflow")
     ..
-    readCnt u64 = try this.vtable.read(this.impl, buff, nBytes)
+    readCnt u64 = try this.readRaw(buff, nBytes)
     if readCnt > nBytes:
         throw errors.failure("reader returned more bytes than requested")
     ..

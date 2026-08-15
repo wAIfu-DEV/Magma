@@ -9,37 +9,34 @@ use "std:reader" reader
 use "std:strings" strings
 use "std:writer" writer
 
-sink(impl ptr, bytes str) !u64:
+Sink impl writer.Writer(total u64*)
+
+Sink.write(bytes str) !u64:
     count := bytes.countBytes()
-    # SAFETY: writer.new receives impl as addrof a live u64 in main.
-    unsafe:
-        total u64* = impl
-        *total = *total + count
-    ..
+    *this.total = *this.total + count
     ret count
 ..
 
-source(impl ptr, bytes u8[], count u64) !u64:
-    # SAFETY: reader supplies a slice with at least count writable elements,
-    # and impl is addrof the live calls counter.
-    unsafe:
-        calls u64* = impl
-        if *calls == 0 && count >= 2:
+Source impl reader.Reader(calls u64)
+
+Source.readRaw(bytes u8[], count u64) !u64:
+    if this.calls == 0 && count >= 2:
+        # SAFETY: Reader supplies a slice with at least count writable elements.
+        unsafe:
             bytes[0] = 65
             bytes[1] = 10
-            *calls = 1
-            ret 2
         ..
+        this.calls = 1
+        ret 2
     ..
     ret 0
 ..
 
-const implVtable := reader.Vtable(read=source)
-
 pub main() !void:
     a allocator.Allocator = heap.allocator()
     written u64 = 0
-    raw := writer.new(addrof written, sink)
+    sink := Sink(total=addrof written)
+    raw := sink.proto[writer.Writer]()
     output := try buffered.writerBuffered(a, raw)
     defer output.close()
     if try output.write("a") != 1 || try output.writeAll("b") != 1 || try output.writeLn("c") != 2:
@@ -51,11 +48,11 @@ pub main() !void:
     facade := output.writer()
     try facade.writeAll("z")
     flushed := try output.flush()
-    if flushed != 1 || written != 15:
+    if flushed != 15 || written != 15:
         throw errors.failure("buffered writer flush changed")
     ..
-    calls u64 = 0
-    input := reader.new(addrof calls, addrof implVtable)
+    source := Source(calls=0)
+    input := source.proto[reader.Reader]()
     bufferedInput := try buffered.readerBuffered(a, input)
     defer bufferedInput.close()
     if bufferedInput.filledCount() != 0 || bufferedInput.isEof():

@@ -16,7 +16,7 @@ use "std:unix/file_impl" impl_file
 
 # File handle wrapper and state.
 # @complexity O(1).
-pub File(
+pub File impl r.Reader w.Writer(
     handle ptr
     openMode fopm.OpenMode
     open bool
@@ -42,6 +42,10 @@ write(f File*, bytes str) !u64:
     ret try impl_file.write(f.handle, bytes)
 ..
 
+File.write(bytes str) !u64:
+    ret try write(this, bytes)
+..
+
 # Returns a writer for this file.
 # @complexity O(1).
 # @throws invalidArgument when the file is closed or lacks write access
@@ -52,7 +56,7 @@ File.writer() !w.Writer:
     if this.open == false || (this.openMode.bits & fopm.FLAG_WRITE) == 0:
         throw errors.invalidArgument("file not open in write mode")
     ..
-    ret w.new(this, write)
+    ret this.proto()
 ..
 
 # Reads bytes from an open file handle.
@@ -64,7 +68,9 @@ read(f File*, buff u8[], n u64) !u64:
     ret try impl_file.read(f.handle, buff, n)
 ..
 
-const gl_reader_vtable := r.Vtable(read=read)
+File.readRaw(buff u8[], n u64) !u64:
+    ret try read(this, buff, n)
+..
 
 # Returns a reader for this file.
 # @complexity O(1).
@@ -76,7 +82,7 @@ File.reader() !r.Reader:
     if this.open == false || (this.openMode.bits & fopm.FLAG_READ) == 0:
         throw errors.invalidArgument("file not open in read mode")
     ..
-    ret r.new(this, addrof gl_reader_vtable)
+    ret this.proto()
 ..
 
 # Advances the file pointer to the desired position.

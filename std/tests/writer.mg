@@ -3,11 +3,13 @@ use "std:errors" errors
 use "std:cast" cast
 use "std:strings" strings
 use "std:writer" writer
-sink(impl ptr, bytes str) !u64:
+Sink impl writer.Writer(value u8)
+Sink.write(bytes str) !u64:
     ret bytes.countBytes()
 ..
 pub main() !void:
-    output := writer.new(none, sink)
+    sink := Sink(value=0)
+    output := sink.proto[writer.Writer]()
     if try output.write("ab") != 2 || try output.writeAll("abc") != 3:
         throw errors.failure("writer write behavior changed")
     ..

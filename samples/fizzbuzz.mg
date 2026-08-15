@@ -1,22 +1,22 @@
 mod main
 
-use "../std/heap.mg" heap
-use "../std/io.mg" io
+use "std:heap.mg" heap
+use "std:io.mg" io
+use "std:fmt" fmt
 
 main() !void:
-    out := io.stdoutUnbuffered()
+    a := heap.allocator()
     n u64 = 1
 
     loop n <= 100:
         if n % 15 == 0:
-            try out.writeLn("FizzBuzz")
+            io.printLn("FizzBuzz")
         elif n % 3 == 0:
-            try out.writeLn("Fizz")
+            io.printLn("Fizz")
         elif n % 5 == 0:
-            try out.writeLn("Buzz")
+            io.printLn("Buzz")
         else:
-            try out.writeUint64(n)
-            try out.writeLn("")
+            fmt.printf(fmt.new(a).uint(n).str("\n"))
         ..
 
         n = n + 1

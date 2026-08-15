@@ -15,9 +15,45 @@ type StructDef struct {
 	Fields     map[string]*NodeType
 	FieldOrder []string
 	Funcs      map[string]*NodeFuncDef
+	// Implements records the prototype types named by `impl` on this struct.
+	// Resolution fills Proto after imports and named types are available.
+	Implements []*ProtoImpl
+	IsProto    bool
+	Proto      *ProtoDef
 
 	Destructor  *NodeFuncDef
 	Destructors []*NodeFuncDef
+}
+
+type ProtoDef struct {
+	Module     string
+	Name       string
+	IsPublic   bool
+	TypeParams []string
+	Methods    []*ProtoMethod
+	MethodMap  map[string]*ProtoMethod
+	VtableName string
+}
+
+type ProtoMethod struct {
+	Name  string
+	Args  []NodeArg
+	Ret   *NodeType
+	Slot  int
+	Tk    Token
+	FnDef *NodeFuncDef
+	Proto *ProtoDef
+}
+
+type ProtoImpl struct {
+	Type  *NodeType
+	Proto *ProtoDef
+	Owner *StructDef
+	Tk    Token
+}
+
+func ProtoVtableSymbol(implementation *StructDef, proto *ProtoDef) string {
+	return implementation.Module + "." + implementation.Name + ".__proto." + proto.Module + "." + proto.Name
 }
 
 func (*StructDef) Print(int) {

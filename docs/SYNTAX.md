@@ -327,6 +327,98 @@ VTable(
 Allocator(impl ptr, vtable VTable*)
 ```
 
+### Prototypes
+
+Prototypes provide compiler-generated versions of the same two-word
+implementation-pointer and immutable-vtable pattern:
+
+```magma
+pub proto Allocator(
+    alloc(byteCount u64) !$u8*
+    free(block u8*) void
+)
+
+pub Heap impl Allocator(
+    handle ptr
+)
+
+Heap.alloc(byteCount u64) !$u8*:
+    ...
+..
+
+Heap.free(block u8*) void:
+    ...
+..
+```
+
+A struct may implement more than one prototype by separating their names with
+whitespace:
+
+```magma
+Duplex impl Reader Writer(handle ptr)
+```
+
+A prototype may implement other prototypes using the same syntax when its
+required methods satisfy their contracts. This permits views of a combined
+interface to be projected into narrower interfaces:
+
+```magma
+pub proto Duplex impl Writer Reader(
+    write(bytes str) !u64
+    readRaw(buffer u8[], count u64) !u64
+)
+```
+
+Construct the implementation normally, then create a borrowed prototype view
+from stable named storage:
+
+```magma
+heap := Heap(handle=nativeHandle)
+a := heap.proto[Allocator]()
+```
+
+The prototype type may instead be inferred from a typed expectation:
+
+```magma
+a Allocator = heap.proto()
+```
+
+The expectation must resolve to a type declared with `proto`. An inferred
+binding such as `a := heap.proto()` is rejected because it provides no target
+prototype.
+
+The implementation must remain alive and unmoved while the view is used.
+Creating a view directly from a temporary is rejected. Prototype requirements
+become vtable entries; additional methods declared on the prototype are
+ordinary methods and do not affect its layout:
+
+```magma
+Allocator.allocT[T](count u64) !$T*:
+    ret try this.alloc(count * sizeof T)
+..
+```
+
+Such ordinary methods may be generic. Generic prototype declarations themselves
+are not currently supported.
+
+Generic calls support shallow type-parameter inference. A parameter may be
+inferred from a directly corresponding argument, including matching pointer,
+reference, slice, and generic-type structure, or from a typed return
+expectation. Both typed assignments and an enclosing function's declared return
+type provide such an expectation:
+
+```magma
+block u8* = a.allocT(count)              # T is u8 from the expected result
+next := a.reallocT(previousU64, newCount) # T is u64 from the argument
+
+makeAllocator() Allocator:
+    ret implementation.proto()           # prototype inferred as Allocator
+..
+```
+
+Inference does not guess from an unconstrained result, so
+`block := a.allocT(count)` requires explicit type arguments.
+
 Function type argument lists contain types only, not argument names:
 
 ```magma

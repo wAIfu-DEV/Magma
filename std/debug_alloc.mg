@@ -42,7 +42,7 @@ pub Leak(
 )
 
 # Owned tracking state wrapping a borrowed target allocator.
-pub DebugAllocator(
+pub DebugAllocator impl allocator.Allocator(
     target allocator.Allocator
     entries Entry*
     capacityValue u64
@@ -214,11 +214,17 @@ debugRealloc(raw ptr, pointer u8*, byteCount u64) !u8*:
     ret replacement
 ..
 
-const vtable := allocator.Vtable(
-    alloc=debugAlloc,
-    realloc=debugRealloc,
-    free=debugFree,
-)
+DebugAllocator.alloc(byteCount u64) !$u8*:
+    ret try debugAlloc(this, byteCount)
+..
+
+DebugAllocator.realloc(pointer u8*, byteCount u64) !$u8*:
+    ret try debugRealloc(this, pointer, byteCount)
+..
+
+DebugAllocator.free(pointer u8*) void:
+    debugFree(this, pointer)
+..
 
 # Creates a debug allocator with explicit tracking behavior.
 pub new(target allocator.Allocator, options Options) !$DebugAllocator:
@@ -258,7 +264,7 @@ pub newDefault(target allocator.Allocator) !$DebugAllocator:
 # Returns a non-owning allocator view. DebugAllocator must remain at a stable
 # address and outlive the returned value.
 DebugAllocator.allocator() allocator.Allocator:
-    ret allocator.Allocator(impl=this, vtable=addrof vtable)
+    ret this.proto()
 ..
 
 DebugAllocator.stats() Stats:
@@ -302,7 +308,7 @@ DebugAllocator.leak(index u64) !Leak:
 
 # Releases tracking metadata. Live user allocations are intentionally left
 # untouched so their pointers are not invalidated implicitly.
-destr DebugAllocator.free() void:
+destr DebugAllocator.destroy() void:
     if this.entries != none:
         this.target.free(this.entries)
     ..

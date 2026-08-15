@@ -524,20 +524,83 @@ func identifierPath(value string) bool {
 }
 
 func selectorParts(value string) ([]selectorPart, bool) {
-	parts := strings.Split(value, ".")
+	parts, ok := splitSelectorParts(value)
+	if !ok {
+		return nil, false
+	}
 	result := make([]selectorPart, 0, len(parts))
 	for _, part := range parts {
-		call := strings.HasSuffix(part, "()")
-		name := part
-		if call {
-			name = strings.TrimSuffix(part, "()")
-		}
-		if name == "" || !identifier(name) {
+		name, call, ok := selectorPartName(part)
+		if !ok {
 			return nil, false
 		}
 		result = append(result, selectorPart{name: name, call: call})
 	}
 	return result, len(result) != 0
+}
+
+func splitSelectorParts(value string) ([]string, bool) {
+	parts := []string{}
+	start := 0
+	parenDepth := 0
+	bracketDepth := 0
+	inString := false
+	escaped := false
+	for i, r := range value {
+		if inString {
+			if escaped {
+				escaped = false
+			} else if r == '\\' {
+				escaped = true
+			} else if r == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch r {
+		case '"':
+			inString = true
+		case '(':
+			parenDepth++
+		case ')':
+			parenDepth--
+		case '[':
+			bracketDepth++
+		case ']':
+			bracketDepth--
+		case '.':
+			if parenDepth == 0 && bracketDepth == 0 {
+				parts = append(parts, value[start:i])
+				start = i + 1
+			}
+		}
+		if parenDepth < 0 || bracketDepth < 0 {
+			return nil, false
+		}
+	}
+	if inString || parenDepth != 0 || bracketDepth != 0 {
+		return nil, false
+	}
+	parts = append(parts, value[start:])
+	return parts, true
+}
+
+func selectorPartName(part string) (string, bool, bool) {
+	open := strings.IndexByte(part, '(')
+	if open < 0 {
+		return part, false, identifier(part)
+	}
+	if !strings.HasSuffix(part, ")") {
+		return "", false, false
+	}
+	name := part[:open]
+	if generic := strings.IndexByte(name, '['); generic >= 0 {
+		if !strings.HasSuffix(name, "]") {
+			return "", false, false
+		}
+		name = name[:generic]
+	}
+	return name, true, name != "" && identifier(name)
 }
 
 func isIdentRune(r rune) bool { return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) }
@@ -644,6 +707,9 @@ func (d *docIndex) completions(keyPrefix, forbiddenDotPrefix, typedPrefix string
 			label = "~" + name
 			filterText = name
 			insertText = name
+		} else if name == "proto" && kind == 2 {
+			filterText = name
+			insertText = "proto()"
 		}
 		items = append(items, completionItem{Label: label, Kind: kind, Detail: firstCodeLine(hover), FilterText: filterText, InsertText: insertText, Documentation: map[string]any{"kind": "markdown", "value": hover}})
 	}

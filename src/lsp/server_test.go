@@ -76,6 +76,28 @@ func TestCompletionReceiverKinds(t *testing.T) {
 	}
 }
 
+func TestPrototypeViewCompletion(t *testing.T) {
+	source := "mod completion\nproto Reader(read() u64)\nBox impl Reader(value u64)\nBox.read() u64:\n    ret this.value\n..\ninspect(item Box) void:\n    item.\n..\n"
+	path := filepath.Join(t.TempDir(), "completion.mg")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	items := complete("file:///"+filepath.ToSlash(path), source, position{Line: 7, Character: 9}, testStdRoot())
+	for _, item := range items {
+		if item.Label != "proto" {
+			continue
+		}
+		if item.Kind != 2 || item.InsertText != "proto()" || item.FilterText != "proto" {
+			t.Fatalf("proto completion = %#v", item)
+		}
+		if item.Documentation == nil || !strings.Contains(item.Documentation["value"].(string), "Reader") {
+			t.Fatalf("proto completion documentation = %#v", item.Documentation)
+		}
+		return
+	}
+	t.Fatalf("completion items %#v do not include proto", items)
+}
+
 func TestFunctionDefinitionNavigation(t *testing.T) {
 	directory := t.TempDir()
 	dependency := filepath.Join(directory, "dependency.mg")
@@ -312,6 +334,47 @@ func TestCompletionOnModuleFunctionResult(t *testing.T) {
 	}
 	if !labels["enable"] || !labels["value"] {
 		t.Fatalf("module function result completions = %#v", items)
+	}
+}
+
+func TestCompletionOnModuleFunctionResultWithArguments(t *testing.T) {
+	directory := t.TempDir()
+	dependency := filepath.Join(directory, "dependency.mg")
+	dependencySource := "mod dependency\npub Mode(value bool)\npub make(label str, enabled bool) Mode:\n    ret Mode(value=enabled)\n..\nMode.enable() Mode:\n    ret *this\n..\n"
+	if err := os.WriteFile(dependency, []byte(dependencySource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := "mod completion\nuse \"./dependency.mg\" dep\nmain() void:\n    dep.make(\"a.b\", true).\n..\n"
+	path := filepath.Join(directory, "completion.mg")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	items := complete("file:///"+filepath.ToSlash(path), source, position{Line: 3, Character: 26}, testStdRoot())
+	labels := map[string]bool{}
+	for _, item := range items {
+		labels[item.Label] = true
+	}
+	if !labels["enable"] || !labels["value"] {
+		t.Fatalf("argument-bearing function result completions = %#v", items)
+	}
+}
+
+func TestCompletionOnFormatBuilderResult(t *testing.T) {
+	directory := t.TempDir()
+	source := "mod completion\nuse \"std:heap.mg\" heap\nuse \"std:fmt\" fmt\nmain() void:\n    a := heap.allocator()\n    fmt.str(a, \"\").\n..\n"
+	path := filepath.Join(directory, "completion.mg")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	items := complete("file:///"+filepath.ToSlash(path), source, position{Line: 5, Character: 19}, testStdRoot())
+	labels := map[string]bool{}
+	for _, item := range items {
+		labels[item.Label] = true
+	}
+	for _, want := range []string{"str", "uint", "int", "bool", "float"} {
+		if !labels[want] {
+			t.Fatalf("Format completion labels %v do not include %q", labels, want)
+		}
 	}
 }
 

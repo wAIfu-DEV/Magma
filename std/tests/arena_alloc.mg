@@ -6,7 +6,7 @@ use "std:heap" heap
 
 pub main() !void:
     arena := try arena_alloc.new(heap.allocator(), 1024)
-    defer arena.free()
+    defer arena.destroy()
     a := arena.allocator()
 
     first := try a.alloc(32)

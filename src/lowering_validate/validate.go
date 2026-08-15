@@ -734,6 +734,17 @@ func expressionValid(file *t.FileCtx, expression t.NodeExpr) error {
 				return err
 			}
 		}
+	case *t.NodeExprProtoView:
+		if node.Implementation == nil || node.Implementation.Owner == nil || node.Implementation.Proto == nil {
+			return invalid(file, &node.Tk, "prototype view has no resolved implementation")
+		}
+		if err := typeValid(file, node.ProtoType, "prototype view target type"); err != nil {
+			return err
+		}
+		if err := typeValid(file, node.InfType, "prototype view result"); err != nil {
+			return err
+		}
+		return expressionValid(file, node.Target)
 	case *t.NodeExprSubscript:
 		if !typeComplete(node.BoxType) || !typeComplete(node.ElemType) || !typeComplete(node.IndexType) {
 			return invalid(file, &node.Tk, "subscript has incomplete resolved type metadata")

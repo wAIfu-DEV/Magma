@@ -11,3 +11,6 @@ IGNORE/
 *.lib
 ~*
 Magma.exe~
+.git/
+.github/
+.agents/

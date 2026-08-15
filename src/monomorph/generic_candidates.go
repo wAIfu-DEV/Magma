@@ -99,6 +99,8 @@ func (m *monoCtx) resolveCandidateExpr(module string, gl *t.NodeGlobal, expr t.N
 		for i := range node.Fields {
 			node.Fields[i].Expression = m.resolveCandidateExpr(module, gl, node.Fields[i].Expression)
 		}
+	case *t.NodeExprProtoView:
+		node.Target = m.resolveCandidateExpr(module, gl, node.Target)
 	case *t.NodeExprMemberAccess:
 		node.Target = m.resolveCandidateExpr(module, gl, node.Target)
 	case *t.NodeExprSubscript:

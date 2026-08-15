@@ -267,6 +267,8 @@ func expressionToken(expr types.NodeExpr) types.Token {
 		return node.Tk
 	case *types.NodeExprAddrof:
 		return expressionToken(node.Expr)
+	case *types.NodeExprProtoView:
+		return node.Tk
 	}
 	return types.Token{}
 }
@@ -1360,6 +1362,8 @@ func (a *analyzer) borrowExpr(out *flow, expr types.NodeExpr) {
 		a.checkTryFailure(out)
 	case *types.NodeExprStructInit:
 		a.transferStructFields(out, node)
+	case *types.NodeExprProtoView:
+		a.borrowExpr(out, node.Target)
 	}
 }
 
@@ -2338,6 +2342,8 @@ func collectExprUses(expr types.NodeExpr, out map[*types.NodeExprVarDef]bool) {
 		for _, field := range node.Fields {
 			collectExprUses(field.Expression, out)
 		}
+	case *types.NodeExprProtoView:
+		collectExprUses(node.Target, out)
 	case *types.NodeExprArray:
 		collectExprUses(node.Length, out)
 		for _, entry := range node.Entries {

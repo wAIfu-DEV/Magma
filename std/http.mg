@@ -237,7 +237,7 @@ buildRequest(a allocator.Allocator, request Request, parsed ParsedUrl*) !$str:
         try output.appendBorrowed(parsed.service)
     ..
     try output.appendBorrowed("\r\nConnection: keep-alive\r\n")
-    if request.body.vtable != none:
+    if request.bodyLength > 0:
         length := try strconv.formatUint(a, request.bodyLength)
         try output.appendBorrowed("Content-Length: ")
         try output.appendOwned(move length)
@@ -251,7 +251,7 @@ buildRequest(a allocator.Allocator, request Request, parsed ParsedUrl*) !$str:
         try output.appendBorrowed("\r\n")
     ..
     try output.appendBorrowed("\r\n")
-    if request.body.vtable != none && request.bodyLength > 0:
+    if request.bodyLength > 0:
         contents := try request.body.read(a, request.bodyLength)
         if contents.countBytes() != request.bodyLength:
             contents.free(a)

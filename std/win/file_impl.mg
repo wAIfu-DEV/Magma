@@ -37,7 +37,7 @@ writeOnce(handle ptr, next ptr, amount u32) !u64:
    ok win.BOOL = ext_win32_WriteFile(handle, next, amount, addrof gl_writeOnce_written, none)
    
    if ok == 0:
-      throw errors.native(ext_win32_GetLastError(), "WriteFile failed")
+      throw errors.native(cast.u64to32(ext_win32_GetLastError()), "WriteFile failed")
    ..
 
    ret cast.u32to64(gl_writeOnce_written)
@@ -61,7 +61,7 @@ pub write(handle ptr, bytes str) !u64:
       ret try writeOnce(handle, strings.toPtr(bytes), cast.u64to32(bound))
    ..
 
-   p ptr = strings.toPtr(bytes)
+   p u8* = strings.toPtr(bytes)
    total u64 = 0
 
    loop total < bound:
@@ -97,7 +97,7 @@ readOnce(handle ptr, next ptr, amount u32) !u64:
    ok win.BOOL = ext_win32_ReadFile(handle, next, amount, addrof gl_readOnce_read, none)
 
    if ok == 0:
-      throw errors.native(ext_win32_GetLastError(), "ReadFile failed")
+      throw errors.native(cast.u64to32(ext_win32_GetLastError()), "ReadFile failed")
    ..
 
    # Note: if read == 0 should set EOF flag
@@ -155,8 +155,20 @@ pub read(handle ptr, buff u8[], n u64) !u64:
 
 # Returns a writer for the Win32 standard output handle.
 # O(1).
+Console impl writer.Writer(handle ptr, handleId u32)
+
+Console.write(bytes str) !u64:
+   if this.handle == none:
+      this.handle = ext_win32_GetStdHandle(this.handleId)
+   ..
+   ret try write(this.handle, bytes)
+..
+
+gl_stdout := Console(handle=none, handleId=0xFFFFFFF5)
+gl_stderr := Console(handle=none, handleId=0xFFFFFFF4)
+
 pub stdout() writer.Writer:
-   ret writer.new(ext_win32_GetStdHandle(-11), write)
+   ret gl_stdout.proto()
 ..
 
 # The interface is constant; only the OS handle cache is mutable. Magma globals
@@ -170,11 +182,9 @@ writeConstStdout(impl ptr, bytes str) !u64:
    ret try write(gl_constStdoutHandle, bytes)
 ..
 
-const gl_stdoutVtable := writer.Vtable(fn_write=writeConstStdout)
-
 const gl_stdoutWriter := writer.ConstWriter(
    impl=none,
-   vtable=addrof gl_stdoutVtable,
+   fn_write=writeConstStdout,
 )
 
 pub stdoutConst() writer.ConstWriter*:
@@ -184,22 +194,31 @@ pub stdoutConst() writer.ConstWriter*:
 # Returns a writer for the Win32 standard error handle.
 # O(1).
 pub stderr() writer.Writer:
-   ret writer.new(ext_win32_GetStdHandle(-12), write)
+   ret gl_stderr.proto()
 ..
 
-const gl_stdinVtable := reader.Vtable(read=read)
+Stdin impl reader.Reader(handle ptr)
+
+Stdin.readRaw(bytes u8[], count u64) !u64:
+   if this.handle == none:
+      this.handle = ext_win32_GetStdHandle(-10)
+   ..
+   ret try read(this.handle, bytes, count)
+..
+
+gl_stdin := Stdin(handle=none)
 
 # Returns a reader for the Win32 standard input handle.
 # O(1).
 pub stdin() reader.Reader:
-   ret reader.new(ext_win32_GetStdHandle(-10), addrof gl_stdinVtable)
+   ret gl_stdin.proto()
 ..
 
 # Closes a Win32 file handle.
 # O(1).
 pub closeFile(handle ptr) !void:
    if ext_win32_CloseHandle(handle) == 0:
-      throw errors.native(ext_win32_GetLastError(), "CloseHandle failed")
+      throw errors.native(cast.u64to32(ext_win32_GetLastError()), "CloseHandle failed")
    ..
 ..
 
@@ -256,7 +275,7 @@ pub openFile(a alc.Allocator, path str, openMode fopm.OpenMode) !$ptr:
 
    # invalid handle
    if cast.ptou(handle) == cast.itou(-1):
-      throw errors.native(ext_win32_GetLastError(), "CreateFileW failed")
+      throw errors.native(cast.u64to32(ext_win32_GetLastError()), "CreateFileW failed")
    ..
    ret handle
 ..
@@ -280,7 +299,7 @@ pub seek(handle ptr, offset i64, whence u8) !u64:
     
    newPos i64 = 0
    if ext_win32_SetFilePointerEx(handle, offset, addrof newPos, moveMethod) == 0:
-      throw errors.native(ext_win32_GetLastError(), "SetFilePointerEx failed")
+      throw errors.native(cast.u64to32(ext_win32_GetLastError()), "SetFilePointerEx failed")
    ..
    if newPos < 0:
       throw errors.failure("seek returned a negative position")

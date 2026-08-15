@@ -21,7 +21,7 @@ pub toPtr(s str) u8*:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %l0 = extractvalue %type.str %s, 0\n"
-            llvm "  ret ptr %l0\n"
+        llvm "  ret ptr %l0\n"
     ..
 ..
 
@@ -80,8 +80,8 @@ pub fromPtrNoCopy(p ptr, bytesCount u64) str:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %s0 = insertvalue %type.str zeroinitializer, ptr %p, 0\n"
-            llvm "  %s1 = insertvalue %type.str %s0, i64 %bytesCount, 1\n"
-            llvm "  ret %type.str %s1\n"
+        llvm "  %s1 = insertvalue %type.str %s0, i64 %bytesCount, 1\n"
+        llvm "  ret %type.str %s1\n"
     ..
 ..
 
@@ -95,8 +95,8 @@ pub truncate(value str*, byteCount u64) bool:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %countPtr = getelementptr %type.str, ptr %value, i32 0, i32 1\n"
-            llvm "  store i64 %byteCount, ptr %countPtr\n"
-            llvm "  ret i1 true\n"
+        llvm "  store i64 %byteCount, ptr %countPtr\n"
+        llvm "  ret i1 true\n"
     ..
 ..
 
@@ -106,10 +106,10 @@ pub updateAfterRealloc(value str*, data ptr, capacity u64) void:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %dataPtr = getelementptr %type.str, ptr %value, i32 0, i32 0\n"
-            llvm "  store ptr %data, ptr %dataPtr\n"
-            llvm "  %capacityPtr = getelementptr %type.str, ptr %value, i32 0, i32 1\n"
-            llvm "  store i64 %capacity, ptr %capacityPtr\n"
-            llvm "  ret void\n"
+        llvm "  store ptr %data, ptr %dataPtr\n"
+        llvm "  %capacityPtr = getelementptr %type.str, ptr %value, i32 0, i32 1\n"
+        llvm "  store i64 %capacity, ptr %capacityPtr\n"
+        llvm "  ret void\n"
     ..
 ..
 
@@ -229,9 +229,9 @@ pub byteAt(s str, idx u64) u8:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %l0 = extractvalue %type.str %s, 0\n"
-            llvm "  %ptr = getelementptr inbounds i8, ptr %l0, i64 %idx\n"
-            llvm "  %byte = load i8, ptr %ptr\n"
-            llvm "  ret i8 %byte\n"
+        llvm "  %ptr = getelementptr inbounds i8, ptr %l0, i64 %idx\n"
+        llvm "  %byte = load i8, ptr %ptr\n"
+        llvm "  ret i8 %byte\n"
     ..
 ..
 

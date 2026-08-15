@@ -11,20 +11,19 @@ use "std:strings" strings
 use "std:writer" writer
 use "std:footgun" footgun
 
-Capture(
+Capture impl writer.Writer(
     data u8*
     count u64
 )
 
-captureWrite(raw ptr, bytes str) !u64:
+Capture.write(bytes str) !u64:
     count := bytes.countBytes()
     # SAFETY: render passes addrof its live Capture; its 1024-byte allocation
     # exceeds every test rendering and count tracks the initialized prefix.
     unsafe:
-        output Capture* = raw
-        destination := cast.utop(cast.ptou(output.data) + output.count)
+        destination := cast.utop(cast.ptou(this.data) + this.count)
         memory.copy(strings.toPtr(bytes), destination, count)
-        output.count = output.count + count
+        this.count = this.count + count
     ..
     ret count
 ..
@@ -35,7 +34,7 @@ render(a allocator.Allocator, value json.Value, precision u64) !$str:
     output Capture
     output.data = storage
     output.count = 0
-    sink := writer.new(addrof output, captureWrite)
+    sink := output.proto[writer.Writer]()
     try value.write(sink, precision)
     view := strings.fromPtrNoCopy(output.data, output.count)
     ret try strings.copy(a, view)

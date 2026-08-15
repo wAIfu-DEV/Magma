@@ -8,23 +8,22 @@ use "std:heap" heap
 use "std:strings" strings
 use "std:writer" writer
 
-Capture(
+Capture impl writer.Writer(
     buffer u8*
     count u64
 )
 
-captureWrite(impl ptr, bytes str) !u64:
+Capture.write(bytes str) !u64:
     count := bytes.countBytes()
     # SAFETY: impl is a Capture and main provides a 128-byte buffer, larger
     # than every write made by this test.
     unsafe:
-        capture Capture* = impl
         i u64 = 0
         loop i < count:
-            capture.buffer[capture.count + i] = strings.byteAt(bytes, i)
+            this.buffer[this.count + i] = strings.byteAt(bytes, i)
             i = i + 1
         ..
-        capture.count = capture.count + count
+        this.count = this.count + count
     ..
     ret count
 ..
@@ -44,7 +43,7 @@ pub main() !void:
     captureBytes := try strings.alloc(a, 128)
     defer captureBytes.free(a)
     capture := Capture(buffer=strings.toPtr(captureBytes), count=0)
-    output := writer.new(addrof capture, captureWrite)
+    output := capture.proto[writer.Writer]()
     written := try fmt.str(a, "one").str(" two").str(" three").str(" four").str(" five").str(" six").str(" seven").str(" eight").str(" nine").writeTo(output)
     captured := strings.fromPtrNoCopy(capture.buffer, capture.count)
     if written != 44 || strings.compare(captured, "one two three four five six seven eight nine") == false:

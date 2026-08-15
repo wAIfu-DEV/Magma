@@ -5,33 +5,12 @@ mod allocator
 use "std:errors" errors
 use "std:checked" checked
 
-# Function table shared by allocator handles whose implementation and vtable
-# lifetimes are managed externally.
-pub Vtable(
-    alloc   (ptr, u64) !u8*
-    realloc (ptr, u8*, u64) !u8*
-    free    (ptr, u8*) void
+# Generic allocator interface backed by a compiler-generated immutable vtable.
+pub proto Allocator(
+    alloc(byteCount u64) !$u8*
+    realloc(block u8*, byteCount u64) !$u8*
+    free(block u8*) void
 )
-
-# Generic allocator interface backed by a shared, immutable vtable.
-pub Allocator(
-    impl ptr
-    vtable Vtable*
-)
-# Byte size: 16B
-
-# Allocates a new block of byteCount bytes.
-# @complexity O(1) wrapper call; allocator-dependent.
-# @param byteCount number of bytes to allocate
-# @returns owned memory block
-# @throws outOfMemory when the allocator cannot satisfy the request
-# @ownership Release the block with the same allocator or transfer ownership.
-# @example
-#   block := try a.alloc(64)
-#   a.free(block)
-Allocator.alloc(byteCount u64) !$u8*:
-    ret try this.vtable.alloc(this.impl, byteCount)
-..
 
 # Allocates a new block of size count * sizeof T.
 # @complexity O(1) wrapper call; allocator-dependent.
@@ -43,20 +22,7 @@ Allocator.alloc(byteCount u64) !$u8*:
 #   values := try a.allocT[u64](16)
 #   a.free(values)
 Allocator.allocT[T](count u64) !$T*:
-    ret try this.vtable.alloc(this.impl, try checked.byteCount[T](count))
-..
-
-# Reallocates a block of byteCount bytes.
-# @complexity O(1) wrapper call; allocator-dependent.
-# @param block existing allocation
-# @param byteCount new size in bytes
-# @returns owned memory block
-# @throws outOfMemory when the block cannot be resized
-# @ownership The returned pointer replaces block and remains owned by the caller.
-# @example
-#   block = try a.realloc(block, 128)
-Allocator.realloc(block u8*, byteCount u64) !$u8*:
-    ret try this.vtable.realloc(this.impl, block, byteCount)
+    ret try this.alloc(try checked.byteCount[T](count))
 ..
 
 # Reallocates a block of size count * sizeof T.
@@ -67,15 +33,30 @@ Allocator.realloc(block u8*, byteCount u64) !$u8*:
 # @throws outOfMemory when the block cannot be resized
 # @ownership The returned pointer replaces block and remains owned by the caller.
 Allocator.reallocT[T](block T*, count u64) !$T*:
-    ret try this.vtable.realloc(this.impl, block, try checked.byteCount[T](count))
+    ret try this.realloc(block, try checked.byteCount[T](count))
 ..
 
-# Frees a previously allocated block.
-# @complexity O(1) wrapper call; allocator-dependent.
-# @param block allocation to free
-# @warning block must have been allocated by this allocator and not already freed.
-# @example
-#   a.free(block)
-Allocator.free(block u8*) void:
-    this.vtable.free(this.impl, block)
+# Stable placeholder used by containers whose optional backing allocator is
+# inactive (for example arenas over caller-owned buffers).
+NullAllocator impl Allocator(
+    value u8
+)
+
+NullAllocator.alloc(byteCount u64) !$u8*:
+    throw errors.invalidArgument("null allocator cannot allocate")
+    ret none
+..
+
+NullAllocator.realloc(block u8*, byteCount u64) !$u8*:
+    throw errors.invalidArgument("null allocator cannot reallocate")
+    ret none
+..
+
+NullAllocator.free(block u8*) void:
+..
+
+gl_nullAllocator := NullAllocator(value=0)
+
+pub null() Allocator:
+    ret gl_nullAllocator.proto()
 ..

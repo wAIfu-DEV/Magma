@@ -130,8 +130,17 @@ pub read(handle ptr, buff u8[], n u64) !u64:
 
 # Returns a writer for standard output.
 # O(1).
+Console impl writer.Writer(fd u64)
+
+Console.write(bytes str) !u64:
+    ret try write(cast.utop(this.fd), bytes)
+..
+
+gl_stdout := Console(fd=1)
+gl_stderr := Console(fd=2)
+
 pub stdout() writer.Writer:
-    ret writer.new(cast.utop(1), write)
+    ret gl_stdout.proto()
 ..
 
 # Constant-interface variant used by std:io. Keeping the callback in a
@@ -140,11 +149,9 @@ writeConstStdout(impl ptr, bytes str) !u64:
     ret try write(cast.utop(1), bytes)
 ..
 
-const gl_stdoutVtable := writer.Vtable(fn_write=writeConstStdout)
-
 const gl_stdoutWriter := writer.ConstWriter(
     impl=none,
-    vtable=addrof gl_stdoutVtable,
+    fn_write=writeConstStdout,
 )
 
 pub stdoutConst() writer.ConstWriter*:
@@ -154,15 +161,21 @@ pub stdoutConst() writer.ConstWriter*:
 # Returns a writer for standard error.
 # O(1).
 pub stderr() writer.Writer:
-    ret writer.new(cast.utop(2), write)
+    ret gl_stderr.proto()
 ..
 
-const gl_stdinVtable := reader.Vtable(read=read)
+Stdin impl reader.Reader(handle ptr)
+
+Stdin.readRaw(bytes u8[], count u64) !u64:
+    ret try read(this.handle, bytes, count)
+..
+
+gl_stdin := Stdin(handle=none)
 
 # Returns a reader for standard input.
 # O(1).
 pub stdin() reader.Reader:
-    ret reader.new(none, addrof gl_stdinVtable)
+    ret gl_stdin.proto()
 ..
 
 # Closes a unix file handle.

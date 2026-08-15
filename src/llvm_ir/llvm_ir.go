@@ -8,8 +8,39 @@ import (
 	"bytes"
 	"fmt"
 	"maps"
+	"sort"
 	"sync"
 )
+
+func irProtoVtables(ctx *IrCtx, gl *t.NodeGlobal) error {
+	names := make([]string, 0, len(gl.StructDefs))
+	for name := range gl.StructDefs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		implementation := gl.StructDefs[name]
+		for _, relation := range implementation.Implements {
+			if relation.Proto == nil {
+				return fmt.Errorf("unresolved prototype implementation on %s", implementation.Name)
+			}
+			proto := relation.Proto
+			irWriteGlf(ctx, "@%s = private constant %%struct.%s.%s { ", t.ProtoVtableSymbol(implementation, proto), proto.Module, proto.VtableName)
+			for i, method := range proto.Methods {
+				concrete := implementation.Funcs[method.Name]
+				if concrete == nil {
+					return fmt.Errorf("missing resolved prototype method %s.%s", implementation.Name, method.Name)
+				}
+				if i != 0 {
+					irWriteGl(ctx, ", ")
+				}
+				irWriteGlf(ctx, "ptr @%s", concrete.AbsName)
+			}
+			irWriteGl(ctx, " }\n")
+		}
+	}
+	return nil
+}
 
 func irDefineStruct(ctx *IrCtx, structNode *t.NodeStructDef) error {
 	irWriteGlf(ctx, "%%struct.%s = type { ", structNode.AbsName)
@@ -126,6 +157,9 @@ func irWriteModule(
 	irWriteGl(ctx, "; Defined Types\n")
 	e := irGlobalStructDefs(ctx, fCtx.GlNode)
 	if e != nil {
+		return e
+	}
+	if e = irProtoVtables(ctx, fCtx.GlNode); e != nil {
 		return e
 	}
 

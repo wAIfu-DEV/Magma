@@ -6,7 +6,7 @@ use "std:heap" heap
 
 pub main() !void:
     scratch := try scratch_alloc.new(heap.allocator(), 1024)
-    defer scratch.free()
+    defer scratch.destroy()
     a := scratch.allocator()
 
     first := try a.alloc(64)

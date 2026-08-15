@@ -73,6 +73,141 @@ func parseStructDef(ctx *ParseCtx, tk t.Token, gncls t.NodeGenericClass) (*t.Nod
 	}, nil
 }
 
+func syntheticNamed(name string) *t.NodeType {
+	return &t.NodeType{KindNode: &t.NodeTypeNamed{NameNode: &t.NodeNameSingle{Name: name}}}
+}
+
+func parseProtoDef(ctx *ParseCtx, protoTk t.Token) (t.NodeGlobalDecl, error) {
+	modifiers := slices.Clone(ctx.NextModifiers)
+	ctx.NextModifiers = []ModifierType{}
+	consume(ctx) // proto
+	decl, err := parseDeclNameWithGenerics(ctx)
+	if err != nil {
+		return nil, err
+	}
+	name, ok := decl.NameNode.(*t.NodeNameSingle)
+	if !ok {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &protoTk, "prototype names must be simple", "")
+	}
+	if len(decl.TypeParams) != 0 {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &name.Tk, "generic prototype declarations are not yet supported", "ordinary methods declared on a prototype may still be generic")
+	}
+	if _, exists := ctx.GlobalNode.StructDefs[name.Name]; exists {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &name.Tk, fmt.Sprintf("type '%s' is already declared", name.Name), "")
+	}
+	if _, exists := ctx.GlobalNode.TypeAliases[name.Name]; exists {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &name.Tk, fmt.Sprintf("type '%s' is already declared as an alias", name.Name), "")
+	}
+	impls := []*t.ProtoImpl{}
+	open, err := peek(ctx)
+	if err == nil && open.Type == t.TokName && open.Repr == "impl" {
+		consume(ctx)
+		for {
+			current, currentErr := peek(ctx)
+			if currentErr != nil {
+				return nil, currentErr
+			}
+			if current.KeywType == t.KwParenOp {
+				open = current
+				break
+			}
+			implementedType, typeErr := parseType(ctx, current, false)
+			if typeErr != nil {
+				return nil, typeErr
+			}
+			impls = append(impls, &t.ProtoImpl{Type: implementedType, Tk: current})
+		}
+	}
+	if err != nil || open.KeywType != t.KwParenOp {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &name.Tk, "prototype declaration requires a method list", "expected: `proto Name(method(args) Return)`")
+	}
+	consume(ctx)
+	proto := &t.ProtoDef{Module: ctx.Fctx.PackageName, Name: name.Name, IsPublic: slices.Contains(modifiers, MdPublic), TypeParams: decl.TypeParams, MethodMap: map[string]*t.ProtoMethod{}, VtableName: "__proto_" + name.Name + "_vtable"}
+	for {
+		tk, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+		if tk.KeywType == t.KwNewline || tk.KeywType == t.KwComma {
+			consume(ctx)
+			continue
+		}
+		if tk.KeywType == t.KwParenCl {
+			consume(ctx)
+			break
+		}
+		if tk.Type != t.TokName {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, "expected prototype method name", "")
+		}
+		consume(ctx)
+		if next, _ := peek(ctx); next.KeywType == t.KwBrackOp {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, "prototype requirements cannot declare method-specific generic parameters", "declare a generic ordinary method on the prototype instead")
+		}
+		args, e := parseArgsList(ctx)
+		if e != nil {
+			return nil, e
+		}
+		retTk, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+		ret, e := parseType(ctx, retTk, true)
+		if e != nil {
+			return nil, e
+		}
+		if _, duplicate := proto.MethodMap[tk.Repr]; duplicate {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, fmt.Sprintf("duplicate prototype method '%s'", tk.Repr), "")
+		}
+		method := &t.ProtoMethod{Name: tk.Repr, Args: args.Args, Ret: ret, Slot: len(proto.Methods), Tk: tk}
+		method.Proto = proto
+		proto.Methods = append(proto.Methods, method)
+		proto.MethodMap[method.Name] = method
+	}
+
+	vtArgs := make([]t.NodeArg, 0, len(proto.Methods))
+	for _, method := range proto.Methods {
+		fnArgs := []*t.NodeType{syntheticNamed("ptr")}
+		for _, arg := range method.Args {
+			fnArgs = append(fnArgs, arg.TypeNode)
+		}
+		vtArgs = append(vtArgs, t.NodeArg{Name: method.Name, Tk: method.Tk, TypeNode: &t.NodeType{KindNode: &t.NodeTypeFunc{Args: fnArgs, RetType: method.Ret}}})
+	}
+	vtName := &t.NodeNameSingle{Name: proto.VtableName, Tk: name.Tk}
+	vtClass := t.NodeGenericClass{NameNode: vtName, ArgsNode: t.NodeArgList{Args: vtArgs}}
+	vtNode, e := parseStructDef(ctx, name.Tk, vtClass)
+	if e != nil {
+		return nil, e
+	}
+	ctx.GlobalNode.Declarations = append(ctx.GlobalNode.Declarations, vtNode)
+
+	protoArgs := []t.NodeArg{{Name: "impl", TypeNode: syntheticNamed("ptr")}, {Name: "vtable", TypeNode: &t.NodeType{KindNode: &t.NodeTypePointer{Kind: &t.NodeTypeNamed{NameNode: vtName}}}}}
+	protoClass := t.NodeGenericClass{NameNode: name, TypeParams: decl.TypeParams, ArgsNode: t.NodeArgList{Args: protoArgs}}
+	protoNode, e := parseStructDef(ctx, name.Tk, protoClass)
+	if e != nil {
+		return nil, e
+	}
+	protoNode.IsPublic = proto.IsPublic
+	def := ctx.GlobalNode.StructDefs[name.Name]
+	def.IsPublic = proto.IsPublic
+	def.IsProto = true
+	def.Proto = proto
+	def.Implements = impls
+	ctx.GlobalNode.ProtoDefs[name.Name] = proto
+
+	for _, method := range proto.Methods {
+		owner := &t.NodeTypeNamed{NameNode: &t.NodeNameSingle{Name: name.Name}}
+		thisType := &t.NodeType{KindNode: &t.NodeTypePointer{Kind: owner}}
+		args := []t.NodeArg{{Name: "this", TypeNode: thisType}}
+		args = append(args, method.Args...)
+		fn := &t.NodeFuncDef{Class: t.NodeGenericClass{NameNode: &t.NodeNameComposite{Parts: []string{name.Name, method.Name}, Tokens: []t.Token{name.Tk, method.Tk}}, ArgsNode: t.NodeArgList{Args: args}, OwnerTypeParams: decl.TypeParams}, ReturnType: method.Ret, AbsName: ctx.Fctx.PackageName + "." + name.Name + "." + method.Name, IsMember: true, ProtoDispatch: method}
+		method.FnDef = fn
+		def.Funcs[method.Name] = fn
+		ctx.GlobalNode.FuncDefs[name.Name+"."+method.Name] = fn
+		ctx.GlobalNode.Declarations = append(ctx.GlobalNode.Declarations, fn)
+	}
+	return protoNode, nil
+}
+
 func parseAliasDecl(ctx *ParseCtx, aliasTk t.Token) (t.NodeGlobalDecl, error) {
 	pruned := ctx.PruneNext
 	ctx.PruneNext = false
@@ -451,6 +586,47 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 		return nil, e
 	}
 
+	if next.Type == t.TokName && next.Repr == "impl" {
+		consume(ctx)
+		impls := []*t.ProtoImpl{}
+		for {
+			current, err := peek(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if current.KeywType == t.KwParenOp {
+				break
+			}
+			protoType, err := parseType(ctx, current, false)
+			if err != nil {
+				return nil, err
+			}
+			impls = append(impls, &t.ProtoImpl{Type: protoType, Tk: current})
+		}
+		gncls, err := parseGenericClass(ctx, declName.NameNode, declName.TypeParams, declName.OwnerTypeParams)
+		if err != nil {
+			return nil, err
+		}
+		after, err := peek(ctx)
+		if err != nil && !errors.Is(err, errOutOfBounds) {
+			return nil, err
+		}
+		if err == nil && after.KeywType != t.KwNewline {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &after, "implementation declaration must be a struct", "")
+		}
+		st, err := parseStructDef(ctx, tk, gncls)
+		if err != nil {
+			return nil, err
+		}
+		if st != nil {
+			st.IsPublic = slices.Contains(modifiers, MdPublic)
+			def := ctx.GlobalNode.StructDefs[declName.NameNode.(*t.NodeNameSingle).Name]
+			def.IsPublic = st.IsPublic
+			def.Implements = impls
+		}
+		return st, nil
+	}
+
 	switch next.KeywType {
 	case t.KwParenOp:
 		// A function type starts with the same token as a function declaration.
@@ -661,6 +837,9 @@ func parseGlobalDecl(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
 outer:
 	switch tk.Type {
 	case t.TokName:
+		if tk.Repr == "proto" {
+			return parseProtoDef(ctx, tk)
+		}
 		n, e := parseGlobalDeclFromName(ctx, tk)
 		if e != nil {
 			return nil, e

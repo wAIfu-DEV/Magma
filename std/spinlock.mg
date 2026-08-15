@@ -16,7 +16,7 @@ use "std:unix/thread_impl" impl_thread
 
 # Busy-waiting lock intended only for very short, non-blocking critical sections.
 # @warning Do not copy a SpinLock after sharing it between threads.
-pub SpinLock(
+pub SpinLock impl locker.Locker(
     flag atomic.U64
 )
 
@@ -48,40 +48,20 @@ SpinLock.unlock() void:
     this.flag.store(1)
 ..
 
-lockerLock(raw ptr) !void:
-    impl SpinLock*
-    # SAFETY: locker vtable contexts are created from a live SpinLock by asLocker.
-    unsafe:
-        impl = raw
-    ..
-    impl.lock()
+SpinLock.lockRaw() !void:
+    this.lock()
 ..
 
-lockerUnlock(raw ptr) !void:
-    impl SpinLock*
-    # SAFETY: locker vtable contexts are created from a live SpinLock by asLocker.
-    unsafe:
-        impl = raw
-    ..
-    impl.unlock()
+SpinLock.unlockRaw() !void:
+    this.unlock()
 ..
 
-lockerFree(raw ptr) void:
-    ret
+SpinLock.releaseRaw() void:
 ..
-
-const vtable := locker.Vtable(
-    lock = lockerLock
-    unlock = lockerUnlock
-    free = lockerFree
-)
 
 # Returns a non-owning type-erased view of this spin lock.
 # @complexity O(1)
 # @ownership The SpinLock must outlive the returned Locker.
 SpinLock.locker() locker.Locker:
-    ret locker.Locker(
-        impl = this,
-        vtable = addrof vtable,
-    )
+    ret this.proto()
 ..

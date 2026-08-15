@@ -196,6 +196,9 @@ func (m *monoCtx) trackExprVarDefs(module string, gl *t.NodeGlobal, expr t.NodeE
 				if init, isStructInit := n.AssignExpr.(*t.NodeExprStructInit); isStructInit {
 					varType = init.Type
 				}
+				if view, isProtoView := n.AssignExpr.(*t.NodeExprProtoView); isProtoView {
+					varType = view.ProtoType
+				}
 				if call, isCall := n.AssignExpr.(*t.NodeExprCall); isCall {
 					if callee, isName := call.Callee.(*t.NodeExprName); isName {
 						if targetModule, functionName, err := resolveQualifiedName(m.modules, module, gl, callee.Name); err == nil {

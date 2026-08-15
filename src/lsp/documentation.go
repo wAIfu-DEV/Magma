@@ -129,8 +129,27 @@ func buildDocIndex(state *types.SharedState) *docIndex {
 					index.completionVisible[key] = true
 					index.memberTypes[key] = field.TypeNode
 				}
-				if definition := file.GlNode.StructDefs[name]; definition != nil && text != "" {
-					index.byNode[definition] = text
+				if definition := file.GlNode.StructDefs[name]; definition != nil {
+					if text != "" {
+						index.byNode[definition] = text
+					}
+					if len(definition.Implements) > 0 {
+						targets := make([]string, 0, len(definition.Implements))
+						for _, implementation := range definition.Implements {
+							if implementation != nil && implementation.Type != nil {
+								targets = append(targets, formatType(implementation.Type))
+							}
+						}
+						key := file.PackageName + "\x00" + name + ".proto"
+						detail := "proto()"
+						documentation := "Creates a borrowed prototype view."
+						if len(targets) > 0 {
+							documentation += "\n\nAvailable prototypes: `" + strings.Join(targets, "`, `") + "`."
+						}
+						index.hoverSymbols[key] = joinHover(code(detail), documentation)
+						index.completionVisible[key] = true
+						index.completionKinds[key] = 2 // CompletionItemKind.Method
+					}
 				}
 			case *types.NodeTypeAlias:
 				if node.Alias != nil {

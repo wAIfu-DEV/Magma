@@ -807,6 +807,8 @@ func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr, topLeve
 		return irExprFuncCall(ctx, ne, false, topLevel)
 	case *t.NodeExprStructInit:
 		return irExprStructInit(ctx, ne)
+	case *t.NodeExprProtoView:
+		return irExprProtoView(ctx, ne)
 	// DEPRECATED
 	/*case *t.NodeExprDestructor:
 	return irExprDestructor(ctx, ne)*/

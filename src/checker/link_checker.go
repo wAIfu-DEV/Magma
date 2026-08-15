@@ -1,10 +1,51 @@
 package checker
 
 import (
+	"Magma/src/comp_err"
 	t "Magma/src/types"
 	"fmt"
 	"sort"
 )
+
+func clResolveImplementations(c *ctx, st *t.StructDef) error {
+	seen := map[string]bool{}
+	for _, implementation := range st.Implements {
+		if err := clType(c, implementation.Type); err != nil {
+			return err
+		}
+		protoStruct, err := clGetStructDefFromType(c, implementation.Type)
+		if err != nil || protoStruct == nil || !protoStruct.IsProto || protoStruct.Proto == nil {
+			return comp_err.CompilationErrorToken(c.FileCtx, &implementation.Tk, fmt.Sprintf("type '%s' is not a prototype", t.DisplayType(implementation.Type)), "only types declared with `proto` may follow `impl`")
+		}
+		proto := protoStruct.Proto
+		key := proto.Module + "." + proto.Name
+		if seen[key] {
+			return comp_err.CompilationErrorToken(c.FileCtx, &implementation.Tk, fmt.Sprintf("prototype '%s' is implemented more than once", proto.Name), "")
+		}
+		seen[key] = true
+		implementation.Proto = proto
+		implementation.Owner = st
+		for _, requirement := range proto.Methods {
+			method := st.Funcs[requirement.Name]
+			if method == nil {
+				return comp_err.CompilationErrorToken(c.FileCtx, &implementation.Tk, fmt.Sprintf("type '%s' does not implement '%s': missing method '%s'", st.Name, proto.Name, requirement.Name), fmt.Sprintf("declare `%s.%s` with the prototype signature", st.Name, requirement.Name))
+			}
+			actual := method.Class.ArgsNode.Args
+			if len(actual) == 0 || len(actual)-1 != len(requirement.Args) {
+				return comp_err.CompilationErrorToken(c.FileCtx, &implementation.Tk, fmt.Sprintf("method '%s.%s' does not satisfy '%s.%s': expected %d argument(s), got %d", st.Name, requirement.Name, proto.Name, requirement.Name, len(requirement.Args), max(0, len(actual)-1)), "")
+			}
+			for i := range requirement.Args {
+				if !sameType(actual[i+1].TypeNode, requirement.Args[i].TypeNode) {
+					return comp_err.CompilationErrorToken(c.FileCtx, &actual[i+1].Tk, fmt.Sprintf("method '%s.%s' parameter %d has type '%s', expected '%s'", st.Name, requirement.Name, i+1, t.DisplayType(actual[i+1].TypeNode), t.DisplayType(requirement.Args[i].TypeNode)), "")
+				}
+			}
+			if !sameType(method.ReturnType, requirement.Ret) {
+				return comp_err.CompilationErrorToken(c.FileCtx, &implementation.Tk, fmt.Sprintf("method '%s.%s' returns '%s', expected '%s'", st.Name, requirement.Name, t.DisplayType(method.ReturnType), t.DisplayType(requirement.Ret)), "")
+			}
+		}
+	}
+	return nil
+}
 
 func clFuncDef(c *ctx, fnDef *t.NodeFuncDef) error {
 	var scope *t.Scope = nil
@@ -144,6 +185,11 @@ func clGlobal(c *ctx, gl *t.NodeGlobal) error {
 			if e != nil {
 				return e
 			}
+		}
+	}
+	for _, st := range gl.StructDefs {
+		if err := clResolveImplementations(c, st); err != nil {
+			return err
 		}
 	}
 

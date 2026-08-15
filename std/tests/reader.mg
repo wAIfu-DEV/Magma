@@ -6,7 +6,9 @@ use "std:heap" heap
 use "std:reader" reader
 use "std:strings" strings
 
-source(impl ptr, bytes u8[], count u64) !u64:
+Source impl reader.Reader(value u8)
+
+Source.readRaw(bytes u8[], count u64) !u64:
     if count > 0:
         # SAFETY: reader callbacks receive at least count writable elements.
         unsafe:
@@ -17,11 +19,10 @@ source(impl ptr, bytes u8[], count u64) !u64:
     ret 0
 ..
 
-const implVtable := reader.Vtable(read=source)
-
 pub main() !void:
     a allocator.Allocator = heap.allocator()
-    input := reader.new(none, addrof implVtable)
+    source := Source(value=0)
+    input := source.proto[reader.Reader]()
     result := try input.read(a, 1)
     defer result.free(a)
     if strings.compare(result, "A") == false:

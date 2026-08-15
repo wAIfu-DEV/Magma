@@ -68,6 +68,9 @@ func (m *monoCtx) instantiateStruct(module string, baseName string, args []*t.No
 		FieldOrder: []string{},
 		Funcs:      map[string]*t.NodeFuncDef{},
 	}
+	for _, relation := range origDef.Implements {
+		stDef.Implements = append(stDef.Implements, &t.ProtoImpl{Type: substituteType(cloneType(relation.Type), subst), Tk: relation.Tk})
+	}
 	for i, fld := range specStruct.Class.ArgsNode.Args {
 		stDef.FieldNb[fld.Name] = i
 		stDef.Fields[fld.Name] = cloneType(fld.TypeNode)

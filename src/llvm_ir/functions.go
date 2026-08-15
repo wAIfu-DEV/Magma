@@ -3,6 +3,7 @@ package llvmir
 import (
 	t "Magma/src/types"
 	"bytes"
+	"fmt"
 )
 
 func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
@@ -356,6 +357,9 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 		// func declared elsewhere, just emit declaration
 		return irFunDefAliased(ctx, fnDefNode)
 	}
+	if fnDefNode.ProtoDispatch != nil {
+		return irProtoDispatchFunc(ctx, fnDefNode)
+	}
 
 	if ctx.fCtx.PackageName == ctx.fCtx.MainPckgName && fnDefNode.IsEntryPoint {
 		e := irMainWrapper(ctx, fnDefNode)
@@ -402,6 +406,58 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 		}
 	}
 	ctx.CurrFunc = nil
+	return nil
+}
+
+func irProtoDispatchFunc(ctx *IrCtx, fn *t.NodeFuncDef) error {
+	method := fn.ProtoDispatch
+	if method == nil || method.Proto == nil {
+		return fmt.Errorf("prototype dispatch wrapper lacks method metadata")
+	}
+	irWrite(ctx, "define internal ")
+	if err := irThrowingType(ctx, fn.ReturnType); err != nil {
+		return err
+	}
+	irWritef(ctx, " @%s", fn.AbsName)
+	if err := irArgsList(ctx, &fn.Class.ArgsNode, true); err != nil {
+		return err
+	}
+	irWrite(ctx, " alwaysinline {\n")
+	irWritef(ctx, "  %%proto.impl.addr = getelementptr inbounds %%struct.%s.%s, ptr %%this, i32 0, i32 0\n", method.Proto.Module, method.Proto.Name)
+	irWrite(ctx, "  %proto.impl = load ptr, ptr %proto.impl.addr\n")
+	irWritef(ctx, "  %%proto.vtable.addr = getelementptr inbounds %%struct.%s.%s, ptr %%this, i32 0, i32 1\n", method.Proto.Module, method.Proto.Name)
+	irWrite(ctx, "  %proto.vtable = load ptr, ptr %proto.vtable.addr\n")
+	irWritef(ctx, "  %%proto.slot.addr = getelementptr inbounds %%struct.%s.%s, ptr %%proto.vtable, i32 0, i32 %d\n", method.Proto.Module, method.Proto.VtableName, method.Slot)
+	irWrite(ctx, "  %proto.fn = load ptr, ptr %proto.slot.addr\n  ")
+	returnsValue := !(isVoidType(fn.ReturnType) && !fn.ReturnType.Throws)
+	if returnsValue {
+		irWrite(ctx, "%proto.result = ")
+	}
+	irWrite(ctx, "call ")
+	if err := irThrowingType(ctx, fn.ReturnType); err != nil {
+		return err
+	}
+	irWrite(ctx, " %proto.fn(ptr %proto.impl")
+	for i, arg := range fn.Class.ArgsNode.Args {
+		if i == 0 {
+			continue
+		}
+		irWrite(ctx, ", ")
+		if err := irType(ctx, arg.TypeNode); err != nil {
+			return err
+		}
+		irWritef(ctx, " %%%s", arg.Name)
+	}
+	irWrite(ctx, ")\n  ret ")
+	if returnsValue {
+		if err := irThrowingType(ctx, fn.ReturnType); err != nil {
+			return err
+		}
+		irWrite(ctx, " %proto.result\n")
+	} else {
+		irWrite(ctx, "void\n")
+	}
+	irWrite(ctx, "}\n")
 	return nil
 }
 

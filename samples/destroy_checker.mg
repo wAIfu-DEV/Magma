@@ -24,7 +24,7 @@ consume(x $Destructible) void: # $ before arg type marks ownership transfer (non
 
 assign(x $Destructible) void:
     someSlice := array Destructible[1]
-    someSlice[0] = x # ownership is transferred, checker is satisfied
+    someSlice[0] = move x # ownership is transferred, checker is satisfied
 
     # WRONG
     x.free() # ownership was already transferred, checker warning!
@@ -42,12 +42,12 @@ pub main() !void:
     condition bool = false
 
     if condition:
-        consume(myVal) # functions takes ownership of value, checker is satisfied with this branch
+        consume(move myVal) # functions takes ownership of value, checker is satisfied with this branch
         ret
     ..
 
     if condition:
-        assign(myVal) # same here
+        assign(move myVal) # same here
         ret 
     ..
 

@@ -75,16 +75,26 @@ heapFree(impl ptr, in u8*) void:
     ..
 ..
 
-const gl_heapVtable := a.Vtable(
-    alloc =   heapAlloc,
-    realloc = heapRealloc,
-    free =    heapFree,
-)
+HeapAllocator impl a.Allocator(value u8)
+
+HeapAllocator.alloc(nBytes u64) !$u8*:
+    ret try heapAlloc(none, nBytes)
+..
+
+HeapAllocator.realloc(in u8*, nBytes u64) !$u8*:
+    ret try heapRealloc(none, in, nBytes)
+..
+
+HeapAllocator.free(in u8*) void:
+    heapFree(none, in)
+..
+
+gl_heapAllocator := HeapAllocator(value=0)
 
 # Returns an allocator object that uses Windows heap allocation.
 # O(1).
 pub allocator() a.Allocator:
-    ret a.Allocator(impl=none, vtable=addrof gl_heapVtable)
+    ret gl_heapAllocator.proto()
 ..
 
 # Returns a heap-allocated region of memory of exactly nBytes bytes wide.

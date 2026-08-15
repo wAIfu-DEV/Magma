@@ -17,7 +17,7 @@ Block(
 )
 
 # Fixed-capacity allocator that splits and coalesces blocks within its storage.
-pub Scratch(
+pub Scratch impl allocator.Allocator(
     backing allocator.Allocator
     bytes u8*
     capacityValue u64
@@ -139,11 +139,17 @@ scratchRealloc(raw ptr, pointer u8*, byteCount u64) !u8*:
     ret replacement
 ..
 
-const vtable := allocator.Vtable(
-    alloc=scratchAlloc,
-    realloc=scratchRealloc,
-    free=scratchFree,
-)
+Scratch.alloc(byteCount u64) !$u8*:
+    ret try scratchAlloc(this, byteCount)
+..
+
+Scratch.realloc(pointer u8*, byteCount u64) !$u8*:
+    ret try scratchRealloc(this, pointer, byteCount)
+..
+
+Scratch.free(pointer u8*) void:
+    scratchFree(this, pointer)
+..
 
 initialize(a allocator.Allocator, bytes u8*, capacity u64, ownsBytes bool) !Scratch:
     if capacity < sizeof Block + ALIGNMENT:
@@ -173,7 +179,7 @@ pub newDefault(a allocator.Allocator) !$Scratch:
 
 # Creates scratch storage over a caller-owned buffer.
 pub fromBuffer(buffer u8[]) !Scratch:
-    empty := allocator.Allocator(impl=none, vtable=addrof vtable)
+    empty := allocator.null()
     address := cast.ptou(slices.toPtr(buffer))
     padding := (ALIGNMENT - (address & (ALIGNMENT - 1))) & (ALIGNMENT - 1)
     if padding > buffer.count():
@@ -184,7 +190,7 @@ pub fromBuffer(buffer u8[]) !Scratch:
 
 # Returns a non-owning allocator view. Scratch must remain at a stable address.
 Scratch.allocator() allocator.Allocator:
-    ret allocator.Allocator(impl=this, vtable=addrof vtable)
+    ret this.proto()
 ..
 
 # Releases every scratch allocation and restores one free block.
@@ -199,7 +205,7 @@ Scratch.capacity() u64:
 ..
 
 # Releases owned storage. Caller-provided storage is not freed.
-destr Scratch.free() void:
+destr Scratch.destroy() void:
     if this.ownsBytes && this.bytes != none:
         this.backing.free(this.bytes)
     ..

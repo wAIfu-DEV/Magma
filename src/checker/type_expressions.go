@@ -316,6 +316,14 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 			warnNumericConversion(c, field.FieldType, field.Expression, fmt.Sprintf("field '%s'", field.Name))
 		}
 		return nil
+	case *t.NodeExprProtoView:
+		if e := ctExpr(c, n.Target); e != nil {
+			return e
+		}
+		if n.Implementation == nil || n.InfType == nil {
+			return fmt.Errorf("prototype view was not resolved during linking")
+		}
+		return nil
 	case *t.NodeExprSubscript:
 		e := ctExpr(c, n.Expr)
 		if e != nil {

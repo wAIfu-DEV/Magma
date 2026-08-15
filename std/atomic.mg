@@ -81,7 +81,7 @@ U8.store(value u8) void:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  store atomic i8 %value, ptr %this seq_cst, align 1\n"
-            llvm "  ret void\n"
+        llvm "  ret void\n"
     ..
 ..
 
@@ -93,7 +93,7 @@ U8.load() u8:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %value = load atomic i8, ptr %this seq_cst, align 1\n"
-            llvm "  ret i8 %value\n"
+        llvm "  ret i8 %value\n"
     ..
 ..
 
@@ -105,7 +105,7 @@ U8.exchange(value u8) u8:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %previous = atomicrmw xchg ptr %this, i8 %value seq_cst, align 1\n"
-            llvm "  ret i8 %previous\n"
+        llvm "  ret i8 %previous\n"
     ..
 ..
 
@@ -117,7 +117,7 @@ U8.loadAcquire() u8:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %value = load atomic i8, ptr %this acquire, align 1\n"
-            llvm "  ret i8 %value\n"
+        llvm "  ret i8 %value\n"
     ..
 ..
 
@@ -129,7 +129,7 @@ U8.storeRelease(value u8) void:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  store atomic i8 %value, ptr %this release, align 1\n"
-            llvm "  ret void\n"
+        llvm "  ret void\n"
     ..
 ..
 
@@ -142,7 +142,7 @@ U8.fetchAdd(value u8) u8:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %previous = atomicrmw add ptr %this, i8 %value seq_cst, align 1\n"
-            llvm "  ret i8 %previous\n"
+        llvm "  ret i8 %previous\n"
     ..
 ..
 
@@ -155,7 +155,7 @@ U8.fetchSub(value u8) u8:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %previous = atomicrmw sub ptr %this, i8 %value seq_cst, align 1\n"
-            llvm "  ret i8 %previous\n"
+        llvm "  ret i8 %previous\n"
     ..
 ..
 
@@ -167,7 +167,7 @@ U32.store(value u32) void:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  store atomic i32 %value, ptr %this seq_cst, align 4\n"
-            llvm "  ret void\n"
+        llvm "  ret void\n"
     ..
 ..
 
@@ -179,7 +179,7 @@ U32.load() u32:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %value = load atomic i32, ptr %this seq_cst, align 4\n"
-            llvm "  ret i32 %value\n"
+        llvm "  ret i32 %value\n"
     ..
 ..
 
@@ -191,7 +191,7 @@ U32.exchange(value u32) u32:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %previous = atomicrmw xchg ptr %this, i32 %value seq_cst, align 4\n"
-            llvm "  ret i32 %previous\n"
+        llvm "  ret i32 %previous\n"
     ..
 ..
 
@@ -203,7 +203,7 @@ U32.loadAcquire() u32:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %value = load atomic i32, ptr %this acquire, align 4\n"
-            llvm "  ret i32 %value\n"
+        llvm "  ret i32 %value\n"
     ..
 ..
 
@@ -215,7 +215,7 @@ U32.storeRelease(value u32) void:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  store atomic i32 %value, ptr %this release, align 4\n"
-            llvm "  ret void\n"
+        llvm "  ret void\n"
     ..
 ..
 
@@ -228,7 +228,7 @@ U32.fetchAdd(value u32) u32:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %previous = atomicrmw add ptr %this, i32 %value seq_cst, align 4\n"
-            llvm "  ret i32 %previous\n"
+        llvm "  ret i32 %previous\n"
     ..
 ..
 
@@ -241,7 +241,7 @@ U32.fetchAddRelease(value u32) u32:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %previous = atomicrmw add ptr %this, i32 %value release, align 4\n"
-            llvm "  ret i32 %previous\n"
+        llvm "  ret i32 %previous\n"
     ..
 ..
 
@@ -254,7 +254,7 @@ U32.fetchSub(value u32) u32:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %previous = atomicrmw sub ptr %this, i32 %value seq_cst, align 4\n"
-            llvm "  ret i32 %previous\n"
+        llvm "  ret i32 %previous\n"
     ..
 ..
 
@@ -267,7 +267,7 @@ U32.fetchSubAcqRel(value u32) u32:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %previous = atomicrmw sub ptr %this, i32 %value acq_rel, align 4\n"
-            llvm "  ret i32 %previous\n"
+        llvm "  ret i32 %previous\n"
     ..
 ..
 
@@ -279,7 +279,7 @@ U64.store(value u64) void:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  store atomic i64 %value, ptr %this seq_cst, align 8\n"
-            llvm "  ret void\n"
+        llvm "  ret void\n"
     ..
 ..
 
@@ -291,7 +291,7 @@ U64.load() u64:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %value = load atomic i64, ptr %this seq_cst, align 8\n"
-            llvm "  ret i64 %value\n"
+        llvm "  ret i64 %value\n"
     ..
 ..
 
@@ -303,7 +303,7 @@ U64.exchange(value u64) u64:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %previous = atomicrmw xchg ptr %this, i64 %value seq_cst, align 8\n"
-            llvm "  ret i64 %previous\n"
+        llvm "  ret i64 %previous\n"
     ..
 ..
 
@@ -316,7 +316,7 @@ U64.loadRelaxed() u64:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %value = load atomic i64, ptr %this monotonic, align 8\n"
-            llvm "  ret i64 %value\n"
+        llvm "  ret i64 %value\n"
     ..
 ..
 
@@ -328,7 +328,7 @@ U64.loadAcquire() u64:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %value = load atomic i64, ptr %this acquire, align 8\n"
-            llvm "  ret i64 %value\n"
+        llvm "  ret i64 %value\n"
     ..
 ..
 
@@ -341,7 +341,7 @@ U64.storeRelaxed(value u64) void:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  store atomic i64 %value, ptr %this monotonic, align 8\n"
-            llvm "  ret void\n"
+        llvm "  ret void\n"
     ..
 ..
 
@@ -353,7 +353,7 @@ U64.storeRelease(value u64) void:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  store atomic i64 %value, ptr %this release, align 8\n"
-            llvm "  ret void\n"
+        llvm "  ret void\n"
     ..
 ..
 
@@ -366,7 +366,7 @@ U64.fetchAdd(value u64) u64:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %previous = atomicrmw add ptr %this, i64 %value seq_cst, align 8\n"
-            llvm "  ret i64 %previous\n"
+        llvm "  ret i64 %previous\n"
     ..
 ..
 
@@ -379,7 +379,7 @@ U64.fetchAddRelaxed(value u64) u64:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %previous = atomicrmw add ptr %this, i64 %value monotonic, align 8\n"
-            llvm "  ret i64 %previous\n"
+        llvm "  ret i64 %previous\n"
     ..
 ..
 
@@ -392,7 +392,7 @@ U64.fetchSub(value u64) u64:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %previous = atomicrmw sub ptr %this, i64 %value seq_cst, align 8\n"
-            llvm "  ret i64 %previous\n"
+        llvm "  ret i64 %previous\n"
     ..
 ..
 
@@ -404,7 +404,7 @@ I64.store(value i64) void:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  store atomic i64 %value, ptr %this seq_cst, align 8\n"
-            llvm "  ret void\n"
+        llvm "  ret void\n"
     ..
 ..
 
@@ -416,7 +416,7 @@ I64.load() i64:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %value = load atomic i64, ptr %this seq_cst, align 8\n"
-            llvm "  ret i64 %value\n"
+        llvm "  ret i64 %value\n"
     ..
 ..
 
@@ -428,7 +428,7 @@ I64.exchange(value i64) i64:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %previous = atomicrmw xchg ptr %this, i64 %value seq_cst, align 8\n"
-            llvm "  ret i64 %previous\n"
+        llvm "  ret i64 %previous\n"
     ..
 ..
 
@@ -441,7 +441,7 @@ I64.fetchAdd(value i64) i64:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %previous = atomicrmw add ptr %this, i64 %value seq_cst, align 8\n"
-            llvm "  ret i64 %previous\n"
+        llvm "  ret i64 %previous\n"
     ..
 ..
 
@@ -454,7 +454,7 @@ I64.fetchSub(value i64) i64:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %previous = atomicrmw sub ptr %this, i64 %value seq_cst, align 8\n"
-            llvm "  ret i64 %previous\n"
+        llvm "  ret i64 %previous\n"
     ..
 ..
 
@@ -466,8 +466,8 @@ F64.store(value f64) void:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %bits = bitcast double %value to i64\n"
-            llvm "  store atomic i64 %bits, ptr %this seq_cst, align 8\n"
-            llvm "  ret void\n"
+        llvm "  store atomic i64 %bits, ptr %this seq_cst, align 8\n"
+        llvm "  ret void\n"
     ..
 ..
 
@@ -479,8 +479,8 @@ F64.load() f64:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %bits = load atomic i64, ptr %this seq_cst, align 8\n"
-            llvm "  %value = bitcast i64 %bits to double\n"
-            llvm "  ret double %value\n"
+        llvm "  %value = bitcast i64 %bits to double\n"
+        llvm "  ret double %value\n"
     ..
 ..
 
@@ -493,8 +493,8 @@ F64.exchange(value f64) f64:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %bits = bitcast double %value to i64\n"
-            llvm "  %previous.bits = atomicrmw xchg ptr %this, i64 %bits seq_cst, align 8\n"
-            llvm "  %previous = bitcast i64 %previous.bits to double\n"
-            llvm "  ret double %previous\n"
+        llvm "  %previous.bits = atomicrmw xchg ptr %this, i64 %bits seq_cst, align 8\n"
+        llvm "  %previous = bitcast i64 %previous.bits to double\n"
+        llvm "  ret double %previous\n"
     ..
 ..

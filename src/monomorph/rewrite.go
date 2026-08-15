@@ -151,6 +151,9 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 	case *t.NodeExprMemberAccess:
 		return m.rewriteExpr(module, gl, n.Target, env)
 	case *t.NodeExprCall:
+		if e := m.inferGenericExpr(module, gl, n, nil, env); e != nil {
+			return e
+		}
 		if e := m.rewriteExpr(module, gl, n.Callee, env); e != nil {
 			return e
 		}
@@ -243,6 +246,15 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 		}
 		return nil
 
+	case *t.NodeExprProtoView:
+		if e := m.inferGenericExpr(module, gl, n, nil, env); e != nil {
+			return e
+		}
+		if e := m.rewriteType(module, gl, n.ProtoType); e != nil {
+			return e
+		}
+		return m.rewriteExpr(module, gl, n.Target, env)
+
 	case *t.NodeExprSubscript:
 		if e := m.rewriteType(module, gl, n.IndexType); e != nil {
 			return e
@@ -260,6 +272,9 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 		return m.rewriteType(module, gl, n.Type)
 	case *t.NodeExprVarDefAssign:
 		if e := m.rewriteType(module, gl, n.VarDef.Type); e != nil {
+			return e
+		}
+		if e := m.inferGenericExpr(module, gl, n.AssignExpr, n.VarDef.Type, env); e != nil {
 			return e
 		}
 		return m.rewriteExpr(module, gl, n.AssignExpr, env)
@@ -291,9 +306,12 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 	return nil
 }
 
-func (m *monoCtx) rewriteStmt(module string, gl *t.NodeGlobal, stmt t.NodeStatement, env map[string]*t.NodeType) error {
+func (m *monoCtx) rewriteStmt(module string, gl *t.NodeGlobal, stmt t.NodeStatement, env map[string]*t.NodeType, returnType *t.NodeType) error {
 	switch n := stmt.(type) {
 	case *t.NodeStmtRet:
+		if e := m.inferGenericExpr(module, gl, n.Expression, returnType, env); e != nil {
+			return e
+		}
 		return m.rewriteExpr(module, gl, n.Expression, env)
 	case *t.NodeStmtExpr:
 		if e := m.rewriteExpr(module, gl, n.Expression, env); e != nil {
@@ -309,17 +327,17 @@ func (m *monoCtx) rewriteStmt(module string, gl *t.NodeGlobal, stmt t.NodeStatem
 		}
 		ifEnv := cloneEnv(env)
 		for _, s := range n.Body.Statements {
-			if e := m.rewriteStmt(module, gl, s, ifEnv); e != nil {
+			if e := m.rewriteStmt(module, gl, s, ifEnv, returnType); e != nil {
 				return e
 			}
 		}
 		if n.NextCondStmt != nil {
-			return m.rewriteStmt(module, gl, n.NextCondStmt, cloneEnv(env))
+			return m.rewriteStmt(module, gl, n.NextCondStmt, cloneEnv(env), returnType)
 		}
 	case *t.NodeStmtElse:
 		elseEnv := cloneEnv(env)
 		for _, s := range n.Body.Statements {
-			if e := m.rewriteStmt(module, gl, s, elseEnv); e != nil {
+			if e := m.rewriteStmt(module, gl, s, elseEnv, returnType); e != nil {
 				return e
 			}
 		}
@@ -329,7 +347,7 @@ func (m *monoCtx) rewriteStmt(module string, gl *t.NodeGlobal, stmt t.NodeStatem
 		}
 		loopEnv := cloneEnv(env)
 		for _, s := range n.Body.Statements {
-			if e := m.rewriteStmt(module, gl, s, loopEnv); e != nil {
+			if e := m.rewriteStmt(module, gl, s, loopEnv, returnType); e != nil {
 				return e
 			}
 		}
@@ -343,7 +361,7 @@ func (m *monoCtx) rewriteStmt(module string, gl *t.NodeGlobal, stmt t.NodeStatem
 			return e
 		}
 		for _, s := range n.Body.Statements {
-			if e := m.rewriteStmt(module, gl, s, loopEnv); e != nil {
+			if e := m.rewriteStmt(module, gl, s, loopEnv, returnType); e != nil {
 				return e
 			}
 		}
@@ -355,14 +373,14 @@ func (m *monoCtx) rewriteStmt(module string, gl *t.NodeGlobal, stmt t.NodeStatem
 		}
 		boundedEnv := cloneEnv(env)
 		for _, s := range n.Body.Statements {
-			if e := m.rewriteStmt(module, gl, s, boundedEnv); e != nil {
+			if e := m.rewriteStmt(module, gl, s, boundedEnv, returnType); e != nil {
 				return e
 			}
 		}
 	case *t.NodeStmtUnsafe:
 		unsafeEnv := cloneEnv(env)
 		for _, s := range n.Body.Statements {
-			if e := m.rewriteStmt(module, gl, s, unsafeEnv); e != nil {
+			if e := m.rewriteStmt(module, gl, s, unsafeEnv, returnType); e != nil {
 				return e
 			}
 		}
@@ -370,7 +388,7 @@ func (m *monoCtx) rewriteStmt(module string, gl *t.NodeGlobal, stmt t.NodeStatem
 		if n.IsBody {
 			deferEnv := cloneEnv(env)
 			for _, s := range n.Body.Statements {
-				if e := m.rewriteStmt(module, gl, s, deferEnv); e != nil {
+				if e := m.rewriteStmt(module, gl, s, deferEnv, returnType); e != nil {
 					return e
 				}
 			}

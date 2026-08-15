@@ -139,6 +139,18 @@ pub str(a alc.Allocator, initial str) $Format:
     ret move result
 ..
 
+pub new(a alc.Allocator) $Format:
+    parts Part*, allocErr error = a.allocT[Part](INITIAL_CAPACITY)
+    result := Format(
+        allocator=a,
+        parts=parts,
+        count=0,
+        capacity=INITIAL_CAPACITY,
+        failure=allocErr,
+    )
+    ret move result
+..
+
 # Appends a borrowed string part.
 # @complexity Amortized O(1)
 # @ownership value must remain valid until the Format is consumed or freed.
@@ -266,25 +278,25 @@ pub printf(format $Format) !void:
     try format.print()
 ..
 
-countBytes(impl ptr, bytes str) !u64:
+CountWriter impl writer.Writer(value u8)
+
+CountWriter.write(bytes str) !u64:
     ret bytes.countBytes()
 ..
 
-BufferSink(
+BufferSink impl writer.Writer(
     out u8*
     offset u64
 )
 
-writeBuffer(impl ptr, bytes str) !u64:
+BufferSink.write(bytes str) !u64:
     count := bytes.countBytes()
-    # SAFETY: impl is created from BufferSink by render, and render allocates
-    # enough output for every write accepted by this callback.
+    # SAFETY: render allocates enough output for every accepted write.
     unsafe:
-        sink BufferSink* = impl
         for i u64 = 0 to count:
-            sink.out[sink.offset + i] = strings.byteAt(bytes, i)
+            this.out[this.offset + i] = strings.byteAt(bytes, i)
         ..
-        sink.offset = sink.offset + count
+        this.offset = this.offset + count
     ..
     ret count
 ..
@@ -300,7 +312,8 @@ destr Format.toStr(a alc.Allocator) !$str:
         release(this)
         throw constructionErr
     ..
-    counter := writer.new(none, countBytes)
+    countWriter := CountWriter(value=0)
+    counter := countWriter.proto[writer.Writer]()
     total u64, countErr error = writeParts(this, counter)
     if countErr.nok():
         release(this)
@@ -314,7 +327,7 @@ destr Format.toStr(a alc.Allocator) !$str:
     onerror result.free(a)
 
     sink := BufferSink(out=strings.toPtr(result), offset=0)
-    out := writer.new(addrof sink, writeBuffer)
+    out := sink.proto[writer.Writer]()
     ignored u64, writeErr error = writeParts(this, out)
     release(this)
     if writeErr.nok(): throw writeErr ..

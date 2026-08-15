@@ -18,7 +18,7 @@ atomicAdd(target u64*, value u64) void:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %ignored = atomicrmw add ptr %target, i64 %value acq_rel, align 8\n"
-            llvm "  ret void\n"
+        llvm "  ret void\n"
     ..
 ..
 
@@ -26,7 +26,7 @@ atomicLoad(target u64*) u64:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %value = load atomic i64, ptr %target acquire, align 8\n"
-            llvm "  ret i64 %value\n"
+        llvm "  ret i64 %value\n"
     ..
 ..
 
@@ -34,7 +34,7 @@ atomicStore(target u64*, value u64) void:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  store atomic i64 %value, ptr %target release, align 8\n"
-            llvm "  ret void\n"
+        llvm "  ret void\n"
     ..
 ..
 

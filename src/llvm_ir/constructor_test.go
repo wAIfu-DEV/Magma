@@ -86,6 +86,260 @@ func compileSourceTarget(t *testing.T, source string, target *magmatarget.Target
 	return string(ir), err
 }
 
+func TestPrototypeViewGeneratesVtableAndReusesOrdinaryPrototypeMethods(t *testing.T) {
+	ir, err := compileSource(t, `mod main
+
+pub proto Counter(
+    add(delta u64) u64
+)
+
+State(value u64)
+
+pub Box impl Counter(
+    state State*
+)
+
+Box.add(delta u64) u64:
+    this.state.value = this.state.value + delta
+    ret this.state.value
+..
+
+Counter.addTwice(delta u64) u64:
+    first := this.add(delta)
+    ret this.add(first)
+..
+
+Counter.identity[T](value T) T:
+    ret value
+..
+
+main() void:
+    state := State(value=1)
+    box := Box(state=addrof state)
+    counter := box.proto[Counter]()
+    counter.addTwice(2)
+    value := counter.identity[u64](2)
+..
+`)
+	if err != nil {
+		t.Fatalf("compile prototype program: %v", err)
+	}
+	for _, want := range []string{".__proto.", "private constant %struct.", "%proto.fn = load ptr", "insertvalue %struct."} {
+		if !strings.Contains(ir, want) {
+			t.Fatalf("prototype IR is missing %q:\n%s", want, ir)
+		}
+	}
+}
+
+func TestShallowGenericInferenceAndInferredPrototypeView(t *testing.T) {
+	_, err := compileSource(t, `mod main
+
+proto Memory(
+    touch() void
+)
+
+Heap impl Memory(value u64)
+
+Heap.touch() void:
+..
+
+Memory.allocT[T](count u64) T*:
+    ret none
+..
+
+Memory.reallocT[T](previous T*, count u64) T*:
+    ret previous
+..
+
+main() void:
+    heap := Heap(value=0)
+    memory Memory = heap.proto()
+    block u8* = memory.allocT(8)
+    previous u64* = none
+    resized := memory.reallocT(previous, 16)
+..
+`)
+	if err != nil {
+		t.Fatalf("compile shallow inference program: %v", err)
+	}
+}
+
+func TestShallowGenericReturnInferenceRequiresExpectation(t *testing.T) {
+	_, err := compileSource(t, `mod main
+proto Memory(touch() void)
+Heap impl Memory(value u64)
+Heap.touch() void:
+..
+Memory.allocT[T](count u64) T*:
+    ret none
+..
+main() void:
+    heap := Heap(value=0)
+    memory Memory = heap.proto()
+    block := memory.allocT(8)
+..
+`)
+	if err == nil || !strings.Contains(err.Error(), "cannot infer generic type parameter 'T'") {
+		t.Fatalf("error = %v, want missing generic inference expectation", err)
+	}
+}
+
+func TestInferredPrototypeViewRequiresPrototypeExpectation(t *testing.T) {
+	_, err := compileSource(t, `mod main
+proto Memory(touch() void)
+Heap impl Memory(value u64)
+Heap.touch() void:
+..
+main() void:
+    heap := Heap(value=0)
+    memory := heap.proto()
+..
+`)
+	if err == nil || !strings.Contains(err.Error(), "cannot infer prototype type") {
+		t.Fatalf("error = %v, want missing prototype expectation", err)
+	}
+}
+
+func TestPrototypeViewMayBorrowPointerReceiver(t *testing.T) {
+	_, err := compileSource(t, `mod main
+proto Value(read() u64)
+Box impl Value(value u64)
+Box.read() u64:
+    ret this.value
+..
+Box.view() Value:
+    ret this.proto[Value]()
+..
+main() void:
+    box := Box(value=7)
+    view := box.view()
+    view.read()
+..
+`)
+	if err != nil {
+		t.Fatalf("compile pointer-receiver prototype view: %v", err)
+	}
+}
+
+func TestPrototypeMayImplementOtherPrototypes(t *testing.T) {
+	_, err := compileSource(t, `mod main
+proto Reader(read() u64)
+proto Duplex impl Reader(read() u64)
+Duplex.reader() Reader:
+    ret this.proto[Reader]()
+..
+Value impl Duplex(value u64)
+Value.read() u64:
+    ret this.value
+..
+main() void:
+    value := Value(value=7)
+    duplex := value.proto[Duplex]()
+    reader := duplex.reader()
+    reader.read()
+..
+`)
+	if err != nil {
+		t.Fatalf("compile prototype implementing prototype: %v", err)
+	}
+}
+
+func TestReturnTypeProvidesShallowInferenceExpectation(t *testing.T) {
+	_, err := compileSource(t, `mod main
+proto Value(read() u64)
+Box impl Value(value u64)
+Box.read() u64:
+    ret this.value
+..
+Box.view() !Value:
+    ret this.proto()
+..
+makePointer[T]() T*:
+    ret none
+..
+bytes() !u8*:
+    ret makePointer()
+..
+main() !void:
+    box := Box(value=7)
+    view := try box.view()
+    view.read()
+    try bytes()
+..
+`)
+	if err != nil {
+		t.Fatalf("compile return-context inference: %v", err)
+	}
+}
+
+func TestStructMayImplementMultiplePrototypesWithoutCommaList(t *testing.T) {
+	_, err := compileSource(t, `mod main
+proto Reader(read() u64)
+proto Writer(write(value u64) void)
+Duplex impl Reader Writer(value u64)
+Duplex.read() u64:
+    ret this.value
+..
+Duplex.write(value u64) void:
+    this.value = value
+..
+main() void:
+    duplex := Duplex(value=1)
+    reader := duplex.proto[Reader]()
+    writer := duplex.proto[Writer]()
+    writer.write(reader.read())
+..
+`)
+	if err != nil {
+		t.Fatalf("compile multiple prototype program: %v", err)
+	}
+}
+
+func TestPrototypeConformanceReportsMissingMethod(t *testing.T) {
+	_, err := compileSource(t, `mod main
+proto Reader(read() u64)
+Broken impl Reader(value u64)
+main() void:
+..
+`)
+	if err == nil || !strings.Contains(err.Error(), "missing method 'read'") {
+		t.Fatalf("error = %v, want missing prototype method", err)
+	}
+}
+
+func TestPrototypeViewRejectsTemporaryImplementation(t *testing.T) {
+	_, err := compileSource(t, `mod main
+proto Reader(read() u64)
+Box impl Reader(value u64)
+Box.read() u64:
+    ret this.value
+..
+main() void:
+    reader := Box(value=1).proto[Reader]()
+..
+`)
+	if err == nil || !strings.Contains(err.Error(), "addressable implementation value") {
+		t.Fatalf("error = %v, want temporary-view diagnostic", err)
+	}
+}
+
+func TestGenericStructSpecializationRetainsPrototypeImplementation(t *testing.T) {
+	_, err := compileSource(t, `mod main
+proto Reset(reset() void)
+Box[T] impl Reset(value T)
+Box[T].reset() void:
+..
+main() void:
+    box := Box[u64](value=1)
+    reset := box.proto[Reset]()
+    reset.reset()
+..
+`)
+	if err != nil {
+		t.Fatalf("compile generic implementation: %v", err)
+	}
+}
+
 func TestFunctionDefersKeepReverseExecutionOrderAndLabels(t *testing.T) {
 	ir, err := compileSource(t, `mod main
 

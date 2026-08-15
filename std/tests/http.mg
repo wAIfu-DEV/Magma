@@ -12,7 +12,7 @@ pub main() !void:
     ..
     headers http.Header[] = slices.fromPtr(none, 0)
     request := http.noBody("GET", "https://example.com/", headers)
-    if request.body.vtable != none || request.bodyLength != 0:
+    if request.bodyLength != 0:
         throw errors.failure("empty HTTP request has a body")
     ..
     a := heap.allocator()

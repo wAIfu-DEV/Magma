@@ -61,39 +61,28 @@ cpuPause() void:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  call void asm sideeffect \"pause\", \"~{memory}\"()\n"
-            llvm "  ret void\n"
+        llvm "  ret void\n"
     ..
 ..
 
 # Dynamically growing worker pool for independent pointer-context tasks.
 # Submitted contexts remain caller-owned and must stay valid until their task ends.
-pub ThreadPool(
+pub ThreadPool impl executor.Executor(
     state State*
 )
 
-executorSubmit(raw ptr, entry ptr, context ptr) !void:
-    pool ThreadPool*
-    # SAFETY: executor() installs a live ThreadPool as the vtable context.
-    unsafe:
-        pool = raw
-    ..
-    try pool.submit(entry, context)
+ThreadPool.submitRaw(entry ptr, context ptr) !void:
+    try this.submit(entry, context)
 ..
 
-executorFree(raw ptr) void:
-    ret
+ThreadPool.releaseRaw() void:
 ..
-
-const executorVtable := executor.Vtable(
-    submit = executorSubmit
-    free = executorFree
-)
 
 # Returns a borrowed, type-erased scheduling view of this pool.
 # @ownership The pool must outlive the executor and all submitted tasks.
 # @complexity O(1)
 ThreadPool.executor() executor.Executor:
-    ret executor.Executor(impl=this, vtable=addrof executorVtable)
+    ret this.proto()
 ..
 
 releaseIdle(value $wake.Wake) void:

@@ -7,7 +7,7 @@ use "std:heap" heap
 pub main() !void:
     options := debug_alloc.Options(initialCapacity=1, canGrow=true, rejectUntrackedFree=true)
     debug := try debug_alloc.new(heap.allocator(), options)
-    defer debug.free()
+    defer debug.destroy()
     a := debug.allocator()
 
     first := try a.alloc(16)

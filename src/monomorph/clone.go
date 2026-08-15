@@ -111,6 +111,8 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 			fields[i] = t.NodeStructFieldInit{Tk: field.Tk, Name: field.Name, Expression: cloneExpr(field.Expression), FieldIndex: field.FieldIndex, FieldType: cloneType(field.FieldType)}
 		}
 		return &t.NodeExprStructInit{Tk: n.Tk, Type: cloneType(n.Type), Fields: fields}
+	case *t.NodeExprProtoView:
+		return &t.NodeExprProtoView{Tk: n.Tk, Target: cloneExpr(n.Target), ProtoType: cloneType(n.ProtoType), InfType: cloneType(n.InfType)}
 	case *t.NodeExprMemberAccess:
 		return &t.NodeExprMemberAccess{
 			Tk:      n.Tk,

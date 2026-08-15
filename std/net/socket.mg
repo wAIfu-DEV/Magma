@@ -19,7 +19,7 @@ pub const SHUTDOWN_READ u8 = 1
 pub const SHUTDOWN_WRITE u8 = 2
 pub const SHUTDOWN_BOTH u8 = 3
 
-pub Socket(
+pub Socket impl reader.Reader writer.Writer duplex.Duplex(
     handle ptr
     family u8
     kind u8
@@ -146,22 +146,27 @@ socketWrite(raw ptr, bytes str) !u64:
     ..
 ..
 
-const socketDuplexVtable := duplex.Vtable(fn_write=socketWrite, fn_read=socketRead)
-const socketReaderVtable := reader.Vtable(read=socketRead)
+Socket.readRaw(buffer u8[], count u64) !u64:
+    ret try this.recv(buffer, count)
+..
+
+Socket.write(bytes str) !u64:
+    ret try this.send(bytes)
+..
 
 Socket.reader() !reader.Reader:
     try this.requireOpen()
-    ret reader.new(this, addrof socketReaderVtable)
+    ret this.proto()
 ..
 
 Socket.writer() !writer.Writer:
     try this.requireOpen()
-    ret writer.new(this, socketWrite)
+    ret this.proto()
 ..
 
 Socket.duplex() !duplex.Duplex:
     try this.requireOpen()
-    ret duplex.new(this, addrof socketDuplexVtable)
+    ret this.proto()
 ..
 
 Socket.nativeHandle() !ptr:

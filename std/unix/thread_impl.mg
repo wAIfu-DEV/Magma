@@ -29,7 +29,7 @@ storeCompleted(value u8*) void:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  store atomic i8 1, ptr %value release, align 1\n"
-            llvm "  ret void\n"
+        llvm "  ret void\n"
     ..
 ..
 
@@ -37,7 +37,7 @@ loadCompleted(value u8*) u8:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %done = load atomic i8, ptr %value acquire, align 1\n"
-            llvm "  ret i8 %done\n"
+        llvm "  ret i8 %done\n"
     ..
 ..
 

@@ -17,7 +17,7 @@ const FILLED_MASK u64 = 0x7FFFFFFFFFFFFFFF
 # Buffered writer that accumulates writes before flushing.
 # Reduces syscall overhead for many small writes.
 # @complexity O(1) for most operations until buffer fills.
-pub Writer(
+pub Writer impl writer.Writer(
     underlying writer.Writer
     buffer ptr
     position u64
@@ -137,7 +137,7 @@ bufferedWrite(bw Writer*, bytes str) !u64:
 # @example
 #   output := bufferedWriter.writer()
 Writer.writer() writer.Writer:
-    ret writer.new(this, bufferedWrite)
+    ret this.proto()
 ..
 
 # Closes the buffered writer, flushing any remaining data.
@@ -156,21 +156,20 @@ destr Writer.close() !void:
 # @complexity O(N) for byte count.
 # @param bytes string to write
 # @returns number of bytes written
-# @note This convenience method writes directly to the underlying writer; use writer() for buffering.
 # @example
 #   written := try bufferedWriter.write("data")
 Writer.write(bytes str) !u64:
-    ret try this.underlying.write(bytes)
+    ret try bufferedWrite(this, bytes)
 ..
 
 # Writes the complete byte string or returns an error if the adapter makes no
 # progress or reports an invalid count.
 # @complexity O(N) for byte count
-# @note This convenience method writes directly to the underlying writer; use writer() for buffering.
 # @example
 #   try bufferedWriter.writeAll("complete payload")
 Writer.writeAll(bytes str) !u64:
-    ret try this.underlying.writeAll(bytes)
+    output := this.proto[writer.Writer]()
+    ret try output.writeAll(bytes)
 ..
 
 # Writes the provided bytes followed by a newline.
@@ -180,7 +179,8 @@ Writer.writeAll(bytes str) !u64:
 # @example
 #   try bufferedWriter.writeLn("record")
 Writer.writeLn(bytes str) !u64:
-    ret try this.underlying.writeLn(bytes)
+    output := this.proto[writer.Writer]()
+    ret try output.writeLn(bytes)
 ..
 
 # Writes "true" or "false" based on the boolean value.
@@ -190,7 +190,8 @@ Writer.writeLn(bytes str) !u64:
 # @example
 #   try bufferedWriter.writeBool(true)
 Writer.writeBool(b bool) !u64:
-    ret try this.underlying.writeBool(b)
+    output := this.proto[writer.Writer]()
+    ret try output.writeBool(b)
 ..
 
 # Writes a signed 64-bit integer in decimal form.
@@ -200,7 +201,8 @@ Writer.writeBool(b bool) !u64:
 # @example
 #   try bufferedWriter.writeInt64(-42)
 Writer.writeInt64(num i64) !u64:
-    ret try this.underlying.writeInt64(num)
+    output := this.proto[writer.Writer]()
+    ret try output.writeInt64(num)
 ..
 
 # Writes an unsigned 64-bit integer in decimal form.
@@ -210,7 +212,8 @@ Writer.writeInt64(num i64) !u64:
 # @example
 #   try bufferedWriter.writeUint64(42)
 Writer.writeUint64(num u64) !u64:
-    ret try this.underlying.writeUint64(num)
+    output := this.proto[writer.Writer]()
+    ret try output.writeUint64(num)
 ..
 
 
@@ -222,13 +225,14 @@ Writer.writeUint64(num u64) !u64:
 # @example
 #   try bufferedWriter.writeFloat64(3.14159, 2)
 Writer.writeFloat64(flt f64, precision u64) !u64:
-    ret try this.underlying.writeFloat64(flt, precision)
+    output := this.proto[writer.Writer]()
+    ret try output.writeFloat64(flt, precision)
 ..
 
 # Buffered reader that reads in chunks and serves from buffer.
 # Reduces syscall overhead for many small reads.
 # @complexity O(1) for most operations when reading from buffer.
-pub Reader(
+pub Reader impl reader.Reader(
     underlying reader.Reader
     buffer u8*
     position u64   # Current read position in buffer
@@ -363,9 +367,9 @@ bufferedRead(br Reader*, buff u8[], nBytes u64) !u64:
     ret totalRead
 ..
 
-const gl_reader_vtable := reader.Vtable(
-    read=bufferedRead,
-)
+Reader.readRaw(buff u8[], nBytes u64) !u64:
+    ret try bufferedRead(this, buff, nBytes)
+..
 
 # Returns a Reader interface for this buffered reader.
 # @complexity O(1).
@@ -374,7 +378,7 @@ const gl_reader_vtable := reader.Vtable(
 # @example
 #   input := bufferedReader.reader()
 Reader.reader() reader.Reader:
-    ret reader.new(this, addrof gl_reader_vtable)
+    ret this.proto()
 ..
 
 resizeLineBuffer(a alc.Allocator, old u8*, newCapacity u64) !$u8*:

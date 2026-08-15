@@ -9,6 +9,7 @@ import (
 func parseGlobal(ctx *ParseCtx) (*t.NodeGlobal, error) {
 	n := &t.NodeGlobal{
 		StructDefs:           map[string]*t.StructDef{},
+		ProtoDefs:            map[string]*t.ProtoDef{},
 		TypeAliases:          map[string]*t.TypeAlias{},
 		FuncDefs:             map[string]*t.NodeFuncDef{},
 		PrimitiveMethods:     map[string]map[string]*t.NodeFuncDef{},

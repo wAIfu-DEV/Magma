@@ -20,7 +20,7 @@ environmentPointer() u8**:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %environment = load ptr, ptr @environ\n"
-            llvm "  ret ptr %environment\n"
+        llvm "  ret ptr %environment\n"
     ..
 ..
 

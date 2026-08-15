@@ -11,10 +11,7 @@ pub main(args str[]) !void:
     a := heap.allocator()
 
     in :=  try io.stdin(a)
-
-    defer:
-        in.close()
-    ..
+    defer in.close()
 
     io.printLn("Started program. URL to query.")
 
@@ -33,8 +30,7 @@ pub main(args str[]) !void:
         defer resp.close()
 
         if resp.statusCode != 200:
-            fmt.str(a, "Request failed with code: ").int(resp.statusCode).print()
-            io.printLn("")
+            fmt.str(a, "Request failed with code: ").int(resp.statusCode).str("\n").print()
             continue
         ..
 

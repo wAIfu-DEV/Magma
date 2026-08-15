@@ -3,6 +3,7 @@ mod generation_wait_win
 
 
 use "std:win/types" win
+use "std:cast" cast
 use "std:errors" errors
 
 link "synchronization"
@@ -26,7 +27,7 @@ pub observe(generation u32*) u32:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %value = load atomic i32, ptr %generation acquire, align 4\n"
-            llvm "  ret i32 %value\n"
+        llvm "  ret i32 %value\n"
     ..
 ..
 
@@ -34,7 +35,7 @@ advance(generation u32*) void:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %previous = atomicrmw add ptr %generation, i32 1 release, align 4\n"
-            llvm "  ret void\n"
+        llvm "  ret void\n"
     ..
 ..
 
@@ -45,7 +46,7 @@ pub signal(generation u32*) void:
 pub wait(waiter Wait*, generation u32*, observed u32) !void:
     ok i32 = ext_win32_WaitOnAddress(generation, addrof observed, sizeof u32, infinite)
     if ok == 0:
-        throw errors.native(ext_win32_GetLastError(), "WaitOnAddress failed")
+        throw errors.native(cast.u64to32(ext_win32_GetLastError()), "WaitOnAddress failed")
     ..
 ..
 

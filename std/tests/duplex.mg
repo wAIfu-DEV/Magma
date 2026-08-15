@@ -1,20 +1,20 @@
 mod main
 use "std:duplex" duplex
-use "std:cast" cast
 use "std:errors" errors
-use "std:strings" strings
-write(impl ptr, bytes str) !u64:
+
+Stream impl duplex.Duplex(value u8)
+
+Stream.write(bytes str) !u64:
     ret bytes.countBytes()
 ..
-read(impl ptr, bytes u8[], count u64) !u64:
+
+Stream.readRaw(bytes u8[], count u64) !u64:
     ret 0
 ..
-const streamVTable := duplex.Vtable(
-    fn_write = write,
-    fn_read =  read,
-)
+
 pub main() !void:
-    stream := duplex.new(none, addrof streamVTable)
+    implementation := Stream(value=0)
+    stream := implementation.proto[duplex.Duplex]()
     count := try stream.writer().write("ok")
     if count != 2:
         throw errors.failure("duplex behavior changed")

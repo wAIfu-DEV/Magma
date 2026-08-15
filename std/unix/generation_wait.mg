@@ -16,7 +16,7 @@ pub observe(generation u32*) u32:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %value = load atomic i32, ptr %generation acquire, align 4\n"
-            llvm "  ret i32 %value\n"
+        llvm "  ret i32 %value\n"
     ..
 ..
 
@@ -24,7 +24,7 @@ advance(generation u32*) void:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %previous = atomicrmw add ptr %generation, i32 1 release, align 4\n"
-            llvm "  ret void\n"
+        llvm "  ret void\n"
     ..
 ..
 

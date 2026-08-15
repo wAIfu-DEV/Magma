@@ -351,6 +351,26 @@ type NodeExprStructInit struct {
 	Tk     Token
 }
 
+// NodeExprProtoView creates the two-word borrowed view of an implementation.
+type NodeExprProtoView struct {
+	Tk              Token
+	Target          NodeExpr
+	ProtoType       *NodeType
+	Implementation  *ProtoImpl
+	TargetIsPointer bool
+	InfType         *NodeType
+}
+
+func (n *NodeExprProtoView) GetInferredType() *NodeType { return n.InfType }
+func (n *NodeExprProtoView) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprProtoView\n")
+	n.Target.Print(indent + 1)
+	if n.ProtoType != nil {
+		n.ProtoType.Print(indent + 1)
+	}
+}
+
 func (n *NodeExprStructInit) GetInferredType() *NodeType { return n.Type }
 func (n *NodeExprStructInit) Print(indent int) {
 	PrintIndent(indent)
@@ -974,15 +994,18 @@ type NodeFuncDef struct {
 	IsMember bool
 	// IsEntryPoint records a top-level source function named main. The LLVM
 	// backend still checks that it belongs to the selected main package.
-	IsEntryPoint   bool
-	IsExternal     bool
-	IsPublic       bool
+	IsEntryPoint bool
+	IsExternal   bool
+	IsPublic     bool
 	// NoRetain declares that pointer/slice arguments are used only for the
 	// duration of the call and are not retained by its owned result.
 	NoRetain       bool
 	ExportName     string
 	ExportABI      string
 	ErrorPredicate ErrorPredicateKind
+	// ProtoDispatch is set on compiler-created member wrappers for required
+	// prototype methods. Their bodies are lowered directly through the vtable.
+	ProtoDispatch *ProtoMethod
 }
 
 type ErrorPredicateKind uint8
@@ -1040,6 +1063,7 @@ type NodeGlobal struct {
 	PublicImportAlias map[string]bool
 
 	StructDefs           map[string]*StructDef
+	ProtoDefs            map[string]*ProtoDef
 	TypeAliases          map[string]*TypeAlias
 	FuncDefs             map[string]*NodeFuncDef
 	PrimitiveMethods     map[string]map[string]*NodeFuncDef
@@ -1071,6 +1095,7 @@ func (*NodeExprArray) IsExpr()             {}
 func (*NodeExprName) IsExpr()              {}
 func (*NodeExprCall) IsExpr()              {}
 func (*NodeExprStructInit) IsExpr()        {}
+func (*NodeExprProtoView) IsExpr()         {}
 func (*NodeExprSubscript) IsExpr()         {}
 func (*NodeExprMemberAccess) IsExpr()      {}
 func (*NodeExprBinary) IsExpr()            {}

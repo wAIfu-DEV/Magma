@@ -25,11 +25,21 @@ fakeFree(impl ptr, in u8*) void:
     ret
 ..
 
-const gl_fakeVtable := a.Vtable(
-    alloc =   fakeAlloc,
-    realloc = fakeRealloc,
-    free =    fakeFree,
-)
+FakeAllocator impl a.Allocator(value u8)
+
+FakeAllocator.alloc(nBytes u64) !$u8*:
+    ret try fakeAlloc(none, nBytes)
+..
+
+FakeAllocator.realloc(in u8*, nBytes u64) !$u8*:
+    ret try fakeRealloc(none, in, nBytes)
+..
+
+FakeAllocator.free(in u8*) void:
+    fakeFree(none, in)
+..
+
+gl_fakeAllocator := FakeAllocator(value=0)
 
 # Returns an allocator whose allocation and reallocation operations always fail.
 # Free is accepted as a no-op, allowing failure-path tests to use normal cleanup.
@@ -39,5 +49,5 @@ const gl_fakeVtable := a.Vtable(
 #   a := fake_alloc.allocator()
 #   block u8*, allocationError error = a.alloc(16)
 pub allocator() a.Allocator:
-    ret a.Allocator(impl=none, vtable=addrof gl_fakeVtable)
+    ret gl_fakeAllocator.proto()
 ..

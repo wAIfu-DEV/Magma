@@ -19,7 +19,7 @@ Header(
 
 # Owned or borrowed arena storage. Individual frees are no-ops; reset releases
 # every arena allocation at once.
-pub Arena(
+pub Arena impl allocator.Allocator(
     backing allocator.Allocator
     bytes u8*
     capacityValue u64
@@ -89,11 +89,17 @@ arenaFree(raw ptr, block u8*) void:
     ret
 ..
 
-const vtable := allocator.Vtable(
-    alloc=arenaAlloc,
-    realloc=arenaRealloc,
-    free=arenaFree,
-)
+Arena.alloc(byteCount u64) !$u8*:
+    ret try arenaAlloc(this, byteCount)
+..
+
+Arena.realloc(block u8*, byteCount u64) !$u8*:
+    ret try arenaRealloc(this, block, byteCount)
+..
+
+Arena.free(block u8*) void:
+    arenaFree(this, block)
+..
 
 # Creates an arena with owned storage of capacity bytes.
 pub new(a allocator.Allocator, capacity u64) !$Arena:
@@ -117,7 +123,7 @@ pub fromBuffer(buffer u8[]) !Arena:
         throw errors.invalidArgument("arena buffer is too small after alignment")
     ..
     ret Arena(
-        backing=allocator.Allocator(impl=none, vtable=addrof vtable),
+        backing=allocator.null(),
         bytes=cast.utop(address + padding),
         capacityValue=buffer.count() - padding,
         offset=0,
@@ -127,7 +133,7 @@ pub fromBuffer(buffer u8[]) !Arena:
 
 # Returns a non-owning allocator view. The arena must remain at a stable address.
 Arena.allocator() allocator.Allocator:
-    ret allocator.Allocator(impl=this, vtable=addrof vtable)
+    ret this.proto()
 ..
 
 # Releases all allocations without modifying their bytes.
@@ -144,7 +150,7 @@ Arena.capacity() u64:
 ..
 
 # Releases owned arena storage. Borrowed storage is left untouched.
-destr Arena.free() void:
+destr Arena.destroy() void:
     if this.ownsBytes && this.bytes != none:
         this.backing.free(this.bytes)
     ..

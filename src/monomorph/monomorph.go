@@ -113,7 +113,7 @@ func Run(shared *t.SharedState) error {
 				env[a.Name] = cloneType(a.TypeNode)
 			}
 			for _, s := range fn.Body.Statements {
-				if e := ctx.rewriteStmt(module, gl, s, env); e != nil {
+				if e := ctx.rewriteStmt(module, gl, s, env, fn.ReturnType); e != nil {
 					return e
 				}
 			}

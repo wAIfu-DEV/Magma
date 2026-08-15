@@ -237,8 +237,8 @@ slicesFromEvents(events poll.Event*, count u64) poll.Event[]:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %s0 = insertvalue %type.slice zeroinitializer, ptr %events, 0\n"
-            llvm "  %s1 = insertvalue %type.slice %s0, i64 %count, 1\n"
-            llvm "  ret %type.slice %s1\n"
+        llvm "  %s1 = insertvalue %type.slice %s0, i64 %count, 1\n"
+        llvm "  ret %type.slice %s1\n"
     ..
 ..
 

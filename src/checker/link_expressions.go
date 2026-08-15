@@ -314,6 +314,40 @@ func clExpr(c *ctx, expr t.NodeExpr, lvalue bool) error {
 			}
 		}
 		return nil
+	case *t.NodeExprProtoView:
+		if _, ok := n.Target.(*t.NodeExprName); !ok {
+			return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, "prototype views require a named, addressable implementation value", "store the implementation in a local before calling `.proto[...]()`")
+		}
+		if e := clExpr(c, n.Target, true); e != nil {
+			return e
+		}
+		if e := ctExpr(c, n.Target); e != nil {
+			return e
+		}
+		if e := clType(c, n.ProtoType); e != nil {
+			return e
+		}
+		protoStruct, e := clGetStructDefFromType(c, n.ProtoType)
+		if e != nil || protoStruct == nil || !protoStruct.IsProto || protoStruct.Proto == nil {
+			return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("type '%s' is not a prototype", t.DisplayType(n.ProtoType)), "")
+		}
+		ownerType := n.Target.GetInferredType()
+		if dereferenced, isPointer := clDerefOne(ownerType); isPointer {
+			ownerType = dereferenced
+			n.TargetIsPointer = true
+		}
+		owner, e := clGetStructDefFromType(c, ownerType)
+		if e != nil || owner == nil {
+			return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, "prototype views require a concrete struct implementation", "")
+		}
+		for _, implementation := range owner.Implements {
+			if implementation.Proto == protoStruct.Proto {
+				n.Implementation = implementation
+				n.InfType = n.ProtoType
+				return nil
+			}
+		}
+		return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("type '%s' does not implement prototype '%s'", owner.Name, protoStruct.Proto.Name), "")
 	case *t.NodeExprTry:
 		call, ok := n.Call.(*t.NodeExprCall)
 		if !ok {

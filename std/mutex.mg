@@ -11,7 +11,7 @@ use "std:unix/mutex_impl" impl_mutex
 
 # Owned native mutex providing blocking mutual exclusion between threads.
 # @warning Do not copy a Mutex after it has been shared or locked.
-pub Mutex(
+pub Mutex impl locker.Locker(
     impl impl_mutex.Mutex
 )
 
@@ -47,33 +47,16 @@ destr Mutex.free() !void:
     try impl_mutex.free(addrof this.impl)
 ..
 
-lockerLock(raw ptr) !void:
-    impl Mutex*
-    # SAFETY: locker vtable contexts are created from a live Mutex by asLocker.
-    unsafe:
-        impl = raw
-    ..
-    try impl.lock()
+Mutex.lockRaw() !void:
+    try this.lock()
 ..
 
-lockerUnlock(raw ptr) !void:
-    impl Mutex*
-    # SAFETY: locker vtable contexts are created from a live Mutex by asLocker.
-    unsafe:
-        impl = raw
-    ..
-    try impl.unlock()
+Mutex.unlockRaw() !void:
+    try this.unlock()
 ..
 
-lockerFree(raw ptr) void:
-    ret
+Mutex.releaseRaw() void:
 ..
-
-const vtable := locker.Vtable(
-    lock = lockerLock
-    unlock = lockerUnlock
-    free = lockerFree
-)
 
 # Returns a non-owning type-erased view of this mutex.
 # @complexity O(1)
@@ -81,8 +64,5 @@ const vtable := locker.Vtable(
 # @example
 #   lock := guard.locker()
 Mutex.locker() locker.Locker:
-    ret locker.Locker(
-        impl = this,
-        vtable = addrof vtable,
-    )
+    ret this.proto()
 ..

@@ -8,23 +8,16 @@ use "std:errors"  errors
 
 # Writer interface for emitting bytes and formatted values.
 # @complexity O(1) wrapper calls; underlying writer decides cost.
-# Mutable type-erased byte sink. The implementation pointer is borrowed and
-# must remain alive and unmoved while this interface is used.
-pub Writer(
-    impl ptr,
-    fn_write (ptr, str) !u64,
+# Type-erased byte sink. The implementation is borrowed and must remain alive
+# and unmoved while this interface is used.
+pub proto Writer(
+    write(bytes str) !u64
 )
 
-# Immutable-vtable writer variant. This representation is useful for global
-# interfaces whose implementation and operation table never change.
-pub Vtable(
-    fn_write (ptr, str) !u64,
-)
-
-# Type-erased byte sink whose write callback receives immutable implementation state.
-pub ConstWriter(
+# Statically stored byte sink used by the standard output globals.
+pub ConstWriter impl Writer(
     impl ptr,
-    vtable Vtable*,
+    fn_write (ptr, str) !u64,
 )
 
 # Attempts one write and returns the number of bytes accepted.
@@ -33,7 +26,7 @@ pub ConstWriter(
 # @example
 #   written := try output.write("data")
 ConstWriter.write(bytes str) !u64:
-    ret try this.vtable.fn_write(this.impl, bytes)
+    ret try this.fn_write(this.impl, bytes)
 ..
 
 constWriterWriteRemaining(cw ConstWriter*, bytes str, firstWritten u64) !u64:
@@ -87,30 +80,7 @@ ConstWriter.writeLn(bytes str) !u64:
 # @example
 #   writer := output.toWriter()
 ConstWriter.toWriter() Writer:
-    ret Writer(
-        impl = this.impl
-        fn_write = this.vtable.fn_write
-    )
-..
-
-# Constructs a writer from borrowed implementation state and a write callback.
-# @warning writeFunc must return no more than the requested byte count.
-# @complexity O(1)
-# @example
-#   output := writer.new(context, writeBytes)
-pub new(impl ptr, writeFunc (ptr, str) !u64) Writer:
-    ret Writer(impl=impl, fn_write=writeFunc)
-..
-
-# Writes the provided bytes and returns the count written.
-# @complexity O(N) for byte count.
-# @param bytes string to write
-# @returns number of bytes written
-# @warning A successful call may write fewer bytes than requested.
-# @example
-#   written := try output.write("data")
-Writer.write(bytes str) !u64:
-    ret try this.fn_write(this.impl, bytes)
+    ret this.proto()
 ..
 
 # Writes the complete byte string or returns an error if the adapter makes no
@@ -119,7 +89,7 @@ Writer.write(bytes str) !u64:
 # @example
 #   try output.writeAll("complete payload")
 Writer.writeAll(bytes str) !u64:
-    firstWritten u64 = try this.fn_write(this.impl, bytes)
+    firstWritten u64 = try this.write(bytes)
 
     # Happy path, mean and lean
     if firstWritten == bytes.countBytes():
@@ -137,7 +107,7 @@ Writer.writeAll(bytes str) !u64:
     loop total < bound:
         remaining u64 = bound - total
         next ptr = cast.utop(cast.ptou(base) + total)
-        written u64 = try this.fn_write(this.impl, strings.fromPtrNoCopy(next, remaining))
+        written u64 = try this.write(strings.fromPtrNoCopy(next, remaining))
         if written > remaining:
             throw errors.failure("writer returned more bytes than requested")
         ..
