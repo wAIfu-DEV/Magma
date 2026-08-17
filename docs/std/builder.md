@@ -20,6 +20,11 @@ Builds a string from borrowed or copied segments while avoiding repeated concate
 ## API
 
 - `pub new(a alc.Allocator) !$Builder` creates an empty builder.
+- `pub newWithCapacity(a alc.Allocator, chunkCapacity u64) !$Builder` creates
+  one with a chosen initial segment capacity.
+- `Builder.addBorrowed` and `addOwned` append one segment without coalescing it
+  with the previous segment. The `appendBorrowed` and `appendOwned` variants
+  coalesce adjacent compatible segments when possible.
 - `Builder.appendBorrowed(s str) !void` appends a borrowed string. It must remain valid until the builder is built, reset, or freed.
 - `Builder.addByte(b u8) !void` appends one byte as an owned segment.
 - `Builder.appendOwned(s $str) !void` transfers an owned string allocated by the builder's allocator into the builder.
@@ -30,4 +35,5 @@ Builds a string from borrowed or copied segments while avoiding repeated concate
 - `Builder.reset() !void` releases owned segment copies and returns to an empty initial state.
 - `Builder.free() void` is a `destr` method that releases owned copies and segment storage.
 
-`ensureCapacity() !void`, `add(s str, owned bool) !void`, and `releaseCopies() void` are internal storage and ownership helpers.
+`ensureCapacity() !void` and `releaseCopies() void` are public low-level storage
+helpers used by the higher-level operations; most callers do not need them.

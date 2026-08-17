@@ -235,12 +235,12 @@ pub encode(cp u32, output u16[]) !u64:
 
 # Converts validated UTF-16 to an owned UTF-8 string.
 pub toUtf8(a alc.Allocator, units u16[]) !$str:
-    ret try utf8.utf16to8(a, units)
+    ret try utf8.utf16to8(units)
 ..
 
 # Converts validated UTF-8 to owned UTF-16 code units.
 pub fromUtf8(a alc.Allocator, text str) !$u16[]:
-    ret try utf8.utf8To16(a, text)
+    ret try utf8.utf8To16(text)
 ..
 
 # Returns the UTF-8 byte count required for validated UTF-16.
@@ -267,7 +267,7 @@ fromUtf8SizeUsingIterator(text str) !u64:
 # Converts malformed UTF-16 by replacing each unpaired surrogate with U+FFFD.
 pub toUtf8Lossy(a alc.Allocator, units u16[]) !$str:
     maximum := try checked.uMul(slices.count(units), 3)
-    owned $str = try strings.alloc(a, maximum)
+    owned $str = try strings.alloc(maximum)
     onerror owned.free(a)
     out := strings.toPtr(owned)
     inputIndex u64 = 0
@@ -361,8 +361,8 @@ pub decodeBytes(a alc.Allocator, bytes u8[], endian u8) !$u16[]:
     if count == 0:
         ret slices.fromPtr(none, 0)
     ..
-    result := try slices.alloc[u16](a, count)
-    onerror slices.free(a, result)
+    result := try slices.alloc[u16](count)
+    onerror slices.free(result)
     for i u64 = 0 to count:
         at := offset + i * 2
         # count=(byteCount-offset)/2 establishes both source bytes; result was

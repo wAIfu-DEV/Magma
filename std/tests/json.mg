@@ -28,16 +28,17 @@ Capture.write(bytes str) !u64:
     ret count
 ..
 
-render(a allocator.Allocator, value json.Value, precision u64) !$str:
-    storage u8* = try a.allocT[u8](1024)
-    defer a.free(storage)
+render(value json.Value, precision u64) !$str:
+    temporary := ctx.tempAlloc
+    storage u8* = try temporary.allocT[u8](1024)
+    defer temporary.free(storage)
     output Capture
     output.data = storage
     output.count = 0
     sink := output.proto[writer.Writer]()
     try value.write(sink, precision)
     view := strings.fromPtrNoCopy(output.data, output.count)
-    ret try strings.copy(a, view)
+    ret try strings.copy(view)
 ..
 
 pub main() !void:
@@ -67,7 +68,7 @@ pub main() !void:
         throw errors.failure("JSON float conversion failed")
     ..
 
-    object := try json.newObject(a)
+    object := try json.newObject()
     defer object.free()
     objectValue := json.objectBorrowed(addrof object)
     if try objectValue.asObject() != addrof object:
@@ -91,7 +92,7 @@ pub main() !void:
         throw errors.failure("JSON object delete failed")
     ..
 
-    array := try json.newArray(a)
+    array := try json.newArray()
     defer array.free()
     arrayValue := json.arrayBorrowed(addrof array)
     if try arrayValue.asArray() != addrof array:
@@ -108,7 +109,7 @@ pub main() !void:
     specialBytes[3] = 9
     specialBytes[4] = 1
     special := strings.fromPtrNoCopy(slices.toPtr(specialBytes), 5)
-    specialValue := try json.stringCopy(a, special)
+    specialValue := try json.stringCopy(special)
     specialRoundTrip := try specialValue.asString()
     if specialRoundTrip.countBytes() != 5:
         throw errors.failure("JSON string payload round trip failed")
@@ -125,7 +126,7 @@ pub main() !void:
         throw errors.failure("JSON array accepted an out-of-bounds index")
     ..
 
-    escaped := try render(a, json.arrayBorrowed(addrof array), 2)
+    escaped := try render(json.arrayBorrowed(addrof array), 2)
     defer escaped.free(a)
     escapedLength := escaped.countBytes()
     if escapedLength != 21:
@@ -161,24 +162,24 @@ pub main() !void:
         byteIndex = byteIndex + 1
     ..
 
-    nested := try json.newObject(a)
+    nested := try json.newObject()
     try nested.set("ok", json.bool(true))
     try object.set("items", json.arrayBorrowed(addrof array))
     try object.set("nested", json.objectOwned(addrof nested))
     footgun.drop[json.Object](move nested)
-    encoded := try render(a, json.objectBorrowed(addrof object), 2)
+    encoded := try render(json.objectBorrowed(addrof object), 2)
     defer encoded.free(a)
     encodedLength := encoded.countBytes()
     if encodedLength < 2 || strings.byteAt(encoded, 0) != 123 || strings.byteAt(encoded, encodedLength - 1) != 125:
         throw errors.failure("JSON nested object serialization changed")
     ..
 
-    copied := try json.stringCopy(a, "owned")
+    copied := try json.stringCopy("owned")
     ownedText := try copied.asString()
     if strings.compare(ownedText, "owned") == false:
         throw errors.failure("JSON owned string copy failed")
     ..
-    cleanup := try json.newArray(a)
+    cleanup := try json.newArray()
     try cleanup.append(move copied)
 
     borrowedValue := json.stringBorrowed("borrowed")
@@ -186,10 +187,10 @@ pub main() !void:
         cleanup.free()
         throw errors.failure("JSON borrowed string changed")
     ..
-    transferredText := try strings.copy(a, "transferred")
-    try cleanup.append(json.stringOwned(a, move transferredText))
+    transferredText := try strings.copy("transferred")
+    try cleanup.append(json.stringOwned(move transferredText))
 
-    child := try json.newArray(a)
+    child := try json.newArray()
     try child.append(json.bool(true))
     try cleanup.append(json.arrayOwned(addrof child))
     footgun.drop[json.Array](move child)

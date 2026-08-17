@@ -159,7 +159,7 @@ Resolver.resolveTo(host str, service str, family u8, output address.Endpoint[]) 
     ..
     try this.lock.unlock()
 
-    nativeResult impl.Resolved, resolveError error = impl.resolve(this.allocator, host, service, family, this.maxResults)
+    nativeResult impl.Resolved, resolveError error = impl.resolve(host, service, family, this.maxResults)
     resolved address.Endpoint* = none
     resolvedCount u64 = 0
     if resolveError.ok():
@@ -174,7 +174,7 @@ Resolver.resolveTo(host str, service str, family u8, output address.Endpoint[]) 
     index = findSlot(this, hash, host, service, family, now)
     cached = entryAt(this, index)
     clearEntry(this, cached)
-    ownedHost str, hostError error = strings.copy(this.allocator, host)
+    ownedHost str, hostError error = strings.copy(host)
     if hostError.nok():
         try this.lock.unlock()
         if resolved != none:
@@ -182,7 +182,7 @@ Resolver.resolveTo(host str, service str, family u8, output address.Endpoint[]) 
         ..
         throw hostError
     ..
-    ownedService str, serviceError error = strings.copy(this.allocator, service)
+    ownedService str, serviceError error = strings.copy(service)
     if serviceError.nok():
         ownedHost.free(this.allocator)
         try this.lock.unlock()
@@ -219,8 +219,8 @@ Resolver.resolveTo(host str, service str, family u8, output address.Endpoint[]) 
 
 # Allocating convenience wrapper. Use resolveTo on latency-sensitive paths.
 Resolver.resolve(host str, service str, family u8) !$address.Endpoint[]:
-    output := try slices.alloc[address.Endpoint](this.allocator, this.maxResults)
-    onerror slices.free(this.allocator, output)
+    output := try slices.alloc[address.Endpoint](this.maxResults)
+    onerror slices.free(output)
     count := try this.resolveTo(host, service, family, output)
     ret slices.fromPtr(slices.toPtr(output), count)
 ..

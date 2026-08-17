@@ -72,7 +72,7 @@ HeapAllocator.free(in u8*) void:
 gl_heapAllocator := HeapAllocator(value=0)
 
 # Returns an allocator object that uses the OS's standard heap allocation methods.
-pub allocator() a.Allocator:
+pub noctx allocator() a.Allocator:
     ret gl_heapAllocator.proto()
 ..
 

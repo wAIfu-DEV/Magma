@@ -1,23 +1,44 @@
 mod raylib
 # Magma bindings for common raylib windowing, drawing, and input operations.
-# @platform windows
-# @warning The raylib runtime library must be available beside the executable.
+# Raylib itself is linked statically. Platform graphics and window-system
+# libraries remain runtime dependencies of the generated executable.
 
 
 use "std:c" c
-# Requires raylib.dll beside executable
 @platform("windows")
-link "vendor/raylib/win/raylibdll.lib"
+link "vendor/raylib/win/raylib.lib"
 @platform("windows")
-bundle "vendor/raylib/win/raylib.dll"
+link "gdi32"
+@platform("windows")
+link "opengl32"
+@platform("windows")
+link "winmm"
 
-@platform("linux", "freebsd", "netbsd", "openbsd")
-link "vendor/raylib/linux/libraylib.so.550"
-@platform("linux", "freebsd", "netbsd", "openbsd")
-bundle "vendor/raylib/linux/libraylib.so.550"
+@platform("linux")
+link "vendor/raylib/linux/libraylib.a"
+@platform("linux")
+link ":libGL.so.1"
+@platform("linux")
+link ":libX11.so.6"
+@platform("linux")
+link "dl"
+@platform("linux")
+link "m"
+@platform("linux")
+link "pthread"
+@platform("linux")
+link "rt"
 
 @platform("darwin")
-link "vendor/raylib/mac/libraylib.dylib"
+link "vendor/raylib/mac/libraylib.a"
+@platform("darwin")
+link "framework:Cocoa"
+@platform("darwin")
+link "framework:CoreVideo"
+@platform("darwin")
+link "framework:IOKit"
+@platform("darwin")
+link "framework:OpenGL"
 
 use "std:allocator" alc
 use "std:strings"   strings

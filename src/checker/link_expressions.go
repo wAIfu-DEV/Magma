@@ -353,7 +353,11 @@ func clExpr(c *ctx, expr t.NodeExpr, lvalue bool) error {
 		if !ok {
 			return fmt.Errorf("try requires a throwing function call")
 		}
-		return clExprCall(c, call)
+		previousBoundary := c.ErrorBoundary
+		c.ErrorBoundary = 1
+		err := clExprCall(c, call)
+		c.ErrorBoundary = previousBoundary
+		return err
 	case *t.NodeExprSubscript:
 		return clExprSubscript(c, n)
 	case *t.NodeExprMemberAccess:
@@ -400,7 +404,11 @@ func clExpr(c *ctx, expr t.NodeExpr, lvalue bool) error {
 			return e
 		}
 	case *t.NodeExprDestructureAssign:
-		if e := clExprCall(c, n.Call); e != nil {
+		previousBoundary := c.ErrorBoundary
+		c.ErrorBoundary = 2
+		e := clExprCall(c, n.Call)
+		c.ErrorBoundary = previousBoundary
+		if e != nil {
 			return e
 		}
 		// Inferred destructuring bindings must have concrete types before later

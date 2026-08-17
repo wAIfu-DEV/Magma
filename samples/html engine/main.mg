@@ -91,7 +91,7 @@ getFile(a alc.Allocator, args str[]) !$file.File:
     if foundErr.nok():
         throw errors.invalidArgument("invalid argument: expected .html file path")
     ..
-    ret try file.open(a, mainArg, file.mode().read())
+    ret try file.open(mainArg, file.mode().read())
 ..
 
 isHiddenTag(tag str) bool:

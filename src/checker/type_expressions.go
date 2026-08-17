@@ -256,7 +256,11 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 			if e != nil {
 				return e
 			}
-			if !compatibleInitializer(expectedArgs[i], a) {
+			compatible := compatibleInitializer(expectedArgs[i], a)
+			if !compatible && n.AssociatedFnDef != nil && n.AssociatedFnDef.IsExternal {
+				compatible = compatibleNativeCallback(expectedArgs[i], a.GetInferredType(), a)
+			}
+			if !compatible {
 				return comp_err.CompilationErrorToken(
 					c.FileCtx,
 					expressionSourceToken(a),
@@ -283,6 +287,13 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 			n.InfType = n.FuncPtrType.KindNode.(*t.NodeTypeFunc).RetType
 		} else {
 			n.InfType = n.AssociatedFnDef.ReturnType
+		}
+		if c.ErrorBoundary > 0 && n.InfType != nil && n.InfType.Throws {
+			n.ThrowingType = n.InfType
+			n.ErrorMode = uint8(c.ErrorBoundary)
+			unwrapped := *n.InfType
+			unwrapped.Throws = false
+			n.InfType = &unwrapped
 		}
 		if valueUsed && n.InfType != nil && n.InfType.Throws {
 			return comp_err.CompilationErrorToken(
@@ -578,12 +589,15 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 		warnNumericConversion(c, n.InfType, n.Right, "assignment")
 		return nil
 	case *t.NodeExprTry:
+		previousBoundary := c.ErrorBoundary
+		c.ErrorBoundary = 1
 		e := ctExprWithUsage(c, n.Call, false)
+		c.ErrorBoundary = previousBoundary
 		if e != nil {
 			return e
 		}
-		callType := n.Call.GetInferredType()
-		if callType == nil || !callType.Throws {
+		call, ok := n.Call.(*t.NodeExprCall)
+		if !ok || call.ThrowingType == nil || !call.ThrowingType.Throws {
 			return comp_err.CompilationErrorToken(
 				c.FileCtx,
 				&n.Tk,
@@ -599,12 +613,13 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 				"mark the enclosing function's return type with '!' or handle the error explicitly",
 			)
 		}
-		unwrapped := *callType
-		unwrapped.Throws = false
-		n.InfType = &unwrapped
+		n.InfType = call.InfType
 		return nil
 	case *t.NodeExprDestructureAssign:
+		previousBoundary := c.ErrorBoundary
+		c.ErrorBoundary = 2
 		e := ctExprWithUsage(c, n.Call, false)
+		c.ErrorBoundary = previousBoundary
 		if e != nil {
 			return e
 		}
@@ -613,11 +628,11 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 			return comp_err.CompilationErrorToken(c.FileCtx, &n.Call.Tk, "cannot determine the return type for destructuring assignment", "")
 		}
 
-		if !n.Call.InfType.Throws {
+		if n.Call.ThrowingType == nil || !n.Call.ThrowingType.Throws {
 			return comp_err.CompilationErrorToken(c.FileCtx, &n.Call.Tk, fmt.Sprintf("cannot destructure non-throwing call '%s'", callDisplayName(n.Call)), "destructuring requires a call whose return type is marked with '!'")
 		}
 
-		if isVoidType(n.Call.InfType) {
+		if isVoidType(n.Call.ThrowingType) {
 			return comp_err.CompilationErrorToken(c.FileCtx, &n.Call.Tk, fmt.Sprintf("cannot bind a result value from throwing void call '%s'", callDisplayName(n.Call)), "a '!void' call only produces an error result")
 		}
 
@@ -628,9 +643,7 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 			return comp_err.CompilationErrorToken(c.FileCtx, &n.Call.Tk, fmt.Sprintf("destructuring error binding must have type 'error', but got '%s'", flattenType(n.ErrDef.Type)), "")
 		}
 
-		unwrappedValue := *n.Call.InfType
-		unwrappedValue.Throws = false
-		unwrapped := &unwrappedValue
+		unwrapped := n.Call.InfType
 
 		if n.ValueDef.Type == nil {
 			n.ValueDef.Type = unwrapped

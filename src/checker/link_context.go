@@ -16,6 +16,7 @@ type ctx struct {
 	CurrentTypeFunc  *t.NodeFuncDef
 	FileCtx          *t.FileCtx
 	LoopDepth        int
+	ErrorBoundary    int
 	PrimitiveMethods map[string]primitiveMethod
 
 	CurrScope  *t.Scope

@@ -102,7 +102,8 @@ testAddress() !void:
     ..
 ..
 
-testDns(a allocator.Allocator) !void:
+testDns() !void:
+    a := ctx.tempAlloc
     resolver := try dns.new(a, dns.defaultOptions())
     defer resolver.close()
     output := array address.Endpoint[16]
@@ -127,7 +128,8 @@ testUdp() !void:
     ..
 ..
 
-testTcpPollAndAsync(a allocator.Allocator) !void:
+testTcpPollAndAsync() !void:
+    a := ctx.tempAlloc
     listener := try tcp.listen(address.loopbackIpv4(0), 16)
     defer listener.close()
     endpoint := try listener.localEndpoint()
@@ -155,8 +157,8 @@ testTcpPollAndAsync(a allocator.Allocator) !void:
     cbcontext := CallbackContext(socket=addrof server.socket, calls=atomic.newU64(0))
     pool := try thread_pool.new(a, 1, 1, 8, 64)
     defer pool.close()
-    ctx := context.new(a, pool.executor())
-    running := try evloop.runAsync(ctx)
+    ctx = context.new(a, a, pool.executor())
+    running := try evloop.runAsync()
     defer:
         running.stop()
         running.await()
@@ -172,17 +174,19 @@ testTcpPollAndAsync(a allocator.Allocator) !void:
     ..
 ..
 
-testAsyncListener(a allocator.Allocator) !void:
+testAsyncListener() !void:
+    a := ctx.tempAlloc
     accontext AcceptContext* = try a.allocT[AcceptContext](1)
     # SAFETY: allocT returned one writable AcceptContext slot exclusively owned
     # by this test until after the running listener is awaited.
     unsafe:
         *accontext = AcceptContext(calls=atomic.newU64(0))
     ..
-    listener := try net_listener.new(a, address.loopbackIpv4(0), 16, 8, 8, onAccept, accontext)
+    listener := try net_listener.new(address.loopbackIpv4(0), 16, 8, 8, onAccept, accontext)
     endpoint := try listener.localEndpoint()
     pool := try thread_pool.new(a, 1, 1, 8, 64)
-    running := try listener.runAsync(context.new(a, pool.executor()))
+    ctx = context.new(a, a, pool.executor())
+    running := try listener.runAsync()
     client := try tcp.connect(endpoint)
     try client.close()
     deadline := time.ticks() + time.msToTicks(2000)
@@ -199,7 +203,8 @@ testAsyncListener(a allocator.Allocator) !void:
     a.free(accontext)
 ..
 
-testHttpClient(a allocator.Allocator) !void:
+testHttpClient() !void:
+    a := ctx.tempAlloc
     htcontext HttpContext* = try a.allocT[HttpContext](1)
     defer a.free(htcontext)
     # SAFETY: allocT returned one writable HttpContext slot exclusively owned
@@ -207,26 +212,26 @@ testHttpClient(a allocator.Allocator) !void:
     unsafe:
         *htcontext = HttpContext(calls=atomic.newU64(0), accepts=atomic.newU64(0))
     ..
-    listener := try net_listener.new(a, address.loopbackIpv4(0), 16, 8, 8, onHttpAccept, htcontext)
+    listener := try net_listener.new(address.loopbackIpv4(0), 16, 8, 8, onHttpAccept, htcontext)
     endpoint := try listener.localEndpoint()
     pool := try thread_pool.new(a, 2, 2, 8, 64)
     defer pool.close()
-    ctx := context.new(a, pool.executor())
-    running := try listener.runAsync(ctx)
+    ctx = context.new(a, a, pool.executor())
+    running := try listener.runAsync()
     defer:
         running.stop()
         running.await()
     ..
-    portText := try strconv.formatUint(a, endpoint.port)
+    portText := try strconv.formatUint(endpoint.port)
     defer portText.free(a)
-    urlBuilder := try builder.new(a)
+    urlBuilder := try builder.new()
     defer urlBuilder.free()
     try urlBuilder.appendBorrowed("http://127.0.0.1:")
     try urlBuilder.appendBorrowed(portText)
     try urlBuilder.appendBorrowed("/test")
     url := try urlBuilder.build()
     defer url.free(a)
-    client := try http_client.new(a, http_client.defaultOptions())
+    client := try http_client.new(http_client.defaultOptions())
     defer client.close()
     headers http_client.Header[] = slices.fromPtr(none, 0)
     request := http_client.noBody("GET", url, headers)
@@ -240,7 +245,7 @@ testHttpClient(a allocator.Allocator) !void:
     if response.statusCode != 200 || strings.compare(response.body, "ok") == false:
         throw errors.failure("polled HTTP response was invalid")
     ..
-    pending := try client.sendAsync(ctx, request)
+    pending := try client.sendAsync(request)
     asyncResponse := try pending.await()
     defer asyncResponse.close()
     if asyncResponse.statusCode != 200 || strings.compare(asyncResponse.body, "ok") == false:
@@ -257,9 +262,9 @@ testHttpClient(a allocator.Allocator) !void:
 pub main() !void:
     a := heap.allocator()
     try testAddress()
-    try testDns(a)
+    try testDns()
     try testUdp()
-    try testTcpPollAndAsync(a)
-    try testAsyncListener(a)
-    try testHttpClient(a)
+    try testTcpPollAndAsync()
+    try testAsyncListener()
+    try testHttpClient()
 ..

@@ -102,17 +102,18 @@ Arena.free(block u8*) void:
 ..
 
 # Creates an arena with owned storage of capacity bytes.
-pub new(a allocator.Allocator, capacity u64) !$Arena:
+pub new(capacity u64) !$Arena:
     if capacity < HEADER_SIZE + ALIGNMENT:
         throw errors.invalidArgument("arena capacity is too small")
     ..
-    bytes := try a.alloc(capacity)
-    ret Arena(backing=a, bytes=bytes, capacityValue=capacity, offset=0, ownsBytes=true)
+    bytes := try ctx.procAlloc.alloc(capacity)
+    ret Arena(backing=ctx.procAlloc, bytes=bytes, capacityValue=capacity, offset=0, ownsBytes=true)
 ..
 
 # Creates an arena with the default 64 KiB capacity.
-pub newDefault(a allocator.Allocator) !$Arena:
-    ret try new(a, DEFAULT_CAPACITY)
+pub newDefault() !$Arena:
+    a := ctx.procAlloc
+    ret try new(DEFAULT_CAPACITY)
 ..
 
 # Creates an arena over caller-owned storage. The storage must outlive the arena.

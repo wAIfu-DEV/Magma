@@ -90,7 +90,10 @@ func (m *monoCtx) rewriteType(module string, gl *t.NodeGlobal, tp *t.NodeType) e
 	return nil
 }
 
-func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, env map[string]*t.NodeType) error {
+func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, env map[string]*t.NodeType) (err error) {
+	if expr != nil {
+		defer func() { err = m.sourceError(gl, expressionToken(expr), err) }()
+	}
 	switch n := expr.(type) {
 	case *t.NodeExprName:
 		for _, g := range n.GenericArgs {

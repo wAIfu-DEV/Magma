@@ -36,14 +36,6 @@ type TkCtx struct {
 	IsEscaped bool
 }
 
-func hasData(ctx *TkCtx) bool {
-	_, err := peek(ctx)
-	if err != nil {
-		return false
-	}
-	return true
-}
-
 func decodeFirst(ctx *TkCtx) (rune, int, error) {
 	r, size := utf8.DecodeRune(ctx.Content[ctx.Idx:])
 
@@ -189,7 +181,7 @@ func handleNonAlphaKeyword(ctx *TkCtx, first rune) (t.Token, int, error) {
 	}, bestSize, nil
 }
 
-func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
+func Tokenize(fCtx *t.FileCtx, bytes []byte) (tokens []t.Token, err error) {
 	ctx := &TkCtx{
 		fCtx:    fCtx,
 		Content: bytes,
@@ -213,8 +205,11 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 		Mode:      tkModeNormal,
 		IsEscaped: false,
 	}
+	defer func() {
+		err = comp_err.EnsureDiagnostic(fCtx, &t.Token{Pos: ctx.Pos}, err)
+	}()
 
-	for hasData(ctx) {
+	for ctx.Idx < len(ctx.Content) {
 		r, err := peek(ctx)
 		if err != nil {
 			return nil, err
@@ -325,9 +320,8 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 			if r == '-' {
 				r2, err := peekMany(ctx, 2)
 				if err != nil {
-					return nil, err
-				}
-				if !unicode.IsDigit(r2[1]) {
+					ctx.CurrTok.Type = prev
+				} else if !unicode.IsDigit(r2[1]) {
 					ctx.CurrTok.Type = prev
 				} else {
 					goto write_num
@@ -337,9 +331,8 @@ func Tokenize(fCtx *t.FileCtx, bytes []byte) ([]t.Token, error) {
 			if r == '0' {
 				runes, err := peekMany(ctx, 2)
 				if err != nil {
-					return nil, err
-				}
-				if runes[1] == 'x' || runes[1] == 'X' {
+					goto write_num
+				} else if runes[1] == 'x' || runes[1] == 'X' {
 					ctx.TokReprBuff = append(ctx.TokReprBuff, 'u') // prefix for LLVM
 					ctx.Mode = tkModeHexNum
 				} else {

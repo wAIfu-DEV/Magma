@@ -359,7 +359,7 @@ main() void:
 		t.Fatalf("compile function defers: %v", err)
 	}
 
-	mainStart := strings.Index(ir, ".main() alwaysinline {")
+	mainStart := strings.Index(ir, ".main(ptr %.ctx.in) {")
 	if mainStart < 0 {
 		t.Fatal("main function body was not emitted")
 	}
@@ -382,9 +382,9 @@ main() void:
 		}
 	}
 
-	third := strings.Index(mainBody, ".third()")
-	second := strings.Index(mainBody, ".second()")
-	first := strings.Index(mainBody, ".first()")
+	third := strings.Index(mainBody, ".third(ptr %.ctx.addr)")
+	second := strings.Index(mainBody, ".second(ptr %.ctx.addr)")
+	first := strings.Index(mainBody, ".first(ptr %.ctx.addr)")
 	if third < 0 || second < 0 || first < 0 {
 		t.Fatalf("function defer calls were not all emitted:\n%s", mainBody)
 	}
@@ -415,7 +415,7 @@ work(fail bool) !u64:
 		"store i1 0, ptr %.defer.err",
 		"store i1 1, ptr %.defer.err",
 		"load i1, ptr %.defer.err",
-		".cleanup()",
+		".cleanup(ptr %.ctx.addr)",
 	} {
 		if !strings.Contains(ir, want) {
 			t.Fatalf("onerror lowering is missing %q:\n%s", want, ir)
@@ -587,8 +587,8 @@ main() void:
 		t.Fatalf("compile ordinary functions: %v", err)
 	}
 	if !strings.Contains(ir, "define internal void @") ||
-		!strings.Contains(ir, ".helper()") ||
-		!strings.Contains(ir, ".main()") {
+		!strings.Contains(ir, ".helper(ptr %.ctx.in)") ||
+		!strings.Contains(ir, ".main(ptr %.ctx.in)") {
 		t.Fatalf("ordinary Magma functions do not have internal linkage:\n%s", ir)
 	}
 	if !strings.Contains(ir, "define i32 @main(") && !strings.Contains(ir, "define i32 @wmain(") {
@@ -613,7 +613,7 @@ main() void:
 	}
 	for _, want := range []string{
 		"define internal i32 @",
-		".add(i32 %a, i32 %b)",
+		".add(ptr %.ctx.in, i32 %a, i32 %b)",
 		"define i32 @magma_add(i32 %a, i32 %b)",
 		"%export.ret = call i32 @",
 		"ret i32 %export.ret",
@@ -877,6 +877,66 @@ main() void:
 	}
 	if !strings.Contains(ir, "extractvalue") {
 		t.Fatal("inferred destructuring did not lower the throwing result")
+	}
+}
+
+func TestTryHandlesThrowingCallsAcrossExpression(t *testing.T) {
+	source := `mod test
+
+Reader(value u64)
+
+make() !Reader:
+    ret Reader(value=1)
+..
+
+argument() !u64:
+    ret 2
+..
+
+Reader.finish(value u64) !u64:
+    ret this.value + value
+..
+
+main() !void:
+    value := try make().finish(argument())
+..
+`
+	ir, err := compileSource(t, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(ir, "extractvalue %type.error"); got < 3 {
+		t.Fatalf("single try did not inspect every throwing call, got %d checks:\n%s", got, ir)
+	}
+}
+
+func TestDestructuringCapturesThrowingCallsAcrossExpression(t *testing.T) {
+	source := `mod test
+
+Reader(value u64)
+
+make() !Reader:
+    ret Reader(value=1)
+..
+
+argument() !u64:
+    ret 2
+..
+
+Reader.finish(value u64) !u64:
+    ret this.value + value
+..
+
+main() void:
+    value, problem := make().finish(argument())
+..
+`
+	ir, err := compileSource(t, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(ir, "store %type.error"); got < 3 {
+		t.Fatalf("destructuring did not capture every throwing call, got %d stores:\n%s", got, ir)
 	}
 }
 
@@ -1383,7 +1443,7 @@ read(item Item) u64:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(ir, "Item.get(ptr %item.addr)") {
+	if !strings.Contains(ir, "Item.get(ptr %.ctx.addr, ptr %item.addr)") {
 		t.Fatalf("expected value argument storage to be used as implicit this, got:\n%s", ir)
 	}
 }

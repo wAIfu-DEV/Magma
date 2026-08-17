@@ -30,6 +30,9 @@ func clResolveImplementations(c *ctx, st *t.StructDef) error {
 			if method == nil {
 				return comp_err.CompilationErrorToken(c.FileCtx, &implementation.Tk, fmt.Sprintf("type '%s' does not implement '%s': missing method '%s'", st.Name, proto.Name, requirement.Name), fmt.Sprintf("declare `%s.%s` with the prototype signature", st.Name, requirement.Name))
 			}
+			if method.ContextABI != requirement.ContextABI {
+				return comp_err.CompilationErrorToken(c.FileCtx, &implementation.Tk, fmt.Sprintf("method '%s.%s' has an incompatible context calling convention", st.Name, requirement.Name), "match the prototype method's noctx modifier")
+			}
 			actual := method.Class.ArgsNode.Args
 			if len(actual) == 0 || len(actual)-1 != len(requirement.Args) {
 				return comp_err.CompilationErrorToken(c.FileCtx, &implementation.Tk, fmt.Sprintf("method '%s.%s' does not satisfy '%s.%s': expected %d argument(s), got %d", st.Name, requirement.Name, proto.Name, requirement.Name, len(requirement.Args), max(0, len(actual)-1)), "")
@@ -62,6 +65,12 @@ func clFuncDef(c *ctx, fnDef *t.NodeFuncDef) error {
 
 	enterScope(c, scope)
 	defer leaveScope(c)
+
+	if fnDef.ImplicitContext != nil {
+		if fnDef.ImplicitContext.Type == nil {
+			fnDef.ImplicitContext.Type = t.ImplicitContextType(c.Shared)
+		}
+	}
 
 	for _, arg := range fnDef.Class.ArgsNode.Args {
 		e := clTypeForUsage(c, arg.TypeNode, typeUsageValue, "a function parameter type")
@@ -228,7 +237,7 @@ func CheckLinks(s *t.SharedState) error {
 			for name, function := range methods {
 				key := primitive + "." + name
 				if _, exists := ctx.PrimitiveMethods[key]; exists {
-					return fmt.Errorf("primitive method '%s' is defined more than once", key)
+					return comp_err.CompilationErrorToken(v, lastNameToken(function.Class.NameNode), fmt.Sprintf("primitive method '%s' is defined more than once", key), "primitive methods must have a single definition in the program")
 				}
 				ctx.PrimitiveMethods[key] = primitiveMethod{Function: function, Module: v.PackageName}
 			}
@@ -265,7 +274,8 @@ func CheckLinks(s *t.SharedState) error {
 	}
 
 	if len(queue) == 0 {
-		return fmt.Errorf("found no file with 0 dependencies, this may be sign of circular dependcy.")
+		cycle := firstFileByPath(s.Files, nil)
+		return comp_err.CompilationErrorToken(cycle, &t.Token{Pos: t.FilePos{Line: 1, Col: 1}}, "module import graph contains a cycle", "remove one of the imports participating in the cycle")
 	}
 
 	//fmt.Println("Resolving dependency order...")
@@ -289,7 +299,8 @@ func CheckLinks(s *t.SharedState) error {
 	}
 
 	if len(sorted) != len(s.Files) {
-		return fmt.Errorf("failed to produce dependency-sorted file list, this may be sign of a circular dependency.")
+		cycle := firstFileByPath(s.Files, func(file *t.FileCtx) bool { return n_deps[file] > 0 })
+		return comp_err.CompilationErrorToken(cycle, &t.Token{Pos: t.FilePos{Line: 1, Col: 1}}, "module import graph contains a cycle", "remove one of the imports participating in the cycle")
 	}
 
 	for _, fCtx := range sorted {
@@ -301,9 +312,23 @@ func CheckLinks(s *t.SharedState) error {
 		//fmt.Printf("check links of: %s\n", fCtx.PackageName)
 		e := clGlobal(ctx, n)
 		if e != nil {
-			return e
+			return comp_err.EnsureDiagnostic(fCtx, &t.Token{Pos: t.FilePos{Line: 1, Col: 1}}, e)
 		}
 	}
 
 	return nil
+}
+
+func firstFileByPath(files map[string]*t.FileCtx, include func(*t.FileCtx) bool) *t.FileCtx {
+	paths := make([]string, 0, len(files))
+	for path, file := range files {
+		if include == nil || include(file) {
+			paths = append(paths, path)
+		}
+	}
+	sort.Strings(paths)
+	if len(paths) == 0 {
+		return &t.FileCtx{}
+	}
+	return files[paths[0]]
 }

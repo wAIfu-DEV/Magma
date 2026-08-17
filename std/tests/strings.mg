@@ -5,7 +5,7 @@ use "std:heap" heap
 use "std:strings" strings
 pub main() !void:
     a allocator.Allocator = heap.allocator()
-    copy := try strings.copy(a, "magma")
+    copy := try strings.copy("magma")
     defer copy.free(a)
     if copy.countBytes() != 5 || strings.compare(copy, "magma") == false:
         throw errors.failure("strings behavior changed")
@@ -17,7 +17,7 @@ pub main() !void:
             throw errors.failure("copied string is not null terminated")
         ..
     ..
-    empty := try strings.alloc(a, 0)
+    empty := try strings.alloc(0)
     defer empty.free(a)
     emptyPtr u8* = strings.toPtr(empty)
     # SAFETY: strings.alloc always returns a terminated allocation.
@@ -26,7 +26,7 @@ pub main() !void:
             throw errors.failure("empty allocated string is not null terminated")
         ..
     ..
-    filled := try strings.allocFill(a, 3, 65)
+    filled := try strings.allocFill(3, 65)
     defer filled.free(a)
     filledPtr u8* = strings.toPtr(filled)
     # SAFETY: allocFill appends a terminator after the requested payload.
@@ -35,7 +35,7 @@ pub main() !void:
             throw errors.failure("filled string is not null terminated")
         ..
     ..
-    cstr := try strings.toCstr(a, "magma")
+    cstr := try strings.toCstr("magma")
     defer a.free(cstr)
     # SAFETY: toCstr returns count+1 addressable bytes including the terminator.
     unsafe:
@@ -64,13 +64,13 @@ pub main() !void:
     if borrowedPtr != unterminated:
         throw errors.failure("toCstrNoCopy did not return the borrowed pointer")
     ..
-    copiedFromPtr := try strings.fromPtr(a, unterminated, 5)
+    copiedFromPtr := try strings.fromPtr(unterminated, 5)
     defer copiedFromPtr.free(a)
     if copiedFromPtr.countBytes() != 5 || strings.toPtr(copiedFromPtr) == unterminated:
         throw errors.failure("fromPtr did not copy its input")
     ..
     borrowedCstr := strings.fromCstrNoCopy(cstr)
-    ownedCstr := try strings.fromCstr(a, cstr)
+    ownedCstr := try strings.fromCstr(cstr)
     defer ownedCstr.free(a)
     if strings.compare(borrowedCstr, "magma") == false || strings.compare(ownedCstr, "magma") == false:
         throw errors.failure("C string conversion changed")
@@ -79,28 +79,28 @@ pub main() !void:
     if try strings.findByte("magma", 103) != 2 || try strings.find("one two", "two") != 4:
         throw errors.failure("string find changed")
     ..
-    sub := try strings.substring(a, "magma", 1, 4)
+    sub := try strings.substring("magma", 1, 4)
     defer sub.free(a)
     if strings.compare(sub, "agm") == false:
         throw errors.failure("substring changed")
     ..
-    trimmed := try strings.trim(a, " \t magma \r\n")
+    trimmed := try strings.trim(" \t magma \r\n")
     defer trimmed.free(a)
-    withoutPrefix := try strings.trimPrefix(a, "std:strings", "std:")
+    withoutPrefix := try strings.trimPrefix("std:strings", "std:")
     defer withoutPrefix.free(a)
-    withoutSuffix := try strings.trimSuffix(a, "file.mg", ".mg")
+    withoutSuffix := try strings.trimSuffix("file.mg", ".mg")
     defer withoutSuffix.free(a)
     if strings.compare(trimmed, "magma") == false || strings.compare(withoutPrefix, "strings") == false || strings.compare(withoutSuffix, "file") == false:
         throw errors.failure("string trimming changed")
     ..
 
-    parts := try strings.split(a, "one::two::", "::")
+    parts := try strings.split("one::two::", "::")
     defer parts.free()
     if parts.count() != 3 || strings.compare(try parts.get(0), "one") == false || strings.compare(try parts.get(1), "two") == false || strings.compare(try parts.get(2), "") == false:
         throw errors.failure("eager split changed")
     ..
 
-    splitPair := try strings.splitOnce(a, "left=right", "=")
+    splitPair := try strings.splitOnce("left=right", "=")
     defer:
         # SAFETY: splitOnce returns two uniquely owned string fields.
         unsafe:
@@ -112,7 +112,7 @@ pub main() !void:
         throw errors.failure("splitOnce changed")
     ..
 
-    splitIterator := try strings.splitIter(a, "a,b,c", ",")
+    splitIterator := try strings.splitIter("a,b,c", ",")
     defer splitIterator.free()
     iterFirst := try splitIterator.next()
     defer iterFirst.free(a)

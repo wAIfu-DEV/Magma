@@ -1,19 +1,25 @@
-# `std/async`
+# Asynchronous I/O
 
-`async.Async` is a lightweight execution context for asynchronous
-standard-library operations. It borrows a `thread_pool.ThreadPool` and an
-allocator, avoiding repeated parameters while keeping the synchronous I/O
-modules independent of the thread-pool stack.
+There is no `std:async` module. Asynchronous standard-library APIs compose
+`std/context`, `std/executor`, and `std/future`; this page is a cross-module
+guide retained at the former topic URL.
 
 ```magma
-as := async.new(pool, allocator)
-pending := try as.read(source, 512)
+pool := try thread_pool.newDefault(a)
+defer pool.close()
+ctx = context.new(a, a, pool.executor())
+
+source := try fileHandle.reader()
+pending := try source.readAsync(512)
 bytes := try pending.await()
 ```
 
-`Async.read` copies the `Reader` interface into its task, but the reader's
-underlying implementation, pool, and allocator must remain valid until the
-future completes. The returned string is owned by the context's allocator.
+Implicit `ctx` borrows allocators and an executor. `Reader.readAsync` copies the
+`Reader` interface and requested byte count into private future work storage,
+then performs `Reader.read` on the executor. The reader's implementation, the
+executor, and the allocator must remain valid until `await()` consumes the
+future. The returned string is owned by the context allocator.
 
-`Async` does not close or otherwise own its pool or allocator and is cheap to
-copy.
+Executable and native-thunk startup supplies a retained per-thread default context
+when explicit scheduler shutdown is unnecessary. Use an explicit pool and
+context when worker limits, allocation, sharing, or shutdown order matter.

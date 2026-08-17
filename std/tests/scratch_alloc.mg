@@ -5,7 +5,7 @@ use "std:errors" errors
 use "std:heap" heap
 
 pub main() !void:
-    scratch := try scratch_alloc.new(heap.allocator(), 1024)
+    scratch := try scratch_alloc.new(1024)
     defer scratch.destroy()
     a := scratch.allocator()
 

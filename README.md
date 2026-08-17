@@ -252,7 +252,8 @@ argument-echo sample.
 - [`docs/SYNTAX.md`](docs/SYNTAX.md) - language syntax
 - [`docs/FEATURES.md`](docs/FEATURES.md) - language and library features
 - [`docs/OWNERSHIP.md`](docs/OWNERSHIP.md) - ownership and destruction analysis
-- [`docs/std/`](docs/std/) - standard-library reference
+- [`docs/std/`](docs/std/README.md) - indexed standard-library reference,
+  including networking and concurrency guides
 - [`samples/`](samples/) - example programs
 - [`src/`](src/) - compiler implementation
 

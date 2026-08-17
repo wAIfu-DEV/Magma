@@ -29,12 +29,14 @@ const usage = `usage: magma [options] <input-file>
 
 options:
   --debug                 print compiler diagnostics
+  --timings               print compilation phase timings
   --version, -v           print the compiler version
   --out, -o <path>        output path (default depends on --emit)
   --emit, -e <kind>       llvm, object, or exe (default llvm)
   --opt, -O <0-3>         LLVM optimization level (default 3)
   --error-trace-slots <n> trace slots per runtime shard (default 1024)
   --safety-warnings       downgrade memory-safety diagnostics to warnings
+  --null-context          use null allocator and executor adapters for roots
   --target <triple>       compilation target (default: Clang native target)
   --std <directory>       override the Magma standard-library directory
   --lsp                   run the Magma language server over stdio
@@ -43,12 +45,14 @@ options:
 type options struct {
 	inputFile       string
 	debug           bool
+	timings         bool
 	version         bool
 	out             string
 	emit            string
 	opt             int
 	errorTraceSlots uint64
 	safetyWarnings  bool
+	nullContext     bool
 	clangVersion    bool
 	target          string
 	targetOS        string
@@ -62,6 +66,7 @@ func parseArgs(args []string) (options, error) {
 	flags := flag.NewFlagSet("magma", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.BoolVar(&opts.debug, "debug", false, "print compiler diagnostics")
+	flags.BoolVar(&opts.timings, "timings", false, "print compilation phase timings")
 	flags.BoolVar(&opts.version, "version", false, "print compiler version")
 	flags.BoolVar(&opts.version, "v", false, "print compiler version")
 	flags.StringVar(&opts.out, "out", "", "output path")
@@ -72,6 +77,7 @@ func parseArgs(args []string) (options, error) {
 	flags.IntVar(&opts.opt, "O", 3, "optimization level")
 	flags.Uint64Var(&opts.errorTraceSlots, "error-trace-slots", 1024, "error trace slots per runtime shard")
 	flags.BoolVar(&opts.safetyWarnings, "safety-warnings", false, "downgrade memory-safety diagnostics to warnings")
+	flags.BoolVar(&opts.nullContext, "null-context", false, "use null root context")
 	flags.BoolVar(&opts.clangVersion, "clang-version", false, "print the resolved Clang version")
 	flags.BoolVar(&opts.clangVersion, "cv", false, "print the resolved Clang version")
 	flags.StringVar(&opts.target, "target", "", "target triple or architecture")
@@ -129,6 +135,9 @@ func wrappedMain() error {
 		return err
 	}
 	debug.SetEnabled(opts.debug)
+	timings := newCompilationTimings(opts.timings)
+	defer timings.report(os.Stderr)
+	stop := timings.start("Preparation", "standard library discovery")
 	if opts.stdRoot == "" {
 		executable, err := os.Executable()
 		if err != nil {
@@ -136,6 +145,7 @@ func wrappedMain() error {
 		}
 		opts.stdRoot = filepath.Join(filepath.Dir(executable), "std")
 	}
+	stop()
 	if opts.lsp {
 		return lsp.ServeWithPolicy(os.Stdin, os.Stdout, opts.stdRoot, opts.safetyWarnings)
 	}
@@ -151,11 +161,14 @@ func wrappedMain() error {
 		fmt.Printf("Clang %s (%s)\n", version, path)
 		return nil
 	}
+	stop = timings.start("Preparation", "Clang and target resolution")
 	clangPath, _, err := clangresolver.Resolve("")
 	if err != nil {
+		stop()
 		return err
 	}
 	target, err := magmatarget.Resolve(clangPath, opts.target)
+	stop()
 	if err != nil {
 		return err
 	}
@@ -167,8 +180,10 @@ func wrappedMain() error {
 	debug.Printf("target: %s\n", target.Triple)
 	filePathArg := opts.inputFile
 
+	stop = timings.start("Preparation", "paths and shared state")
 	cwd, e := os.Getwd()
 	if e != nil {
+		stop()
 		return e
 	}
 
@@ -178,40 +193,59 @@ func wrappedMain() error {
 	// second arg of MakeAbs is expected to be file path
 	absPath, e := makeabs.MakeAbs(filePathArg, cwd+"/a.b")
 	if e != nil {
+		stop()
 		return e
 	}
 
 	s, e := shared.MakeShared(cwd, opts.stdRoot)
 	if e != nil {
+		stop()
 		return e
 	}
 	s.ErrorTraceSlots = opts.errorTraceSlots
+	s.NullContext = opts.nullContext
 	s.Target = target
+	stop()
 
+	stop = timings.start("Front end", "parsing and imports")
 	parsed, e := compilerpipeline.Parse(s, absPath)
+	stop()
 	if e != nil {
 		return e
 	}
+	stop = timings.start("Front end", "main module validation")
 	if e = compilerpipeline.RequireMainModule(parsed, absPath); e != nil {
+		stop()
 		return e
 	}
+	stop()
+	stop = timings.start("Front end", "generic specialization")
 	specialized, e := compilerpipeline.Specialize(parsed)
+	stop()
 	if e != nil {
 		return e
 	}
+	stop = timings.start("Front end", "module linking")
 	linked, e := compilerpipeline.Link(specialized)
+	stop()
 	if e != nil {
 		return e
 	}
+	stop = timings.start("Checks", "type checking")
 	typed, e := compilerpipeline.CheckTypes(linked)
+	stop()
 	if e != nil {
 		return e
 	}
+	stop = timings.start("Checks", "lowering validation")
 	validated, e := compilerpipeline.ValidateLowering(typed)
+	stop()
 	if e != nil {
 		return e
 	}
+	stop = timings.start("Checks", "memory safety checking")
 	ready, e := compilerpipeline.CheckSafety(validated, opts.safetyWarnings)
+	stop()
 	if e != nil {
 		return e
 	}
@@ -219,7 +253,9 @@ func wrappedMain() error {
 		comp_err.FprintDiagnostic(os.Stderr, &s.Warnings[i])
 	}
 
-	irStr, e := compilerpipeline.Lower(ready)
+	stop = timings.start("Back end", "LLVM IR lowering")
+	irStr, e := compilerpipeline.LowerReachable(ready)
+	stop()
 	if e != nil {
 		return e
 	}
@@ -227,7 +263,10 @@ func wrappedMain() error {
 	//debug.Printf("LLVM IR:\n%s\n", irStr)
 	debug.Printf("Successful lowering to LLVM\n")
 
-	return emitOutput(opts, irStr, nativeLibraries(s), bundledFiles(s))
+	stop = timings.start("Back end", "output and Clang")
+	e = emitOutput(opts, irStr, nativeLibraries(s), bundledFiles(s))
+	stop()
+	return e
 }
 
 func nativeLibraries(s *types.SharedState) []string {
@@ -314,11 +353,7 @@ func emitOutput(opts options, ir []byte, nativeLibraries, bundles []string) erro
 	}
 	if opts.emit == "exe" {
 		for _, library := range nativeLibraries {
-			if filepath.IsAbs(library) {
-				args = append(args, library)
-			} else {
-				args = append(args, "-l"+library)
-			}
+			args = append(args, nativeLibraryArgs(library)...)
 		}
 		args = append(args, runtimeLibraryArgs(opts.targetOS)...)
 	}
@@ -350,6 +385,16 @@ func runtimeLibraryArgs(targetOS string) []string {
 	default:
 		return nil
 	}
+}
+
+func nativeLibraryArgs(library string) []string {
+	if framework, found := strings.CutPrefix(library, "framework:"); found {
+		return []string{"-framework", framework}
+	}
+	if filepath.IsAbs(library) {
+		return []string{library}
+	}
+	return []string{"-l" + library}
 }
 
 func copyBundles(output string, bundles []string) error {

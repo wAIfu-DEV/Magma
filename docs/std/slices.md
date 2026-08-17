@@ -18,6 +18,8 @@ Low-level generic slice representation and ownership helpers.
 - `pub reinterpret[T, R](in T[]) R[]` returns a view over the same bytes with
   element type `R`; its count is `sourceBytes / sizeof R`, rounded down. It does
   not validate alignment or representation.
+- `pub subslice[T](in T[], start u64, end u64) !T[]` returns the borrowed
+  half-open range `[start, end)` and rejects invalid bounds.
 - `pub alloc[T](a alc.Allocator, elemCount u64) !$T[]` allocates an owned typed
   slice with checked byte-size multiplication.
 - `pub free(a alc.Allocator, s slice) void` releases an owned slice allocation. Use only for a `$T[]` created with the same allocator; it does not recursively free elements.

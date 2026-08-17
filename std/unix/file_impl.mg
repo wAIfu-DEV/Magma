@@ -193,7 +193,8 @@ pub closeFile(handle ptr) !void:
 # @param path UTF-8 path
 # @param openMode desired open mode
 # @returns handle to the opened file
-pub openFile(a alc.Allocator, path str, openMode fopm.OpenMode) !$ptr:
+pub openFile(path str, openMode fopm.OpenMode) !$ptr:
+    a := ctx.tempAlloc
     O_RDONLY i32 = 0
     O_WRONLY i32 = 1
     O_RDWR   i32 = 2

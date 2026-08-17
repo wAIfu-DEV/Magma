@@ -24,11 +24,12 @@ pub proto Reader(
 # @ownership Release the returned string with a.
 # @example
 #   chunk := try input.read(a, 4096)
-Reader.read(a alc.Allocator, nBytes u64) !$str:
+Reader.read(nBytes u64) !$str:
+    a := ctx.procAlloc
     if nBytes == 0:
-        ret try strings.alloc(a, 0)
+        ret try strings.alloc(0)
     ..
-    result str = try strings.alloc(a, nBytes)
+    result str = try strings.alloc(nBytes)
     onerror result.free(a)
 
     buffPtr u8* = strings.toPtr(result)
@@ -71,11 +72,11 @@ ReaderReadTask(
     count u64
 )
 
-runReadTask(ctx ReaderReadTask*) !str:
-    ret try ctx.source.read(ctx.allocator, ctx.count)
+runReadTask(task ReaderReadTask*) !str:
+    ret try task.source.read(task.count)
 ..
 
-Reader.readAsync(ctx context.Ctx, nBytes u64) !$future.Future[str]:
-    task := ReaderReadTask(source=this, allocator=ctx.alloc, count=nBytes)
-    ret try future.new[str, ReaderReadTask](ctx.alloc, ctx.exec, runReadTask, task)
+Reader.readAsync(nBytes u64) !$future.Future[str]:
+    task := ReaderReadTask(source=this, allocator=ctx.procAlloc, count=nBytes)
+    ret try future.new[str, ReaderReadTask](ctx.exec, runReadTask, task)
 ..

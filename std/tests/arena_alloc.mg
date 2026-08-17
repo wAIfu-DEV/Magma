@@ -5,7 +5,7 @@ use "std:errors" errors
 use "std:heap" heap
 
 pub main() !void:
-    arena := try arena_alloc.new(heap.allocator(), 1024)
+    arena := try arena_alloc.new(1024)
     defer arena.destroy()
     a := arena.allocator()
 

@@ -10,12 +10,12 @@ use "../std/slices.mg"    slices
 pub main(args str[]) !void:
     a := heap.allocator()
 
-    in :=  try io.stdin(a)
+    in :=  try io.stdin()
     defer in.close()
 
     io.printLn("Started program. URL to query.")
 
-    client := try http.new(a, http.defaultOptions())
+    client := try http.new(http.defaultOptions())
     defer client.close()
 
     loop true:

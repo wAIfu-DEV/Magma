@@ -23,7 +23,8 @@ name16(name str) !$u16[]:
     ret try utf8.utf8To16NT(heap.allocator(), name)
 ..
 
-pub get(a allocator.Allocator, name str) !$str:
+pub get(name str) !$str:
+    temporary := ctx.tempAlloc
     wide := try name16(name)
     defer heap.allocator().free(slices.toPtr(wide))
     needed := ext_GetEnvironmentVariableW(slices.toPtr(wide), none, 0)
@@ -33,14 +34,14 @@ pub get(a allocator.Allocator, name str) !$str:
         ..
         throw errors.native(ext_GetLastError(), "GetEnvironmentVariableW failed")
     ..
-    buffer := try a.allocT[u16](needed)
+    buffer := try temporary.allocT[u16](needed)
     written := ext_GetEnvironmentVariableW(slices.toPtr(wide), buffer, needed)
     if written == 0 && ext_GetLastError() != 0:
-        a.free(buffer)
+        temporary.free(buffer)
         throw errors.native(ext_GetLastError(), "GetEnvironmentVariableW failed")
     ..
-    result str, conversionError error = utf16.toUtf8(a, slices.fromPtr(buffer, written))
-    a.free(buffer)
+    result str, conversionError error = utf16.toUtf8(ctx.procAlloc, slices.fromPtr(buffer, written))
+    temporary.free(buffer)
     if conversionError.nok():
         throw conversionError
     ..
@@ -73,7 +74,8 @@ pub unset(name str) !void:
     ..
 ..
 
-pub list(a allocator.Allocator) !$list.List[str]:
+pub list() !$list.List[str]:
+    a := ctx.procAlloc
     block := ext_GetEnvironmentStringsW()
     if block == none: throw errors.native(ext_GetLastError(), "GetEnvironmentStringsW failed") ..
     entries := try list.new[str](a, freeString)

@@ -1,24 +1,27 @@
 # `std/reader`
 
-## Example
+`Reader` is a type-erased byte-input `proto`:
 
 ```magma
-input := reader.new(state, readCallback)
-text := try input.read(heap.allocator(), 128)
-defer text.free(heap.allocator())
-n := try input.readToBuff(buffer, 16)
+pub proto Reader(
+    readRaw(buff u8[], nBytes u64) !u64
+)
 ```
 
-A type-erased byte-input interface.
+Concrete reader types implement `readRaw` and expose a borrowed view with
+`proto()` or a helper such as `File.reader()`. The implementation and its
+storage must outlive the view.
 
-## Type
+- `read(a, nBytes) !$str` allocates space with `a`, requests up to `nBytes`,
+  validates the adapter's returned count, and returns an owned string truncated
+  to the bytes obtained.
+- `readToBuff(buff, nBytes) !u64` rejects a request larger than `buff`, invokes
+  `readRaw`, and rejects an adapter count larger than the request.
+- `readAsync(nBytes) !$future.Future[str]` copies the interface into future
+  work storage and runs `read` through `ctx.exec`, allocating through
+  `ctx.procAlloc`. The implementation and all context components must remain valid
+  until the future is awaited.
 
-`Reader(impl ptr, fn_read (ptr, u8[], u64) !u64)` pairs adapter state with a callback. The state must remain valid for the reader's lifetime.
-
-## API
-
-- `pub new(impl ptr, readFunc (ptr, u8[], u64) !u64) Reader` constructs an interface.
-- `Reader.read(a alc.Allocator, nBytes u64) !$str` allocates space, reads up to `nBytes`, and returns an owned string containing exactly the bytes obtained.
-- `Reader.readToBuff(buff u8[], nBytes u64) !u64` reads into caller storage and returns the byte count. `nBytes` must not exceed the slice length.
-
-Read behavior and errors otherwise come from the adapter callback.
+Read semantics, EOF signaling, and other errors come from the concrete
+adapter. A zero count is a valid successful result; higher-level adapters such
+as `std/buffered` define their own EOF behavior.

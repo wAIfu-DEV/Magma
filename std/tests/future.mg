@@ -15,7 +15,7 @@ pub main() !void:
     pool := try thread_pool.new(a, 1, 1, 8, 1)
 
     scheduler := pool.executor()
-    direct := try future.new[u64, u64](a, scheduler, doubleValue, 21)
+    direct := try future.new[u64, u64](scheduler, doubleValue, 21)
     if try direct.await() != 42:
         try pool.close()
         throw errors.failure("direct Future returned the wrong value")

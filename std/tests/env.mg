@@ -10,12 +10,12 @@ pub main() !void:
     if env.has(name): throw errors.failure("unset variable reported present") ..
     try env.set(name, "hello")
     defer env.unset(name)
-    value := try env.get(heap.allocator(), name)
+    value := try env.get(name)
     defer value.free(heap.allocator())
     if strings.compare(value, "hello") == false:
         throw errors.failure("environment round trip changed")
     ..
-    snapshot := try env.list(heap.allocator())
+    snapshot := try env.list()
     defer snapshot.free()
     entries := snapshot.view()
     found bool = false

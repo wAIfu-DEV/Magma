@@ -129,8 +129,9 @@ File.count() !u64:
 # @mustcall close
 # @example
 #   handle := try file.open(a, "data.bin", file.mode().read())
-pub open(a alc.Allocator, path str, openMode fopm.OpenMode) !$File:
-    handle ptr = try impl_file.openFile(a, path, openMode)
+pub open(path str, openMode fopm.OpenMode) !$File:
+    a := ctx.tempAlloc
+    handle ptr = try impl_file.openFile(path, openMode)
     ret File(handle=handle, openMode=openMode, open=true)
 ..
 

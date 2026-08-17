@@ -21,7 +21,7 @@ pub main() !void:
     defer selectedDir.free(a)
 
     try io.printLn(selectedDir)
-    directory := try fs.openDir(a, selectedDir)
+    directory := try fs.openDir(selectedDir)
     defer directory.close()
 
     entries := directory.iterator()

@@ -104,7 +104,7 @@ Scanner.consume() !u8:
 ..
 
 pub parseHtml(a alc.Allocator, r reader.Reader) !$Html:
-    buff := try buffered.readerBuffered(a, r)
+    buff := try buffered.readerBuffered(r)
     defer buff.close()
     # Reader.reader() borrows its receiver, so create the interface from the
     # parseHtml-local buffer that remains alive and unmoved for the full parse.

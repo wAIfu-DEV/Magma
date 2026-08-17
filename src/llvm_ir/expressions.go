@@ -235,6 +235,9 @@ func irNameVariableStorage(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, *t.No
 	if variable.Type == nil || variable.Type.KindNode == nil {
 		return SsaName{}, nil, fmt.Errorf("cannot lower variable name without a resolved type")
 	}
+	if variable.IsImplicitContext {
+		return SsaName{Repr: "%.ctx.addr"}, variable.Type, nil
+	}
 	switch variable.Storage {
 	case t.VariableStorageGlobal:
 		if variable.AbsName == "" {
@@ -307,7 +310,11 @@ func irExprName(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 	} else if isFuncName {
 		irWritef(ctx, "  %s = bitcast ptr @", ssa.Repr)
 
-		if fnDef.NoAliasName != "" {
+		if nameExpr.NativeContextThunk {
+			irWrite(ctx, nativeContextThunkSymbol(fnDef))
+		} else if nameExpr.ContextAdapter {
+			irWrite(ctx, contextAdapterSymbol(fnDef))
+		} else if fnDef.NoAliasName != "" {
 			// NoAliasName has precedence, used for extern func aliasing
 			irWrite(ctx, fnDef.NoAliasName)
 		} else {
@@ -764,7 +771,8 @@ func irTryCall(ctx *IrCtx, callRetSsa SsaName, fnCall *t.NodeExprCall, pos t.Fil
 
 	irWritef(ctx, "  %s = extractvalue ", errSsa.Repr)
 
-	e := irThrowingType(ctx, fnCall.InfType)
+	returnType := callReturnType(fnCall)
+	e := irThrowingType(ctx, returnType)
 	if e != nil {
 		return SsaName{}, e
 	}
@@ -776,12 +784,12 @@ func irTryCall(ctx *IrCtx, callRetSsa SsaName, fnCall *t.NodeExprCall, pos t.Fil
 		return SsaName{}, e
 	}
 
-	if !isVoidType(fnCall.InfType) {
+	if !isVoidType(returnType) {
 		valSsa := irSsaLocal(ctx)
 
 		irWritef(ctx, "  %s = extractvalue ", valSsa.Repr)
 
-		e = irThrowingType(ctx, fnCall.InfType)
+		e = irThrowingType(ctx, returnType)
 		if e != nil {
 			return SsaName{}, e
 		}
@@ -791,6 +799,36 @@ func irTryCall(ctx *IrCtx, callRetSsa SsaName, fnCall *t.NodeExprCall, pos t.Fil
 	}
 
 	return SsaName{Repr: "<void ret>"}, nil
+}
+
+func irCaptureCall(ctx *IrCtx, callRetSsa SsaName, fnCall *t.NodeExprCall) (SsaName, error) {
+	returnType := callReturnType(fnCall)
+	errSsa := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = extractvalue ", errSsa.Repr)
+	if err := irThrowingType(ctx, returnType); err != nil {
+		return SsaName{}, err
+	}
+	irWritef(ctx, " %s, 0\n", callRetSsa.Repr)
+	codeSsa, failedSsa := irSsaLocal(ctx), irSsaLocal(ctx)
+	successLabel := irSsaName(ctx)
+	irWritef(ctx, "  %s = extractvalue %%type.error %s, 1\n", codeSsa.Repr, errSsa.Repr)
+	irWritef(ctx, "  %s = icmp ne i32 %s, 0\n", failedSsa.Repr, codeSsa.Repr)
+	failureStore := irSsaName(ctx)
+	irWritef(ctx, "  br i1 %s, label %%%s, label %%%s, !prof !9000\n", failedSsa.Repr, failureStore.Repr, successLabel.Repr)
+	irWritef(ctx, "%s:\n", failureStore.Repr)
+	irWritef(ctx, "  store %%type.error %s, ptr %s\n", errSsa.Repr, ctx.CapturedErrorSlot.Repr)
+	irWritef(ctx, "  br label %%%s\n", ctx.ErrorFailureLabel.Repr)
+	irWritef(ctx, "%s:\n", successLabel.Repr)
+	if isVoidType(returnType) {
+		return SsaName{Repr: "<void ret>"}, nil
+	}
+	valueSsa := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = extractvalue ", valueSsa.Repr)
+	if err := irThrowingType(ctx, returnType); err != nil {
+		return SsaName{}, err
+	}
+	irWritef(ctx, " %s, 1\n", callRetSsa.Repr)
+	return valueSsa, nil
 }
 
 func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr, topLevel bool) (SsaName, error) {
@@ -815,15 +853,11 @@ func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr, topLeve
 	case *t.NodeExprUnary:
 		return irExprUnary(ctx, expectedType, ne)
 	case *t.NodeExprTry:
-		call, ok := ne.Call.(*t.NodeExprCall)
-		if !ok {
-			return SsaName{}, fmt.Errorf("cannot lower try expression without a function call")
-		}
-		callSsa, e := irExprFuncCall(ctx, call, true, false)
-		if e != nil {
-			return SsaName{}, e
-		}
-		return irTryCall(ctx, callSsa, call, ne.Pos)
+		previousMode := ctx.ErrorMode
+		ctx.ErrorMode = 1
+		value, err := irExpression(ctx, expectedType, ne.Call, false)
+		ctx.ErrorMode = previousMode
+		return value, err
 	case *t.NodeExprDestructureAssign:
 		return irExprDestructureAssign(ctx, ne)
 	case *t.NodeExprSubscript:

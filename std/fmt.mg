@@ -319,7 +319,7 @@ destr Format.toStr(a alc.Allocator) !$str:
         release(this)
         throw countErr
     ..
-    result $str, allocErr error = strings.alloc(a, total)
+    result $str, allocErr error = strings.alloc(total)
     if allocErr.nok():
         release(this)
         throw allocErr

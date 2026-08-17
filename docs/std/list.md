@@ -28,7 +28,8 @@ its backing array and uses `cleanup` for removed or remaining elements.
 - `view() T[]` returns a borrowed element slice. Any structural mutation may invalidate it.
 - `get(index u64) !T` returns an element without removing it.
 - `take(index u64) !$T` removes and transfers an element without cleanup.
-- `set(index u64, value $T) !void` replaces an element and cleans up the old value.
+- `replace(index u64, value $T) !$T` replaces and returns the old element;
+  `set(index u64, value $T) !void` replaces an element and cleans up the old value.
 - `pushRight(item $T) !void`, `pushLeft(item $T) !void`, `popRight() !$T`, and `popLeft() !$T` transfer elements at either end; popping an empty list fails.
 - `expandRight() !u64` and `expandLeft() !void` are low-level growth methods.
 - `free() void` is the list's `destr` method and releases storage.

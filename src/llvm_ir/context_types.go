@@ -32,13 +32,17 @@ func ssaName(name string) SsaName {
 }
 
 type IrCtx struct {
-	Shared       *t.SharedState
-	fCtx         *t.FileCtx
-	bld          ScopeBuilder
-	parentBld    ScopeBuilder
-	nextSsa      *int
-	moduleIdx    int
-	CurrFunc     *t.NodeFuncDef
+	Shared    *t.SharedState
+	fCtx      *t.FileCtx
+	bld       ScopeBuilder
+	parentBld ScopeBuilder
+	nextSsa   *int
+	moduleIdx int
+	CurrFunc  *t.NodeFuncDef
+	// ContextPtr is the activation-local context pointer passed to contextful
+	// descendants. Contextless functions leave it empty until source-level ctx
+	// initialization establishes one.
+	ContextPtr   SsaName
 	traceStrings *traceStringPool
 	constStrings map[*t.NodeExprLit]SsaName
 	localSlots   map[*t.NodeExprVarDef]SsaName
@@ -52,6 +56,10 @@ type IrCtx struct {
 	LoopExitLbl SsaName
 
 	IsTopLevel bool
+
+	ErrorMode         int
+	CapturedErrorSlot SsaName
+	ErrorFailureLabel SsaName
 }
 
 // traceStringPool gives trace metadata one constant per distinct byte string.
@@ -119,7 +127,7 @@ func (p *traceStringPool) writeTo(b *bytes.Buffer) {
 	}
 }
 
-func collectTraceStrings(files map[string]*t.FileCtx) []string {
+func collectTraceStrings(files map[string]*t.FileCtx, reachable map[*t.NodeFuncDef]bool) []string {
 	values := []string{"<global>"}
 	for _, file := range files {
 		values = append(values, filepath.Base(file.FilePath))
@@ -128,7 +136,7 @@ func collectTraceStrings(files map[string]*t.FileCtx) []string {
 		}
 		for _, declaration := range file.GlNode.Declarations {
 			fn, ok := declaration.(*t.NodeFuncDef)
-			if !ok || fn.NoAliasName != "" {
+			if !ok || !reachable[fn] || fn.NoAliasName != "" {
 				continue
 			}
 			name := fn.DisplayName

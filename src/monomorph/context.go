@@ -43,6 +43,52 @@ func (m *monoCtx) genericInstantiationError(gl *t.NodeGlobal, tk *t.Token, err e
 	)
 }
 
+func (m *monoCtx) sourceError(gl *t.NodeGlobal, tk *t.Token, err error) error {
+	return comp_err.EnsureDiagnostic(m.fileCtxForGlobal(gl), tk, err)
+}
+
+func expressionToken(expr t.NodeExpr) *t.Token {
+	switch n := expr.(type) {
+	case *t.NodeExprUnary:
+		return &n.Tk
+	case *t.NodeExprLit:
+		return &n.Tk
+	case *t.NodeExprArray:
+		return &n.Tk
+	case *t.NodeExprName:
+		return &n.Tk
+	case *t.NodeExprCall:
+		return &n.Tk
+	case *t.NodeExprStructInit:
+		return &n.Tk
+	case *t.NodeExprProtoView:
+		return &n.Tk
+	case *t.NodeExprSubscript:
+		return &n.Tk
+	case *t.NodeExprMemberAccess:
+		return &n.Tk
+	case *t.NodeExprBinary:
+		return &n.Tk
+	case *t.NodeExprVarDef:
+		return nameToken(n.Name)
+	case *t.NodeExprVarDefAssign:
+		return &n.Tk
+	case *t.NodeExprAssign:
+		return &n.Tk
+	case *t.NodeExprTry:
+		return expressionToken(n.Call)
+	case *t.NodeExprSizeof:
+		return &n.Tk
+	case *t.NodeExprAddrof:
+		return &n.Tk
+	case *t.NodeExprMove:
+		return &n.Tk
+	case *t.NodeExprDestructureAssign:
+		return expressionToken(n.Call)
+	}
+	return &t.Token{}
+}
+
 func nameToken(name t.NodeName) *t.Token {
 	switch n := name.(type) {
 	case *t.NodeNameSingle:

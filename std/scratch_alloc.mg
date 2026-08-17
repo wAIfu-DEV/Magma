@@ -151,7 +151,8 @@ Scratch.free(pointer u8*) void:
     scratchFree(this, pointer)
 ..
 
-initialize(a allocator.Allocator, bytes u8*, capacity u64, ownsBytes bool) !Scratch:
+initialize(bytes u8*, capacity u64, ownsBytes bool) !Scratch:
+    a := ctx.procAlloc
     if capacity < sizeof Block + ALIGNMENT:
         throw errors.invalidArgument("scratch capacity is too small")
     ..
@@ -162,30 +163,30 @@ initialize(a allocator.Allocator, bytes u8*, capacity u64, ownsBytes bool) !Scra
 ..
 
 # Creates owned scratch storage with the requested capacity.
-pub new(a allocator.Allocator, capacity u64) !$Scratch:
+pub new(capacity u64) !$Scratch:
+    a := ctx.procAlloc
     if capacity < sizeof Block + ALIGNMENT:
         throw errors.invalidArgument("scratch capacity is too small")
     ..
     bytes := try a.alloc(capacity)
     onerror a.free(bytes)
-    value Scratch = try initialize(a, bytes, capacity, true)
+    value Scratch = try initialize(bytes, capacity, true)
     ret value
 ..
 
 # Creates owned scratch storage with the default 64 KiB capacity.
-pub newDefault(a allocator.Allocator) !$Scratch:
-    ret try new(a, DEFAULT_CAPACITY)
+pub newDefault() !$Scratch:
+    ret try new(DEFAULT_CAPACITY)
 ..
 
 # Creates scratch storage over a caller-owned buffer.
 pub fromBuffer(buffer u8[]) !Scratch:
-    empty := allocator.null()
     address := cast.ptou(slices.toPtr(buffer))
     padding := (ALIGNMENT - (address & (ALIGNMENT - 1))) & (ALIGNMENT - 1)
     if padding > buffer.count():
         throw errors.invalidArgument("scratch buffer is too small after alignment")
     ..
-    ret try initialize(empty, cast.utop(address + padding), buffer.count() - padding, false)
+    ret try initialize(cast.utop(address + padding), buffer.count() - padding, false)
 ..
 
 # Returns a non-owning allocator view. Scratch must remain at a stable address.

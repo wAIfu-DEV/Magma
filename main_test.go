@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -69,6 +71,22 @@ func TestRuntimeLibraryArgs(t *testing.T) {
 	}
 }
 
+func TestNativeLibraryArgs(t *testing.T) {
+	tests := []struct {
+		library string
+		want    []string
+	}{
+		{library: "m", want: []string{"-lm"}},
+		{library: ":libGL.so.1", want: []string{"-l:libGL.so.1"}},
+		{library: "framework:Cocoa", want: []string{"-framework", "Cocoa"}},
+	}
+	for _, test := range tests {
+		if got := nativeLibraryArgs(test.library); !slices.Equal(got, test.want) {
+			t.Errorf("nativeLibraryArgs(%q) = %q, want %q", test.library, got, test.want)
+		}
+	}
+}
+
 func TestErrorTraceSlotsOption(t *testing.T) {
 	opts, err := parseArgs([]string{"--std", "std", "--error-trace-slots", "512", "input.mg"})
 	if err != nil {
@@ -86,6 +104,43 @@ func TestSafetyWarningsOption(t *testing.T) {
 	}
 	if !opts.safetyWarnings {
 		t.Fatal("--safety-warnings was not retained")
+	}
+}
+
+func TestTimingsOption(t *testing.T) {
+	opts, err := parseArgs([]string{"--timings", "input.mg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.timings {
+		t.Fatal("--timings was not retained")
+	}
+}
+
+func TestCompilationTimingReportGroupsMajorAndMinorPhases(t *testing.T) {
+	timings := newCompilationTimings(true)
+	stop := timings.start("Checks", "type checking")
+	stop()
+	stop = timings.start("Checks", "memory safety checking")
+	stop()
+
+	var output bytes.Buffer
+	timings.report(&output)
+	got := output.String()
+	for _, want := range []string{"Compilation timings", "Category", "Checks", "type checking", "memory safety checking", "wall clock"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("timing report missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestNullContextOption(t *testing.T) {
+	opts, err := parseArgs([]string{"--null-context", "input.mg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.nullContext {
+		t.Fatal("--null-context was not retained")
 	}
 }
 

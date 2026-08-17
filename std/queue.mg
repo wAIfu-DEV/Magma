@@ -17,7 +17,8 @@ pub Queue[T](
 # @ownership Release with Queue.free.
 # @example
 #   pending := try queue.new[u64](a, none)
-pub new[T](a alc.Allocator, cleanup (alc.Allocator, $T) void) !$Queue[T]:
+pub new[T](cleanup (alc.Allocator, $T) void) !$Queue[T]:
+    a := ctx.procAlloc
     data := try arr.new[T](a)
     q Queue[T]
     q.allocator = a

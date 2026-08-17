@@ -16,7 +16,7 @@ func ctFuncDef(c *ctx, fnDef *t.NodeFuncDef) error {
 	if e != nil {
 		return e
 	}
-	return nil
+	return checkContextInitialization(c.FileCtx, fnDef)
 }
 
 func isSimpleConstInitializer(expr t.NodeExpr) bool {
@@ -97,7 +97,7 @@ func ctGlDecl(c *ctx, glDecl t.NodeGlobalDecl) error {
 			return nil
 		}
 		if !compatibleInitializer(n.VarDef.Type, n.Initializer) {
-			return fmt.Errorf("constant %s expects %s but initializer has type %s", flattenName(n.VarDef.Name), flattenType(n.VarDef.Type), flattenType(n.Initializer.GetInferredType()))
+			return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("constant %s expects %s but initializer has type %s", flattenName(n.VarDef.Name), flattenType(n.VarDef.Type), flattenType(n.Initializer.GetInferredType())), "")
 		}
 		warnNumericConversion(c, n.VarDef.Type, n.Initializer, "constant initialization")
 		return nil
@@ -128,7 +128,7 @@ func TypeChecker(s *t.SharedState) error {
 		ctx.FileCtx = fCtx
 		e := ctGlobal(ctx, n)
 		if e != nil {
-			return e
+			return comp_err.EnsureDiagnostic(fCtx, &t.Token{Pos: t.FilePos{Line: 1, Col: 1}}, e)
 		}
 	}
 

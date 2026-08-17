@@ -286,48 +286,46 @@ func irExprDestructureAssign(ctx *IrCtx, expr *t.NodeExprDestructureAssign) (Ssa
 		return SsaName{}, e
 	}
 
-	callSsa, e := irExprFuncCall(ctx, expr.Call, true, false)
+	capturedError := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = alloca %%type.error\n", capturedError.Repr)
+	failureLabel, endLabel := irSsaName(ctx), irSsaName(ctx)
+	previousMode, previousSlot, previousFailure := ctx.ErrorMode, ctx.CapturedErrorSlot, ctx.ErrorFailureLabel
+	ctx.ErrorMode, ctx.CapturedErrorSlot, ctx.ErrorFailureLabel = 2, capturedError, failureLabel
+	valueSsa, e := irExpression(ctx, expr.ValueDef.Type, expr.Call, false)
+	ctx.ErrorMode, ctx.CapturedErrorSlot, ctx.ErrorFailureLabel = previousMode, previousSlot, previousFailure
 	if e != nil {
 		return SsaName{}, e
 	}
 
-	// Extract error
-	errVal := irSsaLocal(ctx)
-	irWritef(ctx, "  %s = extractvalue ", errVal.Repr)
-	e = irThrowingType(ctx, expr.Call.InfType)
-	if e != nil {
-		return SsaName{}, e
-	}
-	irWritef(ctx, " %s, 0\n", callSsa.Repr)
-
+	// Success initializes the error binding to its zero value.
 	irWrite(ctx, "  store ")
 	e = irType(ctx, expr.ErrDef.Type)
 	if e != nil {
 		return SsaName{}, e
 	}
 	irWrite(ctx, " ")
-	irPossibleLitSsa(ctx, errVal)
+	irWrite(ctx, "zeroinitializer")
 	irWritef(ctx, ", ptr %s\n", errPtr.Repr)
 
-	// Extract value (if any)
 	if !isVoidType(expr.Call.InfType) {
-		valVal := irSsaLocal(ctx)
-		irWritef(ctx, "  %s = extractvalue ", valVal.Repr)
-		e = irThrowingType(ctx, expr.Call.InfType)
-		if e != nil {
-			return SsaName{}, e
-		}
-		irWritef(ctx, " %s, 1\n", callSsa.Repr)
-
 		irWrite(ctx, "  store ")
 		e = irType(ctx, expr.ValueDef.Type)
 		if e != nil {
 			return SsaName{}, e
 		}
 		irWrite(ctx, " ")
-		irPossibleLitSsa(ctx, valVal)
+		irPossibleLitSsa(ctx, valueSsa)
 		irWritef(ctx, ", ptr %s\n", valPtr.Repr)
 	}
+	irWritef(ctx, "  br label %%%s\n", endLabel.Repr)
+
+	// Every throwing subcall in the RHS converges here.
+	irWritef(ctx, "%s:\n", failureLabel.Repr)
+	errVal := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = load %%type.error, ptr %s\n", errVal.Repr, capturedError.Repr)
+	irWritef(ctx, "  store %%type.error %s, ptr %s\n", errVal.Repr, errPtr.Repr)
+	irWritef(ctx, "  br label %%%s\n", endLabel.Repr)
+	irWritef(ctx, "%s:\n", endLabel.Repr)
 
 	return valPtr, nil
 }

@@ -1,8 +1,10 @@
 package monomorph
 
 import (
+	"Magma/src/comp_err"
 	scopeinfo "Magma/src/scope_info"
 	t "Magma/src/types"
+	"fmt"
 	"strings"
 )
 
@@ -85,7 +87,7 @@ func Run(shared *t.SharedState) error {
 			}
 			for _, fld := range st.Class.ArgsNode.Args {
 				if e := ctx.rewriteType(module, gl, fld.TypeNode); e != nil {
-					return e
+					return ctx.sourceError(gl, &fld.Tk, e)
 				}
 			}
 			syncStructDefFields(gl, st)
@@ -102,15 +104,31 @@ func Run(shared *t.SharedState) error {
 
 			for _, a := range fn.Class.ArgsNode.Args {
 				if e := ctx.rewriteType(module, gl, a.TypeNode); e != nil {
-					return e
+					return ctx.sourceError(gl, &a.Tk, e)
 				}
 			}
 			if e := ctx.rewriteType(module, gl, fn.ReturnType); e != nil {
-				return e
+				return ctx.sourceError(gl, nameToken(fn.Class.NameNode), e)
+			}
+			if fn.ImplicitContext != nil {
+				if fn.ImplicitContext.Type == nil {
+					fn.ImplicitContext.Type = t.ImplicitContextType(ctx.shared)
+				}
+				if fn.ImplicitContext.Type == nil {
+					return ctx.sourceError(gl, nameToken(fn.ImplicitContext.Name), fmt.Errorf("canonical context.Ctx type is not loaded"))
+				}
+				if e := ctx.rewriteType(module, gl, fn.ImplicitContext.Type); e != nil {
+					return ctx.sourceError(gl, nameToken(fn.ImplicitContext.Name), e)
+				}
 			}
 			env := map[string]*t.NodeType{}
 			for _, a := range fn.Class.ArgsNode.Args {
 				env[a.Name] = cloneType(a.TypeNode)
+			}
+			if fn.ImplicitContext != nil {
+				if name, ok := fn.ImplicitContext.Name.(*t.NodeNameSingle); ok {
+					env[name.Name] = cloneType(fn.ImplicitContext.Type)
+				}
 			}
 			for _, s := range fn.Body.Statements {
 				if e := ctx.rewriteStmt(module, gl, s, env, fn.ReturnType); e != nil {
@@ -128,7 +146,7 @@ func Run(shared *t.SharedState) error {
 				continue
 			}
 			if e := ctx.rewriteType(module, gl, v.Type); e != nil {
-				return e
+				return ctx.sourceError(gl, nameToken(v.Name), e)
 			}
 		}
 	}
@@ -138,7 +156,7 @@ func Run(shared *t.SharedState) error {
 	for _, f := range shared.Files {
 		scope, e := scopeinfo.BuildScopeTree(f, f.GlNode)
 		if e != nil {
-			return e
+			return comp_err.EnsureDiagnostic(f, &t.Token{Pos: t.FilePos{Line: 1, Col: 1}}, e)
 		}
 		f.ScopeTree = scope
 	}

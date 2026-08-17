@@ -285,6 +285,18 @@ func bldBody(ctx *lcx, bdy *t.NodeBody, makeScope bool) error {
 }
 
 func bldFuncDef(ctx *lcx, fnDef *t.NodeFuncDef) error {
+	if !fnDef.IsExternal {
+		if fnDef.ImplicitContext == nil {
+			fnDef.ImplicitContext = &t.NodeExprVarDef{
+				Name:              &t.NodeNameSingle{Name: "ctx"},
+				Storage:           t.VariableStorageLocal,
+				IsImplicitContext: true,
+			}
+		}
+		if err := declVarInStack(ctx, fnDef.ImplicitContext); err != nil {
+			return err
+		}
+	}
 	for i, arg := range fnDef.Class.ArgsNode.Args {
 		definition := &t.NodeExprVarDef{
 			Name:    &t.NodeNameSingle{Tk: arg.Tk, Name: arg.Name},

@@ -1,7 +1,8 @@
 # `std/locker`
 
-`Locker` is a type-erased mutual-exclusion handle containing an implementation
-pointer and a `Vtable` of `lock`, `unlock`, and `free` callbacks.
+`Locker` is a type-erased mutual-exclusion `proto`. Implementations provide
+`lockRaw`, `unlockRaw`, and `releaseRaw`; the public convenience methods are
+`lock`, `unlock`, and the `free` destructor.
 
 `lock() !void` acquires exclusive access, `unlock() !void` releases it, and the
 destructor `free() void` invokes cleanup. Views returned by `Mutex.locker()` and

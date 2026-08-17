@@ -8,8 +8,9 @@ magma [options] <input-file>
 
 With no output option, the compiler builds an executable named for the selected
 platform. Compilation performs parsing, generic specialization, name linking,
-type and lowering validation, warning-only ownership analysis, LLVM lowering,
-and native emission.
+type and lowering validation, ownership-safety analysis, LLVM lowering, and
+native emission. Definite ownership violations are errors by default; use
+`--safety-warnings` only as a migration aid.
 
 ## Output
 
@@ -52,3 +53,25 @@ The LSP defaults to fatal safety enforcement. Starting it with
 sending `workspace/didChangeConfiguration` with `settings.safetyWarnings`
 selects warning mode. Both policies publish identical diagnostic codes,
 locations, messages, and related locations; only severity changes.
+# Implicit context ABI
+
+Every non-external function carries a resolved contextful/contextless calling-
+convention bit through parsing, specialization, substitution, linking, type
+compatibility, and lowering validation. Ordinary functions receive a leading
+`context.Ctx*`. Their prologue copies the incoming value into an activation-
+local `ctx`; every contextful direct, member, prototype, generic, or indirect
+child call receives the address of that local copy.
+
+`noctx` functions omit the hidden parameter. Definite-initialization analysis
+rejects paths which use `ctx` or call contextful code before assigning it.
+Converting `noctx` code to an ordinary function pointer emits a context-discard
+adapter. Passing contextful code across a native callback boundary emits a
+contextless thunk which initializes the retained per-thread root, reports
+failure, and aborts before entering Magma code. External declarations remain
+contextless.
+
+LLVM tests assert the leading pointer, entry load/store, local child-call
+address, contextless native signatures, and thunk bodies. These operations are
+kept explicit in IR so optimizer behavior is measurable. The representation is
+an implementation choice and may change after profiling without changing the
+language semantics.

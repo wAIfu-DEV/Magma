@@ -36,13 +36,14 @@ type ProtoDef struct {
 }
 
 type ProtoMethod struct {
-	Name  string
-	Args  []NodeArg
-	Ret   *NodeType
-	Slot  int
-	Tk    Token
-	FnDef *NodeFuncDef
-	Proto *ProtoDef
+	Name       string
+	Args       []NodeArg
+	Ret        *NodeType
+	ContextABI ContextABI
+	Slot       int
+	Tk         Token
+	FnDef      *NodeFuncDef
+	Proto      *ProtoDef
 }
 
 type ProtoImpl struct {
@@ -99,6 +100,7 @@ type SharedState struct {
 	// ErrorTraceSlots is the number of reusable trace nodes in each runtime
 	// shard. It is a power of two so generated code can mask instead of divide.
 	ErrorTraceSlots uint64
+	NullContext     bool
 	Target          target.Target
 
 	ImportedFiles  map[string]<-chan error
@@ -115,8 +117,10 @@ type SharedState struct {
 	PipeChans  []<-chan error
 	PipeChansM sync.Mutex
 
-	LlvmDecl  map[string]bool
-	LlvmDeclM sync.Mutex
+	LlvmDecl            map[string]bool
+	LlvmDeclM           sync.Mutex
+	NativeDeclarations  map[string]string
+	NativeDeclarationsM sync.Mutex
 
 	// ExportedSymbols tracks native symbol names across every module in one
 	// compilation. Parsing modules may happen concurrently, so registration is

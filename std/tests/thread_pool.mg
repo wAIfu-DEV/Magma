@@ -66,7 +66,8 @@ shutdownResult(pool thread_pool.ThreadPool*) !bool:
     ret true
 ..
 
-expectInvalidSizes(a allocator.Allocator) !void:
+expectInvalidSizes() !void:
+    a := ctx.tempAlloc
     zeroWorkers thread_pool.ThreadPool, workerErr error = thread_pool.new(a, 0, 1, 1, 1)
     if workerErr.ok():
         footgun.drop[thread_pool.ThreadPool](move zeroWorkers)
@@ -98,7 +99,7 @@ expectInvalidSizes(a allocator.Allocator) !void:
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()
-    try expectInvalidSizes(a)
+    try expectInvalidSizes()
 
     defaultPool := try thread_pool.newDefault(a)
     try defaultPool.close()

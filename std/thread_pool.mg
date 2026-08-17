@@ -11,6 +11,7 @@ use "std:spinlock" spinlock
 use "std:thread" thread
 use "std:wake" wake
 use "std:cpu" cpu
+use "std:context" context_module
 
 @platform("windows")
 use "std:win/generation_wait" generation_wait
@@ -21,6 +22,7 @@ use "std:unix/generation_wait" generation_wait
 Task(
     entry (ptr) u64
     context ptr
+    magmaContext context_module.Ctx
 )
 
 WorkerContext(
@@ -93,17 +95,17 @@ spawnWorkerInto(state State*, index u64) !bool:
     # SAFETY: index selects a reserved worker slot; its zero state means both
     # the handle and context slot are unoccupied before publication.
     unsafe:
-    destination thread.Thread* = workerAt(state, index)
-    context WorkerContext* = try state.allocator.allocT[WorkerContext](1)
-    onerror state.allocator.free(context)
-    context.state = state
-    context.index = index
-    worker thread.Thread = try thread.new[WorkerContext](workerMain, context)
-    *destination = move worker
-    *workerContextAt(state, index) = context
-    state.workerStates[index] = 1
-    state.activeWorkers = state.activeWorkers + 1
-      ret true
+        destination thread.Thread* = workerAt(state, index)
+        context WorkerContext* = try state.allocator.allocT[WorkerContext](1)
+        onerror state.allocator.free(context)
+        context.state = state
+        context.index = index
+        worker thread.Thread = try thread.new[WorkerContext](workerMain, context)
+        *destination = move worker
+        *workerContextAt(state, index) = context
+        state.workerStates[index] = 1
+        state.activeWorkers = state.activeWorkers + 1
+        ret true
     ..
 ..
 
@@ -117,23 +119,23 @@ growQueue(state State*) !bool:
     # SAFETY: the caller holds the lock; count initialized ring entries are
     # moved into a newCapacity allocation before old storage is released.
     unsafe:
-    maxU64 u64 = 0 - 1
-    if state.capacity > maxU64 / 2:
-        throw errors.wouldOverflow("thread pool queue capacity overflow")
-    ..
-    newCapacity u64 = state.capacity * 2
-    newTasks Task* = try state.allocator.allocT[Task](newCapacity)
-    for i u64 = 0 to state.count:
-        source u64 = (state.head + i) % state.capacity
-        destination Task* = cast.utop(cast.ptou(newTasks) + (i * sizeof Task))
-        *destination = *taskAt(state, source)
-    ..
-    state.allocator.free(state.tasks)
-    state.tasks = newTasks
-    state.capacity = newCapacity
-    state.head = 0
-    state.tail = state.count
-      ret true
+        maxU64 u64 = 0 - 1
+        if state.capacity > maxU64 / 2:
+            throw errors.wouldOverflow("thread pool queue capacity overflow")
+        ..
+        newCapacity u64 = state.capacity * 2
+        newTasks Task* = try state.allocator.allocT[Task](newCapacity)
+        for i u64 = 0 to state.count:
+            source u64 = (state.head + i) % state.capacity
+            destination Task* = cast.utop(cast.ptou(newTasks) + (i * sizeof Task))
+            *destination = *taskAt(state, source)
+        ..
+        state.allocator.free(state.tasks)
+        state.tasks = newTasks
+        state.capacity = newCapacity
+        state.head = 0
+        state.tail = state.count
+        ret true
     ..
 ..
 
@@ -167,10 +169,13 @@ growWorkerStorage(state State*) !bool:
 
     newWorkers thread.Thread* = try state.allocator.allocT[thread.Thread](newCapacity)
     onerror state.allocator.free(newWorkers)
+
     newContexts WorkerContext** = try state.allocator.allocT[WorkerContext*](newCapacity)
     onerror state.allocator.free(newContexts)
+
     newStates u8* = try state.allocator.allocT[u8](newCapacity)
     onerror state.allocator.free(newStates)
+
     mem.zero(newWorkers, newCapacity * sizeof thread.Thread)
     mem.zero(newContexts, newCapacity * sizeof WorkerContext*)
     mem.zero(newStates, newCapacity)
@@ -201,24 +206,24 @@ growWorkers(state State*) !bool:
     # SAFETY: the caller holds the pool lock; workerStates is the occupancy
     # metadata for worker handles and their separately allocated contexts.
     unsafe:
-    oldCapacity := state.workerCapacity
-    for index u64 = 0 to oldCapacity:
-        status u8 = state.workerStates[index]
-        if status != 1:
-            if status == 2:
-                try workerAt(state, index).join()
-                state.allocator.free(*workerContextAt(state, index))
-                *workerContextAt(state, index) = none
-                state.workerStates[index] = 0
+        oldCapacity := state.workerCapacity
+        for index u64 = 0 to oldCapacity:
+            status u8 = state.workerStates[index]
+            if status != 1:
+                if status == 2:
+                    try workerAt(state, index).join()
+                    state.allocator.free(*workerContextAt(state, index))
+                    *workerContextAt(state, index) = none
+                    state.workerStates[index] = 0
+                ..
+                ret try spawnWorkerInto(state, index)
             ..
-            ret try spawnWorkerInto(state, index)
         ..
-    ..
-    grown := try growWorkerStorage(state)
-    if grown:
-        ret try spawnWorkerInto(state, oldCapacity)
-    ..
-      ret false
+        grown := try growWorkerStorage(state)
+        if grown:
+            ret try spawnWorkerInto(state, oldCapacity)
+        ..
+        ret false
     ..
 ..
 
@@ -286,6 +291,7 @@ workerMain(context WorkerContext*) u64:
                 ret 1
             ..
 
+            ctx = task.magmaContext
             task.entry(task.context)
             completionLocked bool, completionLockErr error = lockResult(state)
             if completionLockErr.nok():
@@ -513,7 +519,7 @@ ThreadPool.submit(entry (ptr) u64, context ptr) !void:
         try growWorkers(state)
     ..
     destination Task* = taskAt(state, state.tail)
-    *destination = Task(entry=entry, context=context)
+    *destination = Task(entry=entry, context=context, magmaContext=ctx)
     state.tail = (state.tail + 1) % state.capacity
     state.count = state.count + 1
     state.pending = state.pending + 1

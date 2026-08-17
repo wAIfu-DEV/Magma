@@ -37,7 +37,8 @@ decode(native ptr) !address.Endpoint:
     ret address.Endpoint(address=ip6, port=ext_ntohs(ipv6.port))
 ..
 
-pub resolve(a allocator.Allocator, host str, service str, family u8, maxResults u64) !Resolved:
+pub resolve(host str, service str, family u8, maxResults u64) !Resolved:
+    a := ctx.procAlloc
     data WsaData
     startupCode i32 = ext_WSAStartup(0x0202, addrof data)
     if startupCode != 0:

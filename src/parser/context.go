@@ -18,6 +18,7 @@ type ModifierType string
 const (
 	MdPublic     ModifierType = "pub"
 	MdDestructor ModifierType = "destr"
+	MdNoCtx      ModifierType = "noctx"
 )
 
 type ParseCtx struct {

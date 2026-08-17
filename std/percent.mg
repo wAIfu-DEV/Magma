@@ -101,9 +101,10 @@ pub encodeTo(text str, output u8[], policy u8) !u64:
     ret outputIndex
 ..
 
-pub encode(a alc.Allocator, text str, policy u8) !$str:
+pub encode(text str, policy u8) !$str:
+    a := ctx.procAlloc
     size := try encodedSize(text, policy)
-    result $str = try strings.alloc(a, size)
+    result $str = try strings.alloc(size)
     onerror result.free(a)
     output u8[] = slices.fromPtr(strings.toPtr(result), size)
     try encodeTo(text, output, policy)
@@ -178,21 +179,24 @@ pub decodeFormTo(text str, output u8[]) !u64:
     ret try decodeToKind(text, output, true)
 ..
 
-decodeAllocated(a alc.Allocator, text str, form bool) !$u8[]:
+decodeAllocated(text str, form bool) !$u8[]:
+    a := ctx.procAlloc
     size := try decodedSizeKind(text, form)
     if size == 0:
         ret slices.fromPtr(none, 0)
     ..
-    result := try slices.alloc[u8](a, size)
-    onerror slices.free(a, result)
+    result := try slices.alloc[u8](size)
+    onerror slices.free(result)
     try decodeToKind(text, result, form)
     ret result
 ..
 
-pub decode(a alc.Allocator, text str) !$u8[]:
-    ret try decodeAllocated(a, text, false)
+pub decode(text str) !$u8[]:
+    a := ctx.procAlloc
+    ret try decodeAllocated(text, false)
 ..
 
-pub decodeForm(a alc.Allocator, text str) !$u8[]:
-    ret try decodeAllocated(a, text, true)
+pub decodeForm(text str) !$u8[]:
+    a := ctx.procAlloc
+    ret try decodeAllocated(text, true)
 ..

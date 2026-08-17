@@ -40,10 +40,11 @@ alive and open throughout iteration.
 
 - `metadata` follows symbolic links; `linkMetadata` inspects the link itself.
 - `Metadata` exposes `kind`, `size`, `permissions`, and Unix modification seconds.
-- `FileKind` wraps a kind value. `file()`, `directory()`, `symlink()`, and
-  `other()` construct values corresponding to `KIND_FILE`, `KIND_DIR`,
-  `KIND_SYMLINK`, and `KIND_OTHER`; `equal` compares kinds.
-- `setPermissions` applies portable readable, writable, and executable bits.
+- `FileKind` wraps a kind value. `isFile()`, `isDir()`,
+  `isSymbolicLink()`, and `isOther()` compare it with `KIND_FILE`, `KIND_DIR`,
+  `KIND_SYMLINK`, and `KIND_OTHER`.
+- `Permissions` wraps portable permission bits; `readable()`, `writable()`, and
+  `executable()` inspect them. `setPermissions` applies a value.
 - `walkDefault` performs a metadata-aware depth-first traversal without following links.
 - `walkWithOptions` accepts `WalkOptions(followLinks=..., includeRoot=...)`.
 - The original `walk(a, root, visit(str, bool))` remains as a compatibility API.

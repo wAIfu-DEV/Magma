@@ -123,8 +123,9 @@ submitWork[T, Context](scheduler executor.Executor, work Work[T, Context]*) !boo
 # must remain valid until await completes.
 # @example
 #   scheduler := pool.executor()
-#   pending := try future.new[u64, Work](a, scheduler, run, work)
-pub new[T, Context](a alc.Allocator, scheduler executor.Executor, entry (Context*) !T, context Context) !$Future[T]:
+#   pending := try future.new[u64, Work](scheduler, run, work)
+pub new[T, Context](scheduler executor.Executor, entry (Context*) !T, context Context) !$Future[T]:
+    a := ctx.procAlloc
     work Work[T, Context]* = try a.allocT[Work[T, Context]](1)
     onerror a.free(work)
     state State[T]* = addrof work.state

@@ -9,7 +9,7 @@ use "std:strings" strings
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()
-    values := try linear_map.new[u64](a, none)
+    values := try linear_map.new[u64](none)
     defer values.free()
     try values.set("answer", 42)
     answer := try values.get("answer")

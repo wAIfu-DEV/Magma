@@ -255,15 +255,16 @@ Magma also accepts an ownership/reference marker `$` before or after types:
 ```magma
 heap_ptr $MyStruct* = try heap.alloc(sizeof MyStruct)
 Allocator.alloc(byteCount u64) !$u8*:
-    ret try this.vtable.alloc(this.impl, byteCount)
+    ret try platformAlloc(byteCount)
 ..
 ```
 
 When `$` appears before the base type, it marks an ownership-transfer position
 and does not change the backend type. `$T` returns produce ownership, `$T`
-parameters consume it, and unmarked `T` positions borrow. The warning-only
-destroy checker applies these rules to direct locals whose struct type declares
-a destructor. When `$` appears after an already parsed type, it is the older
+parameters consume it, and unmarked `T` positions borrow. The ownership-safety
+checker applies these rules to destructible locals and statically identifiable
+aggregate fields. Definite invalid transfers are errors by default; cleanup and
+leak findings are warnings. When `$` appears after an already parsed type, it is the older
 reference-like form and currently lowers as `ptr`; do not confuse it with the
 prefix ownership annotation.
 
@@ -284,12 +285,13 @@ struct may have multiple destructor methods. Calling any marked destructor
 consumes its receiver. Destructors are explicit rather than automatically
 inserted; use a direct call or `defer value.close()` on every owning path.
 
-The checker warns about unconsumed owners, consuming borrows, repeated
-consumption, use after transfer, overwriting live owners, pending deferred
-destructors during transfer, and discarded owned destructible results. It does
-not reject compilation and only tracks direct locals. Fields, indexed values,
-pointers, aliases, aggregate contents, and partial moves are outside its model.
-See [OWNERSHIP.md](OWNERSHIP.md) for the complete behavior and examples.
+The checker warns about unconsumed owners. It rejects consuming borrows,
+repeated consumption, use after transfer, invalid partial moves, overwriting
+live owners, transfers with pending deferred destructors, and discarded
+completion-bearing results. It tracks direct locals, projected fields, supported
+pointer provenance, and subscript range proofs. Dynamic indexed ownership and
+opaque native retention remain outside its proof model. See
+[OWNERSHIP.md](OWNERSHIP.md) for the complete behavior and examples.
 
 Throwing return types use prefix `!` on a return type:
 
@@ -551,7 +553,7 @@ Functions are called with parentheses:
 retOne()
 heap.alloc(8)
 io.stdout(a)
-writer.new(this, write)
+sink.proto()
 ```
 
 Calls can be statements or expressions:
@@ -1147,7 +1149,7 @@ owning or completion-bearing result; no lifetime clauses are added to `ext`.
 Native libraries required by external declarations are declared at top level:
 
 ```magma
-link "vendor/raylib/win/raylibdll.lib"
+link "vendor/raylib/win/raylib.lib"
 link "winhttp"
 ```
 
@@ -1162,6 +1164,10 @@ A name beginning with `:` selects an exact linker library filename. For example,
 `link ":libssl.so.3"` is passed as `-l:libssl.so.3`; it is not resolved as a
 module-relative path. This supports versioned Unix runtime libraries without an
 unversioned development-package symlink.
+
+On Apple targets, a name beginning with `framework:` links a system framework.
+For example, `link "framework:Cocoa"` is passed to Clang as
+`-framework Cocoa`.
 
 On Windows, linking an import library such as `raylib.lib` keeps the dependency
 dynamic: `raylib.dll` must be beside the generated executable or otherwise on
@@ -1453,11 +1459,13 @@ exports.
 
 ### Low-Level and Runtime Caveats
 
-Pointers, slices, `str`, and inline LLVM are low-level facilities. Bounds checks,
-null checks, pointer lifetime/alias checks, and read-only memory protection are
-not enforced. The destroy checker covers only direct destructible locals and is
-warning-only. Incorrect pointer arithmetic, indexing, writes through invalid
-pointers, or mutation of read-only string data can crash the generated program.
+Pointers, slices, `str`, and inline LLVM are low-level facilities. The safety
+checker proves supported local pointer lifetimes and ordinary slice bounds, and
+requires unprovable dereferences, pointer indexing, typed/raw pointer
+conversions, and inline LLVM to appear in `unsafe` blocks. It does not provide
+null checking, data-race checking, native retention guarantees, or read-only
+memory protection. Incorrect operations admitted by `unsafe`, opaque native
+code, or mutation of string-literal storage can crash the generated program.
 
 Function-pointer fields can be called, and function-pointer types lower to
 backend function pointer signatures. Calls through function pointers still go
@@ -1520,3 +1528,28 @@ Writer(
 
 Statements inside blocks are indented with spaces, but indentation is not the
 source of block structure. The `:` and `..` tokens are authoritative.
+# Implicit context and `noctx`
+
+Ordinary functions and function types are contextful by default. `ctx` is a
+compiler-provided local binding and is not written in the parameter list:
+
+```magma
+work(value u64) !Result:
+    ret try build(ctx.procAlloc, value)
+..
+```
+
+Prefix a function or function type with `noctx` to omit the hidden context
+argument:
+
+```magma
+noctx bootstrap() !void:
+    ctx = context.new(heap.allocator(), heap.allocator(), executor.null())
+    try work(1)
+..
+
+callback noctx (ptr) u64
+```
+
+A `noctx` body must definitely initialize `ctx` before contextful calls or
+uses. External declarations are always contextless.

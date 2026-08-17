@@ -208,7 +208,7 @@ func sameResolvedTypeKind(left t.NodeTypeKind, right t.NodeTypeKind) bool {
 		return ok && sameResolvedTypeKind(leftKind.ElemKind, rightKind.ElemKind)
 	case *t.NodeTypeFunc:
 		rightKind, ok := right.(*t.NodeTypeFunc)
-		if !ok || len(leftKind.Args) != len(rightKind.Args) || !sameResolvedType(leftKind.RetType, rightKind.RetType) {
+		if !ok || leftKind.ContextABI != rightKind.ContextABI || len(leftKind.Args) != len(rightKind.Args) || !sameResolvedType(leftKind.RetType, rightKind.RetType) {
 			return false
 		}
 		for i := range leftKind.Args {
@@ -320,6 +320,9 @@ func nameValid(file *t.FileCtx, name *t.NodeExprName, inferredTypeRequired bool)
 		}
 		if len(functionType.Args) != len(definition.Class.ArgsNode.Args) {
 			return invalid(file, nameToken(name), "function value signature does not match its resolved declaration")
+		}
+		if functionType.ContextABI != definition.ContextABI {
+			return invalid(file, nameToken(name), "function value context ABI does not match its resolved declaration")
 		}
 		for i, argument := range definition.Class.ArgsNode.Args {
 			if !sameResolvedType(functionType.Args[i], argument.TypeNode) {
@@ -651,10 +654,14 @@ func expressionValid(file *t.FileCtx, expression t.NodeExpr) error {
 		if err := callValid(file, node.Call); err != nil {
 			return err
 		}
-		if !node.Call.InfType.Throws {
+		callType := node.Call.ThrowingType
+		if callType == nil {
+			callType = node.Call.InfType
+		}
+		if !callType.Throws {
 			return invalid(file, &node.Call.Tk, "destructuring assignment call is not throwing")
 		}
-		callValue := *node.Call.InfType
+		callValue := *callType
 		callValue.Throws = false
 		if namedTypeIs(&callValue, "void") {
 			return invalid(file, &node.Call.Tk, "destructuring assignment call has no value result")

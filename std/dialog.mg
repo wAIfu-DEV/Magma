@@ -42,17 +42,20 @@ pub defaultOptions() Options:
 ..
 
 # Shows the native file-open dialog.
-pub openFile(a allocator.Allocator, configuration Options) !$str:
-    ret try impl.openFile(a, slices.toPtr(configuration.filters), configuration.filters.count(), configuration.defaultPath, configuration.title, configuration.parent)
+pub openFile(configuration Options) !$str:
+    a := ctx.procAlloc
+    ret try impl.openFile(slices.toPtr(configuration.filters), configuration.filters.count(), configuration.defaultPath, configuration.title, configuration.parent)
 ..
 
 # Shows the native save-location dialog. This chooses a destination path; it
 # does not itself download or write a file.
-pub saveFile(a allocator.Allocator, configuration Options) !$str:
-    ret try impl.saveFile(a, slices.toPtr(configuration.filters), configuration.filters.count(), configuration.defaultPath, configuration.defaultName, configuration.title, configuration.parent)
+pub saveFile(configuration Options) !$str:
+    a := ctx.procAlloc
+    ret try impl.saveFile(slices.toPtr(configuration.filters), configuration.filters.count(), configuration.defaultPath, configuration.defaultName, configuration.title, configuration.parent)
 ..
 
 # Shows the native folder-selection dialog.
-pub openDir(a allocator.Allocator, configuration Options) !$str:
-    ret try impl.openDir(a, configuration.defaultPath, configuration.title, configuration.parent)
+pub openDir(configuration Options) !$str:
+    a := ctx.procAlloc
+    ret try impl.openDir(configuration.defaultPath, configuration.title, configuration.parent)
 ..

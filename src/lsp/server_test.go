@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"Magma/src/comp_err"
 	"Magma/src/types"
 	"net/url"
 	"os"
@@ -8,6 +9,38 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestStandardLibraryModulesAreValidAnalysisRoots(t *testing.T) {
+	stdRoot, err := filepath.Abs(testStdRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	modules, err := filepath.Glob(filepath.Join(stdRoot, "*.mg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(modules) == 0 {
+		t.Fatal("no standard-library modules found")
+	}
+	for _, path := range modules {
+		name := filepath.Base(path)
+		t.Run(name, func(t *testing.T) {
+			source, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			uri := (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
+			result := analyze(uri, string(source), stdRoot)
+			if result.err != nil {
+				diagnostics := comp_err.Diagnostics(result.err)
+				if len(diagnostics) != 0 {
+					t.Fatalf("analysis failed at %s:%d:%d (%q): %v", diagnostics[0].FilePath, diagnostics[0].Token.Pos.Line, diagnostics[0].Token.Pos.Col, diagnostics[0].Token.Repr, result.err)
+				}
+				t.Fatalf("analysis failed: %v", result.err)
+			}
+		})
+	}
+}
 
 func TestCompletionReceiverKinds(t *testing.T) {
 	tests := []struct {

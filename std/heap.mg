@@ -17,7 +17,7 @@ use "std:unix/heap_impl" impl_heap
 # @complexity O(1)
 # @example
 #   a := heap.allocator()
-pub allocator() a.Allocator:
+pub noctx allocator() a.Allocator:
     ret impl_heap.allocator()
 ..
 

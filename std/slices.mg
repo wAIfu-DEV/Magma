@@ -87,9 +87,10 @@ pub subslice[T](in T[], start u64, end u64) !T[]:
 # @throws outOfMemory when allocation fails
 # @ownership Release the result with free using the same allocator.
 # @example
-#   values := try slices.alloc[u64](a, 16)
-#   slices.free(a, values)
-pub alloc[T](a alc.Allocator, elemCount u64) !$T[]:
+#   values := try slices.alloc[u64](16)
+#   slices.free(values)
+pub alloc[T](elemCount u64) !$T[]:
+    a := ctx.procAlloc
     p T* = try a.allocT[T](elemCount)
     ret fromPtr(p, elemCount)
 ..
@@ -101,8 +102,9 @@ pub alloc[T](a alc.Allocator, elemCount u64) !$T[]:
 # @warning Passing a borrowed slice or a different allocator is invalid.
 # @ownership Consumes the slice and releases its allocation.
 # @example
-#   slices.free(a, values)
-pub free(a alc.Allocator, s slice) void:
+#   slices.free(values)
+pub free(s slice) void:
+    a := ctx.procAlloc
     p ptr = toPtr(s)
     a.free(p)
 ..

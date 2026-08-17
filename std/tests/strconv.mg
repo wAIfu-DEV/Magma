@@ -11,7 +11,7 @@ pub main() !void:
     if number != 42 || boolean == false:
         throw errors.failure("strconv parse changed")
     ..
-    formatted := try strconv.formatUint(a, 42)
+    formatted := try strconv.formatUint(42)
     defer formatted.free(a)
     if strings.compare(formatted, "42") == false:
         throw errors.failure("strconv format changed")

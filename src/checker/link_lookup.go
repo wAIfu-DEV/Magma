@@ -161,7 +161,7 @@ func cloneAliasType(in *t.NodeType) *t.NodeType {
 		for i, arg := range n.Args {
 			args[i] = cloneAliasType(arg)
 		}
-		out.KindNode = &t.NodeTypeFunc{Args: args, RetType: cloneAliasType(n.RetType)}
+		out.KindNode = &t.NodeTypeFunc{Args: args, RetType: cloneAliasType(n.RetType), ContextABI: n.ContextABI}
 	}
 	return out
 }

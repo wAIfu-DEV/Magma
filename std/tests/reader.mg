@@ -23,7 +23,7 @@ pub main() !void:
     a allocator.Allocator = heap.allocator()
     source := Source(value=0)
     input := source.proto[reader.Reader]()
-    result := try input.read(a, 1)
+    result := try input.read(1)
     defer result.free(a)
     if strings.compare(result, "A") == false:
         throw errors.failure("reader behavior changed")

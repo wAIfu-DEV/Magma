@@ -82,30 +82,34 @@ pub decodeTo(text str, output u8[]) !u64:
     ret needed
 ..
 
-encodeAllocated(a alc.Allocator, input u8[], uppercase bool) !$str:
+encodeAllocated(input u8[], uppercase bool) !$str:
+    a := ctx.procAlloc
     size := try encodedSize(slices.count(input))
-    result $str = try strings.alloc(a, size)
+    result $str = try strings.alloc(size)
     onerror result.free(a)
     output u8[] = slices.fromPtr(strings.toPtr(result), size)
     try encodeToCase(input, output, uppercase)
     ret move result
 ..
 
-pub encode(a alc.Allocator, input u8[]) !$str:
-    ret try encodeAllocated(a, input, false)
+pub encode(input u8[]) !$str:
+    a := ctx.procAlloc
+    ret try encodeAllocated(input, false)
 ..
 
-pub encodeUpper(a alc.Allocator, input u8[]) !$str:
-    ret try encodeAllocated(a, input, true)
+pub encodeUpper(input u8[]) !$str:
+    a := ctx.procAlloc
+    ret try encodeAllocated(input, true)
 ..
 
-pub decode(a alc.Allocator, text str) !$u8[]:
+pub decode(text str) !$u8[]:
+    a := ctx.procAlloc
     size := try decodedSize(text)
     if size == 0:
         ret slices.fromPtr(none, 0)
     ..
-    result := try slices.alloc[u8](a, size)
-    onerror slices.free(a, result)
+    result := try slices.alloc[u8](size)
+    onerror slices.free(result)
     try decodeTo(text, result)
     ret result
 ..

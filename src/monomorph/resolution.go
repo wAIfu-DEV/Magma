@@ -190,27 +190,10 @@ func (m *monoCtx) trackExprVarDefs(module string, gl *t.NodeGlobal, expr t.NodeE
 		if s, ok := n.VarDef.Name.(*t.NodeNameSingle); ok {
 			varType := n.VarDef.Type
 			if varType == nil {
-				// Inferred locals have not reached the type checker yet. Preserve
-				// enough information from concrete constructors for member-method
-				// specialization later in the same body.
-				if init, isStructInit := n.AssignExpr.(*t.NodeExprStructInit); isStructInit {
-					varType = init.Type
-				}
-				if view, isProtoView := n.AssignExpr.(*t.NodeExprProtoView); isProtoView {
-					varType = view.ProtoType
-				}
-				if call, isCall := n.AssignExpr.(*t.NodeExprCall); isCall {
-					if callee, isName := call.Callee.(*t.NodeExprName); isName {
-						if targetModule, functionName, err := resolveQualifiedName(m.modules, module, gl, callee.Name); err == nil {
-							if target := m.modules[targetModule]; target != nil {
-								if definition := target.FuncDefs[functionName]; definition != nil {
-									varType = cloneType(definition.ReturnType)
-									_ = m.rewriteType(targetModule, target, varType)
-								}
-							}
-						}
-					}
-				}
+				// Inferred locals have not reached the type checker yet. Recover
+				// their type from the initializer so later generic member calls can
+				// resolve the receiver in this pre-checker pass.
+				varType = m.shallowExprType(module, gl, n.AssignExpr, env)
 			}
 			if varType != nil {
 				env[s.Name] = cloneType(varType)
@@ -224,4 +207,45 @@ func (m *monoCtx) trackExprVarDefs(module string, gl *t.NodeGlobal, expr t.NodeE
 			env[s.Name] = cloneType(n.ErrDef.Type)
 		}
 	}
+}
+
+// shallowCallReturnType records enough return information for generic member
+// specialization before the regular linker and type checker run. Calls on a
+// local receiver cannot be resolved as module-qualified free functions, so
+// their owner type must be recovered from the lexical environment.
+func (m *monoCtx) shallowCallReturnType(module string, gl *t.NodeGlobal, call *t.NodeExprCall, env map[string]*t.NodeType) *t.NodeType {
+	callee, ok := call.Callee.(*t.NodeExprName)
+	if !ok {
+		return nil
+	}
+	if composite, ok := callee.Name.(*t.NodeNameComposite); ok && len(composite.Parts) >= 2 {
+		if _, imported := gl.ImportAlias[composite.Parts[0]]; !imported {
+			memberName := composite.Parts[len(composite.Parts)-1]
+			_, ownerModule, ownerName, err := m.inferOwnerTypeFromCallee(module, gl, composite.Parts[:len(composite.Parts)-1], env)
+			if err == nil {
+				ownerGlobal := m.modules[ownerModule]
+				if ownerGlobal != nil {
+					if owner := ownerGlobal.StructDefs[ownerName]; owner != nil {
+						if definition := owner.Funcs[memberName]; definition != nil {
+							result := cloneType(definition.ReturnType)
+							_ = m.rewriteType(ownerModule, ownerGlobal, result)
+							return result
+						}
+					}
+				}
+			}
+			return nil
+		}
+	}
+	targetModule, functionName, err := resolveQualifiedName(m.modules, module, gl, callee.Name)
+	if err != nil {
+		return nil
+	}
+	target := m.modules[targetModule]
+	if target == nil || target.FuncDefs[functionName] == nil {
+		return nil
+	}
+	result := cloneType(target.FuncDefs[functionName].ReturnType)
+	_ = m.rewriteType(targetModule, target, result)
+	return result
 }

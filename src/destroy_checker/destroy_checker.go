@@ -59,6 +59,10 @@ type flow struct {
 	// provenance is compiler-only metadata for pointer and stack-backed slice
 	// values. Its key is the place holding the value, not the pointed-to place.
 	provenance map[placeKey]pointerProvenance
+	// allocators records the implementation owner behind an Allocator interface
+	// value. Copying the two-word interface copies this fact; it does not create
+	// a new allocation region.
+	allocators map[placeKey]allocatorFact
 	// retentions records source storage which may remain borrowed by an owned
 	// completion-bearing handle. Unlike an ordinary loan, the dependency lasts
 	// until the handle is consumed by its destructor (join/await/remove/close).
@@ -66,9 +70,21 @@ type flow struct {
 }
 
 type pointerProvenance struct {
-	sources    []place.Place
-	stackSlice bool
-	unknown    bool
+	sources     []place.Place
+	allocations []allocatorOrigin
+	stackSlice  bool
+	unknown     bool
+}
+
+type allocatorOrigin struct {
+	owner      place.Place
+	createdAt  types.Token
+	allocation types.Token
+}
+
+type allocatorFact struct {
+	origins []allocatorOrigin
+	unknown bool
 }
 
 type rangeRelation struct {
@@ -96,15 +112,24 @@ type analyzer struct {
 	loopDepths          []int
 	nextProof           uint64
 	returnOrigins       map[*types.NodeFuncDef][]int
+	allocatorReturns    map[*types.NodeFuncDef][]int
+	allocationReturns   map[*types.NodeFuncDef][]int
+	allocatorProto      *types.ProtoDef
 	consumePtrOrigins   map[*types.NodeFuncDef][]int
 	futureUses          map[*types.NodeExprVarDef]bool
 	unsafeDepth         int
 	destructorReceivers map[*types.NodeExprVarDef]bool
 	staticExtents       map[*types.NodeExprVarDef]uint64
+	currentFunction     *types.NodeFuncDef
 }
 
+const (
+	allocatorOriginCtxProc = -1
+	allocatorOriginCtxTemp = -2
+)
+
 func cloneFlow(in flow) flow {
-	out := flow{states: map[*types.NodeExprVarDef]State{}, absent: map[placeKey]types.Token{}, deferred: map[*types.NodeExprVarDef]bool{}, consumedAt: map[*types.NodeExprVarDef]types.Token{}, deferredAt: map[*types.NodeExprVarDef]types.Token{}, conditions: map[*types.NodeExprVarDef]*types.NodeExprVarDef{}, errorFacts: map[*types.NodeExprVarDef]int8{}, ranges: map[rangeRelation]*types.RangeProof{}, provenance: map[placeKey]pointerProvenance{}, retentions: map[placeKey]pointerProvenance{}, terminated: in.terminated}
+	out := flow{states: map[*types.NodeExprVarDef]State{}, absent: map[placeKey]types.Token{}, deferred: map[*types.NodeExprVarDef]bool{}, consumedAt: map[*types.NodeExprVarDef]types.Token{}, deferredAt: map[*types.NodeExprVarDef]types.Token{}, conditions: map[*types.NodeExprVarDef]*types.NodeExprVarDef{}, errorFacts: map[*types.NodeExprVarDef]int8{}, ranges: map[rangeRelation]*types.RangeProof{}, provenance: map[placeKey]pointerProvenance{}, allocators: map[placeKey]allocatorFact{}, retentions: map[placeKey]pointerProvenance{}, terminated: in.terminated}
 	for variable, state := range in.states {
 		out.states[variable] = state
 	}
@@ -132,11 +157,18 @@ func cloneFlow(in flow) flow {
 	for key, provenance := range in.provenance {
 		copy := provenance
 		copy.sources = append([]place.Place(nil), provenance.sources...)
+		copy.allocations = append([]allocatorOrigin(nil), provenance.allocations...)
 		out.provenance[key] = copy
+	}
+	for key, fact := range in.allocators {
+		copy := fact
+		copy.origins = append([]allocatorOrigin(nil), fact.origins...)
+		out.allocators[key] = copy
 	}
 	for key, retention := range in.retentions {
 		copy := retention
 		copy.sources = append([]place.Place(nil), retention.sources...)
+		copy.allocations = append([]allocatorOrigin(nil), retention.allocations...)
 		out.retentions[key] = copy
 	}
 	for _, scope := range in.scopes {
@@ -322,7 +354,318 @@ func mergeProvenance(left, right pointerProvenance) pointerProvenance {
 			out.sources = append(out.sources, source)
 		}
 	}
+	for _, origin := range append(append([]allocatorOrigin{}, left.allocations...), right.allocations...) {
+		seen := false
+		for _, old := range out.allocations {
+			if old.owner.Equal(origin.owner) {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			out.allocations = append(out.allocations, origin)
+		}
+	}
 	return out
+}
+
+func mergeAllocatorFacts(left, right allocatorFact) allocatorFact {
+	out := allocatorFact{unknown: left.unknown || right.unknown}
+	for _, origin := range append(append([]allocatorOrigin{}, left.origins...), right.origins...) {
+		seen := false
+		for _, old := range out.origins {
+			if old.owner.Equal(origin.owner) {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			out.origins = append(out.origins, origin)
+		}
+	}
+	return out
+}
+
+func (a *analyzer) isAllocatorType(node *types.NodeType) bool {
+	if node == nil || a.allocatorProto == nil {
+		return false
+	}
+	definition := a.structFor(node.KindNode)
+	return definition != nil && definition.IsProto && definition.Proto == a.allocatorProto
+}
+
+func callReceiver(call *types.NodeExprCall) types.NodeExpr {
+	if call.MemberOwnerExpr != nil {
+		return call.MemberOwnerExpr
+	}
+	if call.MemberOwnerName != nil {
+		return call.MemberOwnerName
+	}
+	return nil
+}
+
+func functionName(function *types.NodeFuncDef) string {
+	if function == nil {
+		return ""
+	}
+	switch named := function.Class.NameNode.(type) {
+	case *types.NodeNameSingle:
+		return named.Name
+	case *types.NodeNameComposite:
+		if len(named.Parts) != 0 {
+			return named.Parts[len(named.Parts)-1]
+		}
+	}
+	return ""
+}
+
+func (a *analyzer) allocatorFactForExpr(out *flow, expr types.NodeExpr) (allocatorFact, bool) {
+	switch node := expr.(type) {
+	case *types.NodeExprMove:
+		return a.allocatorFactForExpr(out, node.Expr)
+	case *types.NodeExprTry:
+		return a.allocatorFactForExpr(out, node.Call)
+	case *types.NodeExprName, *types.NodeExprMemberAccess:
+		if holder, ok := resolvedPlace(expr); ok {
+			fact, exists := out.allocators[keyFor(holder)]
+			return fact, exists
+		}
+	case *types.NodeExprProtoView:
+		if node.Implementation != nil && node.Implementation.Proto == a.allocatorProto {
+			if owner, ok := resolvedPlace(node.Target); ok {
+				return allocatorFact{origins: []allocatorOrigin{{owner: owner, createdAt: node.Tk}}}, true
+			}
+			return allocatorFact{unknown: true}, true
+		}
+	case *types.NodeExprCall:
+		if !a.isAllocatorType(node.InfType) {
+			return allocatorFact{}, false
+		}
+		var result allocatorFact
+		for _, parameter := range a.allocatorReturns[node.AssociatedFnDef] {
+			if parameter == allocatorOriginCtxProc || parameter == allocatorOriginCtxTemp {
+				field := "procAlloc"
+				if parameter == allocatorOriginCtxTemp {
+					field = "tempAlloc"
+				}
+				if fact, ok := a.implicitContextAllocatorFact(out, field); ok {
+					result = mergeAllocatorFacts(result, fact)
+				}
+				continue
+			}
+			var source types.NodeExpr
+			if parameter == 0 && node.IsMemberFunc {
+				source = callReceiver(node)
+			} else {
+				index := parameter
+				if node.IsMemberFunc {
+					index--
+				}
+				if index >= 0 && index < len(node.Args) {
+					source = node.Args[index]
+				}
+			}
+			if source != nil {
+				if fact, ok := a.allocatorFactForExpr(out, source); ok {
+					result = mergeAllocatorFacts(result, fact)
+				} else if owner, ok := resolvedPlace(source); ok {
+					result = mergeAllocatorFacts(result, allocatorFact{origins: []allocatorOrigin{{owner: owner, createdAt: expressionToken(source)}}})
+				}
+			}
+		}
+		if len(result.origins) != 0 || result.unknown {
+			return result, true
+		}
+		if node.IsMemberFunc {
+			if owner, ok := resolvedPlace(callReceiver(node)); ok {
+				return allocatorFact{origins: []allocatorOrigin{{owner: owner, createdAt: node.Tk}}}, true
+			}
+		}
+		return allocatorFact{unknown: true}, true
+	}
+	return allocatorFact{}, false
+}
+
+func (a *analyzer) implicitContextAllocatorFact(out *flow, fieldName string) (allocatorFact, bool) {
+	if a.currentFunction == nil || a.currentFunction.ImplicitContext == nil {
+		return allocatorFact{}, false
+	}
+	for key, fact := range out.allocators {
+		if key.root != a.currentFunction.ImplicitContext {
+			continue
+		}
+		definition := typeStructDefinition(a.shared, key.root.Type)
+		if definition == nil {
+			continue
+		}
+		index, ok := definition.FieldNb[fieldName]
+		if ok && strings.Contains(key.path, fmt.Sprintf("/f:%p:%d", definition, index)) {
+			return fact, true
+		}
+	}
+	return allocatorFact{}, false
+}
+
+func (a *analyzer) allocationRegionsForExpr(out *flow, expr types.NodeExpr) pointerProvenance {
+	var result pointerProvenance
+	if expr == nil {
+		return result
+	}
+	if fact, ok := a.allocatorFactForExpr(out, expr); ok {
+		result.unknown = fact.unknown
+		result.allocations = append(result.allocations, fact.origins...)
+	}
+	if holder, ok := resolvedPlace(expr); ok {
+		base := keyFor(holder)
+		for key, fact := range out.allocators {
+			if key.root == base.root && pathContains(base.path, key.path) {
+				part := pointerProvenance{allocations: fact.origins, unknown: fact.unknown}
+				result = mergeProvenance(result, part)
+			}
+		}
+		for key, provenance := range out.provenance {
+			if key.root == base.root && pathContains(base.path, key.path) {
+				result = mergeProvenance(result, provenance)
+			}
+		}
+	}
+	switch node := expr.(type) {
+	case *types.NodeExprMove:
+		return mergeProvenance(result, a.allocationRegionsForExpr(out, node.Expr))
+	case *types.NodeExprTry:
+		return mergeProvenance(result, a.allocationRegionsForExpr(out, node.Call))
+	case *types.NodeExprStructInit:
+		for _, field := range node.Fields {
+			result = mergeProvenance(result, a.allocationRegionsForExpr(out, field.Expression))
+		}
+	}
+	return result
+}
+
+func (a *analyzer) setAllocatorFact(out *flow, destination place.Place, value types.NodeExpr) {
+	key := keyFor(destination)
+	for old := range out.allocators {
+		if old.root == key.root && pathContains(key.path, old.path) {
+			delete(out.allocators, old)
+		}
+	}
+	if fact, ok := a.allocatorFactForExpr(out, value); ok {
+		out.allocators[key] = fact
+	}
+}
+
+func (a *analyzer) setContextAllocatorFields(out *flow, destination place.Place, value types.NodeExpr) {
+	call, ok := value.(*types.NodeExprCall)
+	if attempted, isTry := value.(*types.NodeExprTry); isTry {
+		call, ok = attempted.Call.(*types.NodeExprCall)
+	}
+	if !ok || call == nil || functionName(call.AssociatedFnDef) != "new" || len(call.Args) < 2 {
+		return
+	}
+	definition := typeStructDefinition(a.shared, destination.Root.Type)
+	if definition == nil {
+		return
+	}
+	for argument, fieldName := range []string{"procAlloc", "tempAlloc"} {
+		index, exists := definition.FieldNb[fieldName]
+		if !exists || !a.isAllocatorType(definition.Fields[fieldName]) {
+			continue
+		}
+		projected := destination
+		projected.Projections = append(append([]place.Projection(nil), destination.Projections...), place.Projection{Kind: place.Field, FieldOwner: definition, FieldIndex: index})
+		a.setAllocatorFact(out, projected, call.Args[argument])
+	}
+}
+
+func (a *analyzer) setAggregateRegions(out *flow, destination place.Place, value types.NodeExpr) {
+	destinationKey := keyFor(destination)
+	if source, ok := resolvedPlace(value); ok {
+		sourceKey := keyFor(source)
+		allocatorCopies := map[placeKey]allocatorFact{}
+		provenanceCopies := map[placeKey]pointerProvenance{}
+		for key, fact := range out.allocators {
+			if key.root == sourceKey.root && pathContains(sourceKey.path, key.path) {
+				allocatorCopies[placeKey{root: destinationKey.root, path: destinationKey.path + strings.TrimPrefix(key.path, sourceKey.path)}] = fact
+			}
+		}
+		for key, provenance := range out.provenance {
+			if key.root == sourceKey.root && pathContains(sourceKey.path, key.path) {
+				provenanceCopies[placeKey{root: destinationKey.root, path: destinationKey.path + strings.TrimPrefix(key.path, sourceKey.path)}] = provenance
+			}
+		}
+		for key, fact := range allocatorCopies {
+			out.allocators[key] = fact
+		}
+		for key, provenance := range provenanceCopies {
+			out.provenance[key] = provenance
+		}
+	}
+	init, ok := value.(*types.NodeExprStructInit)
+	if !ok {
+		return
+	}
+	owner := a.structFor(init.Type.KindNode)
+	for _, field := range init.Fields {
+		projected := destination
+		projected.Projections = append(append([]place.Projection(nil), destination.Projections...), place.Projection{Kind: place.Field, FieldOwner: owner, FieldIndex: field.FieldIndex})
+		if isPointerType(field.FieldType) || isSliceType(field.FieldType) {
+			a.setProvenance(out, projected, field.Expression)
+		}
+		if a.isAllocatorType(field.FieldType) {
+			a.setAllocatorFact(out, projected, field.Expression)
+		}
+		a.setAggregateRegions(out, projected, field.Expression)
+	}
+}
+
+func relocateAllocatorOwner(out *flow, from, to place.Place) {
+	if len(from.Projections) != 0 || len(to.Projections) != 0 {
+		return
+	}
+	for key, fact := range out.allocators {
+		for i := range fact.origins {
+			if fact.origins[i].owner.Root == from.Root {
+				fact.origins[i].owner.Root = to.Root
+			}
+		}
+		out.allocators[key] = fact
+	}
+	for key, provenance := range out.provenance {
+		for i := range provenance.allocations {
+			if provenance.allocations[i].owner.Root == from.Root {
+				provenance.allocations[i].owner.Root = to.Root
+			}
+		}
+		out.provenance[key] = provenance
+	}
+	for key, retention := range out.retentions {
+		for i := range retention.allocations {
+			if retention.allocations[i].owner.Root == from.Root {
+				retention.allocations[i].owner.Root = to.Root
+			}
+		}
+		out.retentions[key] = retention
+	}
+}
+
+func (a *analyzer) allocatorOperation(out *flow, call *types.NodeExprCall) (string, allocatorFact, bool) {
+	if call == nil || !call.IsMemberFunc || call.AssociatedFnDef == nil {
+		return "", allocatorFact{}, false
+	}
+	name := functionName(call.AssociatedFnDef)
+	if name != "alloc" && name != "allocT" && name != "realloc" && name != "reallocT" && name != "free" {
+		return "", allocatorFact{}, false
+	}
+	receiver := callReceiver(call)
+	resolvedAllocatorMethod := call.AssociatedFnDef.ProtoDispatch != nil && call.AssociatedFnDef.ProtoDispatch.Proto == a.allocatorProto
+	if receiver == nil || (!resolvedAllocatorMethod && !a.isAllocatorType(receiver.GetInferredType())) {
+		return "", allocatorFact{}, false
+	}
+	fact, exists := a.allocatorFactForExpr(out, receiver)
+	if !exists {
+		fact = allocatorFact{unknown: true}
+	}
+	return name, fact, true
 }
 
 func (a *analyzer) provenanceForExpr(out *flow, expr types.NodeExpr) (pointerProvenance, bool) {
@@ -354,6 +697,62 @@ func (a *analyzer) provenanceForExpr(out *flow, expr types.NodeExpr) (pointerPro
 		if !isPointerType(node.InfType) && !isSliceType(node.InfType) {
 			return pointerProvenance{}, false
 		}
+		if origins := a.allocationReturns[node.AssociatedFnDef]; len(origins) != 0 {
+			var result pointerProvenance
+			for _, parameter := range origins {
+				if parameter == allocatorOriginCtxProc || parameter == allocatorOriginCtxTemp {
+					field := "procAlloc"
+					if parameter == allocatorOriginCtxTemp {
+						field = "tempAlloc"
+					}
+					if allocator, ok := a.implicitContextAllocatorFact(out, field); ok {
+						result.unknown = result.unknown || allocator.unknown
+						for _, origin := range allocator.origins {
+							origin.allocation = node.Tk
+							result.allocations = append(result.allocations, origin)
+						}
+					}
+					continue
+				}
+				var source types.NodeExpr
+				if parameter == 0 && node.IsMemberFunc {
+					source = callReceiver(node)
+				} else {
+					index := parameter
+					if node.IsMemberFunc {
+						index--
+					}
+					if index >= 0 && index < len(node.Args) {
+						source = node.Args[index]
+					}
+				}
+				if allocator, ok := a.allocatorFactForExpr(out, source); ok {
+					result.unknown = result.unknown || allocator.unknown
+					for _, origin := range allocator.origins {
+						origin.allocation = node.Tk
+						result.allocations = append(result.allocations, origin)
+					}
+				}
+			}
+			if len(result.allocations) != 0 || result.unknown {
+				return result, true
+			}
+		}
+		if operation, allocator, ok := a.allocatorOperation(out, node); ok && operation != "free" {
+			result := pointerProvenance{unknown: allocator.unknown}
+			for _, origin := range allocator.origins {
+				origin.allocation = node.Tk
+				result.allocations = append(result.allocations, origin)
+			}
+			// realloc returns storage in the same region. If the receiver became
+			// opaque, retain the input pointer's known provenance as well.
+			if strings.HasPrefix(operation, "realloc") && len(node.Args) != 0 {
+				if prior, exists := a.provenanceForExpr(out, node.Args[0]); exists {
+					result = mergeProvenance(result, prior)
+				}
+			}
+			return result, true
+		}
 		if origins := a.returnOrigins[node.AssociatedFnDef]; len(origins) != 0 {
 			var result pointerProvenance
 			for _, index := range origins {
@@ -363,7 +762,7 @@ func (a *analyzer) provenanceForExpr(out *flow, expr types.NodeExpr) (pointerPro
 					}
 				}
 			}
-			if len(result.sources) != 0 || result.stackSlice || result.unknown {
+			if len(result.sources) != 0 || len(result.allocations) != 0 || result.stackSlice || result.unknown {
 				return result, true
 			}
 		}
@@ -391,14 +790,14 @@ func (a *analyzer) provenanceForExpr(out *flow, expr types.NodeExpr) (pointerPro
 			}
 		}
 		for _, argument := range node.Args {
-			if !isPointerType(argument.GetInferredType()) && !isSliceType(argument.GetInferredType()) {
-				continue
+			if isPointerType(argument.GetInferredType()) || isSliceType(argument.GetInferredType()) {
+				if source, ok := a.provenanceForExpr(out, argument); ok {
+					result = mergeProvenance(result, source)
+				}
 			}
-			if source, ok := a.provenanceForExpr(out, argument); ok {
-				result = mergeProvenance(result, source)
-			}
+			result = mergeProvenance(result, a.allocationRegionsForExpr(out, argument))
 		}
-		if len(result.sources) != 0 || result.stackSlice || result.unknown {
+		if len(result.sources) != 0 || len(result.allocations) != 0 || result.stackSlice || result.unknown {
 			return result, true
 		}
 		// External and opaque calls may fabricate a pointer. Stage 8 decides
@@ -491,14 +890,14 @@ func (a *analyzer) retentionForExpr(out *flow, expr types.NodeExpr) (pointerProv
 			}
 		}
 		for _, argument := range node.Args {
-			if !isPointerType(argument.GetInferredType()) && !isSliceType(argument.GetInferredType()) {
-				continue
+			if isPointerType(argument.GetInferredType()) || isSliceType(argument.GetInferredType()) {
+				if source, ok := a.provenanceForExpr(out, argument); ok {
+					result = mergeProvenance(result, source)
+				}
 			}
-			if source, ok := a.provenanceForExpr(out, argument); ok {
-				result = mergeProvenance(result, source)
-			}
+			result = mergeProvenance(result, a.allocationRegionsForExpr(out, argument))
 		}
-		if len(result.sources) != 0 || result.stackSlice {
+		if len(result.sources) != 0 || len(result.allocations) != 0 || result.stackSlice {
 			return result, true
 		}
 	}
@@ -533,7 +932,7 @@ func activeRetention(out *flow, holder placeKey) bool {
 
 func (a *analyzer) checkRetentionReplacement(out *flow, destination place.Place, token types.Token) {
 	key := keyFor(destination)
-	if retention, exists := out.retentions[key]; exists && activeRetention(out, key) && (len(retention.sources) != 0 || retention.stackSlice) {
+	if retention, exists := out.retentions[key]; exists && activeRetention(out, key) && (len(retention.sources) != 0 || len(retention.allocations) != 0 || retention.stackSlice) {
 		a.safetyError(token, fmt.Sprintf("assignment discards completion-bearing handle '%s' before completion", placeName(destination)))
 	}
 }
@@ -558,6 +957,12 @@ func (a *analyzer) validateDereference(out *flow, unary *types.NodeExprUnary) {
 	for _, source := range provenance.sources {
 		if _, absent := a.absentOrigin(out, source); absent {
 			a.safetyError(unary.Tk, fmt.Sprintf("dereference uses expired provenance from '%s'", placeName(source)))
+		}
+	}
+	for _, allocation := range provenance.allocations {
+		state := out.states[allocation.owner.Root]
+		if state == stateConsumed || state == stateMaybeConsumed || state == stateConditional {
+			a.safetyErrorRelated(unary.Tk, fmt.Sprintf("dereference uses storage after allocator '%s' was destroyed", placeName(allocation.owner)), out.consumedAt[allocation.owner.Root], "allocator implementation owner was destroyed here")
 		}
 	}
 }
@@ -623,6 +1028,32 @@ func (a *analyzer) checkLiveLoans(out *flow, changed place.Place, token types.To
 			for _, actual := range changedPlaces {
 				if source.Root == actual.Root && source.Overlaps(actual) {
 					a.safetyError(token, fmt.Sprintf("cannot %s '%s' while a pointer to it remains live", action, placeName(actual)))
+					break
+				}
+			}
+		}
+		for _, allocation := range provenance.allocations {
+			if action == "move" {
+				// A whole-owner move relocates the region identity after this loan
+				// check. Stable allocator interface views are checked separately.
+				continue
+			}
+			for _, actual := range changedPlaces {
+				if allocation.owner.Root == actual.Root && allocation.owner.Overlaps(actual) {
+					a.safetyError(token, fmt.Sprintf("cannot %s allocator '%s' while derived storage remains live", action, placeName(actual)))
+					break
+				}
+			}
+		}
+	}
+	for holder, fact := range out.allocators {
+		if holder.root == nil || !a.futureUses[holder.root] {
+			continue
+		}
+		for _, origin := range fact.origins {
+			for _, actual := range changedPlaces {
+				if origin.owner.Root == actual.Root && origin.owner.Overlaps(actual) {
+					a.safetyError(token, fmt.Sprintf("cannot %s '%s' while an allocator interface to it remains live", action, placeName(actual)))
 					break
 				}
 			}
@@ -1071,7 +1502,33 @@ func (a *analyzer) safetyError(token types.Token, message string) {
 	a.diagnostic(token, message, true)
 }
 
+func (a *analyzer) localOwner(out *flow, owner place.Place) bool {
+	if owner.Root == nil || owner.Root.IsGlobal {
+		return false
+	}
+	for _, scope := range out.scopes {
+		if scope.locals[owner.Root] {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *analyzer) checkAllocationEscape(out *flow, provenance pointerProvenance, token types.Token, action string) {
+	for _, origin := range provenance.allocations {
+		if !a.localOwner(out, origin.owner) {
+			continue
+		}
+		message := fmt.Sprintf("cannot %s: its storage was allocated by local allocator '%s', which is destroyed when this function returns", action, placeName(origin.owner))
+		a.safetyErrorRelated(token, message, origin.createdAt, "allocator implementation owner was established here")
+	}
+}
+
 func (a *analyzer) structFor(kind types.NodeTypeKind) *types.StructDef {
+	return structDefinition(a.shared, kind)
+}
+
+func structDefinition(shared *types.SharedState, kind types.NodeTypeKind) *types.StructDef {
 	absolute, ok := kind.(*types.NodeTypeAbsolute)
 	if !ok {
 		return nil
@@ -1081,12 +1538,19 @@ func (a *analyzer) structFor(kind types.NodeTypeKind) *types.StructDef {
 		return nil
 	}
 	module, name := absolute.AbsoluteName[:separator], absolute.AbsoluteName[separator+1:]
-	for _, file := range a.shared.Files {
+	for _, file := range shared.Files {
 		if file.PackageName == module {
 			return file.GlNode.StructDefs[name]
 		}
 	}
 	return nil
+}
+
+func typeStructDefinition(shared *types.SharedState, node *types.NodeType) *types.StructDef {
+	if node == nil {
+		return nil
+	}
+	return structDefinition(shared, node.KindNode)
 }
 
 func (a *analyzer) destructible(nodeType *types.NodeType) bool {
@@ -1393,11 +1857,42 @@ func (a *analyzer) consumeExpression(out *flow, expr types.NodeExpr, reason stri
 	a.borrowExpr(out, expr)
 	// Calling a field destructor is the explicit consumption of that field.
 	// It uses the same projected state transition as `move field`.
+	if reason == "destructor call" {
+		a.checkLiveLoans(out, resolved, token, "destroy")
+	}
 	a.movePlace(out, resolved, token)
 }
 
 func (a *analyzer) call(out *flow, call *types.NodeExprCall) {
+	defer func() {
+		if call.ErrorMode == 1 {
+			a.checkTryFailure(out)
+		}
+	}()
 	definition := call.AssociatedFnDef
+	if operation, allocator, ok := a.allocatorOperation(out, call); ok {
+		for _, origin := range allocator.origins {
+			if state := out.states[origin.owner.Root]; state == stateConsumed || state == stateMaybeConsumed {
+				a.safetyErrorRelated(call.Tk, fmt.Sprintf("allocator '%s' is used after its implementation owner was destroyed", placeName(origin.owner)), out.consumedAt[origin.owner.Root], "allocator implementation owner was destroyed here")
+			}
+		}
+		if (operation == "free" || strings.HasPrefix(operation, "realloc")) && len(call.Args) != 0 {
+			if storage, exists := a.provenanceForExpr(out, call.Args[0]); exists {
+				for _, allocated := range storage.allocations {
+					matched := false
+					for _, owner := range allocator.origins {
+						if owner.owner.Equal(allocated.owner) {
+							matched = true
+							break
+						}
+					}
+					if !matched && !allocator.unknown {
+						a.safetyErrorRelated(call.Tk, fmt.Sprintf("cannot %s storage allocated by '%s' through a different allocator", operation, placeName(allocated.owner)), allocated.allocation, "storage was allocated here")
+					}
+				}
+			}
+		}
+	}
 	if call.IsFuncPointer {
 		functionType, ok := call.FuncPtrType.KindNode.(*types.NodeTypeFunc)
 		if !ok {
@@ -1522,7 +2017,7 @@ func (a *analyzer) expression(out *flow, expr types.NodeExpr) {
 		a.call(out, node)
 		if node.InfType != nil && node.InfType.Owned && a.destructible(node.InfType) {
 			a.warn(node.Tk, "owned destructible call result is discarded")
-			if retention, ok := a.retentionForExpr(out, node); ok && (len(retention.sources) != 0 || retention.stackSlice) {
+			if retention, ok := a.retentionForExpr(out, node); ok && (len(retention.sources) != 0 || len(retention.allocations) != 0 || retention.stackSlice) {
 				a.safetyError(node.Tk, "completion-bearing handle retaining source storage cannot be discarded")
 			}
 		}
@@ -1683,6 +2178,13 @@ func (a *analyzer) valueInto(out *flow, destination *types.NodeExprVarDef, value
 	if destination != nil && (isPointerType(destination.Type) || isSliceType(destination.Type)) {
 		a.setProvenance(out, place.Place{Root: destination}, value)
 	}
+	if destination != nil && a.isAllocatorType(destination.Type) {
+		a.setAllocatorFact(out, place.Place{Root: destination}, value)
+	}
+	if destination != nil {
+		a.setContextAllocatorFields(out, place.Place{Root: destination}, value)
+		a.setAggregateRegions(out, place.Place{Root: destination}, value)
+	}
 	if destination != nil {
 		if init, ok := value.(*types.NodeExprStructInit); ok {
 			owner := a.structFor(destination.Type.KindNode)
@@ -1690,10 +2192,20 @@ func (a *analyzer) valueInto(out *flow, destination *types.NodeExprVarDef, value
 				if isPointerType(field.FieldType) || isSliceType(field.FieldType) {
 					a.setProvenance(out, place.Place{Root: destination, Projections: []place.Projection{{Kind: place.Field, FieldOwner: owner, FieldIndex: field.FieldIndex}}}, field.Expression)
 				}
+				if a.isAllocatorType(field.FieldType) {
+					a.setAllocatorFact(out, place.Place{Root: destination, Projections: []place.Projection{{Kind: place.Field, FieldOwner: owner, FieldIndex: field.FieldIndex}}}, field.Expression)
+				}
 			}
 		}
 	}
 	owned := a.transferValue(out, value)
+	if owned && destination != nil {
+		if moved, ok := value.(*types.NodeExprMove); ok {
+			if source, resolved := resolvedPlace(moved.Expr); resolved {
+				relocateAllocatorOwner(out, source, place.Place{Root: destination})
+			}
+		}
+	}
 	if !owned && destination.Type != nil && destination.Type.Owned && partialValue(value) {
 		// Partial moves are intentionally not analysed. An explicit `$T` local
 		// may claim a field/indexed value, but calls still derive ownership only
@@ -1724,11 +2236,28 @@ func (a *analyzer) assignment(out *flow, assignment *types.NodeExprAssign) {
 
 	if destination := directVariable(assignment.Left); destination != nil {
 		resolved := place.Place{Root: destination}
+		// Mutable module storage outlives every function invocation. Moving a
+		// fresh owner into a global is an ownership escape, not a local owner
+		// whose state can be joined with another call path. Tracking it in this
+		// per-function flow produced false use-after-move errors for guarded
+		// singleton initialization.
+		if destination.IsGlobal {
+			a.checkAllocationEscape(out, a.allocationRegionsForExpr(out, assignment.Right), expressionToken(assignment.Right), "store in global storage")
+			if provenance, ok := a.provenanceForExpr(out, assignment.Right); ok {
+				a.checkAllocationEscape(out, provenance, expressionToken(assignment.Right), "store in global storage")
+			}
+			return
+		}
 		a.checkRetentionReplacement(out, resolved, expressionToken(assignment.Left))
 		a.checkLiveLoans(out, resolved, expressionToken(assignment.Left), "mutate")
 		if isPointerType(destination.Type) || isSliceType(destination.Type) {
 			a.setProvenance(out, resolved, assignment.Right)
 		}
+		if a.isAllocatorType(destination.Type) {
+			a.setAllocatorFact(out, resolved, assignment.Right)
+		}
+		a.setContextAllocatorFields(out, resolved, assignment.Right)
+		a.setAggregateRegions(out, resolved, assignment.Right)
 		// Rebinding invalidates only relations which depend on that value or its
 		// descriptor; unrelated dominating facts remain available.
 		invalidateVariableRanges(out, destination)
@@ -1740,11 +2269,23 @@ func (a *analyzer) assignment(out *flow, assignment *types.NodeExprAssign) {
 		return
 	}
 	if destination, ok := resolvedPlace(assignment.Left); ok {
+		if destination.Root.IsGlobal {
+			a.checkAllocationEscape(out, a.allocationRegionsForExpr(out, assignment.Right), expressionToken(assignment.Right), "store in global storage")
+			if provenance, exists := a.provenanceForExpr(out, assignment.Right); exists {
+				a.checkAllocationEscape(out, provenance, expressionToken(assignment.Right), "store in global storage")
+			}
+			return
+		}
 		a.checkRetentionReplacement(out, destination, expressionToken(assignment.Left))
 		a.checkLiveLoans(out, destination, expressionToken(assignment.Left), "mutate")
 		if isPointerType(assignment.Left.GetInferredType()) || isSliceType(assignment.Left.GetInferredType()) {
 			a.setProvenance(out, destination, assignment.Right)
 		}
+		if a.isAllocatorType(assignment.Left.GetInferredType()) {
+			a.setAllocatorFact(out, destination, assignment.Right)
+		}
+		a.setContextAllocatorFields(out, destination, assignment.Right)
+		a.setAggregateRegions(out, destination, assignment.Right)
 		if _, indexed := assignment.Left.(*types.NodeExprSubscript); !indexed {
 			invalidateVariableRanges(out, destination.Root)
 		}
@@ -1802,6 +2343,13 @@ func mergeFlows(left, right flow) flow {
 			out.provenance[key] = mergeProvenance(prior, provenance)
 		} else {
 			out.provenance[key] = provenance
+		}
+	}
+	for key, fact := range right.allocators {
+		if prior, ok := out.allocators[key]; ok {
+			out.allocators[key] = mergeAllocatorFacts(prior, fact)
+		} else {
+			out.allocators[key] = fact
 		}
 	}
 	for key, retention := range right.retentions {
@@ -1907,6 +2455,11 @@ func (a *analyzer) unwindScope(out *flow, checkLocals bool, failing bool) {
 				a.safetyError(variableToken(source.Root), fmt.Sprintf("completion-bearing handle must be consumed before retained local place '%s' leaves scope", placeName(source)))
 			}
 		}
+		for _, allocation := range retention.allocations {
+			if scope.locals[allocation.owner.Root] {
+				a.safetyError(variableToken(allocation.owner.Root), fmt.Sprintf("completion-bearing handle must be consumed before allocator '%s' leaves scope", placeName(allocation.owner)))
+			}
+		}
 		if retention.stackSlice {
 			for _, source := range retention.sources {
 				if scope.locals[source.Root] {
@@ -1922,12 +2475,43 @@ func (a *analyzer) unwindScope(out *flow, checkLocals bool, failing bool) {
 			if holder.root == variable || scope.locals[holder.root] {
 				continue
 			}
+			holderOutlives := holder.root != nil && holder.root.IsGlobal
+			for _, remaining := range out.scopes {
+				holderOutlives = holderOutlives || remaining.locals[holder.root]
+			}
+			if !holderOutlives {
+				continue
+			}
 			for _, source := range provenance.sources {
 				// Conservative alias overlap between distinct dereferenced roots is
 				// useful for mutation checks, but it does not make one declaration's
 				// lifetime storage belong to every unrelated local declaration.
 				if source.Root == variable && source.Overlaps(localPlace) {
 					a.safetyError(variableToken(variable), fmt.Sprintf("pointer or stack-backed slice to local place '%s' outlives its source scope", placeName(source)))
+					break
+				}
+			}
+			for _, allocation := range provenance.allocations {
+				if allocation.owner.Root == variable {
+					a.safetyError(variableToken(variable), fmt.Sprintf("storage allocated by local allocator '%s' outlives its owner", placeName(allocation.owner)))
+					break
+				}
+			}
+		}
+		for holder, fact := range out.allocators {
+			if holder.root == variable || scope.locals[holder.root] {
+				continue
+			}
+			holderOutlives := holder.root != nil && holder.root.IsGlobal
+			for _, remaining := range out.scopes {
+				holderOutlives = holderOutlives || remaining.locals[holder.root]
+			}
+			if !holderOutlives {
+				continue
+			}
+			for _, origin := range fact.origins {
+				if origin.owner.Root == variable {
+					a.safetyError(variableToken(variable), fmt.Sprintf("allocator interface outlives implementation owner '%s'", placeName(origin.owner)))
 					break
 				}
 			}
@@ -1948,6 +2532,11 @@ func (a *analyzer) unwindScope(out *flow, checkLocals bool, failing bool) {
 		for key := range out.provenance {
 			if key.root == variable {
 				delete(out.provenance, key)
+			}
+		}
+		for key := range out.allocators {
+			if key.root == variable {
+				delete(out.allocators, key)
 			}
 		}
 		for key := range out.retentions {
@@ -2069,7 +2658,9 @@ func (a *analyzer) statement(out *flow, statement types.NodeStatement) {
 	case *types.NodeStmtExpr:
 		a.expression(out, node.Expression)
 	case *types.NodeStmtRet:
+		a.checkAllocationEscape(out, a.allocationRegionsForExpr(out, node.Expression), node.Tk, "return this value")
 		if retention, ok := a.retentionForExpr(out, node.Expression); ok {
+			a.checkAllocationEscape(out, retention, node.Tk, "return this asynchronous handle")
 			for _, source := range retention.sources {
 				for _, scope := range out.scopes {
 					if scope.locals[source.Root] {
@@ -2083,6 +2674,7 @@ func (a *analyzer) statement(out *flow, statement types.NodeStatement) {
 			}
 		}
 		if provenance, ok := a.provenanceForExpr(out, node.Expression); ok {
+			a.checkAllocationEscape(out, provenance, node.Tk, "return this value")
 			if provenance.stackSlice {
 				a.safetyError(node.Tk, "stack-backed slice cannot escape its source frame")
 			}
@@ -2413,7 +3005,7 @@ func isLiteralTrue(expr types.NodeExpr) bool {
 }
 
 func (a *analyzer) function(function *types.NodeFuncDef) {
-	out := flow{states: map[*types.NodeExprVarDef]State{}, deferred: map[*types.NodeExprVarDef]bool{}, conditions: map[*types.NodeExprVarDef]*types.NodeExprVarDef{}, errorFacts: map[*types.NodeExprVarDef]int8{}, ranges: map[rangeRelation]*types.RangeProof{}, provenance: map[placeKey]pointerProvenance{}, retentions: map[placeKey]pointerProvenance{}, scopes: []deferScope{{locals: map[*types.NodeExprVarDef]bool{}}}}
+	out := flow{states: map[*types.NodeExprVarDef]State{}, deferred: map[*types.NodeExprVarDef]bool{}, conditions: map[*types.NodeExprVarDef]*types.NodeExprVarDef{}, errorFacts: map[*types.NodeExprVarDef]int8{}, ranges: map[rangeRelation]*types.RangeProof{}, provenance: map[placeKey]pointerProvenance{}, allocators: map[placeKey]allocatorFact{}, retentions: map[placeKey]pointerProvenance{}, scopes: []deferScope{{locals: map[*types.NodeExprVarDef]bool{}}}}
 	a.futureUses = map[*types.NodeExprVarDef]bool{}
 	// Parameter declaration nodes are manufactured by scope_info. Seed owned
 	// parameters so an unused one still produces an exit warning.
@@ -2470,6 +3062,18 @@ func appendOrigin(out []int, value int) []int {
 		}
 	}
 	return append(out, value)
+}
+
+func linkedFunctionCount(shared *types.SharedState) int {
+	count := 0
+	for _, file := range shared.Files {
+		for _, declaration := range file.GlNode.Declarations {
+			if _, ok := declaration.(*types.NodeFuncDef); ok {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func inferredExprOrigins(expr types.NodeExpr, parameters map[*types.NodeExprVarDef]int, aliases map[*types.NodeExprVarDef][]int, summaries map[*types.NodeFuncDef][]int) []int {
@@ -2554,7 +3158,7 @@ func cloneOrigins(in map[*types.NodeExprVarDef][]int) map[*types.NodeExprVarDef]
 func inferReturnOrigins(shared *types.SharedState) map[*types.NodeFuncDef][]int {
 	summaries := map[*types.NodeFuncDef][]int{}
 	// Iterate because a helper may return the result of another visible helper.
-	for iteration := 0; iteration < 8; iteration++ {
+	for iteration := 0; iteration <= linkedFunctionCount(shared); iteration++ {
 		changed := false
 		for _, file := range shared.Files {
 			for _, declaration := range file.GlNode.Declarations {
@@ -2563,7 +3167,272 @@ func inferReturnOrigins(shared *types.SharedState) map[*types.NodeFuncDef][]int 
 					continue
 				}
 				origins := inferBodyOrigins(&function.Body, functionParameterRoots(file, function), map[*types.NodeExprVarDef][]int{}, summaries)
-				if len(origins) != len(summaries[function]) {
+				if !reflect.DeepEqual(origins, summaries[function]) {
+					summaries[function] = origins
+					changed = true
+				}
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	return summaries
+}
+
+func inferredAllocatorOrigins(expr types.NodeExpr, parameters map[*types.NodeExprVarDef]int, aliases map[*types.NodeExprVarDef][]int, summaries map[*types.NodeFuncDef][]int) []int {
+	if expr == nil {
+		return nil
+	}
+	if resolved, ok := resolvedPlace(expr); ok && resolved.Root != nil && resolved.Root.IsImplicitContext {
+		for _, projection := range resolved.Projections {
+			if projection.Kind != place.Field || projection.FieldOwner == nil || projection.FieldIndex < 0 || projection.FieldIndex >= len(projection.FieldOwner.FieldOrder) {
+				continue
+			}
+			switch projection.FieldOwner.FieldOrder[projection.FieldIndex] {
+			case "procAlloc":
+				return []int{allocatorOriginCtxProc}
+			case "tempAlloc":
+				return []int{allocatorOriginCtxTemp}
+			}
+		}
+	}
+	if root := directVariable(expr); root != nil {
+		if index, ok := parameters[root]; ok {
+			return []int{index}
+		}
+		return append([]int(nil), aliases[root]...)
+	}
+	switch node := expr.(type) {
+	case *types.NodeExprMove:
+		return inferredAllocatorOrigins(node.Expr, parameters, aliases, summaries)
+	case *types.NodeExprTry:
+		return inferredAllocatorOrigins(node.Call, parameters, aliases, summaries)
+	case *types.NodeExprProtoView:
+		return inferredAllocatorOrigins(node.Target, parameters, aliases, summaries)
+	case *types.NodeExprCall:
+		var out []int
+		for _, parameter := range summaries[node.AssociatedFnDef] {
+			if parameter == allocatorOriginCtxProc || parameter == allocatorOriginCtxTemp {
+				out = appendOrigin(out, parameter)
+				continue
+			}
+			var source types.NodeExpr
+			if parameter == 0 && node.IsMemberFunc {
+				source = callReceiver(node)
+			} else {
+				index := parameter
+				if node.IsMemberFunc {
+					index--
+				}
+				if index >= 0 && index < len(node.Args) {
+					source = node.Args[index]
+				}
+			}
+			for _, origin := range inferredAllocatorOrigins(source, parameters, aliases, summaries) {
+				out = appendOrigin(out, origin)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+func inferAllocatorBodyOrigins(body *types.NodeBody, parameters map[*types.NodeExprVarDef]int, aliases map[*types.NodeExprVarDef][]int, summaries map[*types.NodeFuncDef][]int) []int {
+	var returns []int
+	for _, statement := range body.Statements {
+		switch node := statement.(type) {
+		case *types.NodeStmtExpr:
+			switch expression := node.Expression.(type) {
+			case *types.NodeExprVarDefAssign:
+				aliases[expression.VarDef] = inferredAllocatorOrigins(expression.AssignExpr, parameters, aliases, summaries)
+			case *types.NodeExprAssign:
+				if variable := directVariable(expression.Left); variable != nil {
+					aliases[variable] = inferredAllocatorOrigins(expression.Right, parameters, aliases, summaries)
+				}
+			}
+		case *types.NodeStmtRet:
+			for _, origin := range inferredAllocatorOrigins(node.Expression, parameters, aliases, summaries) {
+				returns = appendOrigin(returns, origin)
+			}
+		case *types.NodeStmtIf:
+			for _, origin := range inferAllocatorBodyOrigins(&node.Body, parameters, cloneOrigins(aliases), summaries) {
+				returns = appendOrigin(returns, origin)
+			}
+			for next := node.NextCondStmt; next != nil; {
+				switch branch := next.(type) {
+				case *types.NodeStmtIf:
+					for _, origin := range inferAllocatorBodyOrigins(&branch.Body, parameters, cloneOrigins(aliases), summaries) {
+						returns = appendOrigin(returns, origin)
+					}
+					next = branch.NextCondStmt
+				case *types.NodeStmtElse:
+					for _, origin := range inferAllocatorBodyOrigins(&branch.Body, parameters, cloneOrigins(aliases), summaries) {
+						returns = appendOrigin(returns, origin)
+					}
+					next = nil
+				}
+			}
+		case *types.NodeStmtWhile:
+			for _, origin := range inferAllocatorBodyOrigins(&node.Body, parameters, cloneOrigins(aliases), summaries) {
+				returns = appendOrigin(returns, origin)
+			}
+		case *types.NodeStmtFor:
+			for _, origin := range inferAllocatorBodyOrigins(&node.Body, parameters, cloneOrigins(aliases), summaries) {
+				returns = appendOrigin(returns, origin)
+			}
+		case *types.NodeStmtBounded:
+			for _, origin := range inferAllocatorBodyOrigins(&node.Body, parameters, cloneOrigins(aliases), summaries) {
+				returns = appendOrigin(returns, origin)
+			}
+		case *types.NodeStmtUnsafe:
+			for _, origin := range inferAllocatorBodyOrigins(&node.Body, parameters, cloneOrigins(aliases), summaries) {
+				returns = appendOrigin(returns, origin)
+			}
+		}
+	}
+	return returns
+}
+
+func inferAllocatorReturns(shared *types.SharedState, proto *types.ProtoDef) map[*types.NodeFuncDef][]int {
+	summaries := map[*types.NodeFuncDef][]int{}
+	if proto == nil {
+		return summaries
+	}
+	for iteration := 0; iteration <= linkedFunctionCount(shared); iteration++ {
+		changed := false
+		for _, file := range shared.Files {
+			for _, declaration := range file.GlNode.Declarations {
+				function, ok := declaration.(*types.NodeFuncDef)
+				if !ok {
+					continue
+				}
+				definition := typeStructDefinition(shared, function.ReturnType)
+				if definition == nil || !definition.IsProto || definition.Proto != proto {
+					continue
+				}
+				origins := inferAllocatorBodyOrigins(&function.Body, functionParameterRoots(file, function), map[*types.NodeExprVarDef][]int{}, summaries)
+				if !reflect.DeepEqual(origins, summaries[function]) {
+					summaries[function] = origins
+					changed = true
+				}
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	return summaries
+}
+
+func allocationExprOrigins(expr types.NodeExpr, parameters map[*types.NodeExprVarDef]int, aliases map[*types.NodeExprVarDef][]int, allocatorSummaries, allocationSummaries map[*types.NodeFuncDef][]int, proto *types.ProtoDef) []int {
+	call, ok := expr.(*types.NodeExprCall)
+	if attempted, isTry := expr.(*types.NodeExprTry); isTry {
+		call, ok = attempted.Call.(*types.NodeExprCall)
+	}
+	if !ok || call == nil {
+		return nil
+	}
+	name := functionName(call.AssociatedFnDef)
+	if call.AssociatedFnDef != nil && call.AssociatedFnDef.ProtoDispatch != nil && call.AssociatedFnDef.ProtoDispatch.Proto == proto && (name == "alloc" || name == "allocT" || name == "realloc" || name == "reallocT") {
+		return inferredAllocatorOrigins(callReceiver(call), parameters, aliases, allocatorSummaries)
+	}
+	var out []int
+	for _, parameter := range allocationSummaries[call.AssociatedFnDef] {
+		if parameter == allocatorOriginCtxProc || parameter == allocatorOriginCtxTemp {
+			out = appendOrigin(out, parameter)
+			continue
+		}
+		var source types.NodeExpr
+		if parameter == 0 && call.IsMemberFunc {
+			source = callReceiver(call)
+		} else {
+			index := parameter
+			if call.IsMemberFunc {
+				index--
+			}
+			if index >= 0 && index < len(call.Args) {
+				source = call.Args[index]
+			}
+		}
+		for _, origin := range inferredAllocatorOrigins(source, parameters, aliases, allocatorSummaries) {
+			out = appendOrigin(out, origin)
+		}
+	}
+	return out
+}
+
+func inferAllocationBodyOrigins(body *types.NodeBody, parameters map[*types.NodeExprVarDef]int, aliases map[*types.NodeExprVarDef][]int, allocatorSummaries, allocationSummaries map[*types.NodeFuncDef][]int, proto *types.ProtoDef) []int {
+	var returns []int
+	for _, statement := range body.Statements {
+		switch node := statement.(type) {
+		case *types.NodeStmtExpr:
+			switch expression := node.Expression.(type) {
+			case *types.NodeExprVarDefAssign:
+				aliases[expression.VarDef] = inferredAllocatorOrigins(expression.AssignExpr, parameters, aliases, allocatorSummaries)
+			case *types.NodeExprAssign:
+				if variable := directVariable(expression.Left); variable != nil {
+					aliases[variable] = inferredAllocatorOrigins(expression.Right, parameters, aliases, allocatorSummaries)
+				}
+			}
+		case *types.NodeStmtRet:
+			for _, origin := range allocationExprOrigins(node.Expression, parameters, aliases, allocatorSummaries, allocationSummaries, proto) {
+				returns = appendOrigin(returns, origin)
+			}
+		case *types.NodeStmtIf:
+			for _, origin := range inferAllocationBodyOrigins(&node.Body, parameters, cloneOrigins(aliases), allocatorSummaries, allocationSummaries, proto) {
+				returns = appendOrigin(returns, origin)
+			}
+			for next := node.NextCondStmt; next != nil; {
+				switch branch := next.(type) {
+				case *types.NodeStmtIf:
+					for _, origin := range inferAllocationBodyOrigins(&branch.Body, parameters, cloneOrigins(aliases), allocatorSummaries, allocationSummaries, proto) {
+						returns = appendOrigin(returns, origin)
+					}
+					next = branch.NextCondStmt
+				case *types.NodeStmtElse:
+					for _, origin := range inferAllocationBodyOrigins(&branch.Body, parameters, cloneOrigins(aliases), allocatorSummaries, allocationSummaries, proto) {
+						returns = appendOrigin(returns, origin)
+					}
+					next = nil
+				}
+			}
+		case *types.NodeStmtWhile:
+			for _, origin := range inferAllocationBodyOrigins(&node.Body, parameters, cloneOrigins(aliases), allocatorSummaries, allocationSummaries, proto) {
+				returns = appendOrigin(returns, origin)
+			}
+		case *types.NodeStmtFor:
+			for _, origin := range inferAllocationBodyOrigins(&node.Body, parameters, cloneOrigins(aliases), allocatorSummaries, allocationSummaries, proto) {
+				returns = appendOrigin(returns, origin)
+			}
+		case *types.NodeStmtBounded:
+			for _, origin := range inferAllocationBodyOrigins(&node.Body, parameters, cloneOrigins(aliases), allocatorSummaries, allocationSummaries, proto) {
+				returns = appendOrigin(returns, origin)
+			}
+		case *types.NodeStmtUnsafe:
+			for _, origin := range inferAllocationBodyOrigins(&node.Body, parameters, cloneOrigins(aliases), allocatorSummaries, allocationSummaries, proto) {
+				returns = appendOrigin(returns, origin)
+			}
+		}
+	}
+	return returns
+}
+
+func inferAllocationReturns(shared *types.SharedState, proto *types.ProtoDef, allocatorSummaries map[*types.NodeFuncDef][]int) map[*types.NodeFuncDef][]int {
+	summaries := map[*types.NodeFuncDef][]int{}
+	if proto == nil {
+		return summaries
+	}
+	for iteration := 0; iteration <= linkedFunctionCount(shared); iteration++ {
+		changed := false
+		for _, file := range shared.Files {
+			for _, declaration := range file.GlNode.Declarations {
+				function, ok := declaration.(*types.NodeFuncDef)
+				if !ok || (!isPointerType(function.ReturnType) && !isSliceType(function.ReturnType)) {
+					continue
+				}
+				origins := inferAllocationBodyOrigins(&function.Body, functionParameterRoots(file, function), map[*types.NodeExprVarDef][]int{}, allocatorSummaries, summaries, proto)
+				if !reflect.DeepEqual(origins, summaries[function]) {
 					summaries[function] = origins
 					changed = true
 				}
@@ -2640,8 +3509,19 @@ func Check(shared *types.SharedState) []Diagnostic {
 	diagnostics := []Diagnostic{}
 	returnOrigins := inferReturnOrigins(shared)
 	consumePtrOrigins := inferLeadingDestructorEffects(shared)
+	var allocatorProto *types.ProtoDef
 	for _, file := range shared.Files {
-		a := &analyzer{shared: shared, file: file, seen: map[string]bool{}, returnOrigins: returnOrigins, consumePtrOrigins: consumePtrOrigins, futureUses: map[*types.NodeExprVarDef]bool{}, destructorReceivers: map[*types.NodeExprVarDef]bool{}, staticExtents: map[*types.NodeExprVarDef]uint64{}}
+		if file.ModuleName == "allocator" {
+			if definition := file.GlNode.StructDefs["Allocator"]; definition != nil && definition.IsProto {
+				allocatorProto = definition.Proto
+				break
+			}
+		}
+	}
+	allocatorReturns := inferAllocatorReturns(shared, allocatorProto)
+	allocationReturns := inferAllocationReturns(shared, allocatorProto, allocatorReturns)
+	for _, file := range shared.Files {
+		a := &analyzer{shared: shared, file: file, seen: map[string]bool{}, returnOrigins: returnOrigins, allocatorReturns: allocatorReturns, allocationReturns: allocationReturns, allocatorProto: allocatorProto, consumePtrOrigins: consumePtrOrigins, futureUses: map[*types.NodeExprVarDef]bool{}, destructorReceivers: map[*types.NodeExprVarDef]bool{}, staticExtents: map[*types.NodeExprVarDef]uint64{}}
 		validateDestructors(a, file.GlNode)
 		for _, declaration := range file.GlNode.Declarations {
 			if function, ok := declaration.(*types.NodeFuncDef); ok {

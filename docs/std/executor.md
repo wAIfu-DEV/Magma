@@ -1,8 +1,8 @@
 # `std/executor`
 
-A type-erased task scheduler interface. `Executor` contains a borrowed
-implementation pointer and immutable `Vtable` with `submit` and `free`
-operations.
+A type-erased task scheduler declared as a `proto`. Its required implementation
+methods are `submitRaw(entry ptr, context ptr) !void` and `releaseRaw() void`.
+An `Executor` value is a borrowed interface view.
 
 ```magma
 execution := pool.executor()

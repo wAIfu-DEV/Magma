@@ -58,8 +58,9 @@ func cloneType(in *t.NodeType) *t.NodeType {
 		}
 	case *t.NodeTypeFunc:
 		n2 := &t.NodeTypeFunc{
-			Args:    make([]*t.NodeType, len(n.Args)),
-			RetType: cloneType(n.RetType),
+			Args:       make([]*t.NodeType, len(n.Args)),
+			RetType:    cloneType(n.RetType),
+			ContextABI: n.ContextABI,
 		}
 		for i, a := range n.Args {
 			n2.Args[i] = cloneType(a)
@@ -88,7 +89,7 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 		for i, g := range n.GenericArgs {
 			genericArgs[i] = cloneType(g)
 		}
-		return &t.NodeExprName{Tk: n.Tk, Name: cloneName(n.Name), GenericArgs: genericArgs, InfType: cloneType(n.InfType)}
+		return &t.NodeExprName{Tk: n.Tk, Name: cloneName(n.Name), GenericArgs: genericArgs, InfType: cloneType(n.InfType), ContextAdapter: n.ContextAdapter, NativeContextThunk: n.NativeContextThunk}
 	case *t.NodeExprCall:
 		args := make([]t.NodeExpr, len(n.Args))
 		for i, a := range n.Args {
@@ -272,20 +273,29 @@ func cloneFuncDef(in *t.NodeFuncDef) *t.NodeFuncDef {
 			TypeParams:      append([]string{}, in.Class.TypeParams...),
 			OwnerTypeParams: append([]string{}, in.Class.OwnerTypeParams...),
 		},
-		ReturnType:     cloneType(in.ReturnType),
-		Body:           cloneBody(&in.Body),
-		AbsName:        in.AbsName,
-		NoAliasName:    in.NoAliasName,
-		DisplayName:    in.DisplayName,
-		IsDestructor:   in.IsDestructor,
-		IsMember:       in.IsMember,
-		IsEntryPoint:   in.IsEntryPoint,
-		IsExternal:     in.IsExternal,
-		NoRetain:       in.NoRetain,
-		IsPublic:       in.IsPublic,
-		ExportName:     in.ExportName,
-		ExportABI:      in.ExportABI,
-		ErrorPredicate: in.ErrorPredicate,
+		ReturnType:              cloneType(in.ReturnType),
+		Body:                    cloneBody(&in.Body),
+		AbsName:                 in.AbsName,
+		NoAliasName:             in.NoAliasName,
+		DisplayName:             in.DisplayName,
+		ContextABI:              in.ContextABI,
+		IsDestructor:            in.IsDestructor,
+		IsMember:                in.IsMember,
+		IsEntryPoint:            in.IsEntryPoint,
+		IsExternal:              in.IsExternal,
+		NoRetain:                in.NoRetain,
+		IsPublic:                in.IsPublic,
+		ExportName:              in.ExportName,
+		ExportABI:               in.ExportABI,
+		ErrorPredicate:          in.ErrorPredicate,
+		ProtoDispatch:           in.ProtoDispatch,
+		NeedsNativeContextThunk: in.NeedsNativeContextThunk,
+	}
+	if in.ImplicitContext != nil {
+		out.ImplicitContext = &t.NodeExprVarDef{
+			Name: cloneName(in.ImplicitContext.Name), Type: cloneType(in.ImplicitContext.Type),
+			Storage: in.ImplicitContext.Storage, IsImplicitContext: true,
+		}
 	}
 	for i, a := range in.Class.ArgsNode.Args {
 		out.Class.ArgsNode.Args[i] = t.NodeArg{

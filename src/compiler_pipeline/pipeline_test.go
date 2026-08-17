@@ -70,6 +70,332 @@ main() !void:
 `)
 }
 
+func TestInferredMethodResultResolvesGenericReceiverMember(t *testing.T) {
+	validateTestProgram(t, `mod main
+Future[T](value T)
+Future[T].await() T:
+    ret this.value
+..
+Reader()
+Reader.readAsync() Future[u64]:
+    ret Future[u64](value=42)
+..
+main() void:
+    reader Reader
+    pending := reader.readAsync()
+    value := pending.await()
+..
+`)
+}
+
+func TestNoCtxRequiresDefiniteImplicitContextInitialization(t *testing.T) {
+	parsed, _ := testProgram(t, `mod main
+ordinary() void:
+..
+noctx bootstrap(flag bool) void:
+    if flag:
+        ordinary()
+    ..
+..
+main() void:
+..
+`)
+	specialized, err := Specialize(*parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked, err := Link(specialized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = CheckTypes(linked)
+	if err == nil || !strings.Contains(err.Error(), "implicit 'ctx' may be used before it is initialized") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestNoCtxInitializationAcrossAllBranchesAllowsContextfulCall(t *testing.T) {
+	validateTestProgram(t, `mod main
+use "std:context" context
+noctx seed() context.Ctx:
+    value context.Ctx
+    ret value
+..
+ordinary() void:
+..
+noctx bootstrap(flag bool) void:
+    if flag:
+        ctx = seed()
+    else:
+        ctx = seed()
+    ..
+    ordinary()
+..
+main() void:
+..
+`)
+}
+
+func TestNoCtxFunctionAdaptsToOrdinaryFunctionPointer(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+noctx plusOne(value u64) u64:
+    ret value + 1
+..
+invoke(callback (u64) u64, value u64) u64:
+    ret callback(value)
+..
+main() void:
+    callback (u64) u64 = plusOne
+    value := invoke(callback, 41)
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ir, err := Lower(ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(ir), "plusOne.__ctx_adapter") {
+		t.Fatalf("context-discard adapter missing from IR")
+	}
+}
+
+func TestContextfulFunctionCrossingNativeCallbackBoundaryGetsRootThunk(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+ext ext_install install(cb noctx (u64) u64) void
+callback(value u64) u64:
+    ret value + 1
+..
+main() void:
+    ext_install(callback)
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ir, err := Lower(ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(ir)
+	if !strings.Contains(text, "callback.__native_ctx_thunk") || !strings.Contains(text, "ptr @magma.context.root") {
+		t.Fatalf("native context thunk missing from IR")
+	}
+}
+
+func TestLocalAllocatorStorageCannotEscape(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:scratch_alloc" scratch_alloc
+use "std:heap" heap
+bad() !$u8*:
+    scratch := try scratch_alloc.new(1024)
+    a := scratch.allocator()
+    ret try a.alloc(8)
+..
+main() void:
+..
+`)
+	_, err := CheckSafety(validated, false)
+	if err == nil || !strings.Contains(err.Error(), "allocated by local allocator 'scratch'") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestAllocatorRegionPropagatesThroughHelpers(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:allocator" allocator
+use "std:scratch_alloc" scratch_alloc
+use "std:heap" heap
+allocate(a allocator.Allocator) !$u8*:
+    ret try a.alloc(8)
+..
+forward(a allocator.Allocator) !$u8*:
+    ret try allocate(a)
+..
+bad() !$u8*:
+    scratch := try scratch_alloc.new(1024)
+    a := scratch.allocator()
+    ret try forward(a)
+..
+main() void:
+..
+`)
+	_, err := CheckSafety(validated, false)
+	if err == nil || !strings.Contains(err.Error(), "allocated by local allocator 'scratch'") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestReboundContextPreservesAllocatorRegion(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:scratch_alloc" scratch_alloc
+use "std:heap" heap
+use "std:context" context
+use "std:executor" executor
+bad() !$u8*:
+    scratch := try scratch_alloc.new(1024)
+    a := scratch.allocator()
+    ctx = context.new(a, a, executor.null())
+    ret try ctx.procAlloc.alloc(8)
+..
+main() void:
+..
+`)
+	_, err := CheckSafety(validated, false)
+	if err == nil || !strings.Contains(err.Error(), "allocated by local allocator 'scratch'") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestMismatchedAllocatorReleaseIsRejected(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:scratch_alloc" scratch_alloc
+use "std:heap" heap
+main() !void:
+    left := try scratch_alloc.new(1024)
+    right := try scratch_alloc.new(1024)
+    a := left.allocator()
+    b := right.allocator()
+    block := try a.alloc(8)
+    b.free(block)
+    left.destroy()
+    right.destroy()
+..
+`)
+	_, err := CheckSafety(validated, false)
+	if err == nil || !strings.Contains(err.Error(), "through a different allocator") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestAllocatorImplementationCanMoveAfterInterfaceLastUse(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:scratch_alloc" scratch_alloc
+use "std:heap" heap
+main() !void:
+    first := try scratch_alloc.new(1024)
+    a := first.allocator()
+    block := try a.alloc(8)
+    second $scratch_alloc.Scratch = move first
+    b := second.allocator()
+    b.free(block)
+    second.destroy()
+..
+`)
+	if _, err := CheckSafety(validated, false); err != nil {
+		t.Fatalf("move after allocator-interface last use failed: %v", err)
+	}
+}
+
+func TestLiveAllocatorInterfacePreventsImplementationRelocation(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:scratch_alloc" scratch_alloc
+use "std:heap" heap
+main() !void:
+    first := try scratch_alloc.new(1024)
+    a := first.allocator()
+    second $scratch_alloc.Scratch = move first
+    block := try a.alloc(8)
+    second.destroy()
+..
+`)
+	_, err := CheckSafety(validated, false)
+	if err == nil || !strings.Contains(err.Error(), "allocator interface to it remains live") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestOwnedAsyncLikeResultRetainsAllocatorOwner(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:allocator" allocator
+use "std:scratch_alloc" scratch_alloc
+use "std:heap" heap
+Handle(a allocator.Allocator)
+destr Handle.close() void:
+..
+make(a allocator.Allocator) $Handle:
+    ret Handle(a=a)
+..
+bad() !$Handle:
+    scratch := try scratch_alloc.new(1024)
+    a := scratch.allocator()
+    ret make(a)
+..
+main() void:
+..
+`)
+	_, err := CheckSafety(validated, false)
+	if err == nil || !strings.Contains(err.Error(), "allocated by local allocator 'scratch'") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestScratchResetRemainsOutsideAllocationEpochModel(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:scratch_alloc" scratch_alloc
+use "std:heap" heap
+main() !void:
+    scratch := try scratch_alloc.new(1024)
+    a := scratch.allocator()
+    block := try a.alloc(8)
+    scratch.reset()
+    a.free(block)
+    scratch.destroy()
+..
+`)
+	if _, err := CheckSafety(validated, false); err != nil {
+		t.Fatalf("reset unexpectedly modeled as an allocation epoch: %v", err)
+	}
+}
+
+func TestSpecializationInferenceFailureHasSourceDiagnostic(t *testing.T) {
+	parsed, path := testProgram(t, `mod main
+make[T]() T:
+    value T
+    ret value
+..
+main() void:
+    value := make()
+..
+`)
+	_, err := Specialize(*parsed)
+	if err == nil {
+		t.Fatal("expected generic inference failure")
+	}
+	diagnostics := comp_err.Diagnostics(err)
+	if len(diagnostics) != 1 {
+		t.Fatalf("diagnostics = %#v", diagnostics)
+	}
+	diagnostic := diagnostics[0]
+	if diagnostic.FilePath != path || diagnostic.Token.Pos.Line != 7 || diagnostic.Token.Pos.Col == 0 || diagnostic.Stage != "specialization" {
+		t.Fatalf("diagnostic provenance = %#v", diagnostic)
+	}
+	var rendered strings.Builder
+	comp_err.Fprint(&rendered, err)
+	if text := rendered.String(); strings.Contains(text, "fatal error") || !strings.Contains(text, path+":l7:") {
+		t.Fatalf("opaque specialization rendering:\n%s", text)
+	}
+}
+
+func TestOwnedGlobalInitializationEscapesLocalOwnershipFlow(t *testing.T) {
+	validated := validateTestProgram(t, ownershipProgramPrefix+`initialized bool
+global Resource
+get() Resource:
+    if initialized == false:
+        initialized = true
+        global = makeResource()
+    ..
+    ret global
+..
+`)
+	if _, err := CheckSafety(validated, false); err != nil {
+		t.Fatalf("guarded global owner initialization was treated as a local move: %v", err)
+	}
+}
+
 func TestNamedOwnershipTransferRequiresMove(t *testing.T) {
 	validated := validateTestProgram(t, ownershipProgramPrefix+`main() void:
     value $Resource = makeResource()
@@ -955,7 +1281,7 @@ func TestStagesPreserveProgramIdentityAndLower(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(ir), ".main()") {
+	if !strings.Contains(string(ir), ".main(ptr %.ctx.in)") {
 		t.Fatal("lowered IR does not contain main definition")
 	}
 }

@@ -72,6 +72,17 @@ func CompilationErrorToken(ctx *types.FileCtx, tk *types.Token, shortDesc, addit
 	}
 }
 
+// EnsureDiagnostic attaches source provenance to an otherwise opaque pass
+// error. Existing diagnostics are preserved so recursive walkers can apply
+// this at successively broader syntax boundaries without losing the innermost
+// location.
+func EnsureDiagnostic(ctx *types.FileCtx, tk *types.Token, err error) error {
+	if err == nil || len(Diagnostics(err)) != 0 || ctx == nil || tk == nil {
+		return err
+	}
+	return CompilationErrorToken(ctx, tk, err.Error(), "")
+}
+
 // Diagnostics returns all source diagnostics in stable traversal order. Stage
 // wrappers supply a stage only when the originating pass did not set one.
 func Diagnostics(err error) []*types.Diagnostic {

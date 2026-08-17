@@ -10,8 +10,9 @@ use "std:win/env_impl" impl
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
 use "std:unix/env_impl" impl
 
-pub get(a allocator.Allocator, name str) !$str:
-    ret try impl.get(a, name)
+pub get(name str) !$str:
+    a := ctx.procAlloc
+    ret try impl.get(name)
 ..
 
 pub has(name str) bool:
@@ -26,6 +27,7 @@ pub unset(name str) !void:
     try impl.unset(name)
 ..
 
-pub list(a allocator.Allocator) !$list.List[str]:
-    ret try impl.list(a)
+pub list() !$list.List[str]:
+    a := ctx.procAlloc
+    ret try impl.list()
 ..

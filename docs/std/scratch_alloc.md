@@ -6,8 +6,9 @@ never grows beyond its backing region.
 
 Use `new(allocator, capacity)` for a chosen capacity, `newDefault(allocator)`
 for 64 KiB, or `fromBuffer(buffer)` for caller-owned storage. `reset()` releases
-all allocations at once. `free()` releases only storage owned by the scratch
-allocator.
+all allocations at once. The `destroy()` destructor releases owned backing
+storage but not a buffer supplied through `fromBuffer`. Individual calls to the
+`Allocator.free` view return blocks to the scratch allocator's free list.
 
 The name "scratch allocator" replaces the proposed "buffer allocator" to
 describe its intended temporary-workspace role without confusing it with byte

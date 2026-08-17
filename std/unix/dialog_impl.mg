@@ -5,14 +5,17 @@ mod dialog_impl_unix
 use "std:allocator" allocator
 use "std:errors" errors
 
-pub openFile(a allocator.Allocator, filters ptr, filterCount u64, defaultPath str, title str, parent ptr) !$str:
+pub openFile(filters ptr, filterCount u64, defaultPath str, title str, parent ptr) !$str:
+    a := ctx.procAlloc
     throw errors.failure("XDG file dialog backend is not implemented")
 ..
 
-pub saveFile(a allocator.Allocator, filters ptr, filterCount u64, defaultPath str, defaultName str, title str, parent ptr) !$str:
+pub saveFile(filters ptr, filterCount u64, defaultPath str, defaultName str, title str, parent ptr) !$str:
+    a := ctx.procAlloc
     throw errors.failure("XDG file dialog backend is not implemented")
 ..
 
-pub openDir(a allocator.Allocator, defaultPath str, title str, parent ptr) !$str:
+pub openDir(defaultPath str, title str, parent ptr) !$str:
+    a := ctx.procAlloc
     throw errors.failure("XDG file dialog backend is not implemented")
 ..

@@ -93,7 +93,7 @@ gl_heapAllocator := HeapAllocator(value=0)
 
 # Returns an allocator object that uses Windows heap allocation.
 # O(1).
-pub allocator() a.Allocator:
+pub noctx allocator() a.Allocator:
     ret gl_heapAllocator.proto()
 ..
 
@@ -120,8 +120,10 @@ pub alloc(nBytes u64) !$u8*:
 # @param nBytes how many bytes to allocate
 # @returns owned region of memory
 pub allocZero(nBytes u64) !$u8*:
-    out ptr = try heapAlloc(none, nBytes)
-    mem.zero(out, nBytes)
+    out u8* = try heapAlloc(none, nBytes)
+    unsafe:
+        mem.zero(out, nBytes)
+    ..
     ret out
 ..
 
@@ -161,11 +163,16 @@ pub reallocZero(in u8*, nBytes u64, prevNbytes u64) !$u8*:
         ret try heapRealloc(none, in, nBytes)
     ..
     # manual realloc
-    out ptr = try heapAlloc(none, nBytes)
-    mem.copy(in, out, prevNbytes)
+    out u8* = try heapAlloc(none, nBytes)
+    unsafe:
+        mem.copy(in, out, prevNbytes)
+    ..
 
     # zero end of region
-    outEnd ptr = cast.utop(cast.ptou(out) + prevNbytes)
+    outEnd ptr
+    unsafe:
+        outEnd = cast.utop(cast.ptou(out) + prevNbytes)
+    ..
     mem.zero(outEnd, nBytes - prevNbytes)
 
     heapFree(none, in)

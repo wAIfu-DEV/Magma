@@ -5,7 +5,7 @@ use "std:strings" strings
 
 pub main() !void:
     a := heap.allocator()
-    owned := try strings.copy(a, "core")
+    owned := try strings.copy("core")
     if owned.countBytes() != 4:
         owned.free(a)
         throw errors.failure("primitive string method behavior changed")

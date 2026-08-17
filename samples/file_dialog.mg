@@ -8,7 +8,7 @@ use "std:io" io
 pub main() !void:
     a allocator.Allocator = heap.allocator()
     configuration := dialog.defaultOptions()
-    selected str, dialogError error = dialog.openFile(a, configuration)
+    selected str, dialogError error = dialog.openFile(configuration)
     if dialogError.nok():
         if errors.hasCode(dialogError, errors.ERR_CANCELLED):
             try io.printLn("cancelled")

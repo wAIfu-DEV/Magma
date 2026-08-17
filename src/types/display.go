@@ -69,7 +69,11 @@ func displayTypeKind(kind NodeTypeKind) string {
 		for i, arg := range n.Args {
 			args[i] = DisplayType(arg)
 		}
-		return "(" + strings.Join(args, ", ") + ") " + DisplayType(n.RetType)
+		prefix := ""
+		if n.ContextABI == ContextABIContextless {
+			prefix = "noctx "
+		}
+		return prefix + "(" + strings.Join(args, ", ") + ") " + DisplayType(n.RetType)
 	default:
 		return "undef"
 	}

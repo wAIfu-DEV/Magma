@@ -128,7 +128,7 @@ pub newContext() !ptr:
     credentials.flags = SCH_CRED_AUTO_CRED_VALIDATION
     expiry Timestamp
     status := ext_AcquireCredentialsHandleW(none, slices.toPtr(package), SECPKG_CRED_OUTBOUND, none, addrof credentials, none, none, addrof state.credential, addrof expiry)
-    slices.free(a, package)
+    slices.free(package)
     if failed(status):
         a.free(state)
         throw statusError(status, "SChannel credential acquisition failed")
@@ -145,7 +145,7 @@ pub open(context ptr, a allocator.Allocator, transport socket.Socket*, host str)
     state.credential = addrof owner.credential
     target := try utf8.utf8To16NT(a, host)
     onerror:
-        slices.free(a, target)
+        slices.free(target)
         a.free(state)
     ..
     state.target = slices.toPtr(target)

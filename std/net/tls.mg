@@ -34,11 +34,12 @@ pub newContext() !$Context:
     ret Context(native=native, active=true)
 ..
 
-Context.open(a allocator.Allocator, transport socket.Socket*, host str) !$Session:
+Context.open(transport socket.Socket*, host str) !$Session:
+    a := ctx.tempAlloc
     if this.active == false:
         throw impl.closedContextError()
     ..
-    native := try impl.open(this.native, a, transport, host)
+    native := try impl.open(this.native, transport, host)
     ret Session(native=native, want=WANT_WRITE, handshaken=false, active=true)
 ..
 

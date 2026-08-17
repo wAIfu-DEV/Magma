@@ -167,9 +167,19 @@ func (n *NodeTypeSlice) Print(indent int) {
 }
 
 type NodeTypeFunc struct {
-	Args    []*NodeType
-	RetType *NodeType
+	Args       []*NodeType
+	RetType    *NodeType
+	ContextABI ContextABI
 }
+
+// ContextABI is part of a Magma function's type and physical calling
+// convention. External/native declarations are always contextless.
+type ContextABI uint8
+
+const (
+	ContextABIContextful ContextABI = iota
+	ContextABIContextless
+)
 
 func (n *NodeTypeFunc) Print(indent int) {
 	PrintIndent(indent)
@@ -298,6 +308,12 @@ type NodeExprName struct {
 
 	AssociatedNode Node
 	Storage        VariableStorage
+	// ContextAdapter requests the compiler-generated ABI shim which discards an
+	// incoming implicit context before calling a contextless function.
+	ContextAdapter bool
+	// NativeContextThunk selects a contextless ABI thunk which establishes a
+	// per-thread root before entering a contextful Magma function.
+	NativeContextThunk bool
 }
 
 func (n *NodeExprName) GetInferredType() *NodeType {
@@ -322,6 +338,13 @@ type NodeExprCall struct {
 
 	AssociatedFnDef *NodeFuncDef
 	InfType         *NodeType
+	// ThrowingType preserves the ABI result when an enclosing try or
+	// destructuring expression implicitly unwraps this call. InfType then
+	// describes the successful value visible to the surrounding expression.
+	ThrowingType *NodeType
+	// ErrorMode is 1 for propagation through try and 2 for capture by a
+	// destructuring assignment.
+	ErrorMode uint8
 
 	IsMemberFunc      bool
 	MemberOwnerType   *NodeType
@@ -531,16 +554,17 @@ const (
 func (s VariableStorage) IsSSA() bool { return s == VariableStorageSSA }
 
 type NodeExprVarDef struct {
-	Name        NodeName
-	Type        *NodeType
-	Initializer NodeExpr
-	IsConst     bool
-	AbsName     string
-	RetFlagId   string
-	Storage     VariableStorage
-	IsReturned  bool
-	IsGlobal    bool
-	IsPublic    bool
+	Name              NodeName
+	Type              *NodeType
+	Initializer       NodeExpr
+	IsConst           bool
+	AbsName           string
+	RetFlagId         string
+	Storage           VariableStorage
+	IsReturned        bool
+	IsGlobal          bool
+	IsPublic          bool
+	IsImplicitContext bool
 }
 
 func (n *NodeExprVarDef) GetInferredType() *NodeType {
@@ -987,6 +1011,9 @@ type NodeFuncDef struct {
 	AbsName     string
 	NoAliasName string
 	DisplayName string
+	ContextABI  ContextABI
+	// ImplicitContext is the compiler-provided local binding named ctx.
+	ImplicitContext *NodeExprVarDef
 
 	IsDestructor bool
 	// IsMember records that argument zero is the compiler-inserted receiver.
@@ -1005,7 +1032,8 @@ type NodeFuncDef struct {
 	ErrorPredicate ErrorPredicateKind
 	// ProtoDispatch is set on compiler-created member wrappers for required
 	// prototype methods. Their bodies are lowered directly through the vtable.
-	ProtoDispatch *ProtoMethod
+	ProtoDispatch           *ProtoMethod
+	NeedsNativeContextThunk bool
 }
 
 type ErrorPredicateKind uint8

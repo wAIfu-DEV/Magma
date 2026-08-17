@@ -1,6 +1,7 @@
 package llvmir
 
 import (
+	"Magma/src/comp_err"
 	llvmfragments "Magma/src/llvm_fragments"
 	loweringvalidate "Magma/src/lowering_validate"
 	magmatypes "Magma/src/magma_types"
@@ -12,7 +13,7 @@ import (
 	"sync"
 )
 
-func irProtoVtables(ctx *IrCtx, gl *t.NodeGlobal) error {
+func irProtoVtables(ctx *IrCtx, gl *t.NodeGlobal, reachable map[string]bool) error {
 	names := make([]string, 0, len(gl.StructDefs))
 	for name := range gl.StructDefs {
 		names = append(names, name)
@@ -25,6 +26,9 @@ func irProtoVtables(ctx *IrCtx, gl *t.NodeGlobal) error {
 				return fmt.Errorf("unresolved prototype implementation on %s", implementation.Name)
 			}
 			proto := relation.Proto
+			if !reachable[t.ProtoVtableSymbol(implementation, proto)] {
+				continue
+			}
 			irWriteGlf(ctx, "@%s = private constant %%struct.%s.%s { ", t.ProtoVtableSymbol(implementation, proto), proto.Module, proto.VtableName)
 			for i, method := range proto.Methods {
 				concrete := implementation.Funcs[method.Name]
@@ -94,8 +98,11 @@ func irGlobalStructDefs(ctx *IrCtx, glNode *t.NodeGlobal) error {
 	return nil
 }
 
-func irGlobal(ctx *IrCtx, glNode *t.NodeGlobal) error {
+func irGlobal(ctx *IrCtx, glNode *t.NodeGlobal, reachable map[*t.NodeFuncDef]bool) error {
 	for _, d := range glNode.Declarations {
+		if fn, ok := d.(*t.NodeFuncDef); ok && !reachable[fn] {
+			continue
+		}
 		e := irGlobalDecl(ctx, d)
 		if e != nil {
 			return e
@@ -116,6 +123,8 @@ func irWriteModule(
 	structBld *bytes.Buffer,
 	strctBldM *sync.Mutex,
 	traceStrings *traceStringPool,
+	reachable map[*t.NodeFuncDef]bool,
+	reachableVtables map[string]bool,
 	i int,
 ) error {
 	nextSsa := 0
@@ -159,14 +168,14 @@ func irWriteModule(
 	if e != nil {
 		return e
 	}
-	if e = irProtoVtables(ctx, fCtx.GlNode); e != nil {
+	if e = irProtoVtables(ctx, fCtx.GlNode, reachableVtables); e != nil {
 		return e
 	}
 
 	irWriteGl(ctx, "\n; Global Defs\n")
 
 	irWrite(ctx, "\n; Code\n")
-	e = irGlobal(ctx, fCtx.GlNode)
+	e = irGlobal(ctx, fCtx.GlNode, reachable)
 	if e != nil {
 		return e
 	}
@@ -178,6 +187,17 @@ func irWriteModule(
 }
 
 func IrWrite(shared *t.SharedState) ([]byte, error) {
+	return irWriteProgram(shared, false)
+}
+
+// IrWriteReachable emits only function bodies reachable from executable and
+// export roots. The command pipeline uses this after checking the full program;
+// IrWrite retains its historical all-declarations behavior for embedders.
+func IrWriteReachable(shared *t.SharedState) ([]byte, error) {
+	return irWriteProgram(shared, true)
+}
+
+func irWriteProgram(shared *t.SharedState, pruneFunctions bool) ([]byte, error) {
 	// IrWrite is also used directly by tests and embedders, so enforce the
 	// checker-to-lowering contract when the command pipeline was bypassed.
 	if err := loweringvalidate.Validate(shared); err != nil {
@@ -201,6 +221,12 @@ func IrWrite(shared *t.SharedState) ([]byte, error) {
 	}
 	headBld.WriteString("; Basic Types\n")
 	magmatypes.WriteIrBasicTypes(headBld)
+	// Context interfaces are represented as three two-word prototype views.
+	// The root is retained per native thread; runtime bootstrap replaces these
+	// valid zero adapters with the selected full or null implementations.
+	headBld.WriteString("%type.context = type { ptr, ptr, ptr, ptr, ptr, ptr }\n")
+	headBld.WriteString("@magma.context.root = internal thread_local global %type.context zeroinitializer, align 8\n")
+	headBld.WriteString("declare void @abort() noreturn\n")
 
 	headBld.WriteString("\n; Declarations\n")
 	shared.LlvmDeclM.Lock()
@@ -245,7 +271,12 @@ func IrWrite(shared *t.SharedState) ([]byte, error) {
 
 	structDefBld := &bytes.Buffer{}
 	structDefBldM := sync.Mutex{}
-	traceStrings := newTraceStringPool(collectTraceStrings(filesMap))
+	reachable := allFunctions(filesMap)
+	reachableVtables := allProtoVtables(filesMap)
+	if pruneFunctions {
+		reachable, reachableVtables = reachableFunctions(filesMap, shared.NullContext)
+	}
+	traceStrings := newTraceStringPool(collectTraceStrings(filesMap, reachable))
 
 	i := fragLen
 	for _, v := range filesMap {
@@ -257,9 +288,9 @@ func IrWrite(shared *t.SharedState) ([]byte, error) {
 			// module local builder
 			moduleBld := &bytes.Buffer{}
 			glBld := &bytes.Buffer{}
-			e := irWriteModule(shared, v, moduleBld, glBld, structDefBld, &structDefBldM, traceStrings, idx)
+			e := irWriteModule(shared, v, moduleBld, glBld, structDefBld, &structDefBldM, traceStrings, reachable, reachableVtables, idx)
 			if e != nil {
-				results[idx] = resStr{E: e}
+				results[idx] = resStr{E: comp_err.EnsureDiagnostic(v, &t.Token{Pos: t.FilePos{Line: 1, Col: 1}}, e)}
 				return
 			}
 			glBld.Write(moduleBld.Bytes())

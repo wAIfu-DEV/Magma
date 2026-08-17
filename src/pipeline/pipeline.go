@@ -7,6 +7,7 @@ import (
 	"Magma/src/makeabs"
 	pipelineasync "Magma/src/pipeline_async"
 	randid "Magma/src/rand_id"
+	magmatarget "Magma/src/target"
 	"Magma/src/types"
 	"bufio"
 	"bytes"
@@ -175,6 +176,7 @@ func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath strin
 }
 
 func DoMain(shared *types.SharedState, filePath string) error {
+	shared.Target = magmatarget.WithCompilerKnownDefaults(shared.Target)
 	if err := Do(shared, filePath, "", filePath, nil); err != nil {
 		return err
 	}
@@ -192,8 +194,20 @@ func DoMain(shared *types.SharedState, filePath string) error {
 	if err != nil {
 		return err
 	}
-	mainFile.Imports = append(mainFile.Imports, corePath)
-	return Do(shared, corePath, "__core", mainFile.FilePath, mainFile.GlNode)
+	// Compiler support modules are compilation units, but they are not implicit
+	// source imports of the root. Their own source imports remain ordinary graph
+	// edges. Recording a root -> support edge here would manufacture cycles for
+	// every real dependency of core or context_default when that dependency is
+	// opened as an editor root.
+	if err := Do(shared, corePath, "__core", mainFile.FilePath, mainFile.GlNode); err != nil {
+		return err
+	}
+	contextDefaultPath := filepath.Join(shared.StdRoot, "context_default.mg")
+	if info, err := os.Stat(contextDefaultPath); err != nil || info.IsDir() {
+		return fmt.Errorf("standard library context_default module does not exist at %q", contextDefaultPath)
+	}
+	contextDefaultPath = filepath.Clean(contextDefaultPath)
+	return Do(shared, contextDefaultPath, "__context_default", mainFile.FilePath, mainFile.GlNode)
 }
 
 func findCorePath(shared *types.SharedState) (string, error) {

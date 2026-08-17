@@ -34,7 +34,7 @@ Monotonic timing, Unix wall-clock timestamps, and tick conversions. Tick frequen
 
 Integer conversions truncate fractional units and may overflow for sufficiently large inputs.
 
-`pub sleep(milliSecs u64) void` blocks the current thread. Windows interprets
-the argument as milliseconds. The current Unix backend passes it directly to
-`usleep`, so it currently sleeps that many microseconds despite the public
-parameter name.
+`pub sleep(milliSecs u64) void` blocks the current thread for approximately the
+requested number of milliseconds. Windows passes it to `Sleep`; Unix converts
+milliseconds to microseconds for `usleep`. Very large Unix values can overflow
+the backend's 32-bit microsecond argument.

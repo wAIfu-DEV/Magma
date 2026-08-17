@@ -17,8 +17,9 @@ func makeNamedType(name string) *t.NodeType {
 
 func makeFuncPtrTypeFromDef(fnDef *t.NodeFuncDef) *t.NodeType {
 	k := &t.NodeTypeFunc{
-		Args:    []*t.NodeType{},
-		RetType: fnDef.ReturnType,
+		Args:       []*t.NodeType{},
+		RetType:    fnDef.ReturnType,
+		ContextABI: fnDef.ContextABI,
 	}
 
 	for _, v := range fnDef.Class.ArgsNode.Args {

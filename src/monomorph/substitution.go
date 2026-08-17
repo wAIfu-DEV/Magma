@@ -46,8 +46,9 @@ func substituteType(tp *t.NodeType, subst map[string]*t.NodeType) *t.NodeType {
 		}
 	case *t.NodeTypeFunc:
 		out := &t.NodeTypeFunc{
-			Args:    make([]*t.NodeType, len(n.Args)),
-			RetType: substituteType(n.RetType, subst),
+			Args:       make([]*t.NodeType, len(n.Args)),
+			RetType:    substituteType(n.RetType, subst),
+			ContextABI: n.ContextABI,
 		}
 		for i, a := range n.Args {
 			out.Args[i] = substituteType(a, subst)

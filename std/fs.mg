@@ -22,14 +22,15 @@ use "std:unix/fs_impl" impl_fs
 # @ownership Release the result with the same allocator.
 # @example
 #   contents := try fs.readFile(a, "settings.json")
-pub readFile(a alc.Allocator, path str) !$str:
+pub readFile(path str) !$str:
+    a := ctx.procAlloc
     mode := file.mode()
     mode = mode.read()
-    f := try file.open(a, path, mode)
+    f := try file.open(path, mode)
     defer f.close()
     count := try f.count()
     r := try f.reader()
-    ret try r.read(a, count)
+    ret try r.read(count)
 ..
 
 # Replaces a file with the complete contents, creating it when absent.
@@ -40,10 +41,11 @@ pub readFile(a alc.Allocator, path str) !$str:
 # @warning Existing contents are truncated.
 # @example
 #   try fs.writeFile(a, "output.txt", "complete")
-pub writeFile(a alc.Allocator, path str, contents str) !void:
+pub writeFile(path str, contents str) !void:
+    a := ctx.tempAlloc
     mode := file.mode()
     mode = mode.write().create().truncate()
-    f := try file.open(a, path, mode)
+    f := try file.open(path, mode)
     defer f.close()
     w := try f.writer()
     written := try w.write(contents)
@@ -56,8 +58,9 @@ pub writeFile(a alc.Allocator, path str, contents str) !void:
 # @complexity O(1), excluding filesystem cost
 # @example
 #   try fs.removeFile(a, "obsolete.tmp")
-pub removeFile(a alc.Allocator, path str) !void:
-    try impl_fs.removeFile(a, path)
+pub removeFile(path str) !void:
+    a := ctx.tempAlloc
+    try impl_fs.removeFile(path)
 ..
 
 # Recursively visits every descendant of root. The path passed to visit is
@@ -68,8 +71,9 @@ pub removeFile(a alc.Allocator, path str) !void:
 # @param visit callback receiving a borrowed path and directory flag
 # @example
 #   try fs.walk(a, root, visitEntry)
-pub walk(a alc.Allocator, root str, visit (str, bool) !void) !void:
-    try impl_fs.walk(a, root, visit)
+pub walk(root str, visit (str, bool) !void) !void:
+    a := ctx.tempAlloc
+    try impl_fs.walk(root, visit)
 ..
 
 pub const KIND_FILE u8 = 1
@@ -136,8 +140,9 @@ pub Metadata.modified() i64:
     ret this.modifiedValue
 ..
 
-pub metadata(a alc.Allocator, path str) !Metadata:
-    native := try impl_fs.metadata(a, path, true)
+pub metadata(path str) !Metadata:
+    a := ctx.tempAlloc
+    native := try impl_fs.metadata(path, true)
     ret Metadata(
         kindValue=FileKind(value=native.kind),
         sizeValue=native.size,
@@ -146,8 +151,9 @@ pub metadata(a alc.Allocator, path str) !Metadata:
     )
 ..
 
-pub linkMetadata(a alc.Allocator, path str) !Metadata:
-    native := try impl_fs.metadata(a, path, false)
+pub linkMetadata(path str) !Metadata:
+    a := ctx.tempAlloc
+    native := try impl_fs.metadata(path, false)
     ret Metadata(
         kindValue=FileKind(value=native.kind),
         sizeValue=native.size,
@@ -156,8 +162,9 @@ pub linkMetadata(a alc.Allocator, path str) !Metadata:
     )
 ..
 
-pub setPermissions(a alc.Allocator, path str, permissions Permissions) !void:
-    try impl_fs.setPermissions(a, path, permissions.bits)
+pub setPermissions(path str, permissions Permissions) !void:
+    a := ctx.tempAlloc
+    try impl_fs.setPermissions(path, permissions.bits)
 ..
 
 pub Entry(
@@ -177,8 +184,9 @@ pub Dir(
     native impl_fs.Dir
 )
 
-pub openDir(a alc.Allocator, path str) !$Dir:
-    native := try impl_fs.openDir(a, path)
+pub openDir(path str) !$Dir:
+    a := ctx.procAlloc
+    native := try impl_fs.openDir(path)
     ret Dir(native=move native)
 ..
 
@@ -225,114 +233,129 @@ pub WalkOptions(
     includeRoot bool
 )
 
-walkEntriesInner(a alc.Allocator, root str, options WalkOptions, visit (str, Metadata) !void) !void:
-    directory := try openDir(a, root)
+walkEntriesInner(root str, options WalkOptions, visit (str, Metadata) !void) !void:
+    a := ctx.tempAlloc
+    directory := try openDir(root)
     defer directory.close()
     loop directory.hasData():
         entry := try directory.next()
         parts := array str[2]
         parts[0] = root
         parts[1] = entry.name()
-        child := try path_util.join(a, parts)
+        child := try path_util.join(parts)
         defer child.free(a)
-        info := try linkMetadata(a, child)
+        info := try linkMetadata(child)
         try visit(child, info)
         if info.kind().isDir():
-            try walkEntriesInner(a, child, options, visit)
+            try walkEntriesInner(child, options, visit)
         elif info.kind().isSymbolicLink() && options.followLinks:
-            followed := try metadata(a, child)
+            followed := try metadata(child)
             if followed.kind().isDir():
-                try walkEntriesInner(a, child, options, visit)
+                try walkEntriesInner(child, options, visit)
             ..
         ..
     ..
 ..
 
-pub walkWithOptions(a alc.Allocator, root str, options WalkOptions, visit (str, Metadata) !void) !void:
+pub walkWithOptions(root str, options WalkOptions, visit (str, Metadata) !void) !void:
+    a := ctx.tempAlloc
     if options.includeRoot:
-        try visit(root, try linkMetadata(a, root))
+        try visit(root, try linkMetadata(root))
     ..
-    try walkEntriesInner(a, root, options, visit)
+    try walkEntriesInner(root, options, visit)
 ..
 
-pub walkDefault(a alc.Allocator, root str, visit (str, Metadata) !void) !void:
-    try walkWithOptions(a, root, WalkOptions(followLinks=false, includeRoot=false), visit)
+pub walkDefault(root str, visit (str, Metadata) !void) !void:
+    a := ctx.tempAlloc
+    try walkWithOptions(root, WalkOptions(followLinks=false, includeRoot=false), visit)
 ..
 
-pub makeDir(a alc.Allocator, path str) !void:
-    try impl_fs.makeDir(a, path)
+pub makeDir(path str) !void:
+    a := ctx.tempAlloc
+    try impl_fs.makeDir(path)
 ..
 
-pub makeDirs(a alc.Allocator, path str) !void:
-    existing Metadata, existingError error = metadata(a, path)
+pub makeDirs(path str) !void:
+    a := ctx.tempAlloc
+    existing Metadata, existingError error = metadata(path)
     if existingError.ok():
         if existing.kind().isDir():
             ret
         ..
         throw errors.invalidArgument("path exists and is not a directory")
     ..
-    parent := try path_util.parent(a, path)
+    parent := try path_util.parent(path)
     defer parent.free(a)
     if strings.compare(parent, path) == false && strings.compare(parent, ".") == false:
-        try makeDirs(a, parent)
+        try makeDirs(parent)
     ..
-    try makeDir(a, path)
+    try makeDir(path)
 ..
 
-pub removeDir(a alc.Allocator, path str) !void:
-    try impl_fs.removeDir(a, path)
+pub removeDir(path str) !void:
+    a := ctx.tempAlloc
+    try impl_fs.removeDir(path)
 ..
 
-pub removeTree(a alc.Allocator, root str) !void:
-    info := try linkMetadata(a, root)
+pub removeTree(root str) !void:
+    a := ctx.tempAlloc
+    info := try linkMetadata(root)
     if info.kind().isDir() == false:
-        try removeFile(a, root)
+        try removeFile(root)
         ret
     ..
-    try removeTreeContents(a, root)
-    try removeDir(a, root)
+    try removeTreeContents(root)
+    try removeDir(root)
 ..
 
-removeTreeContents(a alc.Allocator, root str) !void:
-    directory := try openDir(a, root)
+removeTreeContents(root str) !void:
+    a := ctx.tempAlloc
+    directory := try openDir(root)
     defer directory.close()
     loop directory.hasData():
         entry := try directory.next()
         parts := array str[2]
         parts[0] = root
         parts[1] = entry.name()
-        child := try path_util.join(a, parts)
+        child := try path_util.join(parts)
         defer child.free(a)
-        try removeTree(a, child)
+        try removeTree(child)
     ..
 ..
 
-pub rename(a alc.Allocator, source str, destination str) !void:
-    try impl_fs.rename(a, source, destination)
+pub rename(source str, destination str) !void:
+    a := ctx.tempAlloc
+    try impl_fs.rename(source, destination)
 ..
 
-pub replace(a alc.Allocator, source str, destination str) !void:
-    try impl_fs.replace(a, source, destination)
+pub replace(source str, destination str) !void:
+    a := ctx.tempAlloc
+    try impl_fs.replace(source, destination)
 ..
 
-pub copyFile(a alc.Allocator, source str, destination str) !void:
-    sourceInfo := try metadata(a, source)
-    try impl_fs.copyFile(a, source, destination)
-    try setPermissions(a, destination, sourceInfo.permissions())
+pub copyFile(source str, destination str) !void:
+    a := ctx.tempAlloc
+    sourceInfo := try metadata(source)
+    try impl_fs.copyFile(source, destination)
+    try setPermissions(destination, sourceInfo.permissions())
 ..
 
-pub currentDir(a alc.Allocator) !$str:
-    ret try impl_fs.currentDir(a)
+pub currentDir() !$str:
+    a := ctx.procAlloc
+    ret try impl_fs.currentDir()
 ..
 
-pub setCurrentDir(a alc.Allocator, path str) !void:
-    try impl_fs.setCurrentDir(a, path)
+pub setCurrentDir(path str) !void:
+    a := ctx.tempAlloc
+    try impl_fs.setCurrentDir(path)
 ..
 
-pub temporaryDir(a alc.Allocator) !$str:
-    ret try impl_fs.temporaryDir(a)
+pub temporaryDir() !$str:
+    a := ctx.procAlloc
+    ret try impl_fs.temporaryDir()
 ..
 
-pub canonicalize(a alc.Allocator, path str) !$str:
-    ret try impl_fs.canonicalize(a, path)
+pub canonicalize(path str) !$str:
+    a := ctx.procAlloc
+    ret try impl_fs.canonicalize(path)
 ..

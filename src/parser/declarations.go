@@ -77,9 +77,21 @@ func syntheticNamed(name string) *t.NodeType {
 	return &t.NodeType{KindNode: &t.NodeTypeNamed{NameNode: &t.NodeNameSingle{Name: name}}}
 }
 
+func rejectNoCtxModifier(ctx *ParseCtx, modifiers []ModifierType, tk *t.Token, declaration string) error {
+	if !slices.Contains(modifiers, MdNoCtx) {
+		return nil
+	}
+	return comp_err.CompilationErrorToken(ctx.Fctx, tk,
+		fmt.Sprintf("syntax error: noctx modifier cannot be applied to %s", declaration),
+		"noctx may only modify a function declaration")
+}
+
 func parseProtoDef(ctx *ParseCtx, protoTk t.Token) (t.NodeGlobalDecl, error) {
 	modifiers := slices.Clone(ctx.NextModifiers)
 	ctx.NextModifiers = []ModifierType{}
+	if err := rejectNoCtxModifier(ctx, modifiers, &protoTk, "a prototype declaration"); err != nil {
+		return nil, err
+	}
 	consume(ctx) // proto
 	decl, err := parseDeclNameWithGenerics(ctx)
 	if err != nil {
@@ -136,6 +148,15 @@ func parseProtoDef(ctx *ParseCtx, protoTk t.Token) (t.NodeGlobalDecl, error) {
 			consume(ctx)
 			break
 		}
+		contextABI := t.ContextABIContextful
+		if tk.KeywType == t.KwNoCtx {
+			contextABI = t.ContextABIContextless
+			consume(ctx)
+			tk, e = peek(ctx)
+			if e != nil {
+				return nil, e
+			}
+		}
 		if tk.Type != t.TokName {
 			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, "expected prototype method name", "")
 		}
@@ -158,7 +179,7 @@ func parseProtoDef(ctx *ParseCtx, protoTk t.Token) (t.NodeGlobalDecl, error) {
 		if _, duplicate := proto.MethodMap[tk.Repr]; duplicate {
 			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, fmt.Sprintf("duplicate prototype method '%s'", tk.Repr), "")
 		}
-		method := &t.ProtoMethod{Name: tk.Repr, Args: args.Args, Ret: ret, Slot: len(proto.Methods), Tk: tk}
+		method := &t.ProtoMethod{Name: tk.Repr, Args: args.Args, Ret: ret, ContextABI: contextABI, Slot: len(proto.Methods), Tk: tk}
 		method.Proto = proto
 		proto.Methods = append(proto.Methods, method)
 		proto.MethodMap[method.Name] = method
@@ -170,7 +191,7 @@ func parseProtoDef(ctx *ParseCtx, protoTk t.Token) (t.NodeGlobalDecl, error) {
 		for _, arg := range method.Args {
 			fnArgs = append(fnArgs, arg.TypeNode)
 		}
-		vtArgs = append(vtArgs, t.NodeArg{Name: method.Name, Tk: method.Tk, TypeNode: &t.NodeType{KindNode: &t.NodeTypeFunc{Args: fnArgs, RetType: method.Ret}}})
+		vtArgs = append(vtArgs, t.NodeArg{Name: method.Name, Tk: method.Tk, TypeNode: &t.NodeType{KindNode: &t.NodeTypeFunc{Args: fnArgs, RetType: method.Ret, ContextABI: method.ContextABI}}})
 	}
 	vtName := &t.NodeNameSingle{Name: proto.VtableName, Tk: name.Tk}
 	vtClass := t.NodeGenericClass{NameNode: vtName, ArgsNode: t.NodeArgList{Args: vtArgs}}
@@ -199,7 +220,7 @@ func parseProtoDef(ctx *ParseCtx, protoTk t.Token) (t.NodeGlobalDecl, error) {
 		thisType := &t.NodeType{KindNode: &t.NodeTypePointer{Kind: owner}}
 		args := []t.NodeArg{{Name: "this", TypeNode: thisType}}
 		args = append(args, method.Args...)
-		fn := &t.NodeFuncDef{Class: t.NodeGenericClass{NameNode: &t.NodeNameComposite{Parts: []string{name.Name, method.Name}, Tokens: []t.Token{name.Tk, method.Tk}}, ArgsNode: t.NodeArgList{Args: args}, OwnerTypeParams: decl.TypeParams}, ReturnType: method.Ret, AbsName: ctx.Fctx.PackageName + "." + name.Name + "." + method.Name, IsMember: true, ProtoDispatch: method}
+		fn := &t.NodeFuncDef{Class: t.NodeGenericClass{NameNode: &t.NodeNameComposite{Parts: []string{name.Name, method.Name}, Tokens: []t.Token{name.Tk, method.Tk}}, ArgsNode: t.NodeArgList{Args: args}, OwnerTypeParams: decl.TypeParams}, ReturnType: method.Ret, AbsName: ctx.Fctx.PackageName + "." + name.Name + "." + method.Name, IsMember: true, ContextABI: method.ContextABI, ProtoDispatch: method}
 		method.FnDef = fn
 		def.Funcs[method.Name] = fn
 		ctx.GlobalNode.FuncDefs[name.Name+"."+method.Name] = fn
@@ -215,6 +236,9 @@ func parseAliasDecl(ctx *ParseCtx, aliasTk t.Token) (t.NodeGlobalDecl, error) {
 	ctx.NextModifiers = []ModifierType{}
 	if slices.Contains(modifiers, MdDestructor) {
 		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &aliasTk, "destructor modifier cannot be applied to a type alias", "")
+	}
+	if err := rejectNoCtxModifier(ctx, modifiers, &aliasTk, "a type alias"); err != nil {
+		return nil, err
 	}
 	consume(ctx)
 	nameTk, e := peek(ctx)
@@ -297,6 +321,10 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 		IsEntryPoint: !isMemberFunc && alias == "" && fnNameSimple == "main",
 		IsExternal:   alias != "",
 		NoRetain:     ctx.NextNoRetain,
+		ContextABI:   t.ContextABIContextful,
+	}
+	if alias != "" {
+		fnDef.ContextABI = t.ContextABIContextless
 	}
 	ctx.NextNoRetain = false
 	if ctx.NextExportName != "" {
@@ -510,6 +538,11 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 }
 
 func parseExternalFunc(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
+	modifiers := slices.Clone(ctx.NextModifiers)
+	ctx.NextModifiers = nil
+	if slices.Contains(modifiers, MdDestructor) {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, "syntax error: destructor modifier cannot be applied to an external declaration", "")
+	}
 	consume(ctx) // consume "extern"
 
 	nAlias, e := parseName(ctx, tk, false)
@@ -570,7 +603,12 @@ func parseExternalFunc(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
 	}
 
 	alias := flattenName(nAlias)
-	return parseFuncDef(ctx, tk, after, gncls, alias)
+	fn, err := parseFuncDef(ctx, tk, after, gncls, alias)
+	if fn != nil {
+		fn.IsPublic = slices.Contains(modifiers, MdPublic)
+		fn.ContextABI = t.ContextABIContextless
+	}
+	return fn, err
 }
 
 func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
@@ -587,6 +625,9 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 	}
 
 	if next.Type == t.TokName && next.Repr == "impl" {
+		if err := rejectNoCtxModifier(ctx, modifiers, &tk, "a structure declaration"); err != nil {
+			return nil, err
+		}
 		consume(ctx)
 		impls := []*t.ProtoImpl{}
 		for {
@@ -636,6 +677,9 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 		if typeNode, typeErr := parseType(ctx, next, false); typeErr == nil {
 			afterType, afterErr := peek(ctx)
 			if afterErr == nil && (afterType.KeywType == t.KwNewline || afterType.KeywType == t.KwEqual) {
+				if err := rejectNoCtxModifier(ctx, modifiers, &tk, "a global variable"); err != nil {
+					return nil, err
+				}
 				variable := &t.NodeExprVarDef{
 					Name: declName.NameNode, AbsName: ctx.Fctx.PackageName + "." + flattenName(declName.NameNode),
 					Type: typeNode, IsGlobal: true, IsPublic: slices.Contains(modifiers, MdPublic), Storage: t.VariableStorageGlobal,
@@ -667,6 +711,9 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 		}
 
 		if errors.Is(e, errOutOfBounds) || after.KeywType == t.KwNewline {
+			if err := rejectNoCtxModifier(ctx, modifiers, &tk, "a structure declaration"); err != nil {
+				return nil, err
+			}
 			if slices.Contains(modifiers, MdDestructor) {
 				return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, "syntax error: destructor modifier requires a member function", "expected: `destructor Type.method() void:`")
 			}
@@ -703,9 +750,15 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 		}
 		if fn != nil {
 			fn.IsPublic = slices.Contains(modifiers, MdPublic)
+			if slices.Contains(modifiers, MdNoCtx) {
+				fn.ContextABI = t.ContextABIContextless
+			}
 		}
 		return fn, nil
 	case t.KwInfer:
+		if err := rejectNoCtxModifier(ctx, modifiers, &tk, "a global variable"); err != nil {
+			return nil, err
+		}
 		if len(declName.TypeParams) > 0 || len(declName.OwnerTypeParams) > 0 {
 			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &next, "syntax error: generic parameters are only valid on struct/function declarations", "")
 		}
@@ -734,6 +787,9 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 
 		tNode, e := parseType(ctx, next, false)
 		if e == nil {
+			if err := rejectNoCtxModifier(ctx, modifiers, &tk, "a global variable"); err != nil {
+				return nil, err
+			}
 			variable := &t.NodeExprVarDef{
 				Name:       declName.NameNode,
 				AbsName:    ctx.Fctx.PackageName + "." + flattenName(declName.NameNode),
@@ -757,6 +813,9 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 			}
 			return variable, nil
 		}
+		if next.KeywType == t.KwNoCtx {
+			return nil, e
+		}
 
 		return nil, comp_err.CompilationErrorToken(
 			ctx.Fctx,
@@ -770,6 +829,9 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 func parseConstDecl(ctx *ParseCtx, constTk t.Token) (t.NodeGlobalDecl, error) {
 	modifiers := slices.Clone(ctx.NextModifiers)
 	ctx.NextModifiers = []ModifierType{}
+	if err := rejectNoCtxModifier(ctx, modifiers, &constTk, "a constant declaration"); err != nil {
+		return nil, err
+	}
 	consume(ctx)
 	nameTk, e := peek(ctx)
 	if e != nil || nameTk.Type != t.TokName {
@@ -859,6 +921,8 @@ outer:
 			e = parseApplyModifier(ctx, tk, MdPublic)
 		case t.KwDestructor:
 			e = parseApplyModifier(ctx, tk, MdDestructor)
+		case t.KwNoCtx:
+			e = parseApplyModifier(ctx, tk, MdNoCtx)
 		case t.KwConst:
 			n, e = parseConstDecl(ctx, tk)
 			return n, e

@@ -29,7 +29,7 @@ pub main() !void:
     text := try utf16.toUtf8(a, view)
     defer text.free(a)
     roundTrip := try utf16.fromUtf8(a, text)
-    defer slices.free(a, roundTrip)
+    defer slices.free(roundTrip)
     if slices.count(roundTrip) != 3:
         throw errors.failure("UTF-16 round trip changed")
     ..
@@ -42,7 +42,7 @@ pub main() !void:
     raw[5] = 0x03
     rawView u8[] = slices.fromPtr(slices.toPtr(raw), 6)
     decoded := try utf16.decodeBytes(a, rawView, utf16.ENDIAN_BOM)
-    defer slices.free(a, decoded)
+    defer slices.free(decoded)
     if slices.count(decoded) != 2 || decoded[0] != 0x41 || decoded[1] != 0x03A9:
         throw errors.failure("UTF-16 endian decoding changed")
     ..

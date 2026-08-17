@@ -5,8 +5,10 @@ mod thread_impl_win
 use "std:win/types" win
 use "std:cast" cast
 use "std:errors" errors
+use "std:context" context
+use "std:heap" heap
 
-ext ext_win32_CreateThread       CreateThread(attributes win.LPVOID, stackSize win.SIZE_T, startAddress (win.LPVOID) u64, parameter win.LPVOID, creationFlags win.DWORD, threadId win.LPVOID) win.HANDLE
+ext ext_win32_CreateThread       CreateThread(attributes win.LPVOID, stackSize win.SIZE_T, startAddress noctx (win.LPVOID) u64, parameter win.LPVOID, creationFlags win.DWORD, threadId win.LPVOID) win.HANDLE
 ext ext_win32_WaitForSingleObject WaitForSingleObject(handle win.HANDLE, milliseconds win.DWORD) win.DWORD
 ext ext_win32_CloseHandle        CloseHandle(handle win.HANDLE) win.BOOL
 ext ext_win32_GetLastError       GetLastError() win.DWORD
@@ -14,19 +16,49 @@ ext ext_win32_SwitchToThread     SwitchToThread() win.BOOL
 
 pub Thread(
     handle ptr
+    launch Launch*
 )
+
+Launch(
+    entry (ptr) u64
+    context ptr
+    magmaContext context.Ctx
+)
+
+noctx threadMain(raw ptr) u64:
+    launch Launch*
+    unsafe:
+        launch = raw
+    ..
+    ctx = launch.magmaContext
+    ret launch.entry(launch.context)
+..
 
 pub spawn(entry (ptr) u64, context ptr) !$Thread:
     if entry == none:
         throw errors.invalidArgument("thread entry is null")
     ..
 
-    handle ptr = ext_win32_CreateThread(none, 0, entry, context, 0, none)
+    launch Launch* = try heap.alloc(sizeof Launch)
+    onerror:
+        unsafe:
+            heap.free(launch)
+        ..
+    ..
+    launch.entry = entry
+    unsafe:
+        launch.context = context
+    ..
+    launch.magmaContext = ctx
+    handle ptr
+    unsafe:
+        handle = ext_win32_CreateThread(none, 0, threadMain, launch, 0, none)
+    ..
     if handle == none:
         code u32 = ext_win32_GetLastError()
         throw errors.native(code, "CreateThread failed")
     ..
-    ret Thread(handle=handle)
+    ret Thread(handle=handle, launch=launch)
 ..
 
 pub isFinished(thread Thread*) !bool:
@@ -68,6 +100,10 @@ pub join(thread Thread*) !bool:
         thread.handle = none
         throw errors.native(closeCode, "CloseHandle failed")
     ..
+    unsafe:
+        heap.free(thread.launch)
+    ..
+    thread.launch = none
     thread.handle = none
     ret true
 ..

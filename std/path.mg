@@ -50,7 +50,8 @@ pub isAbsolute(path str) bool:
 # @ownership Release the result with the same allocator.
 # @example
 #   name := try path.base(a, "/tmp/archive.tar")
-pub base(a allocator.Allocator, path str) !$str:
+pub base(path str) !$str:
+    a := ctx.procAlloc
     n := path.countBytes()
     end := n
     loop end > 0 && isSeparator(strings.byteAt(path, end - 1)):
@@ -61,7 +62,7 @@ pub base(a allocator.Allocator, path str) !$str:
         start = start - 1
     ..
     p := cast.utop(cast.ptou(strings.toPtr(path)) + start)
-    ret try strings.fromPtr(a, p, end - start)
+    ret try strings.fromPtr(p, end - start)
 ..
 
 # Returns the suffix beginning at the final dot in the base name. The base
@@ -73,19 +74,21 @@ pub base(a allocator.Allocator, path str) !$str:
 # @ownership Release the result with the same allocator.
 # @example
 #   ext := try path.extension(a, "archive.tar.gz")
-pub extension(a allocator.Allocator, path str) !$str:
-    b := try base(a, path)
-    defer b.free(a)
+pub extension(path str) !$str:
+    a := ctx.procAlloc
+    temporary := ctx.tempAlloc
+    b := try base(path)
+    defer b.free(temporary)
     n := b.countBytes()
     i := n
     loop i > 0:
         i = i - 1
         if strings.byteAt(b, i) == 46:
             p := cast.utop(cast.ptou(strings.toPtr(b)) + i)
-            ret try strings.fromPtr(a, p, n - i)
+            ret try strings.fromPtr(p, n - i)
         ..
     ..
-    ret try strings.alloc(a, 0)
+    ret try strings.alloc(0)
 ..
 
 Component(
@@ -99,8 +102,10 @@ borrowRange(value str, start u64, end u64) str:
 
 # Joins path components and normalizes the result. An absolute component
 # discards components accumulated before it.
-pub join(a allocator.Allocator, parts str[]) !$str:
-    out := try builder.new(a)
+pub join(parts str[]) !$str:
+    a := ctx.procAlloc
+    temporary := ctx.tempAlloc
+    out := try builder.new()
     defer out.free()
     for i u64 = 0 to parts.count():
         part := parts[i]
@@ -114,15 +119,17 @@ pub join(a allocator.Allocator, parts str[]) !$str:
         ..
     ..
     combined := try out.build()
-    defer combined.free(a)
-    ret try normalize(a, combined)
+    defer combined.free(temporary)
+    ret try normalize(combined)
 ..
 
 # Lexically normalizes separators, dot components, and resolvable parent
 # components without accessing the filesystem.
-pub normalize(a allocator.Allocator, value str) !$str:
-    components := try array.new[Component](a)
-    defer components.free(a, none)
+pub normalize(value str) !$str:
+    a := ctx.procAlloc
+    temporary := ctx.tempAlloc
+    components := try array.new[Component](temporary)
+    defer components.free(temporary, none)
     n := value.countBytes()
     absolute := isAbsolute(value)
     unc bool = n >= 2 && isSeparator(strings.byteAt(value, 0)) && isSeparator(strings.byteAt(value, 1))
@@ -157,7 +164,7 @@ pub normalize(a allocator.Allocator, value str) !$str:
         ..
     ..
 
-    out := try builder.new(a)
+    out := try builder.new()
     defer out.free()
     if prefixEnd == 2:
         try out.appendBorrowed(borrowRange(value, 0, 2))
@@ -176,18 +183,20 @@ pub normalize(a allocator.Allocator, value str) !$str:
         try out.appendBorrowed(items[j].value)
     ..
     if out.isEmpty():
-        ret try strings.copy(a, ".")
+        ret try strings.copy(".")
     ..
     ret try out.build()
 ..
 
 # Returns the lexical parent of a path.
-pub parent(a allocator.Allocator, value str) !$str:
-    normalized := try normalize(a, value)
-    defer normalized.free(a)
+pub parent(value str) !$str:
+    a := ctx.procAlloc
+    temporary := ctx.tempAlloc
+    normalized := try normalize(value)
+    defer normalized.free(temporary)
     n := normalized.countBytes()
     if isAbsolute(normalized) && (n == 1 || (n == 3 && strings.byteAt(normalized, 1) == 58)):
-        ret try strings.copy(a, normalized)
+        ret try strings.copy(normalized)
     ..
     end := n
     loop end > 0 && isSeparator(strings.byteAt(normalized, end - 1)):
@@ -200,32 +209,36 @@ pub parent(a allocator.Allocator, value str) !$str:
         end = end - 1
     ..
     if end == 0:
-        ret try strings.copy(a, ".")
+        ret try strings.copy(".")
     ..
-    ret try strings.substring(a, normalized, 0, end)
+    ret try strings.substring(normalized, 0, end)
 ..
 
 # Returns the base name without its final extension.
-pub stem(a allocator.Allocator, value str) !$str:
-    b := try base(a, value)
-    defer b.free(a)
+pub stem(value str) !$str:
+    a := ctx.procAlloc
+    temporary := ctx.tempAlloc
+    b := try base(value)
+    defer b.free(temporary)
     n := b.countBytes()
     i := n
     loop i > 0:
         i = i - 1
         if strings.byteAt(b, i) == 46:
-            ret try strings.substring(a, b, 0, i)
+            ret try strings.substring(b, 0, i)
         ..
     ..
-    ret try strings.copy(a, b)
+    ret try strings.copy(b)
 ..
 
 # Replaces the final extension. extension may be empty and may include its dot.
-pub changeExtension(a allocator.Allocator, value str, newExtension str) !$str:
-    oldExtension := try extension(a, value)
-    defer oldExtension.free(a)
+pub changeExtension(value str, newExtension str) !$str:
+    a := ctx.procAlloc
+    temporary := ctx.tempAlloc
+    oldExtension := try extension(value)
+    defer oldExtension.free(temporary)
     keep := value.countBytes() - oldExtension.countBytes()
-    out := try builder.new(a)
+    out := try builder.new()
     defer out.free()
     try out.appendBorrowed(borrowRange(value, 0, keep))
     if newExtension.countBytes() > 0:

@@ -68,12 +68,13 @@ pub newContext() !ptr:
     ret context
 ..
 
-pub open(context ptr, a allocator.Allocator, transport socket.Socket*, host str) !ptr:
+pub open(context ptr, transport socket.Socket*, host str) !ptr:
+    a := ctx.tempAlloc
     session := ext_SSL_new(context)
     if session == none:
         throw errors.failure("OpenSSL TLS session creation failed")
     ..
-    cHost := try strings.toCstr(a, host)
+    cHost := try strings.toCstr(host)
     defer a.free(cHost)
     fd := cast.i64to32(cast.utoi(cast.ptou(try transport.nativeHandle())))
     if ext_SSL_set_fd(session, fd) != 1:

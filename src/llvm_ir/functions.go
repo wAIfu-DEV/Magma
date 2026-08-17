@@ -6,6 +6,72 @@ import (
 	"fmt"
 )
 
+func rootContextInitializer(ctx *IrCtx) (*t.NodeFuncDef, error) {
+	name := "newDefault"
+	if ctx.Shared.NullContext {
+		name = "newNull"
+	}
+	for _, file := range ctx.Shared.Files {
+		if file.ModuleName == "context_default" && file.GlNode != nil {
+			if fn := file.GlNode.FuncDefs[name]; fn != nil {
+				return fn, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("missing context_default.%s root initializer", name)
+}
+
+func irInitializeRootContext(ctx *IrCtx, abortOnFailure bool) error {
+	initializer, err := rootContextInitializer(ctx)
+	if err != nil {
+		return err
+	}
+	if initializer.ContextABI != t.ContextABIContextless {
+		return fmt.Errorf("root context initializer %s must be noctx", initializer.AbsName)
+	}
+	if initializer.ReturnType.Throws {
+		irWrite(ctx, "  %ctx.init = call ")
+		if err := irThrowingType(ctx, initializer.ReturnType); err != nil {
+			return err
+		}
+		irWritef(ctx, " @%s()\n", initializer.AbsName)
+		irWrite(ctx, "  %ctx.error = extractvalue ")
+		if err := irThrowingType(ctx, initializer.ReturnType); err != nil {
+			return err
+		}
+		irWrite(ctx, " %ctx.init, 0\n")
+		irWrite(ctx, "  %ctx.error.code = extractvalue %type.error %ctx.error, 1\n")
+		irWrite(ctx, "  %ctx.failed = icmp ne i32 %ctx.error.code, 0\n")
+		irWrite(ctx, "  br i1 %ctx.failed, label %ctx.init.failed, label %ctx.init.ready, !prof !9000\n")
+		irWrite(ctx, "ctx.init.failed:\n  call void @magma.error.print(%type.error %ctx.error)\n")
+		if abortOnFailure {
+			irWrite(ctx, "  call void @abort()\n  unreachable\n")
+		} else {
+			irWrite(ctx, "  ret i32 %ctx.error.code\n")
+		}
+		irWrite(ctx, "ctx.init.ready:\n  %ctx.root.value = extractvalue ")
+		if err := irThrowingType(ctx, initializer.ReturnType); err != nil {
+			return err
+		}
+		irWrite(ctx, " %ctx.init, 1\n  store ")
+		if err := irType(ctx, initializer.ReturnType); err != nil {
+			return err
+		}
+		irWrite(ctx, " %ctx.root.value, ptr @magma.context.root\n")
+		return nil
+	}
+	irWrite(ctx, "  %ctx.root.value = call ")
+	if err := irType(ctx, initializer.ReturnType); err != nil {
+		return err
+	}
+	irWritef(ctx, " @%s()\n  store ", initializer.AbsName)
+	if err := irType(ctx, initializer.ReturnType); err != nil {
+		return err
+	}
+	irWrite(ctx, " %ctx.root.value, ptr @magma.context.root\n")
+	return nil
+}
+
 func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 	irWrite(ctx, "{\n")
 
@@ -18,6 +84,38 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 		Body:   &bytes.Buffer{},
 	}
 	cpy.parentBld = cpy.bld
+	if fnDef.ImplicitContext != nil {
+		contextType := fnDef.ImplicitContext.Type
+		irWrite(&cpy, "  %.ctx.addr = alloca ")
+		if contextType != nil {
+			if err := irType(&cpy, contextType); err != nil {
+				return err
+			}
+		} else {
+			irWrite(&cpy, "%type.context")
+		}
+		irWrite(&cpy, "\n")
+		if fnDef.ContextABI == t.ContextABIContextful {
+			irWrite(&cpy, "  %.ctx.value = load ")
+			if contextType != nil {
+				if err := irType(&cpy, contextType); err != nil {
+					return err
+				}
+			} else {
+				irWrite(&cpy, "%type.context")
+			}
+			irWrite(&cpy, ", ptr %.ctx.in\n  store ")
+			if contextType != nil {
+				if err := irType(&cpy, contextType); err != nil {
+					return err
+				}
+			} else {
+				irWrite(&cpy, "%type.context")
+			}
+			irWrite(&cpy, " %.ctx.value, ptr %.ctx.addr\n")
+		}
+		cpy.ContextPtr = ssaName("%.ctx.addr")
+	}
 
 	for i, arg := range fnDef.Class.ArgsNode.Args {
 		if fnDef.IsMember && i == 0 {
@@ -290,6 +388,9 @@ finish:
 	if ctx.Shared.Target.OS == "windows" {
 		irWrite(ctx, "  %console.utf8 = call i32 @SetConsoleOutputCP(i32 65001)\n")
 	}
+	if err := irInitializeRootContext(ctx, false); err != nil {
+		return err
+	}
 
 	hasArgs := false
 
@@ -317,10 +418,17 @@ finish:
 	}
 
 	if mainFnDef.ReturnType.Throws {
+		ctxArg := ""
+		if mainFnDef.ContextABI == t.ContextABIContextful {
+			ctxArg = "ptr @magma.context.root"
+		}
 		if hasArgs {
-			irWritef(ctx, "  %%r = call { %%type.error } @%s.main(%%type.slice %%a)\n", ctx.fCtx.MainPckgName)
+			if ctxArg != "" {
+				ctxArg += ", "
+			}
+			irWritef(ctx, "  %%r = call { %%type.error } @%s.main(%s%%type.slice %%a)\n", ctx.fCtx.MainPckgName, ctxArg)
 		} else {
-			irWritef(ctx, "  %%r = call { %%type.error } @%s.main()\n", ctx.fCtx.MainPckgName)
+			irWritef(ctx, "  %%r = call { %%type.error } @%s.main(%s)\n", ctx.fCtx.MainPckgName, ctxArg)
 		}
 		irWrite(ctx, "  %e = extractvalue { %type.error } %r, 0\n")
 		irWrite(ctx, "  %ecd = extractvalue %type.error %e, 1\n")
@@ -334,10 +442,17 @@ finish:
 		irWrite(ctx, "  ret i32 %ecd\n")
 		irWrite(ctx, "ez:\n")
 	} else {
+		ctxArg := ""
+		if mainFnDef.ContextABI == t.ContextABIContextful {
+			ctxArg = "ptr @magma.context.root"
+		}
 		if hasArgs {
-			irWritef(ctx, "  call void @%s.main(%%type.slice %%a)\n", ctx.fCtx.MainPckgName)
+			if ctxArg != "" {
+				ctxArg += ", "
+			}
+			irWritef(ctx, "  call void @%s.main(%s%%type.slice %%a)\n", ctx.fCtx.MainPckgName, ctxArg)
 		} else {
-			irWritef(ctx, "  call void @%s.main()\n", ctx.fCtx.MainPckgName)
+			irWritef(ctx, "  call void @%s.main(%s)\n", ctx.fCtx.MainPckgName, ctxArg)
 		}
 	}
 	if hasArgs && ctx.Shared.Target.OS == "windows" {
@@ -355,10 +470,25 @@ func irFunDefAliased(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 	if fnDefNode.NoAliasName != "" {
 		// func declared elsewhere, just emit declaration
-		return irFunDefAliased(ctx, fnDefNode)
+		if err := irFunDefAliased(ctx, fnDefNode); err != nil {
+			return err
+		}
+		if fnDefNode.ContextABI == t.ContextABIContextless {
+			return irContextDiscardAdapter(ctx, fnDefNode)
+		}
+		return nil
 	}
 	if fnDefNode.ProtoDispatch != nil {
-		return irProtoDispatchFunc(ctx, fnDefNode)
+		if err := irProtoDispatchFunc(ctx, fnDefNode); err != nil {
+			return err
+		}
+		if fnDefNode.ContextABI == t.ContextABIContextless {
+			return irContextDiscardAdapter(ctx, fnDefNode)
+		}
+		if fnDefNode.NeedsNativeContextThunk {
+			return irNativeContextThunk(ctx, fnDefNode)
+		}
+		return nil
 	}
 
 	if ctx.fCtx.PackageName == ctx.fCtx.MainPckgName && fnDefNode.IsEntryPoint {
@@ -381,7 +511,7 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 	irWrite(ctx, " @")
 	irWrite(ctx, fnDefNode.AbsName)
 
-	e = irArgsList(ctx, &fnDefNode.Class.ArgsNode, fnDefNode.IsMember)
+	e = irArgsList(ctx, &fnDefNode.Class.ArgsNode, fnDefNode.IsMember, fnDefNode.ContextABI)
 	if e != nil {
 		return e
 	}
@@ -390,11 +520,12 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 	ctx.localSlots = map[*t.NodeExprVarDef]SsaName{}
 	assignLocalIrNames(ctx, &fnDefNode.Body)
 
-	if len(fnDefNode.Body.Statements) > 5 {
-		irWrite(ctx, " inlinehint ")
-	} else {
-		irWrite(ctx, " alwaysinline ")
-	}
+	irWrite(ctx, " ")
+	//if len(fnDefNode.Body.Statements) > 5 {
+		//irWrite(ctx, "inlinehint ")
+	//} else {
+	//	irWrite(ctx, "alwaysinline ")
+	//}
 
 	e = irFuncBody(ctx, &fnDefNode.Body, fnDefNode)
 	if e != nil {
@@ -405,7 +536,149 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 			return e
 		}
 	}
+	if fnDefNode.ContextABI == t.ContextABIContextless {
+		if err := irContextDiscardAdapter(ctx, fnDefNode); err != nil {
+			return err
+		}
+	}
+	if fnDefNode.NeedsNativeContextThunk {
+		if err := irNativeContextThunk(ctx, fnDefNode); err != nil {
+			return err
+		}
+	}
 	ctx.CurrFunc = nil
+	return nil
+}
+
+func contextAdapterSymbol(fn *t.NodeFuncDef) string {
+	return fn.AbsName + ".__ctx_adapter"
+}
+
+func nativeContextThunkSymbol(fn *t.NodeFuncDef) string {
+	return fn.AbsName + ".__native_ctx_thunk"
+}
+
+func irNativeContextThunk(ctx *IrCtx, fn *t.NodeFuncDef) error {
+	irWrite(ctx, "define internal ")
+	if err := irThrowingType(ctx, fn.ReturnType); err != nil {
+		return err
+	}
+	irWritef(ctx, " @%s(", nativeContextThunkSymbol(fn))
+	start := 0
+	if fn.IsMember {
+		irWrite(ctx, "ptr %this")
+		start = 1
+	}
+	for i := start; i < len(fn.Class.ArgsNode.Args); i++ {
+		if i != start || fn.IsMember {
+			irWrite(ctx, ", ")
+		}
+		arg := &fn.Class.ArgsNode.Args[i]
+		if err := irType(ctx, arg.TypeNode); err != nil {
+			return err
+		}
+		irWritef(ctx, " %%%s", arg.Name)
+	}
+	irWrite(ctx, ") {\n")
+	if err := irInitializeRootContext(ctx, true); err != nil {
+		return err
+	}
+	returnsValue := !(isVoidType(fn.ReturnType) && !fn.ReturnType.Throws)
+	irWrite(ctx, "  ")
+	if returnsValue {
+		irWrite(ctx, "%thunk.result = ")
+	}
+	irWrite(ctx, "call ")
+	if err := irThrowingType(ctx, fn.ReturnType); err != nil {
+		return err
+	}
+	irWritef(ctx, " @%s(ptr @magma.context.root", fn.AbsName)
+	if fn.IsMember {
+		irWrite(ctx, ", ptr %this")
+	}
+	for i := start; i < len(fn.Class.ArgsNode.Args); i++ {
+		arg := &fn.Class.ArgsNode.Args[i]
+		irWrite(ctx, ", ")
+		if err := irType(ctx, arg.TypeNode); err != nil {
+			return err
+		}
+		irWritef(ctx, " %%%s", arg.Name)
+	}
+	irWrite(ctx, ")\n  ret ")
+	if returnsValue {
+		if err := irThrowingType(ctx, fn.ReturnType); err != nil {
+			return err
+		}
+		irWrite(ctx, " %thunk.result\n")
+	} else {
+		irWrite(ctx, "void\n")
+	}
+	irWrite(ctx, "}\n")
+	return nil
+}
+
+// irContextDiscardAdapter gives a noctx function the ordinary Magma function
+// pointer ABI. The leading context is intentionally ignored; all visible
+// arguments and the throwing result layout remain identical.
+func irContextDiscardAdapter(ctx *IrCtx, fn *t.NodeFuncDef) error {
+	irWrite(ctx, "define internal ")
+	if err := irThrowingType(ctx, fn.ReturnType); err != nil {
+		return err
+	}
+	irWritef(ctx, " @%s(ptr %%ctx.discard", contextAdapterSymbol(fn))
+	start := 0
+	if fn.IsMember {
+		irWrite(ctx, ", ptr %this")
+		start = 1
+	}
+	for i := start; i < len(fn.Class.ArgsNode.Args); i++ {
+		arg := &fn.Class.ArgsNode.Args[i]
+		irWrite(ctx, ", ")
+		if err := irType(ctx, arg.TypeNode); err != nil {
+			return err
+		}
+		irWritef(ctx, " %%%s", arg.Name)
+	}
+	irWrite(ctx, ") alwaysinline {\n  ")
+	returnsValue := !(isVoidType(fn.ReturnType) && !fn.ReturnType.Throws)
+	if returnsValue {
+		irWrite(ctx, "%adapter.result = ")
+	}
+	irWrite(ctx, "call ")
+	if err := irThrowingType(ctx, fn.ReturnType); err != nil {
+		return err
+	}
+	target := fn.AbsName
+	if fn.NoAliasName != "" {
+		target = fn.NoAliasName
+	}
+	irWritef(ctx, " @%s(", target)
+	wrote := false
+	if fn.IsMember {
+		irWrite(ctx, "ptr %this")
+		wrote = true
+	}
+	for i := start; i < len(fn.Class.ArgsNode.Args); i++ {
+		arg := &fn.Class.ArgsNode.Args[i]
+		if wrote {
+			irWrite(ctx, ", ")
+		}
+		if err := irType(ctx, arg.TypeNode); err != nil {
+			return err
+		}
+		irWritef(ctx, " %%%s", arg.Name)
+		wrote = true
+	}
+	irWrite(ctx, ")\n  ret ")
+	if returnsValue {
+		if err := irThrowingType(ctx, fn.ReturnType); err != nil {
+			return err
+		}
+		irWrite(ctx, " %adapter.result\n")
+	} else {
+		irWrite(ctx, "void\n")
+	}
+	irWrite(ctx, "}\n")
 	return nil
 }
 
@@ -419,7 +692,7 @@ func irProtoDispatchFunc(ctx *IrCtx, fn *t.NodeFuncDef) error {
 		return err
 	}
 	irWritef(ctx, " @%s", fn.AbsName)
-	if err := irArgsList(ctx, &fn.Class.ArgsNode, true); err != nil {
+	if err := irArgsList(ctx, &fn.Class.ArgsNode, true, fn.ContextABI); err != nil {
 		return err
 	}
 	irWrite(ctx, " alwaysinline {\n")
@@ -437,7 +710,11 @@ func irProtoDispatchFunc(ctx *IrCtx, fn *t.NodeFuncDef) error {
 	if err := irThrowingType(ctx, fn.ReturnType); err != nil {
 		return err
 	}
-	irWrite(ctx, " %proto.fn(ptr %proto.impl")
+	irWrite(ctx, " %proto.fn(")
+	if fn.ContextABI == t.ContextABIContextful {
+		irWrite(ctx, "ptr %.ctx.in, ")
+	}
+	irWrite(ctx, "ptr %proto.impl")
 	for i, arg := range fn.Class.ArgsNode.Args {
 		if i == 0 {
 			continue
@@ -538,20 +815,28 @@ func irArg(ctx *IrCtx, argNode *t.NodeArg) error {
 	return nil
 }
 
-func irArgsList(ctx *IrCtx, argListNode *t.NodeArgList, thisArg bool) error {
+func irArgsList(ctx *IrCtx, argListNode *t.NodeArgList, thisArg bool, contextABI t.ContextABI) error {
 	irWrite(ctx, "(")
-	bound := len(argListNode.Args)
+	wrote := false
+	if contextABI == t.ContextABIContextful {
+		irWrite(ctx, "ptr %.ctx.in")
+		wrote = true
+	}
 
 	if thisArg {
-		irWrite(ctx, "ptr %this")
-		if bound > 1 {
+		if wrote {
 			irWrite(ctx, ", ")
 		}
+		irWrite(ctx, "ptr %this")
+		wrote = true
 	}
 
 	for i, a := range argListNode.Args {
 		if thisArg && i == 0 {
 			continue
+		}
+		if wrote {
+			irWrite(ctx, ", ")
 		}
 
 		e := irArg(ctx, &a)
@@ -559,9 +844,7 @@ func irArgsList(ctx *IrCtx, argListNode *t.NodeArgList, thisArg bool) error {
 			return e
 		}
 
-		if i < bound-1 {
-			irWrite(ctx, ", ")
-		}
+		wrote = true
 	}
 
 	irWrite(ctx, ")")

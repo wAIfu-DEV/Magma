@@ -7,8 +7,8 @@ use "../std/strings.mg" strings
 main() !void:
     a := heap.allocator()
 
-    stdout := try io.stdout(a)
-    stdin := try io.stdin(a)
+    stdout := try io.stdout()
+    stdin := try io.stdin()
 
     defer stdout.close()
     defer stdin.close()

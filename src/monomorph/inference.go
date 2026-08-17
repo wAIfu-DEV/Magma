@@ -96,8 +96,50 @@ func (m *monoCtx) shallowExprType(module string, gl *t.NodeGlobal, expr t.NodeEx
 	switch n := expr.(type) {
 	case *t.NodeExprName:
 		if single, ok := n.Name.(*t.NodeNameSingle); ok {
-			return cloneType(env[single.Name])
+			if local := env[single.Name]; local != nil {
+				return cloneType(local)
+			}
+			for _, declaration := range gl.Declarations {
+				var variable *t.NodeExprVarDef
+				switch candidate := declaration.(type) {
+				case *t.NodeExprVarDef:
+					variable = candidate
+				case *t.NodeConstDef:
+					variable = candidate.VarDef
+				}
+				if variable == nil || variable.Type == nil {
+					continue
+				}
+				if name, ok := variable.Name.(*t.NodeNameSingle); ok && name.Name == single.Name {
+					return cloneType(variable.Type)
+				}
+			}
 		}
+		if composite, ok := n.Name.(*t.NodeNameComposite); ok && len(composite.Parts) > 1 {
+			if _, imported := gl.ImportAlias[composite.Parts[0]]; !imported {
+				if result, _, _, err := m.inferOwnerTypeFromCallee(module, gl, composite.Parts, env); err == nil {
+					return result
+				}
+			}
+		}
+	case *t.NodeExprMemberAccess:
+		ownerType := m.shallowExprType(module, gl, n.Target, env)
+		if ownerType == nil {
+			return nil
+		}
+		owner, ownerModule, _, err := m.getStructDefFromType(module, gl, ownerType)
+		if err != nil || owner == nil {
+			return nil
+		}
+		fieldType := owner.Fields[n.Member]
+		if fieldType == nil {
+			return nil
+		}
+		result := cloneType(fieldType)
+		if ownerGlobal := m.modules[ownerModule]; ownerGlobal != nil {
+			_ = m.rewriteType(ownerModule, ownerGlobal, result)
+		}
+		return result
 	case *t.NodeExprStructInit:
 		return cloneType(n.Type)
 	case *t.NodeExprProtoView:
@@ -106,7 +148,14 @@ func (m *monoCtx) shallowExprType(module string, gl *t.NodeGlobal, expr t.NodeEx
 		if inner := m.shallowExprType(module, gl, n.Expr, env); inner != nil {
 			return &t.NodeType{KindNode: &t.NodeTypePointer{Kind: inner.KindNode}}
 		}
+	case *t.NodeExprMove:
+		return m.shallowExprType(module, gl, n.Expr, env)
+	case *t.NodeExprTry:
+		return m.shallowExprType(module, gl, n.Call, env)
 	case *t.NodeExprCall:
+		if result := m.shallowCallReturnType(module, gl, n, env); result != nil {
+			return result
+		}
 		name, ok := n.Callee.(*t.NodeExprName)
 		if !ok {
 			return nil

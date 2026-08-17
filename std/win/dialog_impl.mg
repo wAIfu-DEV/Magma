@@ -171,7 +171,7 @@ createDialog(save bool) !ptr:
 ..
 
 extensionPattern(a allocator.Allocator, extensions str) !$str:
-    out := try builder.new(a)
+    out := try builder.new()
     defer out.free()
     start u64 = 0
     i u64 = 0
@@ -234,7 +234,7 @@ setDefaultPath(a allocator.Allocator, dialog ptr, path str) !void:
         ret
     ..
     wide := try utf8.utf8To16NT(a, path)
-    defer slices.free(a, wide)
+    defer slices.free(wide)
     item ptr = none
     result := ext_SHCreateItemFromParsingName(slices.toPtr(wide), none, guidShellItem(), addrof item)
     if succeeded(result) == false:
@@ -253,7 +253,7 @@ configureText(a allocator.Allocator, dialog ptr, title str, defaultName str) !vo
     if title.countBytes() > 0:
         wideTitle := try utf8.utf8To16NT(a, title)
         result := table.setTitle(dialog, slices.toPtr(wideTitle))
-        slices.free(a, wideTitle)
+        slices.free(wideTitle)
         if succeeded(result) == false:
             throw errors.native(cast.u64to32(cast.itou(cast.i32to64(result))), "IFileDialog.SetTitle failed")
         ..
@@ -261,7 +261,7 @@ configureText(a allocator.Allocator, dialog ptr, title str, defaultName str) !vo
     if defaultName.countBytes() > 0:
         wideName := try utf8.utf8To16NT(a, defaultName)
         result := table.setFileName(dialog, slices.toPtr(wideName))
-        slices.free(a, wideName)
+        slices.free(wideName)
         if succeeded(result) == false:
             throw errors.native(cast.u64to32(cast.itou(cast.i32to64(result))), "IFileDialog.SetFileName failed")
         ..

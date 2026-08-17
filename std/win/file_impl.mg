@@ -228,7 +228,8 @@ pub closeFile(handle ptr) !void:
 # @param path UTF-8 path
 # @param openMode desired open mode
 # @returns handle to the opened file
-pub openFile(a alc.Allocator, path str, openMode fopm.OpenMode) !$ptr:
+pub openFile(path str, openMode fopm.OpenMode) !$ptr:
+    a := ctx.tempAlloc
    READ  u32 = 0x80000000
    WRITE u32 = 0x40000000
    APPEND u32 = 4

@@ -9,8 +9,9 @@ link "pthread"
 use "std:cast" cast
 use "std:errors" errors
 use "std:heap" heap
+use "std:context" context
 
-ext ext_pthread_create pthread_create(thread u64*, attributes ptr, startRoutine (ptr) u64, argument ptr) c.int
+ext ext_pthread_create pthread_create(thread u64*, attributes ptr, startRoutine noctx (ptr) u64, argument ptr) c.int
 ext ext_pthread_join   pthread_join(thread u64, result ptr) c.int
 ext ext_sched_yield    sched_yield() c.int
 
@@ -22,6 +23,7 @@ pub Thread(
 Launch(
     entry (ptr) u64
     context ptr
+    magmaContext context.Ctx
     completed u8
 )
 
@@ -41,12 +43,13 @@ loadCompleted(value u8*) u8:
     ..
 ..
 
-threadMain(raw ptr) u64:
+noctx threadMain(raw ptr) u64:
     launch Launch*
     # SAFETY: spawn passes a live heap-allocated Launch as this thread context.
     unsafe:
         launch = raw
     ..
+    ctx = launch.magmaContext
     result u64 = launch.entry(launch.context)
     storeCompleted(addrof launch.completed)
     ret result
@@ -62,7 +65,8 @@ pub spawn(entry (ptr) u64, context ptr) !$Thread:
     launch.entry = entry
     # SAFETY: Launch stores the opaque context required by its matching entry callback.
     unsafe:
-        launch.context = context
+    launch.context = context
+    launch.magmaContext = ctx
     ..
     launch.completed = 0
 

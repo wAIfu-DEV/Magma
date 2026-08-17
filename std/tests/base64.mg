@@ -15,19 +15,19 @@ pub main() !void:
     data[4] = 97
     data[5] = 114
     view u8[] = slices.fromPtr(slices.toPtr(data), 6)
-    encoded := try base64.encode(a, view)
+    encoded := try base64.encode(view)
     defer encoded.free(a)
     if strings.compare(encoded, "Zm9vYmFy") == false:
         throw errors.failure("Base64 encoding changed")
     ..
-    decoded := try base64.decode(a, "Zm8=")
-    defer slices.free(a, decoded)
+    decoded := try base64.decode("Zm8=")
+    defer slices.free(decoded)
     if slices.count(decoded) != 2 || decoded[0] != 102 || decoded[1] != 111:
         throw errors.failure("Base64 decoding changed")
     ..
-    bad, badError := base64.decode(a, "Zh==")
+    bad, badError := base64.decode("Zh==")
     if badError.ok():
-        slices.free(a, bad)
+        slices.free(bad)
         throw errors.failure("non-canonical Base64 accepted")
     ..
 ..

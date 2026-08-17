@@ -1,20 +1,21 @@
 # `std/future`
 
-`Future[T]` represents a value being produced by a task submitted to a
-`ThreadPool`. Future does not own a scheduler: the pool passed to `future.new`
-selects the worker count, queue capacity, and idle policy.
+`Future[T]` represents a value being produced by a task submitted through an
+`executor.Executor`. A future does not own that executor; a thread pool is one
+implementation and controls worker count, queue capacity, and idle policy.
 
 ```magma
 pool := try thread_pool.new(a, 2, 8, 256, 0)
-pending := try future.new[Data, LoadContext](a, pool, loadEntry, context)
+scheduler := pool.executor()
+pending := try future.new[Data, LoadContext](a, scheduler, loadEntry, context)
 value := try pending.await()
 try pool.close()
 ```
 
-`new[T, Context](a, pool, entry (Context*) !T, context Context) !$Future[T]`
+`new[T, Context](a, scheduler, entry (Context*) !T, context Context) !$Future[T]`
 allocates one combined work/state object, initializes completion
 state and reference ownership, creates the completion waiter, and submits a
-generic task to the pool. The task publishes either its value or error and
+generic task to the executor. The task publishes either its value or error and
 wakes a consumer waiting in `await()`.
 
 `isDone() !bool` polls completion without consuming the Future. The destructor

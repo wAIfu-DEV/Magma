@@ -210,38 +210,44 @@ pub decodeUrlTo(text str, output u8[]) !u64:
     ret try decodeToKind(text, output, true)
 ..
 
-encodeAllocated(a alc.Allocator, input u8[], urlSafe bool) !$str:
+encodeAllocated(input u8[], urlSafe bool) !$str:
+    a := ctx.procAlloc
     size := try encodedSize(slices.count(input))
-    result $str = try strings.alloc(a, size)
+    result $str = try strings.alloc(size)
     onerror result.free(a)
     output u8[] = slices.fromPtr(strings.toPtr(result), size)
     try encodeToKind(input, output, urlSafe)
     ret move result
 ..
 
-pub encode(a alc.Allocator, input u8[]) !$str:
-    ret try encodeAllocated(a, input, false)
+pub encode(input u8[]) !$str:
+    a := ctx.procAlloc
+    ret try encodeAllocated(input, false)
 ..
 
-pub encodeUrl(a alc.Allocator, input u8[]) !$str:
-    ret try encodeAllocated(a, input, true)
+pub encodeUrl(input u8[]) !$str:
+    a := ctx.procAlloc
+    ret try encodeAllocated(input, true)
 ..
 
-decodeAllocated(a alc.Allocator, text str, urlSafe bool) !$u8[]:
+decodeAllocated(text str, urlSafe bool) !$u8[]:
+    a := ctx.procAlloc
     size := try decodedSizeFor(text, urlSafe)
     if size == 0:
         ret slices.fromPtr(none, 0)
     ..
-    result := try slices.alloc[u8](a, size)
-    onerror slices.free(a, result)
+    result := try slices.alloc[u8](size)
+    onerror slices.free(result)
     try decodeToKind(text, result, urlSafe)
     ret result
 ..
 
-pub decode(a alc.Allocator, text str) !$u8[]:
-    ret try decodeAllocated(a, text, false)
+pub decode(text str) !$u8[]:
+    a := ctx.procAlloc
+    ret try decodeAllocated(text, false)
 ..
 
-pub decodeUrl(a alc.Allocator, text str) !$u8[]:
-    ret try decodeAllocated(a, text, true)
+pub decodeUrl(text str) !$u8[]:
+    a := ctx.procAlloc
+    ret try decodeAllocated(text, true)
 ..

@@ -35,8 +35,15 @@ Creates and inspects Magma `error` values. Standard-library errors use category 
 - `pub outOfBounds(message str) error` creates code 7.
 - `pub notFound(message str) error` creates code 8.
 - `pub cancelled(message str) error` creates code 9.
+- `pub wouldBlock(message str) error` creates code 10.
+- `pub timedOut(message str) error` creates code 11.
+- `pub connectionReset(message str) error` creates code 12.
+- `pub connectionRefused(message str) error` creates code 13.
+- `pub addressInUse(message str) error` creates code 14.
 - `makeErr(code u32, msg str) error` is the internal common constructor.
 
 The corresponding public constants are `ERR_OK`, `ERR_FAIL`, `ERR_INVALID_ARG`,
 `ERR_OUT_OF_MEMORY`, `ERR_END_OF_FILE`, `ERR_WOULD_OVERFLOW`, `ERR_INVALID_TYPE`,
-`ERR_OUT_OF_BOUNDS`, `ERR_NOT_FOUND`, and `ERR_CANCELLED`.
+`ERR_OUT_OF_BOUNDS`, `ERR_NOT_FOUND`, `ERR_CANCELLED`, `ERR_WOULD_BLOCK`,
+`ERR_TIMED_OUT`, `ERR_CONNECTION_RESET`, `ERR_CONNECTION_REFUSED`, and
+`ERR_ADDRESS_IN_USE`.

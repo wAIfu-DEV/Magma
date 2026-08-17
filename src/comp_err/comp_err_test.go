@@ -56,3 +56,18 @@ func TestFprintHandlesSourceAndInternalFailures(t *testing.T) {
 		}
 	}
 }
+
+func TestEnsureDiagnosticAddsSourceAndPreservesExistingDiagnostic(t *testing.T) {
+	ctx := &types.FileCtx{FilePath: "main.mg", Content: []byte("broken\n")}
+	token := &types.Token{Pos: types.FilePos{Line: 1, Col: 3}}
+	wrapped := EnsureDiagnostic(ctx, token, errors.New("opaque failure"))
+	diagnostics := Diagnostics(wrapped)
+	if len(diagnostics) != 1 || diagnostics[0].FilePath != "main.mg" || diagnostics[0].Token.Pos != token.Pos {
+		t.Fatalf("source diagnostic = %#v", diagnostics)
+	}
+
+	existing := CompilationErrorToken(ctx, token, "specific failure", "specific help")
+	if got := EnsureDiagnostic(ctx, &types.Token{}, existing); got != existing {
+		t.Fatal("existing source diagnostic was replaced")
+	}
+}

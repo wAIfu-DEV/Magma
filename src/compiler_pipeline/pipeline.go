@@ -14,6 +14,7 @@ import (
 	loweringvalidate "Magma/src/lowering_validate"
 	"Magma/src/monomorph"
 	"Magma/src/pipeline"
+	magmatarget "Magma/src/target"
 	"Magma/src/types"
 	"fmt"
 )
@@ -38,6 +39,7 @@ func (p SafetyCheckedProgram) State() *types.SharedState { return p.state }
 // imports. It returns a partial program alongside an error so editor tooling can
 // retain successfully parsed declarations.
 func Parse(state *types.SharedState, rootPath string) (ParsedProgram, error) {
+	state.Target = magmatarget.WithCompilerKnownDefaults(state.Target)
 	program := ParsedProgram{state: state}
 	err := pipeline.DoMain(state, rootPath)
 	return program, comp_err.AtStage("parsing", join.JoinCompilationUnits(state, err))
@@ -102,7 +104,24 @@ func CheckSafety(program ValidatedProgram, warningMode bool) (SafetyCheckedProgr
 // Lower emits and cleans LLVM IR. IrWrite retains its own defensive contract
 // validation for direct users outside this pipeline.
 func Lower(program SafetyCheckedProgram) ([]byte, error) {
-	ir, err := llvmir.IrWrite(program.state)
+	return lower(program, false)
+}
+
+// LowerReachable performs executable-oriented lowering and omits function
+// bodies which cannot be reached from main, exports, callbacks, or runtime
+// roots. All declarations have already passed semantic and safety checks.
+func LowerReachable(program SafetyCheckedProgram) ([]byte, error) {
+	return lower(program, true)
+}
+
+func lower(program SafetyCheckedProgram, pruneFunctions bool) ([]byte, error) {
+	var ir []byte
+	var err error
+	if pruneFunctions {
+		ir, err = llvmir.IrWriteReachable(program.state)
+	} else {
+		ir, err = llvmir.IrWrite(program.state)
+	}
 	if err != nil {
 		return nil, comp_err.AtStage("LLVM lowering", err)
 	}

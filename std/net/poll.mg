@@ -35,7 +35,7 @@ pub new(a allocator.Allocator, capacity u64) !$Poller:
     if capacity == 0:
         throw errors.invalidArgument("poll capacity must be nonzero")
     ..
-    native := try impl.new(a, capacity)
+    native := try impl.new(capacity)
     ret Poller(impl=native, capacity=capacity, active=true)
 ..
 

@@ -286,7 +286,6 @@ func irCABIExternalDeclaration(ctx *IrCtx, fn *t.NodeFuncDef) error {
 		}
 	}
 
-	irWritef(ctx, "declare %s @%s(", cABIReturnType(ret), fn.NoAliasName)
 	items := []string{}
 	if ret.kind == cABIIndirect {
 		items = append(items, cABIIndirectSpelling(ret, "", true))
@@ -303,8 +302,23 @@ func irCABIExternalDeclaration(ctx *IrCtx, fn *t.NodeFuncDef) error {
 			items = append(items, arg.logical)
 		}
 	}
-	irWrite(ctx, strings.Join(items, ", "))
-	irWrite(ctx, ")\n")
+	declaration := fmt.Sprintf("declare %s @%s(%s)\n", cABIReturnType(ret), fn.NoAliasName, strings.Join(items, ", "))
+	ctx.Shared.NativeDeclarationsM.Lock()
+	if ctx.Shared.NativeDeclarations == nil {
+		ctx.Shared.NativeDeclarations = map[string]string{}
+	}
+	previous, exists := ctx.Shared.NativeDeclarations[fn.NoAliasName]
+	if !exists {
+		ctx.Shared.NativeDeclarations[fn.NoAliasName] = declaration
+	}
+	ctx.Shared.NativeDeclarationsM.Unlock()
+	if exists {
+		if previous != declaration {
+			return fmt.Errorf("native symbol %q is declared with incompatible signatures", fn.NoAliasName)
+		}
+		return nil
+	}
+	irWrite(ctx, declaration)
 	return nil
 }
 
@@ -464,6 +478,11 @@ func irCABIExportWrapper(ctx *IrCtx, fn *t.NodeFuncDef) error {
 		irWritef(ctx, "%s %s", param.spelling, param.name)
 	}
 	irWrite(ctx, ") {\n")
+	if fn.ContextABI == t.ContextABIContextful {
+		if err := irInitializeRootContext(ctx, true); err != nil {
+			return err
+		}
+	}
 
 	logicalArgs := make([]SsaName, len(argPlans))
 	for i, plan := range argPlans {
@@ -498,11 +517,17 @@ func irCABIExportWrapper(ctx *IrCtx, fn *t.NodeFuncDef) error {
 		irWrite(ctx, "  ")
 	}
 	irWritef(ctx, "call %s @%s(", ret.logical, fn.AbsName)
+	wrote := false
+	if fn.ContextABI == t.ContextABIContextful {
+		irWrite(ctx, "ptr @magma.context.root")
+		wrote = true
+	}
 	for i, arg := range logicalArgs {
-		if i != 0 {
+		if wrote || i != 0 {
 			irWrite(ctx, ", ")
 		}
 		irWritef(ctx, "%s %s", argPlans[i].logical, arg.Repr)
+		wrote = true
 	}
 	irWrite(ctx, ")\n")
 

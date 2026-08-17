@@ -26,7 +26,7 @@ main() void:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := len(regexp.MustCompile(`call i64 @[^\s]+\.bound\(\)`).FindAllString(ir, -1)); got != 1 {
+	if got := len(regexp.MustCompile(`call i64 @[^\s]+\.bound\(ptr %\.ctx\.addr\)`).FindAllString(ir, -1)); got != 1 {
 		t.Fatalf("bound call count = %d, want 1\n%s", got, ir)
 	}
 	for _, want := range []string{"icmp ult i64", "add i64"} {

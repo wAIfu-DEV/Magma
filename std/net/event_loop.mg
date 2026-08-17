@@ -331,13 +331,13 @@ runWorker(task RunTask*) !bool:
     ret true
 ..
 
-destr EventLoop.runAsync(ctx context.Ctx) !$RunningLoop:
+destr EventLoop.runAsync() !$RunningLoop:
     if this.state == none:
         throw errors.invalidArgument("event loop is not active")
     ..
     task := RunTask(state=this.state)
     scheduler := ctx.exec
-    completion := try future.new[bool, RunTask](ctx.alloc, scheduler, runWorker, task)
+    completion := try future.new[bool, RunTask](scheduler, runWorker, task)
     state := this.state
     this.state = none
     ret RunningLoop(state=state, completion=move completion, active=true)

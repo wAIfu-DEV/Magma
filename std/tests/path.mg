@@ -17,7 +17,7 @@ pub main() !void:
         if path.isAbsolute("C:tmp"):
             throw errors.failure("drive-relative Windows path treated as absolute")
         ..
-        unc := try path.normalize(a, "\\\\server\\share\\folder\\..")
+        unc := try path.normalize("\\\\server\\share\\folder\\..")
         defer unc.free(a)
         if strings.compare(unc, "\\\\server\\share") == false:
             throw errors.failure("UNC normalization changed its root")
@@ -25,7 +25,7 @@ pub main() !void:
     elif path.isAbsolute("/tmp") == false:
         throw errors.failure("absolute Unix path was not recognized")
     ..
-    base := try path.base(a, "one/two.txt")
+    base := try path.base("one/two.txt")
     defer base.free(a)
     # SAFETY: owned strings reserve a terminator immediately after countBytes.
     unsafe:
@@ -33,7 +33,7 @@ pub main() !void:
             throw errors.failure("path base changed")
         ..
     ..
-    extension := try path.extension(a, "one/two.txt")
+    extension := try path.extension("one/two.txt")
     defer extension.free(a)
     # SAFETY: owned strings reserve a terminator immediately after countBytes.
     unsafe:
@@ -41,7 +41,7 @@ pub main() !void:
             throw errors.failure("path extension changed")
         ..
     ..
-    noExtension := try path.extension(a, "README")
+    noExtension := try path.extension("README")
     defer noExtension.free(a)
     # SAFETY: even an empty owned string has its allocated terminator byte.
     unsafe:
@@ -54,12 +54,12 @@ pub main() !void:
     parts[0] = "one"
     parts[1] = "two"
     parts[2] = ".."
-    joined := try path.join(a, parts)
+    joined := try path.join(parts)
     defer joined.free(a)
     if strings.compare(joined, "one") == false:
         throw errors.failure("path join did not normalize components")
     ..
-    normalized := try path.normalize(a, "one//./two/../three")
+    normalized := try path.normalize("one//./two/../three")
     defer normalized.free(a)
     expected str = "one/three"
     if separator == 92:
@@ -68,7 +68,7 @@ pub main() !void:
     if strings.compare(normalized, expected) == false:
         throw errors.failure("path normalization changed")
     ..
-    parent := try path.parent(a, "one/two/file.txt")
+    parent := try path.parent("one/two/file.txt")
     defer parent.free(a)
     expectedParent str = "one/two"
     if separator == 92:
@@ -77,12 +77,12 @@ pub main() !void:
     if strings.compare(parent, expectedParent) == false:
         throw errors.failure("path parent changed")
     ..
-    stem := try path.stem(a, "archive.tar.gz")
+    stem := try path.stem("archive.tar.gz")
     defer stem.free(a)
     if strings.compare(stem, "archive.tar") == false:
         throw errors.failure("path stem changed")
     ..
-    changed := try path.changeExtension(a, "archive.tar.gz", "zip")
+    changed := try path.changeExtension("archive.tar.gz", "zip")
     defer changed.free(a)
     if strings.compare(changed, "archive.tar.zip") == false:
         throw errors.failure("path extension replacement changed")

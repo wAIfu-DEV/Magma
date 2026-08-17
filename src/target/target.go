@@ -34,6 +34,15 @@ type Target struct {
 	CompilerKnownTypes map[string]string
 }
 
+// WithCompilerKnownDefaults fills target-dependent C aliases for embedders and
+// tests that construct a Target directly instead of using Resolve.
+func WithCompilerKnownDefaults(t Target) Target {
+	if t.CompilerKnownTypes == nil {
+		t.CompilerKnownTypes = fallbackCTypes(string(t.OS), string(t.Arch), t.PointerBits)
+	}
+	return t
+}
+
 // HostFallback keeps library users and unit tests that construct a SharedState
 // directly compatible. The command-line compiler replaces this with Clang's
 // authoritative target before compilation begins.

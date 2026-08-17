@@ -8,7 +8,7 @@ use "std:cast" cast
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()
-    values := try queue.new[u64](a, none)
+    values := try queue.new[u64](none)
     defer values.free()
     try values.enqueue(3)
     try values.enqueue(7)

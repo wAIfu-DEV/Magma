@@ -144,7 +144,8 @@ Value.borrowed() Value:
     ret out
 ..
 
-valueCleanup(a alc.Allocator, val $Value) void:
+valueCleanup(val $Value) void:
+    a := ctx.procAlloc
     if val.owned == false:
         ret
     ..
@@ -171,8 +172,9 @@ valueCleanup(a alc.Allocator, val $Value) void:
 # @ownership The returned object must be freed.
 # @example
 #   object := try json.newObject(a)
-pub newObject(a alc.Allocator) !$Object:
-    entries := try linear_map.new[Value](a, valueCleanup)
+pub newObject() !$Object:
+    a := ctx.procAlloc
+    entries := try linear_map.new[Value](valueCleanup)
     object Object
     object.entries = move entries
     ret object
@@ -183,7 +185,8 @@ pub newObject(a alc.Allocator) !$Object:
 # @ownership The returned array must be freed.
 # @example
 #   items := try json.newArray(a)
-pub newArray(a alc.Allocator) !$Array:
+pub newArray() !$Array:
+    a := ctx.procAlloc
     values := try arr.new[Value](a)
     array Array
     array.allocator = a
@@ -253,7 +256,8 @@ pub stringBorrowed(value str) Value:
 # @complexity O(1)
 # @example
 #   value := json.stringOwned(a, ownedText)
-pub stringOwned(a alc.Allocator, value $str) Value:
+pub stringOwned(value $str) Value:
+    a := ctx.procAlloc
     out Value = memory.zeroValue[Value]()
     out.kind = 3
     out.owned = true
@@ -268,9 +272,10 @@ pub stringOwned(a alc.Allocator, value $str) Value:
 # @ownership The returned value owns its copy.
 # @example
 #   value := try json.stringCopy(a, input)
-pub stringCopy(a alc.Allocator, value str) !$Value:
-    owned str = try strings.copy(a, value)
-    ret stringOwned(a, move owned)
+pub stringCopy(value str) !$Value:
+    a := ctx.procAlloc
+    owned str = try strings.copy(value)
+    ret stringOwned(move owned)
 ..
 
 # Wraps a borrowed object. The caller remains responsible for freeing it.
@@ -388,6 +393,10 @@ Array.append(value $Value) !void:
     try this.values.pushRight(this.allocator, move value)
 ..
 
+arrayValueCleanup(a alc.Allocator, val $Value) void:
+    valueCleanup(move val)
+..
+
 # Returns the number of array elements.
 # @complexity O(1)
 # @example
@@ -417,7 +426,7 @@ Array.get(index u64) !Value:
 # @example
 #   items.free()
 destr Array.free() void:
-    this.values.free(this.allocator, valueCleanup)
+    this.values.free(this.allocator, arrayValueCleanup)
 ..
 
 writeEscaped(w writer.Writer, value str) !void:

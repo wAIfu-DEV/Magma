@@ -112,7 +112,8 @@ SendTask(
     request Request
 )
 
-pub new(a allocator.Allocator, options Options) !$Client:
+pub new(options Options) !$Client:
+    a := ctx.procAlloc
     if options.ioTimeoutMs < 0 || options.maxResponseBytes == 0 || options.readBufferBytes == 0 || options.dns.maxResults > 16 || options.connectionCapacity == 0:
         throw errors.invalidArgument("invalid HTTP client limits")
     ..
@@ -151,7 +152,8 @@ findSchemeEnd(url str) u64:
     ret n
 ..
 
-parseUrl(a allocator.Allocator, url str) !$ParsedUrl:
+parseUrl(url str) !$ParsedUrl:
+    a := ctx.procAlloc
     n := url.countBytes()
     schemeEnd := findSchemeEnd(url)
     if schemeEnd == n || schemeEnd == 0:
@@ -181,12 +183,12 @@ parseUrl(a allocator.Allocator, url str) !$ParsedUrl:
     if colon < authorityEnd:
         hostEnd = colon
     ..
-    host := try strings.substring(a, url, authorityStart, hostEnd)
+    host := try strings.substring(url, authorityStart, hostEnd)
     onerror host.free(a)
 
     service str
     if colon < authorityEnd:
-        service = try strings.substring(a, url, colon + 1, authorityEnd)
+        service = try strings.substring(url, colon + 1, authorityEnd)
         onerror service.free(a)
         parsedPort := try strconv.parseUint(service)
         if parsedPort == 0 || parsedPort > 65535:
@@ -194,33 +196,35 @@ parseUrl(a allocator.Allocator, url str) !$ParsedUrl:
         ..
     else:
         if secure:
-            service = try strings.copy(a, "443")
+            service = try strings.copy("443")
         else:
-            service = try strings.copy(a, "80")
+            service = try strings.copy("80")
         ..
     ..
     onerror service.free(a)
 
     target str
     if authorityEnd == n:
-        target = try strings.copy(a, "/")
+        target = try strings.copy("/")
     else:
-        target = try strings.substring(a, url, authorityEnd, n)
+        target = try strings.substring(url, authorityEnd, n)
     ..
     ret ParsedUrl(host=move host, service=move service, target=move target, secure=secure)
 ..
 
-destr ParsedUrl.free(a allocator.Allocator) void:
+destr ParsedUrl.free() void:
+    a := ctx.procAlloc
     this.host.free(a)
     this.service.free(a)
     this.target.free(a)
 ..
 
-buildRequest(a allocator.Allocator, request Request, parsed ParsedUrl*) !$str:
+buildRequest(request Request, parsed ParsedUrl*) !$str:
+    a := ctx.procAlloc
     if request.method.countBytes() == 0:
         throw errors.invalidArgument("HTTP method is empty")
     ..
-    output := try builder.newWithCapacity(a, 64)
+    output := try builder.newWithCapacity(64)
     defer output.free()
     try output.appendBorrowed(request.method)
     try output.appendBorrowed(" ")
@@ -238,7 +242,7 @@ buildRequest(a allocator.Allocator, request Request, parsed ParsedUrl*) !$str:
     ..
     try output.appendBorrowed("\r\nConnection: keep-alive\r\n")
     if request.bodyLength > 0:
-        length := try strconv.formatUint(a, request.bodyLength)
+        length := try strconv.formatUint(request.bodyLength)
         try output.appendBorrowed("Content-Length: ")
         try output.appendOwned(move length)
         try output.appendBorrowed("\r\n")
@@ -252,7 +256,7 @@ buildRequest(a allocator.Allocator, request Request, parsed ParsedUrl*) !$str:
     ..
     try output.appendBorrowed("\r\n")
     if request.bodyLength > 0:
-        contents := try request.body.read(a, request.bodyLength)
+        contents := try request.body.read(request.bodyLength)
         if contents.countBytes() != request.bodyLength:
             contents.free(a)
             throw errors.failure("HTTP request body ended before its declared length")
@@ -312,13 +316,13 @@ Client.acquire(host str, service str, secure bool) !u64:
     this.connections[slot].reusable = false
     try this.connectionLock.unlock()
 
-    ownedHost str, hostError error = strings.copy(this.allocator, host)
+    ownedHost str, hostError error = strings.copy(host)
     if hostError.nok():
         this.connections[slot].active = false
         this.connections[slot].inUse = false
         throw hostError
     ..
-    ownedService str, serviceError error = strings.copy(this.allocator, service)
+    ownedService str, serviceError error = strings.copy(service)
     if serviceError.nok():
         ownedHost.free(this.allocator)
         this.connections[slot].active = false
@@ -361,7 +365,7 @@ Client.acquire(host str, service str, secure bool) !u64:
     connection.socket = move transport
     connection.secure = secure
     if secure:
-        secured tls.Session, tlsError error = this.tlsContext.open(this.allocator, addrof connection.socket, host)
+        secured tls.Session, tlsError error = this.tlsContext.open(addrof connection.socket, host)
         if tlsError.nok():
             connection.socket.close()
             connection.host.free(this.allocator)
@@ -403,14 +407,14 @@ Client.start(request Request) !$Exchange:
     if this.active == false:
         throw errors.invalidArgument("HTTP client is closed")
     ..
-    parsed := try parseUrl(this.allocator, request.url)
-    defer parsed.free(this.allocator)
+    parsed := try parseUrl(request.url)
+    defer parsed.free()
     
     connectionIndex := try this.acquire(parsed.host, parsed.service, parsed.secure)
     onerror this.release(connectionIndex, false)
 
     transport := addrof this.connections[connectionIndex].socket
-    requestBytes := try buildRequest(this.allocator, request, addrof parsed)
+    requestBytes := try buildRequest(request, addrof parsed)
     onerror requestBytes.free(this.allocator)
 
     nativePoller := try poll.new(this.allocator, 1)
@@ -849,7 +853,8 @@ parseStatus(bytes u8*, count u64) !u16:
     ..
 ..
 
-decodeChunks(a allocator.Allocator, bytes u8*, start u64, count u64) !$str:
+decodeChunks(bytes u8*, start u64, count u64) !$str:
+    a := ctx.procAlloc
     # SAFETY: scanChunks validates framing within count; decodedBytes sizes the
     # destination exactly and the second pass copies only validated chunks.
     unsafe:
@@ -857,7 +862,7 @@ decodeChunks(a allocator.Allocator, bytes u8*, start u64, count u64) !$str:
     if scan.complete == false:
         throw errors.failure("incomplete chunked HTTP body")
     ..
-    output := try strings.alloc(a, scan.decodedBytes)
+    output := try strings.alloc(scan.decodedBytes)
     destination := strings.toPtr(output)
     position := start
     written u64 = 0
@@ -896,18 +901,18 @@ Exchange.finish() !$Response:
         throw errors.failure("HTTP response headers are incomplete")
     ..
     status := try parseStatus(this.received, headerEnd)
-    raw := try strings.copy(this.allocator, strings.fromPtrNoCopy(this.received, headerEnd))
+    raw := try strings.copy(strings.fromPtrNoCopy(this.received, headerEnd))
     onerror raw.free(this.allocator)
     contents str
     if this.chunked:
-        contents = try decodeChunks(this.allocator, this.received, headerEnd, this.receivedCount)
+        contents = try decodeChunks(this.received, headerEnd, this.receivedCount)
     else:
         bodyBytes := this.receivedCount - headerEnd
         if this.expectedTotal != 0:
             bodyBytes = this.expectedTotal - headerEnd
         ..
         bodyPtr := cast.utop(cast.ptou(this.received) + headerEnd)
-        contents = try strings.copy(this.allocator, strings.fromPtrNoCopy(bodyPtr, bodyBytes))
+        contents = try strings.copy(strings.fromPtrNoCopy(bodyPtr, bodyBytes))
     ..
     try this.poller.close()
     try this.client.release(this.connection, this.closeDelimited == false)
@@ -939,12 +944,12 @@ runSend(task SendTask*) !$Response:
 ..
 
 # Runs the polling state machine on the Async worker pool and returns an awaitable response.
-Client.sendAsync(ctx context.Ctx, request Request) !$future.Future[Response]:
+Client.sendAsync(request Request) !$future.Future[Response]:
     if this.active == false:
         throw errors.invalidArgument("HTTP client is closed")
     ..
     task := SendTask(client=this, request=request)
-    ret try future.new[Response, SendTask](ctx.alloc, ctx.exec, runSend, task)
+    ret try future.new[Response, SendTask](ctx.exec, runSend, task)
 ..
 
 destr Exchange.close() !void:

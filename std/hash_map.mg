@@ -46,7 +46,8 @@ storageSize[T](capacity u64) !u64:
     ret try checked.uAdd(try checked.uAdd(keysBytes, valuesBytes), capacity)
 ..
 
-release[T](a alc.Allocator, cleanup (alc.Allocator, $T) void, value $T) void:
+release[T](cleanup (alc.Allocator, $T) void, value $T) void:
+    a := ctx.procAlloc
     if cleanup == none:
         abandoned := array T[1]
         abandoned[0] = move value
@@ -61,7 +62,8 @@ release[T](a alc.Allocator, cleanup (alc.Allocator, $T) void, value $T) void:
 # @ownership The returned map owns its storage and every value passed to set().
 # @example
 #   users := try hash_map.new[User](a, 16, freeUser)
-pub new[T](a alc.Allocator, capacity u64, cleanup (alc.Allocator, $T) void) !$HashMap[T]:
+pub new[T](capacity u64, cleanup (alc.Allocator, $T) void) !$HashMap[T]:
+    a := ctx.procAlloc
     if capacity == 0:
         throw errors.invalidArgument("hash map capacity must be positive")
     ..
@@ -170,7 +172,7 @@ HashMap[T].set(key str, item $T) !void:
     # SAFETY: all probes are modulo capacity; state bytes describe occupancy,
     # and item is transferred only after selecting an empty or occupied slot.
     unsafe:
-    onerror release[T](this.allocator, this.cleanup, move item)
+    onerror release[T](this.cleanup, move item)
     # Keep the load factor below 75%. Besides maintaining probe performance,
     # rebuilding also discards tombstones left by delete().
     if (this.length + 1) * 4 >= this.capacity * 3:
@@ -190,7 +192,7 @@ HashMap[T].set(key str, item $T) !void:
         if states[idx] == 1 && strings.compare(keys[idx], key):
             previous $T = values[idx]
             values[idx] = memory.zeroValue[T]()
-            release[T](this.allocator, this.cleanup, move previous)
+            release[T](this.cleanup, move previous)
             values[idx] = move item
             ret
         elif states[idx] == 2 && firstDeleted == this.capacity:
@@ -199,7 +201,7 @@ HashMap[T].set(key str, item $T) !void:
             if firstDeleted != this.capacity:
                 idx = firstDeleted
             ..
-            ownedKey str = try strings.copy(this.allocator, key)
+            ownedKey str = try strings.copy(key)
             keys[idx] = move ownedKey
             values[idx] = move item
             states[idx] = 1
@@ -208,7 +210,7 @@ HashMap[T].set(key str, item $T) !void:
         ..
     ..
     if firstDeleted != this.capacity:
-        fallbackKey str = try strings.copy(this.allocator, key)
+        fallbackKey str = try strings.copy(key)
         keys[firstDeleted] = move fallbackKey
         values[firstDeleted] = move item
         states[firstDeleted] = 1
@@ -226,7 +228,7 @@ HashMap[T].set(key str, item $T) !void:
 #   try users.delete("alice")
 HashMap[T].delete(key str) !void:
     value := try this.take(key)
-    release[T](this.allocator, this.cleanup, move value)
+    release[T](this.cleanup, move value)
 ..
 
 # Removes key and transfers its value to the caller without invoking cleanup.

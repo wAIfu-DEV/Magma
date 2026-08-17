@@ -1,8 +1,9 @@
 # `std/http`
 
-Portable buffered HTTP/1.1 client for Windows and Linux. It supports `http`
-and `https`, synchronous and asynchronous requests, response-size limits, and
-client-owned keep-alive connection pooling.
+Portable buffered HTTP/1.1 client with synchronous and asynchronous requests,
+response-size limits, and client-owned keep-alive connection pooling. Plain
+`http` uses the portable socket stack; `https` has native TLS implementations
+on Windows and Linux and reports unsupported operation on the other targets.
 
 ```magma
 headers http.Header[] = slices.fromPtr(none, 0)
@@ -33,7 +34,8 @@ request before transmission. Responses are buffered up to `maxResponseBytes`.
 - `Exchange.poll(timeoutMs)` advances one readiness cycle.
 - `Exchange.finish()` returns the completed buffered `Response`.
 - `Client.send(request)` performs a synchronous exchange.
-- `Client.sendAsync(async, request)` runs an exchange on the async worker pool.
+- `Client.sendAsync(request)` runs an exchange through the allocator and
+  executor in implicit `ctx` and returns `Future[Response]`.
 - `Response.statusCode`, `Response.rawHeaders`, and `Response.body` contain the
   buffered response data.
 

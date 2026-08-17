@@ -93,6 +93,75 @@ func TestGenericDeclarationValidation(t *testing.T) {
 	}
 }
 
+func TestNoCtxFunctionAndFunctionType(t *testing.T) {
+	global, err := parseTestSource(t, `mod main
+noctx bootstrap(callback noctx (u64) void) void:
+..
+ordinary(callback (u64) void) void:
+..
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := global.FuncDefs["bootstrap"]
+	if bootstrap == nil || bootstrap.ContextABI != mt.ContextABIContextless {
+		t.Fatalf("bootstrap ABI = %#v", bootstrap)
+	}
+	callback := bootstrap.Class.ArgsNode.Args[0].TypeNode.KindNode.(*mt.NodeTypeFunc)
+	if callback.ContextABI != mt.ContextABIContextless {
+		t.Fatalf("callback ABI = %v", callback.ContextABI)
+	}
+	ordinary := global.FuncDefs["ordinary"]
+	if ordinary == nil || ordinary.ContextABI != mt.ContextABIContextful {
+		t.Fatalf("ordinary ABI = %#v", ordinary)
+	}
+	ordinaryCallback := ordinary.Class.ArgsNode.Args[0].TypeNode.KindNode.(*mt.NodeTypeFunc)
+	if ordinaryCallback.ContextABI != mt.ContextABIContextful {
+		t.Fatalf("ordinary callback ABI = %v", ordinaryCallback.ContextABI)
+	}
+}
+
+func TestNoCtxRequiresFunctionType(t *testing.T) {
+	_, err := parseTestSource(t, "mod main\nvalue noctx u64\n")
+	if err == nil || !strings.Contains(err.Error(), "noctx' requires a function type") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestNoCtxRejectsNonFunctionDeclarations(t *testing.T) {
+	tests := map[string]string{
+		"struct":            "noctx Value(field u64)\n",
+		"global":            "noctx value u64\n",
+		"function variable": "noctx callback (u64) u64\n",
+		"inferred global":   "noctx value := 1\n",
+		"alias":             "noctx alias Value = u64\n",
+		"constant":          "noctx const value u64 = 1\n",
+		"prototype":         "noctx proto Value(run() void)\n",
+	}
+	for name, declaration := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseTestSource(t, "mod main\n"+declaration)
+			if err == nil || !strings.Contains(err.Error(), "noctx modifier cannot be applied") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestNoCtxPrototypeMethodCarriesABI(t *testing.T) {
+	global, err := parseTestSource(t, "mod main\nproto Bootstrap(noctx start() void)\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proto := global.ProtoDefs["Bootstrap"]
+	if proto == nil || len(proto.Methods) != 1 || proto.Methods[0].ContextABI != mt.ContextABIContextless {
+		t.Fatalf("prototype = %#v", proto)
+	}
+	if proto.Methods[0].FnDef == nil || proto.Methods[0].FnDef.ContextABI != mt.ContextABIContextless {
+		t.Fatalf("wrapper = %#v", proto.Methods[0].FnDef)
+	}
+}
+
 func TestGenericMemberMayDeclareDistinctParameters(t *testing.T) {
 	_, err := parseTestSource(t, `mod main
 Box[T](value T)

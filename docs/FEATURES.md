@@ -332,14 +332,14 @@ pub utf8To16(a alc.Allocator, s str) !$u16[]:
 Prefix `$` marks ownership transfer without changing runtime layout. On a return
 type it gives ownership to the caller; on a parameter it consumes the argument.
 The unmarked form borrows. For structs with a `destr` member, and for primitives
-with a registered destructor such as `str`, a warning-only flow checker tracks
-these transfers through direct locals, assignments, calls,
-returns, struct-constructor fields, control flow, and explicit destructor calls.
-It catches common leaks, double consumption, consuming borrows, use after
-transfer, and discarded owned results. A struct constructor consumes tracked
-locals placed in its fields, but the checker does not subsequently model the
-aggregate's contents. It also does not model aliases, pointers, field or indexed
-state, or partial moves, so it is not a memory-safety guarantee. Detailed rules
+with a registered destructor such as `str`, the ownership-safety checker tracks
+transfers through locals, statically identifiable aggregate fields,
+assignments, calls, returns, constructors, control flow, and explicit
+destructor calls. It reports leaks and rejects double consumption, consuming
+borrows, use after transfer, invalid partial moves, and discarded
+completion-bearing results. The same pass tracks supported pointer provenance,
+local escapes, and subscript range proofs. Dynamic indexed ownership and opaque
+native behavior remain outside its proof model. Detailed rules
 are in [OWNERSHIP.md](OWNERSHIP.md).
 
 ### 4.4 Function types and interface-like structs
@@ -353,7 +353,7 @@ by a return type:
 (ptr, u8*) void
 ```
 
-They appear as struct fields:
+They may appear as ordinary struct fields:
 
 ```magma
 VTable(
@@ -362,15 +362,17 @@ VTable(
     free  (ptr, u8*) void,
 )
 
-Allocator(impl ptr, vtable VTable*)
+CallbackSink(impl ptr, vtable VTable*)
 ```
 
 Together, an opaque implementation pointer and function-pointer fields form a
-manually built interface or vtable. `Allocator`, `Duplex`, and `ConstWriter`
-point to shared immutable vtables; `Reader` and `Writer` store their callback
-directly. Calls through these function-pointer fields provide dynamic dispatch
-without language-level interfaces. `Executor` applies the same pattern to
-type-erased task scheduling.
+manually built interface or vtable. The language also provides `proto` and
+`impl`, which generate the two-word implementation-pointer/vtable representation
+and permit one implementation to satisfy multiple prototypes. `Allocator`,
+`Reader`, `Writer`, `Duplex`, `Locker`, and `Executor` use prototypes;
+`ConstWriter` is a concrete writer implementation with a directly stored
+callback. A stable implementation value creates a borrowed interface view with
+`proto()`.
 
 ### 4.5 Generics
 
@@ -439,7 +441,7 @@ mix shifts, masks, and comparisons.
 `sizeof Type` yields the byte size of a type and is used in generic allocation:
 
 ```magma
-ret try this.vtable.alloc(this.impl, count * sizeof T)
+ret try this.alloc(count * sizeof T)
 ```
 
 There is no general cast operator. Numeric conversions and pointer/integer
@@ -584,11 +586,11 @@ error followed by its propagation sites, newest first:
 
 ```text
 Uncaught Error: 1 'fake alloc'
-  at main (async_test.mg:21:14)
-  at Async.read (async.mg:36:9)
-  at new[str, async.ReaderReadTask] (future.mg:92:9)
-  at Allocator.allocT[future.Work[str, async.ReaderReadTask]] (allocator.mg:37:9)
-  at fakeAlloc (fake_alloc.mg:9:5)
+  at main (load.mg:20:21)
+  at Reader.readAsync (reader.mg:80:9)
+  at new[str, reader.ReaderReadTask] (future.mg:128:35)
+  at Allocator.allocT[future.Work[str, reader.ReaderReadTask]] (allocator.mg:25:13)
+  at fakeAlloc (fake_alloc.mg:11:5)
 ```
 
 Trace names use source-level names rather than LLVM linker symbols. Generic
@@ -702,19 +704,19 @@ occupied pool can deadlock through worker starvation.
 
 ### 8.3 Async execution context
 
-`async.Async` bundles a borrowed pool and allocator. Its `read` operation
-packages `Reader.read` as a future without making `std:reader` depend on the
-thread-pool stack:
+Implicit `context.Ctx` bundles borrowed allocators and an executor. `Reader.readAsync`
+uses that context to package `Reader.read` as a future:
 
 ```magma
 pool := try thread_pool.newDefault(a)
 defer pool.close()
-as := async.new(pool, a)
+ctx = context.new(a, a, pool.executor())
 
 f := try file.open(a, "main.go", file.mode().read())
 defer f.close()
 
-pending := try as.read(f.reader(), f.count())
+source := try f.reader()
+pending := try source.readAsync(try f.count())
 contents := try pending.await()
 ```
 
@@ -851,10 +853,11 @@ Pointer arithmetic is normally performed by converting pointers to
 next ptr = cast.utop(cast.ptou(base) + offset)
 ```
 
-There are no bounds checks, null checks, general lifetime or alias checks,
-data-race rules, or protection against writing string literal storage. The
-warning-only ownership analysis is local and does not cover all values. Fixed
-arrays are zeroed, but pointer validity is not checked.
+The compiler proves supported ordinary slice bounds, local pointer lifetimes,
+and ownership places. It has no null checks, data-race rules, general native
+retention model, or protection against writing string-literal storage. Unknown
+pointer operations require lexical `unsafe`, which makes their validity the
+programmer's responsibility. Fixed arrays are zeroed.
 
 ## 10. Standard-library features
 
@@ -885,10 +888,11 @@ consistency, integer edge cases, and Unicode conversion.
 
 The current implementation has the following restrictions:
 
-1. **No automatic memory safety.** `$` drives warning-only checking for direct
-   destructible locals and transfers into struct constructors; pointers,
-   aliases, field and indexed state, aggregate contents, and partial moves
-   remain unchecked.
+1. **Scoped rather than universal memory safety.** `$` drives mandatory
+   ownership checking, including projected aggregate fields. The compiler also
+   proves supported bounds and local pointer lifetimes. Dynamic indexed
+   ownership, opaque native retention, nullability, and operations admitted by
+   `unsafe` remain the programmer's responsibility.
 2. **Permissive compatibility rules.** Initializers, assignments, arguments,
    returns, and operator families are checked, but numeric types are broadly
    compatible and pointer compatibility is permissive. Some

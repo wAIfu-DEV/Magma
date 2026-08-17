@@ -30,9 +30,10 @@ pub Builder(
 # @complexity O(1), excluding allocator cost
 # @ownership Release with Builder.free.
 # @example
-#   output := try builder.new(a)
-pub new(a alc.Allocator) !$Builder:
-    ret try newWithCapacity(a, 8)
+#   output := try builder.new()
+pub new() !$Builder:
+    a := ctx.procAlloc
+    ret try newWithCapacity(8)
 ..
 
 # Creates an empty builder using a for segment storage and copied strings.
@@ -43,8 +44,9 @@ pub new(a alc.Allocator) !$Builder:
 # @complexity O(1), excluding allocator cost
 # @ownership Release with Builder.free.
 # @example
-#   output := try builder.newWithCapacity(a, 8)
-pub newWithCapacity(a alc.Allocator, chunkCapacity u64) !$Builder:
+#   output := try builder.newWithCapacity(8)
+pub newWithCapacity(chunkCapacity u64) !$Builder:
+    a := ctx.procAlloc
     ret Builder(
         allocator=a,
         segments=try a.allocT[Segment](chunkCapacity),
@@ -142,7 +144,7 @@ Builder.appendCopy(s str) !void:
     # Reserve the segment first so allocation of the owned bytes is the final
     # fallible operation before committing the segment.
     try this.ensureCapacity()
-    owned str = try strings.copy(this.allocator, s)
+    owned str = try strings.copy(s)
     # SAFETY: ensureCapacity reserves slot count and FLAG_OWNED records its
     # transferred string for exactly-once cleanup by releaseCopies.
     unsafe:
@@ -162,9 +164,9 @@ Builder.appendCopy(s str) !void:
 #   text := try output.build()
 Builder.build() !$str:
     if this.totalBytes == 0:
-        ret try strings.alloc(this.allocator, 0)
+        ret try strings.alloc(0)
     ..
-    result str = try strings.alloc(this.allocator, this.totalBytes)
+    result str = try strings.alloc(this.totalBytes)
     out u8* = strings.toPtr(result)
     offset u64 = 0
     i u64 = 0

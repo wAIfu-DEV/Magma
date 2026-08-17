@@ -20,13 +20,13 @@ pub main() !void:
     if count != 2:
         throw errors.failure("utf8 count changed")
     ..
-    wide := try utf8.utf8To16(a, "hé")
-    defer slices.free(a, wide)
+    wide := try utf8.utf8To16("hé")
+    defer slices.free(wide)
     if slices.count(wide) != 2:
         throw errors.failure("utf8 conversion changed")
     ..
-    wideNt := try utf8.utf8To16NT(a, "A")
-    defer slices.free(a, wideNt)
+    wideNt := try utf8.utf8To16NT("A")
+    defer slices.free(wideNt)
     wideNtPtr u16* = slices.toPtr(wideNt)
     # SAFETY: utf8To16NT allocates one trailing code unit beyond the returned
     # logical count for the null terminator.
@@ -38,7 +38,7 @@ pub main() !void:
     if try utf8.utf16to8size(wide) != "hé".countBytes():
         throw errors.failure("UTF-16 size calculation changed")
     ..
-    roundTrip := try utf8.utf16to8(a, wide)
+    roundTrip := try utf8.utf16to8(wide)
     defer roundTrip.free(a)
     roundTripPtr u8* = strings.toPtr(roundTrip)
     # SAFETY: owned strings reserve a terminator immediately after countBytes.

@@ -16,22 +16,23 @@ Defines the allocator interface used by allocating standard-library APIs.
 ### `Allocator`
 
 ```magma
-Vtable(
-    alloc (ptr, u64) !u8*,
-    realloc (ptr, u8*, u64) !u8*,
-    free (ptr, u8*) void,
-)
-
-Allocator(
-    impl ptr,
-    vtable Vtable*,
+pub proto Allocator(
+    alloc(byteCount u64) !$u8*
+    realloc(block u8*, byteCount u64) !$u8*
+    free(block u8*) void
 )
 ```
 
-`impl` is adapter-specific state. `vtable` points to a shared immutable table
-whose three function pointers allocate, resize, and free memory. The allocator
-handle is 16 bytes on 64-bit targets. Blocks must be released or resized with
-the same allocator that created them.
+Concrete allocators use `impl Allocator`; calling `proto()` on stable named
+implementation storage creates the borrowed two-word interface view. Blocks
+must be released or resized with the same allocator that created them.
+
+The compiler associates allocations with the concrete implementation owner,
+not the interface variable. Moving the implementation preserves that identity;
+copying or losing an interface value does not extend it. Storage from local
+scratch, arena, or custom allocator implementations therefore cannot escape
+their owners. The same rule applies when an allocator flows through implicit
+`ctx.procAlloc` or `ctx.tempAlloc`.
 
 ## Methods
 
@@ -40,5 +41,8 @@ the same allocator that created them.
 - `Allocator.realloc(block u8*, byteCount u64) !$u8*` resizes an allocation.
 - `Allocator.reallocT[T](block T*, count u64) !$T*` resizes a typed allocation; it fails if the byte-size calculation overflows.
 - `Allocator.free(block u8*) void` releases a block made by this allocator.
+- `null() Allocator` returns a stable placeholder whose allocation and resize
+  operations fail. Containers use it when caller-owned backing storage needs no
+  allocator cleanup.
 
 `$` marks returned allocations as owned. Allocation methods can fail with the error supplied by the underlying adapter.

@@ -6,6 +6,13 @@ import (
 	"slices"
 )
 
+func callReturnType(call *t.NodeExprCall) *t.NodeType {
+	if call.ThrowingType != nil {
+		return call.ThrowingType
+	}
+	return call.InfType
+}
+
 func irFuncPtrType(ctx *IrCtx, fnType *t.NodeTypeFunc) error {
 	e := irThrowingType(ctx, fnType.RetType)
 	if e != nil {
@@ -13,16 +20,22 @@ func irFuncPtrType(ctx *IrCtx, fnType *t.NodeTypeFunc) error {
 	}
 
 	irWrite(ctx, " (")
+	wrote := false
+	if fnType.ContextABI == t.ContextABIContextful {
+		irWrite(ctx, "ptr")
+		wrote = true
+	}
 
-	for i, n := range fnType.Args {
+	for _, n := range fnType.Args {
+		if wrote {
+			irWrite(ctx, ", ")
+		}
 		e := irType(ctx, n)
 		if e != nil {
 			return e
 		}
 
-		if i != len(fnType.Args)-1 {
-			irWrite(ctx, ", ")
-		}
+		wrote = true
 	}
 
 	irWrite(ctx, ")*")
@@ -68,9 +81,10 @@ func irExprCallFuncPtr(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (SsaNa
 
 	ssa := irSsaLocal(ctx)
 
-	isVoidRet := isVoidType(fnCall.InfType)
+	returnType := callReturnType(fnCall)
+	isVoidRet := isVoidType(returnType)
 
-	if !topLevel && (!isVoidRet || fnCall.InfType.Throws) {
+	if !topLevel && (!isVoidRet || returnType.Throws) {
 		irWritef(ctx, "  %s = ", ssa.Repr)
 	} else {
 		irWrite(ctx, "  ")
@@ -78,15 +92,25 @@ func irExprCallFuncPtr(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (SsaNa
 
 	irWritef(ctx, "call ")
 
-	e = irThrowingType(ctx, fnCall.InfType)
+	e = irThrowingType(ctx, returnType)
 	if e != nil {
 		return ssaName(""), e
 	}
 
 	irWritef(ctx, " %s(", bitCastPtr.Repr)
+	wrote := false
+	if fnType.ContextABI == t.ContextABIContextful {
+		if ctx.ContextPtr.Repr == "" {
+			return SsaName{}, fmt.Errorf("contextful indirect call has no initialized implicit context")
+		}
+		irWritef(ctx, "ptr %s", ctx.ContextPtr.Repr)
+		wrote = true
+	}
 
-	bound := len(argsSsa)
 	for i, ssa := range argsSsa {
+		if wrote {
+			irWrite(ctx, ", ")
+		}
 		e = irType(ctx, fnType.Args[i])
 		if e != nil {
 			return ssaName(""), e
@@ -94,14 +118,12 @@ func irExprCallFuncPtr(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (SsaNa
 		irWrite(ctx, " ")
 		irPossibleLitSsa(ctx, ssa)
 
-		if i < bound-1 {
-			irWrite(ctx, ", ")
-		}
+		wrote = true
 	}
 
 	irWrite(ctx, ")\n")
 
-	if topLevel || (isVoidRet && !fnCall.InfType.Throws) {
+	if topLevel || (isVoidRet && !returnType.Throws) {
 		// TODO: Check and inforce that void ret calls HAVE to be statements
 		// and cannot be in expressions
 		return ssaName(""), nil
@@ -146,9 +168,10 @@ func irExprCallFuncNonPtr(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (Ss
 	}
 
 	ssa := irSsaLocal(ctx)
-	isVoidRet := isVoidType(fnCall.InfType)
+	returnType := callReturnType(fnCall)
+	isVoidRet := isVoidType(returnType)
 
-	if !topLevel && (!isVoidRet || fnCall.InfType.Throws) {
+	if !topLevel && (!isVoidRet || returnType.Throws) {
 		irWritef(ctx, "  %s = ", ssa.Repr)
 	} else {
 		irWrite(ctx, "  ")
@@ -156,7 +179,7 @@ func irExprCallFuncNonPtr(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (Ss
 
 	irWritef(ctx, "call ")
 
-	e := irThrowingType(ctx, fnCall.InfType)
+	e := irThrowingType(ctx, returnType)
 	if e != nil {
 		return ssaName(""), e
 	}
@@ -182,9 +205,19 @@ func irExprCallFuncNonPtr(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (Ss
 		}*/
 
 	irWrite(ctx, "(")
+	wrote := false
+	if fnCall.AssociatedFnDef.ContextABI == t.ContextABIContextful {
+		if ctx.ContextPtr.Repr == "" {
+			return SsaName{}, fmt.Errorf("contextful call to %q has no initialized implicit context", fnCall.AssociatedFnDef.AbsName)
+		}
+		irWritef(ctx, "ptr %s", ctx.ContextPtr.Repr)
+		wrote = true
+	}
 
-	bound := len(argsSsa)
 	for i, ssa := range argsSsa {
+		if wrote {
+			irWrite(ctx, ", ")
+		}
 		e = irType(ctx, fnCall.AssociatedFnDef.Class.ArgsNode.Args[i].TypeNode)
 		if e != nil {
 			return ssaName(""), e
@@ -192,14 +225,12 @@ func irExprCallFuncNonPtr(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (Ss
 		irWrite(ctx, " ")
 		irPossibleLitSsa(ctx, ssa)
 
-		if i < bound-1 {
-			irWrite(ctx, ", ")
-		}
+		wrote = true
 	}
 
 	irWrite(ctx, ")\n")
 
-	if topLevel || (isVoidRet && !fnCall.InfType.Throws) {
+	if topLevel || (isVoidRet && !returnType.Throws) {
 		// TODO: Check and inforce that void ret calls HAVE to be statements
 		// and cannot be in expressions
 		return ssaName(""), nil
@@ -316,9 +347,10 @@ func irExprCallFuncMember(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (Ss
 	argsSsa = slices.Insert(argsSsa, 0, ownerSsa)
 
 	ssa := irSsaLocal(ctx)
-	isVoidRet := isVoidType(fnCall.InfType)
+	returnType := callReturnType(fnCall)
+	isVoidRet := isVoidType(returnType)
 
-	if !topLevel && (!isVoidRet || fnCall.InfType.Throws) {
+	if !topLevel && (!isVoidRet || returnType.Throws) {
 		irWritef(ctx, "  %s = ", ssa.Repr)
 	} else {
 		irWrite(ctx, "  ")
@@ -326,7 +358,7 @@ func irExprCallFuncMember(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (Ss
 
 	irWrite(ctx, "call ")
 
-	e = irThrowingType(ctx, fnCall.InfType)
+	e = irThrowingType(ctx, returnType)
 	if e != nil {
 		return ssaName(""), e
 	}
@@ -347,9 +379,19 @@ func irExprCallFuncMember(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (Ss
 		}*/
 
 	irWrite(ctx, "(")
+	wrote := false
+	if fnCall.AssociatedFnDef.ContextABI == t.ContextABIContextful {
+		if ctx.ContextPtr.Repr == "" {
+			return SsaName{}, fmt.Errorf("contextful member call to %q has no initialized implicit context", fnCall.AssociatedFnDef.AbsName)
+		}
+		irWritef(ctx, "ptr %s", ctx.ContextPtr.Repr)
+		wrote = true
+	}
 
-	bound := len(argsSsa)
 	for i, ssa := range argsSsa {
+		if wrote {
+			irWrite(ctx, ", ")
+		}
 		e = irType(ctx, fnCall.AssociatedFnDef.Class.ArgsNode.Args[i].TypeNode)
 		if e != nil {
 			return ssaName(""), e
@@ -357,14 +399,12 @@ func irExprCallFuncMember(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (Ss
 		irWrite(ctx, " ")
 		irPossibleLitSsa(ctx, ssa)
 
-		if i < bound-1 {
-			irWrite(ctx, ", ")
-		}
+		wrote = true
 	}
 
 	irWrite(ctx, ")\n")
 
-	if topLevel || (isVoidRet && !fnCall.InfType.Throws) {
+	if topLevel || (isVoidRet && !returnType.Throws) {
 		// TODO: Check and enforce that void ret calls HAVE to be statements
 		// and cannot be in expressions
 		return ssaName(""), nil
@@ -398,11 +438,19 @@ func irExprFuncCall(ctx *IrCtx, fnCall *t.NodeExprCall, keepError bool, topLevel
 		return SsaName{}, nil
 	}
 
-	if fnCall.InfType.Throws && !keepError && !isVoidType(fnCall.InfType) {
+	if fnCall.ErrorMode != 0 && ctx.ErrorMode != 0 {
+		if ctx.ErrorMode == 1 {
+			return irTryCall(ctx, ssa, fnCall, fnCall.Tk.Pos)
+		}
+		return irCaptureCall(ctx, ssa, fnCall)
+	}
+
+	returnType := callReturnType(fnCall)
+	if returnType.Throws && !keepError && !isVoidType(returnType) {
 		extractSsa := irSsaLocal(ctx)
 		irWritef(ctx, "  %s = extractvalue ", extractSsa.Repr)
 
-		e = irThrowingType(ctx, fnCall.InfType)
+		e = irThrowingType(ctx, returnType)
 		if e != nil {
 			return SsaName{}, e
 		}

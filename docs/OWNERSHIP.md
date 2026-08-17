@@ -28,24 +28,29 @@ resource $Resource = openResource()
 consume(move resource)
 ```
 
-Assignments between direct locals transfer tracked ownership. Assigning an
-owned value into a field or indexed location is treated as an ownership escape:
-the containing data structure becomes responsible for it, but its contents are
-not tracked by this pass.
+Assignments between ownership places transfer tracked ownership. Direct locals
+and statically identifiable struct fields are tracked independently. Moving a
+field marks that projected place absent until it is replaced; direct ownership
+moves through a dynamic index or pointer dereference are rejected in favor of a
+checked container operation.
 
-A struct constructor is also an ownership boundary. Direct owned locals used as
-constructor fields are consumed, but individual fields in the resulting
-aggregate are not subsequently tracked:
+Moving a fresh owner into mutable module storage escapes the per-function
+ownership flow because globals outlive the call. The checker does not prove
+eventual cleanup of global owners or diagnose replacement of an owner retained
+by an earlier call.
+
+A struct constructor consumes owned values placed in ownership-bearing fields.
+The resulting aggregate's statically identifiable fields remain tracked:
 
 ```magma
 resource := try open()
-holder := Holder(resource=resource) # resource is consumed
+holder := Holder(resource=move resource) # resource is consumed
 ```
 
-Field and indexed reads are treated as borrows because partial moves are not
-modeled. An explicitly owned local can claim one (`item $T = values[i]`), but
-the source aggregate is not updated and the checker does not verify that the
-claimed value was owned.
+Field reads borrow by default. An ownership transfer from a field requires
+`move`, updates that field's tracked state, and is allowed only when the root is
+owned. Indexed reads borrow; direct indexed ownership transfers are rejected
+because a dynamic element is not a stable tracked place.
 
 ## Destructors
 
@@ -79,8 +84,9 @@ consume the old owner later.
 
 ## Checker diagnostics
 
-The checker runs after link and type checking and emits non-fatal warnings. It
-reports common cases including:
+The checker runs after link, type checking, and lowering validation. Definite
+safety violations are compilation errors by default; cleanup and leak findings
+are warnings. It reports common cases including:
 
 - an owned destructible value not consumed on every scope or function exit;
 - consuming a borrowed value or consuming an owner more than once;
@@ -111,6 +117,29 @@ A live pointer to `state.counter` prevents mutation, movement, or destruction of
 that field, but does not freeze `state.status`. After the pointer's final use,
 the source can be changed normally. Opaque pointer provenance is retained for
 the lexical-unsafe stage rather than changing pointer layout or syntax.
+
+## Allocator implementation regions
+
+Allocator results retain the identity and lifetime of the concrete
+implementation behind the `Allocator` interface. Calling `proto()` on a global
+implementation produces process-lifetime storage; calling it on a local,
+field, or owned implementation bounds allocations by that owner's lifetime.
+Copying or dropping the two-word interface does not change this provenance.
+
+The checker propagates allocator regions through helpers, prototype dispatch,
+branches, aggregates, context copies, and completion-bearing handles. It
+rejects returning local-arena storage, storing it in longer-lived owners,
+destroying an allocator implementation while derived storage remains usable,
+and obvious `free`/`realloc` calls through a different allocator. Competing
+branch origins use the shortest possible lifetime. Unsafe casts may erase
+unknown provenance only inside `unsafe:`; known lifetime violations remain
+errors.
+
+`ctx.procAlloc` and `ctx.tempAlloc` use their actual implementation provenance;
+the field names do not imply process or temporary lifetime. In version 1,
+`Scratch.reset()` and `Arena.reset()` are not modeled as allocation epochs.
+Reset still invalidates outstanding allocations at runtime, outside the
+checker guarantee, so callers must ensure no derived value is used afterward.
 
 ## Completion-bearing handles
 

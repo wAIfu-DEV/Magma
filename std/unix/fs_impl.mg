@@ -77,7 +77,8 @@ advance(directory Dir*) void:
     ..
 ..
 
-pub openDir(a allocator.Allocator, path str) !$Dir:
+pub openDir(path str) !$Dir:
+    a := ctx.procAlloc
     handle := ext_opendir(strings.toCstrNoCopy(path))
     if handle == none:
         throw errors.failure("opendir failed")
@@ -101,7 +102,7 @@ pub Dir.next() !$Entry:
     raw u8* = this.nextEntry
     name u8* = cast.utop(cast.ptou(raw) + 19)
     this.clearCurrent()
-    this.currentName = try strings.copy(this.allocator, strings.fromCstrNoCopy(name))
+    this.currentName = try strings.copy(strings.fromCstrNoCopy(name))
     this.hasCurrent = true
     kind u8 = 4
     if raw[18] == 8:
@@ -127,7 +128,8 @@ destr Dir.close() !void:
     ..
 ..
 
-pub metadata(a allocator.Allocator, path str, followLinks bool) !NativeMetadata:
+pub metadata(path str, followLinks bool) !NativeMetadata:
+    a := ctx.tempAlloc
     # SAFETY: the platform stat calls initialize the 256-byte buffer; offsets
     # 24, 48, and 88 are the audited target ABI fields used below.
     unsafe:
@@ -171,7 +173,8 @@ pub metadata(a allocator.Allocator, path str, followLinks bool) !NativeMetadata:
     ..
 ..
 
-pub setPermissions(a allocator.Allocator, path str, permissions u32) !void:
+pub setPermissions(path str, permissions u32) !void:
+    a := ctx.tempAlloc
     mode u32 = 0
     if (permissions & 1) != 0:
         mode = mode | 0x124
@@ -187,29 +190,34 @@ pub setPermissions(a allocator.Allocator, path str, permissions u32) !void:
     ..
 ..
 
-pub makeDir(a allocator.Allocator, path str) !void:
+pub makeDir(path str) !void:
+    a := ctx.tempAlloc
     if ext_mkdir(strings.toCstrNoCopy(path), 0x1FF) != 0:
         throw errors.failure("mkdir failed")
     ..
 ..
 
-pub removeDir(a allocator.Allocator, path str) !void:
+pub removeDir(path str) !void:
+    a := ctx.tempAlloc
     if ext_rmdir(strings.toCstrNoCopy(path)) != 0:
         throw errors.failure("rmdir failed")
     ..
 ..
 
-pub rename(a allocator.Allocator, source str, destination str) !void:
+pub rename(source str, destination str) !void:
+    a := ctx.tempAlloc
     if ext_rename(strings.toCstrNoCopy(source), strings.toCstrNoCopy(destination)) != 0:
         throw errors.failure("rename failed")
     ..
 ..
 
-pub replace(a allocator.Allocator, source str, destination str) !void:
-    try rename(a, source, destination)
+pub replace(source str, destination str) !void:
+    a := ctx.tempAlloc
+    try rename(source, destination)
 ..
 
-pub copyFile(a allocator.Allocator, source str, destination str) !void:
+pub copyFile(source str, destination str) !void:
+    a := ctx.tempAlloc
     input := ext_open(strings.toCstrNoCopy(source), 0, 0)
     if input < 0:
         throw errors.failure("open source failed")
@@ -247,46 +255,52 @@ pub copyFile(a allocator.Allocator, source str, destination str) !void:
     ..
 ..
 
-pub currentDir(a allocator.Allocator) !$str:
-    buffer := try a.alloc(4096)
-    defer a.free(buffer)
+pub currentDir() !$str:
+    temporary := ctx.tempAlloc
+    buffer := try temporary.alloc(4096)
+    defer temporary.free(buffer)
     if ext_getcwd(buffer, 4096) == none:
         throw errors.failure("getcwd failed")
     ..
-    ret try strings.copy(a, strings.fromCstrNoCopy(buffer))
+    ret try strings.copy(strings.fromCstrNoCopy(buffer))
 ..
 
-pub setCurrentDir(a allocator.Allocator, path str) !void:
+pub setCurrentDir(path str) !void:
+    a := ctx.tempAlloc
     if ext_chdir(strings.toCstrNoCopy(path)) != 0:
         throw errors.failure("chdir failed")
     ..
 ..
 
-pub temporaryDir(a allocator.Allocator) !$str:
+pub temporaryDir() !$str:
+    a := ctx.procAlloc
     value := ext_getenv(strings.toCstrNoCopy("TMPDIR"))
     if value == none:
-        ret try strings.copy(a, "/tmp")
+        ret try strings.copy("/tmp")
     ..
-    ret try strings.copy(a, strings.fromCstrNoCopy(value))
+    ret try strings.copy(strings.fromCstrNoCopy(value))
 ..
 
-pub canonicalize(a allocator.Allocator, path str) !$str:
-    buffer := try a.alloc(4096)
-    defer a.free(buffer)
+pub canonicalize(path str) !$str:
+    temporary := ctx.tempAlloc
+    buffer := try temporary.alloc(4096)
+    defer temporary.free(buffer)
     if ext_realpath(strings.toCstrNoCopy(path), buffer) == none:
         throw errors.failure("realpath failed")
     ..
-    ret try strings.copy(a, strings.fromCstrNoCopy(buffer))
+    ret try strings.copy(strings.fromCstrNoCopy(buffer))
 ..
 
-pub removeFile(a allocator.Allocator, path str) !void:
+pub removeFile(path str) !void:
+    a := ctx.tempAlloc
     if ext_unlink(strings.toCstrNoCopy(path)) != 0:
         throw errors.failure("unlink failed")
     ..
 ..
 
-join(a allocator.Allocator, left str, right str) !$str:
-    out := try builder.new(a)
+join(left str, right str) !$str:
+    a := ctx.procAlloc
+    out := try builder.new()
     defer out.free()
     try out.appendBorrowed(left)
     if left.countBytes() > 0 && strings.byteAt(left, left.countBytes() - 1) != 47:
@@ -296,7 +310,8 @@ join(a allocator.Allocator, left str, right str) !$str:
     ret try out.build()
 ..
 
-walkInner(a allocator.Allocator, root str, visit (str, bool) !void) !void:
+walkInner(root str, visit (str, bool) !void) !void:
+    a := ctx.tempAlloc
     # SAFETY: each readdir result is live until the next call and follows the
     # same audited dirent layout used by Dir.next.
     unsafe:
@@ -312,11 +327,11 @@ walkInner(a allocator.Allocator, root str, visit (str, bool) !void) !void:
         name u8* = cast.utop(cast.ptou(raw) + 19)
         borrowed := strings.fromCstrNoCopy(name)
         if strings.compare(borrowed, ".") == false && strings.compare(borrowed, "..") == false:
-            child := try join(a, root, borrowed)
+            child := try join(root, borrowed)
             isDirectory bool = raw[18] == 4
             try visit(child, isDirectory)
             if isDirectory:
-                try walkInner(a, child, visit)
+                try walkInner(child, visit)
             ..
             child.free(a)
         ..
@@ -325,6 +340,7 @@ walkInner(a allocator.Allocator, root str, visit (str, bool) !void) !void:
     ..
 ..
 
-pub walk(a allocator.Allocator, root str, visit (str, bool) !void) !void:
-    try walkInner(a, root, visit)
+pub walk(root str, visit (str, bool) !void) !void:
+    a := ctx.tempAlloc
+    try walkInner(root, visit)
 ..

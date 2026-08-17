@@ -19,12 +19,54 @@ func sameType(a *t.NodeType, b *t.NodeType) bool {
 func compatibleInitializer(expected *t.NodeType, expr t.NodeExpr) bool {
 	actual := expr.GetInferredType()
 	if compatibleTypes(expected, actual) {
+		markContextAdapter(expected, actual, expr)
 		return true
 	}
 	if lit, ok := expr.(*t.NodeExprLit); ok && lit.LitType == t.TokLitNum && isNumberType(expected) {
 		return true
 	}
 	return false
+}
+
+func markContextAdapter(expected, actual *t.NodeType, expr t.NodeExpr) {
+	expectedFn, expectedOK := expected.KindNode.(*t.NodeTypeFunc)
+	actualFn, actualOK := actual.KindNode.(*t.NodeTypeFunc)
+	if !expectedOK || !actualOK || expectedFn.ContextABI != t.ContextABIContextful || actualFn.ContextABI != t.ContextABIContextless {
+		return
+	}
+	if moved, ok := expr.(*t.NodeExprMove); ok {
+		expr = moved.Expr
+	}
+	if name, ok := expr.(*t.NodeExprName); ok {
+		name.ContextAdapter = true
+	}
+}
+
+func compatibleNativeCallback(expected, actual *t.NodeType, expr t.NodeExpr) bool {
+	expectedFn, expectedOK := expected.KindNode.(*t.NodeTypeFunc)
+	actualFn, actualOK := actual.KindNode.(*t.NodeTypeFunc)
+	if !expectedOK || !actualOK || expectedFn.ContextABI != t.ContextABIContextless || actualFn.ContextABI != t.ContextABIContextful || expected.Throws != actual.Throws || len(expectedFn.Args) != len(actualFn.Args) {
+		return false
+	}
+	for i := range expectedFn.Args {
+		if !compatibleTypes(expectedFn.Args[i], actualFn.Args[i]) {
+			return false
+		}
+	}
+	if !compatibleTypes(expectedFn.RetType, actualFn.RetType) {
+		return false
+	}
+	name, ok := expr.(*t.NodeExprName)
+	if !ok {
+		return false
+	}
+	function, ok := name.AssociatedNode.(*t.NodeFuncDef)
+	if !ok || function.IsExternal {
+		return false
+	}
+	name.NativeContextThunk = true
+	function.NeedsNativeContextThunk = true
+	return true
 }
 
 func constArrayIndex(expr t.NodeExpr) (uint64, bool) {
@@ -70,7 +112,7 @@ func compatibleTypes(expected *t.NodeType, actual *t.NodeType) bool {
 		if (expectedIsFunc && isPointerType(actual)) || (actualIsFunc && isPointerType(expected)) {
 			return true
 		}
-		if !expectedIsFunc || !actualIsFunc || len(expectedFunc.Args) != len(actualFunc.Args) {
+		if !expectedIsFunc || !actualIsFunc || (expectedFunc.ContextABI != actualFunc.ContextABI && !(expectedFunc.ContextABI == t.ContextABIContextful && actualFunc.ContextABI == t.ContextABIContextless)) || len(expectedFunc.Args) != len(actualFunc.Args) {
 			return false
 		}
 		for i := range expectedFunc.Args {
@@ -133,7 +175,7 @@ func sameTypeKind(a t.NodeTypeKind, b t.NodeTypeKind) bool {
 		if !ok {
 			return false
 		}
-		if len(ta.Args) != len(tb.Args) {
+		if ta.ContextABI != tb.ContextABI || len(ta.Args) != len(tb.Args) {
 			return false
 		}
 		for i := range ta.Args {

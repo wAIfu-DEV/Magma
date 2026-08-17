@@ -57,6 +57,6 @@ NullAllocator.free(block u8*) void:
 
 gl_nullAllocator := NullAllocator(value=0)
 
-pub null() Allocator:
+pub noctx null() Allocator:
     ret gl_nullAllocator.proto()
 ..

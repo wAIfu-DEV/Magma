@@ -33,12 +33,12 @@ pub Writer impl writer.Writer(
 # @ownership The returned writer owns its buffer and must be closed.
 # @example
 #   bufferedWriter := try buffered.writerBuffered(a, output)
-pub writerBuffered(a alc.Allocator, w writer.Writer) !$Writer:
+pub writerBuffered(w writer.Writer) !$Writer:
     ret Writer(
         underlying=w,
-        buffer=try a.alloc(DEFAULT_BUFFER_SIZE),
+        buffer=try ctx.procAlloc.alloc(DEFAULT_BUFFER_SIZE),
         position=0,
-        allocator=a,
+        allocator=ctx.procAlloc,
     )
 ..
 
@@ -264,7 +264,8 @@ Reader.markEof() void:
 # @ownership The returned reader owns its buffer and must be closed.
 # @example
 #   bufferedReader := try buffered.readerBuffered(a, input)
-pub readerBuffered(a alc.Allocator, r reader.Reader) !$Reader:
+pub readerBuffered(r reader.Reader) !$Reader:
+    a := ctx.procAlloc
     ret Reader(
         underlying=r,
         buffer=try a.alloc(DEFAULT_BUFFER_SIZE),
@@ -381,7 +382,8 @@ Reader.reader() reader.Reader:
     ret this.proto()
 ..
 
-resizeLineBuffer(a alc.Allocator, old u8*, newCapacity u64) !$u8*:
+resizeLineBuffer(old u8*, newCapacity u64) !$u8*:
+    a := ctx.procAlloc
     if newCapacity == 0 - 1:
         throw errors.wouldOverflow("line buffer capacity overflow")
     ..
@@ -398,10 +400,11 @@ resizeLineBuffer(a alc.Allocator, old u8*, newCapacity u64) !$u8*:
 # @throws endOfFile when no bytes remain; a final unterminated line is returned first
 # @example
 #   line := try bufferedReader.readLn(a)
-Reader.readLn(a alc.Allocator) !$str:
+Reader.readLn() !$str:
+    a := ctx.procAlloc
     # Initial capacity for line buffer
     capacity u64 = 128
-    line $str = try strings.alloc(a, capacity)
+    line $str = try strings.alloc(capacity)
     onerror line.free(a)
 
     lineBuffer u8* = strings.toPtr(line)
@@ -416,7 +419,7 @@ Reader.readLn(a alc.Allocator) !$str:
                 throw errors.wouldOverflow("line buffer capacity overflow")
             ..
             newCapacity = capacity * 2
-            lineBuffer = try resizeLineBuffer(a, lineBuffer, newCapacity)
+            lineBuffer = try resizeLineBuffer(lineBuffer, newCapacity)
             capacity = newCapacity
             strings.updateAfterRealloc(addrof line, lineBuffer, capacity)
         ..
@@ -463,7 +466,7 @@ Reader.readLn(a alc.Allocator) !$str:
                     # Ensure capacity
                     if lineLen + foundPos > capacity:
                         newCapacity = lineLen + foundPos
-                        lineBuffer = try resizeLineBuffer(a, lineBuffer, newCapacity)
+                        lineBuffer = try resizeLineBuffer(lineBuffer, newCapacity)
                         capacity = newCapacity
                         strings.updateAfterRealloc(addrof line, lineBuffer, capacity)
                     ..
@@ -488,7 +491,7 @@ Reader.readLn(a alc.Allocator) !$str:
             # No newline found, copy all available
             if lineLen + available > capacity:
                 newCapacity = lineLen + available
-                lineBuffer = try resizeLineBuffer(a, lineBuffer, newCapacity)
+                lineBuffer = try resizeLineBuffer(lineBuffer, newCapacity)
                 capacity = newCapacity
                 strings.updateAfterRealloc(addrof line, lineBuffer, capacity)
             ..

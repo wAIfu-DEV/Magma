@@ -50,7 +50,8 @@ pub parseBool(s str) !bool:
 # @ownership Release the returned string with a.
 # @example
 #   text := try strconv.formatUint(a, 42)
-pub formatUint(a alc.Allocator, value u64) !$str:
+pub formatUint(value u64) !$str:
+    a := ctx.procAlloc
     remaining := value
     digits u64 = 1
     tmp := value
@@ -58,7 +59,7 @@ pub formatUint(a alc.Allocator, value u64) !$str:
         tmp = tmp / 10
         digits = digits + 1
     ..
-    result str = try strings.alloc(a, digits)
+    result str = try strings.alloc(digits)
     out u8* = strings.toPtr(result)
     i := digits
     loop i > 0:

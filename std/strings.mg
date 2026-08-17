@@ -29,8 +29,9 @@ pub toPtr(s str) u8*:
 # @complexity O(1), excluding allocator cost
 # @ownership Release with str.free using the same allocator.
 # @example
-#   text := try strings.alloc(a, 32)
-pub alloc(a alc.Allocator, size u64) !$str:
+#   text := try strings.alloc(32)
+pub alloc(size u64) !$str:
+    a := ctx.procAlloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         if size == 0 - 1:
@@ -46,8 +47,9 @@ pub alloc(a alc.Allocator, size u64) !$str:
 # @complexity O(N)
 # @ownership Release with str.free using the same allocator.
 # @example
-#   padding := try strings.allocFill(a, 8, 32)
-pub allocFill(a alc.Allocator, size u64, fill u8) !$str:
+#   padding := try strings.allocFill(8, 32)
+pub allocFill(size u64, fill u8) !$str:
+    a := ctx.procAlloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         if size == 0 - 1:
@@ -121,8 +123,9 @@ pub updateAfterRealloc(value str*, data ptr, capacity u64) void:
 # @param byteCount number of bytes to copy
 # @returns independently owned copy of byteCount bytes
 # @example
-#   text := try strings.fromPtr(a, pointer, byteCount)
-pub fromPtr(a alc.Allocator, p ptr, byteCount u64) !$str:
+#   text := try strings.fromPtr(pointer, byteCount)
+pub fromPtr(p ptr, byteCount u64) !$str:
+    a := ctx.procAlloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         if byteCount == 0:
@@ -154,8 +157,9 @@ pub fromPtr(a alc.Allocator, p ptr, byteCount u64) !$str:
 # @complexity O(N)
 # @ownership Release the returned string with the same allocator.
 # @example
-#   owned := try strings.copy(a, borrowed)
-pub copy(a alc.Allocator, s str) !$str:
+#   owned := try strings.copy(borrowed)
+pub copy(s str) !$str:
+    a := ctx.procAlloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         byteCount u64 = s.countBytes()
@@ -183,11 +187,12 @@ pub copy(a alc.Allocator, s str) !$str:
 # @complexity O(N)
 # @ownership Release the returned string with the same allocator.
 # @example
-#   lower := try strings.toLower(a, "Hello")
-pub toLower(a alc.Allocator, s str) !$str:
+#   lower := try strings.toLower("Hello")
+pub toLower(s str) !$str:
+    a := ctx.procAlloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
-        result $str = try copy(a, s)
+        result $str = try copy(s)
         data u8* = toPtr(result)
         for i u64 = 0 to result.countBytes():
             if data[i] >= 65 && data[i] <= 90:
@@ -202,11 +207,12 @@ pub toLower(a alc.Allocator, s str) !$str:
 # @complexity O(N)
 # @ownership Release the returned string with the same allocator.
 # @example
-#   upper := try strings.toUpper(a, "Hello")
-pub toUpper(a alc.Allocator, s str) !$str:
+#   upper := try strings.toUpper("Hello")
+pub toUpper(s str) !$str:
+    a := ctx.procAlloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
-        result $str = try copy(a, s)
+        result $str = try copy(s)
         data u8* = toPtr(result)
         for i u64 = 0 to result.countBytes():
             if data[i] >= 97 && data[i] <= 122:
@@ -241,8 +247,9 @@ pub byteAt(s str, idx u64) u8:
 # @param s string to copy
 # @returns a null-terminated c-style string
 # @example
-#   cText := try strings.toCstr(a, text)
-pub toCstr(a alc.Allocator, s str) !$u8*:
+#   cText := try strings.toCstr(text)
+pub toCstr(s str) !$u8*:
+    a := ctx.procAlloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         size u64 = s.countBytes()
@@ -330,8 +337,9 @@ pub fromCstrNoCopy(cstr u8*) str:
 # @complexity O(N)
 # @ownership Release the returned string with the supplied allocator.
 # @example
-#   text := try strings.fromCstr(a, cText)
-pub fromCstr(a alc.Allocator, cstr u8*) !$str:
+#   text := try strings.fromCstr(cText)
+pub fromCstr(cstr u8*) !$str:
+    a := ctx.procAlloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         size u64 = cStrLen(cstr)
@@ -435,14 +443,15 @@ pub find(s str, needle str) !u64:
 # @complexity O(end - start)
 # @throws outOfBounds when the requested range is invalid
 # @example
-#   part := try strings.substring(a, text, 0, 5)
-pub substring(a alc.Allocator, s str, start u64, end u64) !$str:
+#   part := try strings.substring(text, 0, 5)
+pub substring(s str, start u64, end u64) !$str:
+    a := ctx.procAlloc
     size := s.countBytes()
     if start > end || end > size:
         throw err.outOfBounds("substring bounds are invalid")
     ..
     data := toPtr(s)
-    ret try fromPtr(a, cast.utop(cast.ptou(data) + start), end - start)
+    ret try fromPtr(cast.utop(cast.ptou(data) + start), end - start)
 ..
 
 isTrimByte(value u8) bool:
@@ -452,8 +461,9 @@ isTrimByte(value u8) bool:
 # Allocates a copy without leading or trailing ASCII whitespace.
 # @complexity O(N)
 # @example
-#   clean := try strings.trim(a, "  magma  ")
-pub trim(a alc.Allocator, s str) !$str:
+#   clean := try strings.trim("  magma  ")
+pub trim(s str) !$str:
+    a := ctx.procAlloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         start u64 = 0
@@ -465,33 +475,35 @@ pub trim(a alc.Allocator, s str) !$str:
         loop end > start && isTrimByte(data[end - 1]):
             end = end - 1
         ..
-        ret try substring(a, s, start, end)
+        ret try substring(s, start, end)
     ..
 ..
 
 # Allocates s without prefix when it starts with prefix, otherwise copies s.
 # @complexity O(N)
 # @example
-#   value := try strings.trimPrefix(a, text, "prefix-")
-pub trimPrefix(a alc.Allocator, s str, prefix str) !$str:
+#   value := try strings.trimPrefix(text, "prefix-")
+pub trimPrefix(s str, prefix str) !$str:
+    a := ctx.procAlloc
     prefixSize := prefix.countBytes()
     if matchesAt(s, prefix, 0):
-        ret try substring(a, s, prefixSize, s.countBytes())
+        ret try substring(s, prefixSize, s.countBytes())
     ..
-    ret try copy(a, s)
+    ret try copy(s)
 ..
 
 # Allocates s without suffix when it ends with suffix, otherwise copies s.
 # @complexity O(N)
 # @example
-#   value := try strings.trimSuffix(a, text, ".mg")
-pub trimSuffix(a alc.Allocator, s str, suffix str) !$str:
+#   value := try strings.trimSuffix(text, ".mg")
+pub trimSuffix(s str, suffix str) !$str:
+    a := ctx.procAlloc
     sourceSize := s.countBytes()
     suffixSize := suffix.countBytes()
     if suffixSize <= sourceSize && matchesAt(s, suffix, sourceSize - suffixSize):
-        ret try substring(a, s, 0, sourceSize - suffixSize)
+        ret try substring(s, 0, sourceSize - suffixSize)
     ..
-    ret try copy(a, s)
+    ret try copy(s)
 ..
 
 # Owning eager split result. Both the pointer table and every item are owned.
@@ -561,8 +573,9 @@ countParts(s str, separator str) !u64:
 # @complexity O(N + K), where K is the number of produced parts
 # @ownership The returned Split owns its table and every part.
 # @example
-#   parts := try strings.split(a, "a,b,c", ",")
-pub split(a alc.Allocator, s str, separator str) !$Split:
+#   parts := try strings.split("a,b,c", ",")
+pub split(s str, separator str) !$Split:
+    a := ctx.procAlloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         partCount := try countParts(s, separator)
@@ -585,7 +598,7 @@ pub split(a alc.Allocator, s str, separator str) !$Split:
 
         loop position + separatorSize <= sourceSize:
             if matchesAt(s, separator, position):
-                item $str = try substring(a, s, partStart, position)
+                item $str = try substring(s, partStart, position)
                 items[made] = move item
                 made = made + 1
                 position = position + separatorSize
@@ -595,7 +608,7 @@ pub split(a alc.Allocator, s str, separator str) !$Split:
             ..
         ..
 
-        last $str = try substring(a, s, partStart, sourceSize)
+        last $str = try substring(s, partStart, sourceSize)
         items[made] = move last
         ret Split(items=items, size=partCount, allocator=a)
     ..
@@ -615,14 +628,15 @@ pub SplitIterator(
 # @complexity O(N) to initialize; each next call scans to the following separator
 # @ownership Free the iterator and every string returned by next.
 # @example
-#   iterator := try strings.splitIter(a, "a,b,c", ",")
-pub splitIter(a alc.Allocator, s str, separator str) !$SplitIterator:
+#   iterator := try strings.splitIter("a,b,c", ",")
+pub splitIter(s str, separator str) !$SplitIterator:
+    a := ctx.procAlloc
     if separator.countBytes() == 0:
         throw err.invalidArgument("split separator cannot be empty")
     ..
-    sourceCopy := try copy(a, s)
+    sourceCopy := try copy(s)
     onerror sourceCopy.free(a)
-    separatorCopy $str = try copy(a, separator)
+    separatorCopy $str = try copy(separator)
     ret SplitIterator(source=move sourceCopy, separator=move separatorCopy, position=0, finished=false, allocator=a)
 ..
 
@@ -647,13 +661,13 @@ SplitIterator.next() !$str:
     loop position + separatorSize <= sourceSize:
         if matchesAt(this.source, this.separator, position):
             this.position = position + separatorSize
-            ret try substring(this.allocator, this.source, start, position)
+            ret try substring(this.source, start, position)
         ..
         position = position + 1
     ..
     this.finished = true
     this.position = sourceSize
-    ret try substring(this.allocator, this.source, start, sourceSize)
+    ret try substring(this.source, start, sourceSize)
 ..
 
 # Releases the iterator's copied source and separator strings.
@@ -670,16 +684,17 @@ destr SplitIterator.free() void:
 # @complexity O(N)
 # @ownership Both returned strings are independently owned.
 # @example
-#   pair := try strings.splitOnce(a, "name=value", "=")
-pub splitOnce(a alc.Allocator, s str, separator str) !$pair.Pair[str, str]:
+#   pair := try strings.splitOnce("name=value", "=")
+pub splitOnce(s str, separator str) !$pair.Pair[str, str]:
+    a := ctx.procAlloc
     if separator.countBytes() == 0:
         throw err.invalidArgument("split separator cannot be empty")
     ..
     position := try find(s, separator)
-    first := try substring(a, s, 0, position)
+    first := try substring(s, 0, position)
     onerror first.free(a)
     secondStart := position + separator.countBytes()
-    second $str = try substring(a, s, secondStart, s.countBytes())
+    second $str = try substring(s, secondStart, s.countBytes())
     result := pair.new[str, str](move first, move second)
     ret result
 ..

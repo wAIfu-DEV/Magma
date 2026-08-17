@@ -14,7 +14,8 @@ pub newContext() !ptr:
     ret none
 ..
 
-pub open(context ptr, a allocator.Allocator, transport socket.Socket*, host str) !ptr:
+pub open(context ptr, transport socket.Socket*, host str) !ptr:
+    a := ctx.tempAlloc
     throw errors.failure("portable HTTPS is not implemented for this platform")
 ..
 

@@ -130,3 +130,36 @@ func TestRegisterGenericMemberTemplate(test *testing.T) {
 		test.Fatal("generic member template was incorrectly registered as a free function")
 	}
 }
+
+func TestInferredLocalTracksCompositeFieldInitializer(test *testing.T) {
+	allocatorType := &t.NodeType{KindNode: &t.NodeTypeAbsolute{AbsoluteName: "allocator.Allocator"}}
+	contextGlobal := &t.NodeGlobal{StructDefs: map[string]*t.StructDef{
+		"Ctx": {
+			Module: "context",
+			Name:   "Ctx",
+			Fields: map[string]*t.NodeType{"procAlloc": allocatorType},
+		},
+	}}
+	allocatorGlobal := &t.NodeGlobal{StructDefs: map[string]*t.StructDef{
+		"Allocator": {Module: "allocator", Name: "Allocator"},
+	}}
+	ctx := &monoCtx{modules: map[string]*t.NodeGlobal{
+		"context":   contextGlobal,
+		"allocator": allocatorGlobal,
+	}}
+	env := map[string]*t.NodeType{
+		"ctx": {KindNode: &t.NodeTypeAbsolute{AbsoluteName: "context.Ctx"}},
+	}
+	declaration := &t.NodeExprVarDefAssign{
+		VarDef: &t.NodeExprVarDef{Name: &t.NodeNameSingle{Name: "a"}},
+		AssignExpr: &t.NodeExprName{Name: &t.NodeNameComposite{
+			Parts: []string{"ctx", "procAlloc"},
+		}},
+	}
+
+	ctx.trackExprVarDefs("context", contextGlobal, declaration, env)
+
+	if got := env["a"]; got == nil || CanonicalTypeSignature(got) != "A_allocator__Allocator" {
+		test.Fatalf("inferred local type = %v, want allocator.Allocator", got)
+	}
+}

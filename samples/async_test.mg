@@ -1,24 +1,28 @@
 mod main
 
-use "std:fake_alloc" fake
-use "std:strings" strings
 use "std:io" io
-use "std:heap" heap
-use "std:thread_pool" tp
+use "std:fmt" fmt
 use "std:file" file
-use "std:context_default" context
+use "std:time" time
 
 pub main() !void:
-    ctx := try context.newDefault()
-
-    f := try file.open(ctx.alloc, "main.go", file.mode().read())
+    f := try file.open("main.go", file.mode().read())
     defer f.close()
 
-    reader := try f.reader()
+    io.print("Waiting for file read: ")
 
-    future := try reader.readAsync(ctx, try f.count())
+    future := try f.reader().readAsync(f.count())
+
+    start := time.ticks()
+    loop try future.isDone() == false:
+        io.print("#")
+    ..
+
+    took := time.elapsedUs(start)
+    fmt.str(ctx.procAlloc, "\nTook (µs): ").uint(took).str("\n").print()
+
     contents := try future.await()
-    defer contents.free(ctx.alloc)
+    defer contents.free(ctx.procAlloc)
 
     io.printLn(contents)
 ..

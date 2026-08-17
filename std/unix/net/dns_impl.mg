@@ -57,7 +57,8 @@ decode(native ptr) !address.Endpoint:
     ..
 ..
 
-pub resolve(a allocator.Allocator, host str, service str, family u8, maxResults u64) !Resolved:
+pub resolve(host str, service str, family u8, maxResults u64) !Resolved:
+    a := ctx.procAlloc
     # SAFETY: getaddrinfo owns cursor nodes until freeaddrinfo; endpoints has
     # count slots and index is checked before every write.
     unsafe:

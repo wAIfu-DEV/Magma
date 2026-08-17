@@ -8,6 +8,23 @@ pub proto Executor(
     releaseRaw() void
 )
 
+use "std:errors" errors
+
+NullExecutor impl Executor(value u8)
+
+NullExecutor.submitRaw(entry ptr, context ptr) !void:
+    throw errors.invalidArgument("executor is unavailable in the null context")
+..
+
+NullExecutor.releaseRaw() void:
+..
+
+gl_nullExecutor := NullExecutor(value=0)
+
+pub noctx null() Executor:
+    ret gl_nullExecutor.proto()
+..
+
 # Schedules entry(context) for execution.
 # @ownership context remains caller-owned and must stay valid until the task ends.
 Executor.submit[Ctx](entry (Ctx*) u64, context Ctx*) !void:

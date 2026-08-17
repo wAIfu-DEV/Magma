@@ -40,7 +40,7 @@ pub main() !void:
         throw errors.failure("formatted string changed")
     ..
 
-    captureBytes := try strings.alloc(a, 128)
+    captureBytes := try strings.alloc(128)
     defer captureBytes.free(a)
     capture := Capture(buffer=strings.toPtr(captureBytes), count=0)
     output := capture.proto[writer.Writer]()

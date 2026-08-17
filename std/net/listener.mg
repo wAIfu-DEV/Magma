@@ -48,7 +48,8 @@ onReady(raw ptr, token u64, flags u32) !void:
     try state.callback(state.context, move stream)
 ..
 
-pub new(a allocator.Allocator, endpoint address.Endpoint, backlog u32, capacity u64, commandCapacity u64, callback AcceptCallback, context ptr) !$Listener:
+pub new(endpoint address.Endpoint, backlog u32, capacity u64, commandCapacity u64, callback AcceptCallback, context ptr) !$Listener:
+    a := ctx.procAlloc
     # SAFETY: state is freshly allocated and receives unique ownership of the
     # server before being published to the listener and callback.
     unsafe:
@@ -90,14 +91,14 @@ Listener.stop() !void:
     try this.evloop.stop()
 ..
 
-destr Listener.runAsync(ctx context.Ctx) !$RunningListener:
+destr Listener.runAsync() !$RunningListener:
     # SAFETY: runAsync transfers the unique state pointer and event loop into
     # RunningListener while clearing the consumed Listener slot.
     unsafe:
     if this.state == none:
         throw errors.invalidArgument("listener is not active")
     ..
-    running := try this.evloop.runAsync(ctx)
+    running := try this.evloop.runAsync()
     state := this.state
     this.state = none
       ret RunningListener(state=state, evloop=move running, active=true)

@@ -8,8 +8,8 @@ for 64 KiB, or `fromBuffer(buffer)` for caller-owned storage. Call
 `Arena.allocator()` only after the arena is stored at its final address because
 the returned interface borrows it.
 
-`Arena.free()` releases owned backing storage. It does not free storage supplied
-through `fromBuffer`.
+`Arena.destroy()` is the destructor. It releases owned backing storage and does
+not free storage supplied through `fromBuffer`.
 
 `Arena.used()` returns the number of bytes consumed since construction or the
 last reset. `Arena.capacity()` returns total backing-storage capacity.

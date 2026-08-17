@@ -70,11 +70,11 @@ pub spawn(executable str, arguments str[]) !$Process:
     argv u8** = try a.allocT[u8*](count + 2)
     initialized u64 = 0
     onerror freeArguments(argv, initialized)
-    executableCopy u8* = try strings.toCstr(a, executable)
+    executableCopy u8* = try strings.toCstr(executable)
     argv[0] = executableCopy
     initialized = 1
     for i u64 = 0 to count:
-        copied u8*, copyError error = strings.toCstr(a, arguments[i])
+        copied u8*, copyError error = strings.toCstr(arguments[i])
         if copyError.nok():
             throw copyError
         ..
@@ -108,11 +108,11 @@ pub spawnWithEnv(executable str, arguments str[], environment str[]) !$Process:
     argv := try a.allocT[u8*](count + 2)
     initialized u64 = 0
     onerror freeArguments(argv, initialized)
-    executableCopy := try strings.toCstr(a, executable)
+    executableCopy := try strings.toCstr(executable)
     argv[0] = executableCopy
     initialized = 1
     for i u64 = 0 to count:
-        argv[i + 1] = try strings.toCstr(a, arguments[i])
+        argv[i + 1] = try strings.toCstr(arguments[i])
         initialized = initialized + 1
     ..
     argv[count + 1] = none
@@ -121,7 +121,7 @@ pub spawnWithEnv(executable str, arguments str[], environment str[]) !$Process:
     envInitialized u64 = 0
     onerror freeArguments(envp, envInitialized)
     for i u64 = 0 to environmentCount:
-        envp[i] = try strings.toCstr(a, environment[i])
+        envp[i] = try strings.toCstr(environment[i])
         envInitialized = envInitialized + 1
     ..
     envp[environmentCount] = none

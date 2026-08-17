@@ -37,7 +37,7 @@ pub main() !void:
     written u64 = 0
     sink := Sink(total=addrof written)
     raw := sink.proto[writer.Writer]()
-    output := try buffered.writerBuffered(a, raw)
+    output := try buffered.writerBuffered(raw)
     defer output.close()
     if try output.write("a") != 1 || try output.writeAll("b") != 1 || try output.writeLn("c") != 2:
         throw errors.failure("buffered writer basic writes changed")
@@ -53,7 +53,7 @@ pub main() !void:
     ..
     source := Source(calls=0)
     input := source.proto[reader.Reader]()
-    bufferedInput := try buffered.readerBuffered(a, input)
+    bufferedInput := try buffered.readerBuffered(input)
     defer bufferedInput.close()
     if bufferedInput.filledCount() != 0 || bufferedInput.isEof():
         throw errors.failure("new buffered reader state changed")
@@ -61,7 +61,7 @@ pub main() !void:
     if try bufferedInput.fillBuffer() == false || bufferedInput.filledCount() != 2:
         throw errors.failure("buffered reader fill changed")
     ..
-    line := try bufferedInput.readLn(a)
+    line := try bufferedInput.readLn()
     defer line.free(a)
     linePtr u8* = strings.toPtr(line)
     # SAFETY: owned strings reserve a terminator immediately after countBytes.

@@ -13,7 +13,7 @@ const readyFile str = "std_process_kill_ready.tmp"
 
 fileExists(path str) bool:
     a := heap.allocator()
-    contents str, readError error = fs.readFile(a, path)
+    contents str, readError error = fs.readFile(path)
     if readError.ok():
         contents.free(a)
         ret true
@@ -67,8 +67,8 @@ runSpawnTest() !void:
     asyncArgs[0] = "/d"
     asyncArgs[1] = "/c exit 11"
 
-    ctx := context.new(a, pool.executor())
-    execPending := try process.execAsync(ctx, "cmd.exe", asyncArgs)
+    ctx = context.new(a, a, pool.executor())
+    execPending := try process.execAsync("cmd.exe", asyncArgs)
     if try execPending.await() != 11:
         try pool.close()
         throw errors.failure("execAsync returned the wrong exit code")
@@ -127,8 +127,8 @@ runSpawnTest() !void:
     asyncArgs[0] = "-c"
     asyncArgs[1] = "exit 11"
 
-    ctx := context.new(a, pool.executor())
-    execPending := try process.execAsync(ctx, "sh", asyncArgs)
+    ctx = context.new(a, a, pool.executor())
+    execPending := try process.execAsync("sh", asyncArgs)
     if try execPending.await() != 11:
         try pool.close()
         throw errors.failure("execAsync returned the wrong exit code")

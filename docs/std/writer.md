@@ -1,34 +1,21 @@
 # `std/writer`
 
-## Example
+`Writer` is a type-erased byte-output `proto` whose implementation supplies
+`write(bytes str) !u64`. Concrete writers expose a borrowed view with `proto()`
+or a helper such as `File.writer()`.
 
-```magma
-output := writer.new(state, writeCallback)
-try output.writeLn("ready")
-try output.writeInt64(-42)
-try output.writeFloat64(3.5, 2) # writes 3.50
-```
+- `writeAll(bytes) !u64` repeats writes until all bytes are accepted. Zero
+  progress or a count larger than the remaining input is an error.
+- `writeLn(bytes) !u64` writes all bytes followed by `\n`.
+- `writeBool`, `writeInt64`, `writeUint64`, and `writeFloat64` format primitive
+  values directly to the sink. Floating point uses fixed precision and handles
+  NaN and infinities.
 
-A type-erased byte-output interface with formatting helpers.
+`ConstWriter` is a concrete `Writer` implementation for statically stored
+sinks. It contains an implementation pointer and write function, provides
+`write`, `writeAll`, and `writeLn`, and returns a borrowed general view through
+`toWriter()`.
 
-## Type
-
-`Writer(impl ptr, fn_write (ptr, str) !u64)` pairs mutable adapter state with a
-write callback. `Vtable(fn_write ...)` and `ConstWriter(impl ptr, vtable
-Vtable*)` provide an immutable-vtable form suitable for global adapters.
-
-## API
-
-- `pub new(impl ptr, writeFunc (ptr, str) !u64) Writer` constructs an interface.
-- `Writer.write(bytes str) !u64` invokes the adapter once and returns its byte count.
-- `Writer.writeAll(bytes str) !u64` continues through partial writes until all bytes are written; zero progress or a count larger than the remaining input is an error.
-- `Writer.writeLn(bytes str) !u64` writes all bytes followed by `\n` and returns the combined count.
-- `Writer.writeBool(b bool) !u64` writes `true` or `false`.
-- `Writer.writeInt64(num i64) !u64` writes signed decimal, including the minimum `i64` value.
-- `Writer.writeUint64(num u64) !u64` writes unsigned decimal.
-- `Writer.writeFloat64(flt f64, precision u64) !u64` writes fixed-point decimal with `precision` fractional digits and handles NaN and infinities.
-- `ConstWriter.write`, `writeAll`, and `writeLn` have the same partial-write
-  guarantees. `ConstWriter.toWriter() Writer` returns a borrowed mutable-form
-  interface using the same implementation and callback.
-
-`digitToChar(i i16) u8` is an internal decimal formatting helper.
+The implementation behind either interface must remain valid for every call.
+A successful single `write` may be partial; use `writeAll` when completeness is
+required.

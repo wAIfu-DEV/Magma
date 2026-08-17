@@ -247,7 +247,7 @@ Parser.writeUsage(output writer.Writer) !void:
 ..
 
 Parser.usage() !$str:
-    text := try builder.new(this.allocator)
+    text := try builder.new()
     defer text.free()
     try text.appendBorrowed("usage: ")
     try text.appendBorrowed(this.program)

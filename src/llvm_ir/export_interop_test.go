@@ -63,3 +63,54 @@ int main(void) {
 		t.Fatalf("C caller did not receive 42 from magma_add: %v\n%s", err, output)
 	}
 }
+
+func TestExportInitializesContextOnForeignNativeThread(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("pthread foreign-thread fixture is Unix-only")
+	}
+	clangPath, _, err := clangresolver.Resolve("")
+	if err != nil {
+		t.Skipf("Clang is required for the C interoperability test: %v", err)
+	}
+	ir, err := compileSource(t, `mod interop
+@export_name("magma_add_foreign")
+add(a i32, b i32) i32:
+    ret a + b
+..
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	llvmPath := filepath.Join(dir, "foreign.ll")
+	cPath := filepath.Join(dir, "foreign.c")
+	exePath := filepath.Join(dir, "foreign")
+	if err := os.WriteFile(llvmPath, []byte(ir), 0600); err != nil {
+		t.Fatal(err)
+	}
+	const caller = `#include <pthread.h>
+#include <stdint.h>
+extern int32_t magma_add_foreign(int32_t, int32_t);
+static void *run(void *unused) {
+    (void)unused;
+    return (void *)(uintptr_t)(magma_add_foreign(20, 22) != 42);
+}
+int main(void) {
+    pthread_t thread;
+    void *result = 0;
+    if (pthread_create(&thread, 0, run, 0) != 0) return 2;
+    if (pthread_join(thread, &result) != 0) return 3;
+    return (int)(uintptr_t)result;
+}
+`
+	if err := os.WriteFile(cPath, []byte(caller), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := exec.Command(clangPath, "-Wno-override-module", llvmPath, cPath, "-pthread", "-o", exePath)
+	if output, err := link.CombinedOutput(); err != nil {
+		t.Fatalf("link foreign-thread fixture: %v\n%s", err, output)
+	}
+	if output, err := exec.Command(exePath).CombinedOutput(); err != nil {
+		t.Fatalf("foreign-created thread failed to receive a context: %v\n%s", err, output)
+	}
+}

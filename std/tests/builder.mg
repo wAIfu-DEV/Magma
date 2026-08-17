@@ -8,7 +8,7 @@ use "std:strings" strings
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()
-    value := try builder.new(a)
+    value := try builder.new()
     defer value.free()
     if value.isEmpty() == false || value.byteCount() != 0:
         throw errors.failure("new builder is not empty")
@@ -16,7 +16,7 @@ pub main() !void:
     try value.ensureCapacity()
     try value.appendBorrowed("checked ")
     try value.appendCopy("builder")
-    owned := try strings.copy(a, "!")
+    owned := try strings.copy("!")
     try value.appendOwned(move owned)
     if value.byteCount() != 16 || value.isEmpty():
         throw errors.failure("builder byte count changed")

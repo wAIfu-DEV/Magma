@@ -17,8 +17,9 @@ use "std:unix/file_impl" impl_file
 # @ownership Close the returned writer to flush and release its buffer.
 # @example
 #   output := try io.stdout(a)
-pub stdout(a alc.Allocator) !$buffered.Writer:
-    ret try buffered.writerBuffered(a, impl_file.stdout())
+pub stdout() !$buffered.Writer:
+    a := ctx.procAlloc
+    ret try buffered.writerBuffered(impl_file.stdout())
 ..
 
 # Returns a buffered writer for standard output.
@@ -58,8 +59,9 @@ pub printLn(bytes str) !u64:
 # Returns a buffered writer for standard error.
 # @complexity O(1).
 # @ownership Close the returned writer to flush and release its buffer.
-pub stderr(a alc.Allocator) !$buffered.Writer:
-    ret try buffered.writerBuffered(a, impl_file.stderr())
+pub stderr() !$buffered.Writer:
+    a := ctx.procAlloc
+    ret try buffered.writerBuffered(impl_file.stderr())
 ..
 
 # Returns a writer for standard error.
@@ -72,8 +74,9 @@ pub stderrUnbuffered() writer.Writer:
 # Returns a buffered reader for standard input.
 # @complexity O(1).
 # @ownership Close the returned reader to release its buffer.
-pub stdin(a alc.Allocator) !$buffered.Reader:
-    ret try buffered.readerBuffered(a, impl_file.stdin())
+pub stdin() !$buffered.Reader:
+    a := ctx.procAlloc
+    ret try buffered.readerBuffered(impl_file.stdin())
 ..
 
 # Returns a reader for standard input.

@@ -612,6 +612,16 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (*t.NodeType, error) 
 		return nil, e
 	}
 
+	contextABI := t.ContextABIContextful
+	if tk.KeywType == t.KwNoCtx {
+		contextABI = t.ContextABIContextless
+		consume(ctx)
+		tk, e = peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+	}
+
 	// owned marker
 	isOwned := false
 	if tk.KeywType == t.KwDollar {
@@ -629,7 +639,11 @@ func parseType(ctx *ParseCtx, tk t.Token, allowThrow bool) (*t.NodeType, error) 
 			return nil, e
 		}
 		n.Owned = isOwned
+		n.KindNode.(*t.NodeTypeFunc).ContextABI = contextABI
 		return n, nil
+	}
+	if contextABI == t.ContextABIContextless {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, "syntax error: 'noctx' requires a function type", "expected: `noctx (<args>) <return type>`")
 	}
 
 	if tk.Type != t.TokName {

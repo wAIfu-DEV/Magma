@@ -60,7 +60,8 @@ control(poller Poller*, operation i32, handle ptr, token u64, flags u32) !void:
     ..
 ..
 
-pub new(a allocator.Allocator, capacity u64) !$Poller:
+pub new(capacity u64) !$Poller:
+    a := ctx.procAlloc
     epollFd i32 = ext_epoll_create1(0x80000)
     if epollFd < 0:
         throw errors.failure("epoll_create1 failed")

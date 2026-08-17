@@ -13,9 +13,10 @@ while raylib.windowShouldClose() == false:
 ..
 ```
 
-Initial Windows bindings for raylib 5.5 using its shared-library distribution.
-The import library is linked automatically, and the `bundle` declaration copies
-`raylib.dll` beside the resulting executable after a successful build.
+Bindings for raylib 5.5 using a static library placed under
+`std/vendor/raylib` on Windows, Linux, and macOS. Raylib is linked into the
+generated executable automatically; its platform graphics and window-system
+libraries remain runtime dependencies.
 
 The initial surface includes window management, timing, drawing basic 2D
 shapes and text, keyboard input, mouse input, config flags, key constants, and

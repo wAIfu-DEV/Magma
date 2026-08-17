@@ -12,19 +12,19 @@ pub main() !void:
     input[1] = 0xAB
     input[2] = 0xFF
     view u8[] = slices.fromPtr(slices.toPtr(input), 3)
-    encoded := try hex.encode(a, view)
+    encoded := try hex.encode(view)
     defer encoded.free(a)
     if strings.compare(encoded, "00abff") == false:
         throw errors.failure("hexadecimal encoding changed")
     ..
-    decoded := try hex.decode(a, "00ABff")
-    defer slices.free(a, decoded)
+    decoded := try hex.decode("00ABff")
+    defer slices.free(decoded)
     if slices.count(decoded) != 3 || decoded[1] != 0xAB || decoded[2] != 0xFF:
         throw errors.failure("hexadecimal decoding changed")
     ..
-    bad, badError := hex.decode(a, "abc")
+    bad, badError := hex.decode("abc")
     if badError.ok():
-        slices.free(a, bad)
+        slices.free(bad)
         throw errors.failure("odd hexadecimal input accepted")
     ..
 ..

@@ -16,7 +16,7 @@ pub main() !void:
         throw errors.failure("empty HTTP request has a body")
     ..
     a := heap.allocator()
-    client := try http.new(a, options)
+    client := try http.new(options)
     invalidRequest := http.noBody("GET", "://", headers)
     failedResponse http.Response, sendErr error = client.send(invalidRequest)
     if sendErr.ok():

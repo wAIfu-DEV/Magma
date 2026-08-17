@@ -9,8 +9,8 @@ use "../std/strings.mg"   strs
 
 main(args str[]) !void:
     a := heap.allocator()
-    stdin :=  try io.stdin(a)
-    stdout := try io.stdout(a)
+    stdin :=  try io.stdin()
+    stdout := try io.stdout()
 
     defer:
         stdin.close()
@@ -27,7 +27,7 @@ main(args str[]) !void:
         input := try stdin.readLn(a)
         defer input.free(a)
 
-        f := try file.open(a, input, file.mode().read())
+        f := try file.open(input, file.mode().read())
         defer f.close()
 
         source := try f.reader()

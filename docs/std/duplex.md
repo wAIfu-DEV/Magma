@@ -1,29 +1,20 @@
 # `std/duplex`
 
-## Example
+`Duplex` is a type-erased bidirectional `proto` that also implements
+`std/writer.Writer` and `std/reader.Reader`:
 
 ```magma
-const streamVTable := duplex.Vtable(
-    fn_write=writeCallback,
-    fn_read=readCallback,
+pub proto Duplex impl writer.Writer reader.Reader(
+    write(bytes str) !u64
+    readRaw(buff u8[], nBytes u64) !u64
 )
-stream := duplex.new(state, addrof streamVTable)
-try stream.writer().writeAll("ping")
-n := try stream.reader().readToBuff(buffer, 4)
 ```
 
-Combines read and write callbacks over one implementation pointer.
+A concrete type implements both required methods and produces a borrowed
+`Duplex` view with `proto()`. `writer()` and `reader()` project that view into
+the narrower interfaces without changing the underlying implementation.
 
-## Type
-
-`Vtable(fn_write (ptr, str) !u64, fn_read (ptr, u8[], u64) !u64)` stores callbacks shared by implementations.
-
-`Duplex(impl ptr, vtable Vtable*)` stores adapter state and a pointer to that shared table. It occupies 16 bytes on 64-bit targets.
-
-## API
-
-- `pub new(impl ptr, vtable Vtable*) Duplex` constructs the adapter.
-- `Duplex.writer() wr.Writer` returns a writer interface using `fn_write`.
-- `Duplex.reader() rd.Reader` returns a reader interface using `fn_read`.
-
-The duplex object and `impl` state must remain valid while either returned interface is used.
+`readToBuff(buff, nBytes) !u64` checks the destination extent, invokes
+`readRaw`, and rejects a returned count larger than the request. Writer helper
+methods are inherited through the implemented writer prototype. The concrete
+object must remain stable and alive while any projected view is used.
