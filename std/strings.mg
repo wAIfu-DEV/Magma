@@ -6,6 +6,7 @@ use "std:memory"    mem
 use "std:cast"      cast
 use "std:errors"    err
 use "std:pair"      pair
+use "std:footgun"   fg
 
 const gl_nullTerm u8 = 0
 
@@ -18,6 +19,16 @@ const gl_nullTerm u8 = 0
 # @example
 #   pointer := strings.toPtr(text)
 pub toPtr(s str) u8*:
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %l0 = extractvalue %type.str %s, 0\n"
+        llvm "  ret ptr %l0\n"
+    ..
+..
+
+pub toPtrMove(s $str) $u8*:
+    fg.drop(move s)
+
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %l0 = extractvalue %type.str %s, 0\n"
@@ -39,7 +50,7 @@ pub alloc(size u64) !$str:
         ..
         p u8* = try a.alloc(size + 1) # Zero terminated
         p[size] = 0
-        ret fromPtrNoCopy(p, size)
+        ret fromPtrMove(move p, size)
     ..
 ..
 
@@ -62,7 +73,7 @@ pub allocFill(size u64, fill u8) !$str:
         ..
 
         p[size] = 0
-        ret fromPtrNoCopy(p, size)
+        ret fromPtrMove(move p, size)
     ..
 ..
 
@@ -79,6 +90,22 @@ pub allocFill(size u64, fill u8) !$str:
 # @example
 #   view := strings.fromPtrNoCopy(pointer, byteCount)
 pub fromPtrNoCopy(p ptr, bytesCount u64) str:
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %s0 = insertvalue %type.str zeroinitializer, ptr %p, 0\n"
+        llvm "  %s1 = insertvalue %type.str %s0, i64 %bytesCount, 1\n"
+        llvm "  ret %type.str %s1\n"
+    ..
+..
+
+# Returns a str from a owned pointer and a length in bytes.
+# @complexity O(1)
+# @param p owned pointer to the first byte
+# @param bytesCount number of bytes in the view
+# @returns owned string p
+# @example
+#   view := strings.fromPtrMove(move pointer, byteCount)
+pub fromPtrMove(p $ptr, bytesCount u64) $str:
     # SAFETY: this audited implementation injects the required low-level IR.
     unsafe:
         llvm "  %s0 = insertvalue %type.str zeroinitializer, ptr %p, 0\n"
@@ -131,7 +158,7 @@ pub fromPtr(p ptr, byteCount u64) !$str:
         if byteCount == 0:
             nt u8* = try a.alloc(1)
             *nt = 0
-            ret fromPtrNoCopy(nt, 0)
+            ret fromPtrMove(move nt, 0)
         ..
 
         # cap size to 0 in case of impossibly large string size (9 exabytes in this case)
@@ -149,7 +176,7 @@ pub fromPtr(p ptr, byteCount u64) !$str:
         ..
 
         strData[byteCount] = 0
-        ret fromPtrNoCopy(strData, byteCount)
+        ret fromPtrMove(move strData, byteCount)
     ..
 ..
 
@@ -169,7 +196,7 @@ pub copy(s str) !$str:
         if byteCount == 0:
             nt u8* = try a.alloc(1)
             *nt = 0
-            ret fromPtrNoCopy(nt, 0)
+            ret fromPtrMove(move nt, 0)
         ..
         inData u8* = toPtr(s)
         strData u8* = try a.alloc(byteCount + 1) # Zero terminated
@@ -179,7 +206,7 @@ pub copy(s str) !$str:
         ..
 
         strData[byteCount] = 0
-        ret fromPtrNoCopy(strData, byteCount)
+        ret fromPtrMove(move strData, byteCount)
     ..
 ..
 
@@ -349,7 +376,7 @@ pub fromCstr(cstr u8*) !$str:
         if size == 0:
             nt u8* = try a.alloc(1)
             *nt = 0
-            ret fromPtrNoCopy(nt, 0)
+            ret fromPtrMove(move nt, 0)
         ..
         strData u8* = try a.alloc(size + 1)
 
@@ -357,7 +384,7 @@ pub fromCstr(cstr u8*) !$str:
             strData[i] = cstr[i]
         ..
         strData[size] = 0
-        ret fromPtrNoCopy(strData, size)
+        ret fromPtrMove(move strData, size)
     ..
 ..
 
@@ -697,4 +724,26 @@ pub splitOnce(s str, separator str) !$pair.Pair[str, str]:
     second $str = try substring(s, secondStart, s.countBytes())
     result := pair.new[str, str](move first, move second)
     ret result
+..
+
+pub concat(a str, b str) !$str:
+    an := a.countBytes()
+    bn := b.countBytes()
+
+    regSize := an + bn
+    if regSize < an:
+        throw err.wouldOverflow("strings are too big")
+    ..
+
+    region := try ctx.procAlloc.alloc(regSize + 1)
+    mem.copy(toPtr(a), region, an)
+    
+    region2 := cast.utop(cast.ptou(region) + an)
+    mem.copy(toPtr(b), region2, bn)
+
+    # UNSAFE: sets null terminator, safe since we allocate +1
+    unsafe:
+        region[regSize] = 0
+    ..
+    ret fromPtrMove(move region, regSize)
 ..

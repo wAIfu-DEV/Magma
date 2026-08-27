@@ -349,7 +349,7 @@ func clExistsInScopeTree(c *ctx, name *t.NodeExprName, ent entryType, lvalue boo
 
 func clName(c *ctx, name *t.NodeExprName, expected entryType, lvalue bool) error {
 	// TODO: get associated node for easier type checking later
-	found, _, expr, isSsa, err := clExistsInScopeTree(c, name, expected, lvalue)
+	found, lastIsFunc, expr, isSsa, err := clExistsInScopeTree(c, name, expected, lvalue)
 
 	if err != nil {
 		return privateSymbolDiagnostic(c, lastNameToken(name.Name), err)
@@ -361,6 +361,46 @@ func clName(c *ctx, name *t.NodeExprName, expected entryType, lvalue bool) error
 			description = fmt.Sprintf("unknown variable '%s'", flattenName(name.Name))
 		}
 		return comp_err.CompilationErrorToken(c.FileCtx, lastNameToken(name.Name), description, "")
+	}
+
+	if lastIsFunc && !lvalue {
+		var ownerType *t.NodeType
+		var owner *t.NodeExprVarDef
+		switch node := expr.(type) {
+		case *t.NodeExprVarDef:
+			ownerType = node.Type
+			owner = node
+		case *t.NodeExprVarDefAssign:
+			if node.VarDef != nil {
+				ownerType = node.VarDef.Type
+				owner = node.VarDef
+			}
+		}
+		for _, access := range name.MemberAccesses {
+			ownerType = access.Type
+		}
+		parsed := parseName(name.Name)
+		if ownerType == nil || len(parsed.Parts) == 0 {
+			return fmt.Errorf("method value '%s' has no resolved receiver type", flattenName(name.Name))
+		}
+		method, _, _, _, resolveErr := clResolveMemberFunc(c, ownerType, parsed.Parts[len(parsed.Parts)-1])
+		if resolveErr != nil {
+			return resolveErr
+		}
+		// A method value is unbound: the implicit `this` parameter remains the
+		// first function argument. The receiver expression is used only for
+		// method lookup and is not captured at runtime.
+		name.MethodReceiver = &t.NodeExprName{
+			Tk:             name.Tk,
+			Name:           owner.Name,
+			InfType:        ownerType,
+			MemberAccesses: append([]*t.MemberAccess(nil), name.MemberAccesses...),
+			AssociatedNode: owner,
+			Storage:        owner.Storage,
+		}
+		name.AssociatedNode = method
+		name.MemberAccesses = nil
+		return nil
 	}
 
 	if isSsa {

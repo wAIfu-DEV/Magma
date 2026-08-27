@@ -271,6 +271,7 @@ func (w *reachabilityWalker) expression(expression t.NodeExpr) {
 		w.expression(node.Target)
 		w.expression(node.Expr)
 	case *t.NodeExprMemberAccess:
+		w.enqueue(node.MethodDef)
 		w.expression(node.Target)
 	case *t.NodeExprBinary:
 		w.expression(node.Left)

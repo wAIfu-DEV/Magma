@@ -415,8 +415,8 @@ this.entries.values[i]
 Observed unary operations are:
 
 - `-x`: numeric negation;
-- `!x`: logical negation;
-- `~x`: bitwise complement;
+- `not x`: boolean inversion;
+- `~x`: integer bitwise complement;
 - `*p`: pointer dereference;
 - `&x` and `addrof x`: address-like operations.
 

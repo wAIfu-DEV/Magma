@@ -123,34 +123,7 @@ pub read(handle ptr, buff u8[], n u64) !u64:
    if n <= 0xFFFFFFFF:
       ret try readOnce(handle, slices.toPtr(buff), cast.u64to32(n))
    ..
-
-   bound u64 = n
-   p ptr = slices.toPtr(buff)
-
-   total u64 = 0
-
-   loop total < bound:
-      toRead u32 = 0
-      if (bound - total) > 0xFFFFFFFF:
-         toRead = 0xFFFFFFFF
-      else:
-         toRead = cast.u64to32(bound - total)
-      ..
-
-      if toRead == 0:
-         break
-      ..
-
-      next ptr = cast.utop(cast.ptou(p) + total)
-      bytesRead u64 = try readOnce(handle, next, toRead)
-
-      total = total + bytesRead
-
-      if bytesRead < cast.u32to64(toRead):
-         break
-      ..
-   ..
-   ret total
+   ret try readOnce(handle, slices.toPtr(buff), 0xFFFFFFFF)
 ..
 
 # Returns a writer for the Win32 standard output handle.

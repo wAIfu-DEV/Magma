@@ -1,47 +1,69 @@
 mod json
-# Construction, lookup, ownership, and serialization of JSON values.
+# Parsing, construction, lookup, ownership, and serialization of JSON values.
 
 use "std:allocator"  alc
 use "std:array"      arr
+use "std:builder"    builder
 use "std:cast"       cast
 use "std:errors"     errors
+use "std:footgun"    footgun
 use "std:linear_map" linear_map
 use "std:slices"     slices
 use "std:strings"    strings
 use "std:writer"     writer
 use "std:memory"     memory
+use "std:utf8"       utf8
+
+pub const KIND_NULL u8 = 0
+pub const KIND_BOOL u8 = 1
+pub const KIND_FLOAT u8 = 2
+pub const KIND_STRING u8 = 3
+pub const KIND_OBJECT u8 = 4
+pub const KIND_ARRAY u8 = 5
 
 # JSON value. Payloads are stored in raw u128 storage and reinterpreted based
 # on the kind tag. This keeps Value independent of its recursive payload types.
 pub Value(
     value u128
     kind u8
-    owned bool
     allocator alc.Allocator
 )
 
-# JSON object backed by a linear map. Cleanup policy for stored values is
-# supplied by the caller when the object is constructed.
+# Borrowed, copyable view of a JSON object. Pointer storage is private to this
+# module; public APIs pass Object by value.
 pub Object(
+    data ObjectData*
+)
+
+pub proto Serializable(
+    toJson() !$Value
+)
+
+ObjectData(
     entries linear_map.LinearMap[Value]
 )
 
-# JSON array. Cleanup policy for stored values is supplied at construction.
+# Borrowed, copyable view of a JSON array. Pointer storage is private to this
+# module; public APIs pass Array by value.
 pub Array(
+    data ArrayData*
+)
+
+ArrayData(
     allocator alc.Allocator
     values arr.Array[Value]
 )
 
-# Validates that this value is JSON null and returns none.
+# Validates that this value is JSON null.
 # @throws invalidType if this value has another kind
 # @complexity O(1)
 # @example
 #   try value.asNull()
-Value.asNull() !ptr:
+Value.asNull() !void:
     if this.kind != 0:
         throw errors.invalidType("json value is not null")
     ..
-    ret none
+    ret
 ..
 
 # Returns the stored boolean.
@@ -105,100 +127,108 @@ Value.asString() !str:
     ret *r
 ..
 
-# Returns the stored object pointer.
+# Returns a borrowed object view.
 # @throws invalidType if this value is not an object
-# @ownership The returned pointer is borrowed from this value.
+# @ownership The returned view borrows storage from this value.
 # @complexity O(1)
 # @example
 #   object := try value.asObject()
-Value.asObject() !Object*:
+Value.asObject() !Object:
     if this.kind != 4:
         throw errors.invalidType("json value is not object")
     ..
-    r Object** = cast.reinterpret[Object*](addrof this.value)
+    r Object* = cast.reinterpret[Object](addrof this.value)
     ret *r
 ..
 
-# Returns the stored array pointer.
+# Returns a borrowed array view.
 # @throws invalidType if this value is not an array
-# @ownership The returned pointer is borrowed from this value.
+# @ownership The returned view borrows storage from this value.
 # @complexity O(1)
 # @example
 #   items := try value.asArray()
-Value.asArray() !Array*:
+Value.asArray() !Array:
     if this.kind != 5:
         throw errors.invalidType("json value is not array")
     ..
-    r Array** = cast.reinterpret[Array*](addrof this.value)
+    r Array* = cast.reinterpret[Array](addrof this.value)
     ret *r
 ..
 
-# Returns a non-owning view of a Value. This is used by lookup operations;
-# ownership is transferred out of a container only by take().
-# @complexity O(1)
-# @example
-#   view := value.borrowed()
-Value.borrowed() Value:
-    out Value = *this
-    out.owned = false
-    ret out
-..
-
-valueCleanup(val $Value) void:
-    a := ctx.procAlloc
-    if val.owned == false:
-        ret
-    ..
+releaseValue(val Value) void:
     if val.kind == 3:
         value str* = cast.reinterpret[str](addrof val.value)
         val.allocator.free(strings.toPtr(*value))
     elif val.kind == 4:
-        value Object** = cast.reinterpret[Object*](addrof val.value)
-        if *value != none:
-            object Object* = *value
-            object.free()
+        value Object* = cast.reinterpret[Object](addrof val.value)
+        if value.data != none:
+            unsafe:
+                value.data.entries.free()
+                val.allocator.free(value.data)
+            ..
         ..
     elif val.kind == 5:
-        value Array** = cast.reinterpret[Array*](addrof val.value)
-        if *value != none:
-            array Array* = *value
-            array.free()
+        value Array* = cast.reinterpret[Array](addrof val.value)
+        if value.data != none:
+            unsafe:
+                value.data.values.free(value.data.allocator, arrayValueCleanup)
+                val.allocator.free(value.data)
+            ..
         ..
     ..
 ..
 
-# Creates an empty JSON object whose keys and owned values use allocator a.
-# @complexity O(1), excluding allocation
-# @ownership The returned object must be freed.
-# @example
-#   object := try json.newObject(a)
-pub newObject() !$Object:
-    a := ctx.procAlloc
-    entries := try linear_map.new[Value](valueCleanup)
-    object Object
-    object.entries = move entries
-    ret object
+valueCleanup(val $Value) void:
+    releaseValue(val)
+    footgun.drop[Value](move val)
 ..
 
-# Creates an empty JSON array whose owned values use allocator a.
-# @complexity O(1), excluding allocation
-# @ownership The returned array must be freed.
+# Releases an owned JSON value and all of its descendants.
+# @complexity O(N) for arrays and objects
 # @example
-#   items := try json.newArray(a)
-pub newArray() !$Array:
+#   defer value.free()
+destr Value.free() void:
+    releaseValue(*this)
+..
+
+# Creates an owned empty JSON object.
+pub object() !$Value:
     a := ctx.procAlloc
+    data ObjectData* = try a.allocT[ObjectData](1)
+    onerror a.free(data)
+    entries := try linear_map.new[Value](valueCleanup)
+    unsafe:
+        data.entries = move entries
+    ..
+    out := Value(value=0, kind=4, allocator=a)
+    objectView := Object(data=data)
+    payload Object* = cast.reinterpret[Object](addrof out.value)
+    *payload = objectView
+    ret move out
+..
+
+# Creates an owned empty JSON array.
+pub array() !$Value:
+    a := ctx.procAlloc
+    data ArrayData* = try a.allocT[ArrayData](1)
+    onerror a.free(data)
     values := try arr.new[Value](a)
-    array Array
-    array.allocator = a
-    array.values = move values
-    ret array
+    unsafe:
+        data.allocator = a
+        data.values = move values
+    ..
+    out := Value(value=0, kind=5, allocator=a)
+    arrayView := Array(data=data)
+    payload Array* = cast.reinterpret[Array](addrof out.value)
+    *payload = arrayView
+    ret move out
 ..
 
 # Creates a JSON null value.
 # @complexity O(1)
 # @example
 #   value := json.null()
-pub null() Value:
+pub null() $Value:
     ret memory.zeroValue[Value]()
 ..
 
@@ -206,7 +236,7 @@ pub null() Value:
 # @complexity O(1)
 # @example
 #   value := json.bool(true)
-pub bool(value bool) Value:
+pub bool(value bool) $Value:
     out Value = memory.zeroValue[Value]()
     out.kind = 1
     r bool* = cast.reinterpret[bool](addrof out.value)
@@ -219,7 +249,7 @@ pub bool(value bool) Value:
 # @complexity O(1)
 # @example
 #   value := json.numberFloat(3.5)
-pub numberFloat(value f64) Value:
+pub numberFloat(value f64) $Value:
     out Value = memory.zeroValue[Value]()
     out.kind = 2
     r f64* = cast.reinterpret[f64](addrof out.value)
@@ -231,7 +261,7 @@ pub numberFloat(value f64) Value:
 # @complexity O(1)
 # @example
 #   value := json.numberInt(42)
-pub numberInt(value i64) Value:
+pub numberInt(value i64) $Value:
     out Value = memory.zeroValue[Value]()
     out.kind = 6
     r i64* = cast.reinterpret[i64](addrof out.value)
@@ -239,104 +269,34 @@ pub numberInt(value i64) Value:
     ret out
 ..
 
-# Wraps a borrowed string. The caller must keep it alive while the Value is in use.
-# @complexity O(1)
-# @example
-#   value := json.stringBorrowed("ready")
-pub stringBorrowed(value str) Value:
-    out Value = memory.zeroValue[Value]()
-    out.kind = 3
-    r str* = cast.reinterpret[str](addrof out.value)
-    *r = value
-    ret out
-..
-
-# Transfers ownership of an allocated string to the returned Value.
-# @ownership Consumes value; freeing the resulting owner releases it with a.
-# @complexity O(1)
-# @example
-#   value := json.stringOwned(a, ownedText)
-pub stringOwned(value $str) Value:
+stringOwned(value $str) $Value:
     a := ctx.procAlloc
     out Value = memory.zeroValue[Value]()
     out.kind = 3
-    out.owned = true
     out.allocator = a
     r str* = cast.reinterpret[str](addrof out.value)
     *r = move value
     ret out
 ..
 
-# Copies a borrowed string and returns a Value owning the copy.
+# Copies text into an owned JSON string.
 # @complexity O(N) for the string byte length
 # @ownership The returned value owns its copy.
 # @example
-#   value := try json.stringCopy(a, input)
-pub stringCopy(value str) !$Value:
+#   value := try json.string(input)
+pub string(value str) !$Value:
     a := ctx.procAlloc
     owned str = try strings.copy(value)
     ret stringOwned(move owned)
-..
-
-# Wraps a borrowed object. The caller remains responsible for freeing it.
-# @complexity O(1)
-# @example
-#   value := json.objectBorrowed(addrof object)
-pub objectBorrowed(value Object*) Value:
-    out Value = memory.zeroValue[Value]()
-    out.kind = 4
-    r Object** = cast.reinterpret[Object*](addrof out.value)
-    *r = value
-    ret out
-..
-
-# Transfers responsibility for freeing the object's contents to the Value.
-# The pointer storage itself remains borrowed and must outlive the Value.
-# @complexity O(1)
-# @example
-#   value := json.objectOwned(addrof object)
-pub objectOwned(value Object*) Value:
-    out Value = memory.zeroValue[Value]()
-    out.kind = 4
-    out.owned = true
-    r Object** = cast.reinterpret[Object*](addrof out.value)
-    *r = value
-    ret out
-..
-
-# Wraps a borrowed array. The caller remains responsible for freeing it.
-# @complexity O(1)
-# @example
-#   value := json.arrayBorrowed(addrof items)
-pub arrayBorrowed(value Array*) Value:
-    out Value = memory.zeroValue[Value]()
-    out.kind = 5
-    r Array** = cast.reinterpret[Array*](addrof out.value)
-    *r = value
-    ret out
-..
-
-# Transfers responsibility for freeing the array's contents to the Value.
-# The pointer storage itself remains borrowed and must outlive the Value.
-# @complexity O(1)
-# @example
-#   value := json.arrayOwned(addrof items)
-pub arrayOwned(value Array*) Value:
-    out Value = memory.zeroValue[Value]()
-    out.kind = 5
-    out.owned = true
-    r Array** = cast.reinterpret[Array*](addrof out.value)
-    *r = value
-    ret out
 ..
 
 # Inserts or replaces key and transfers value ownership into the object.
 # @complexity O(N) lookup plus key-copy cost
 # @ownership Consumes value, including on failure.
 # @example
-#   try object.set("name", json.stringBorrowed("Magma"))
+#   try object.set("name", try json.string("Magma"))
 Object.set(key str, value $Value) !void:
-    try this.entries.set(key, value)
+    try this.data.entries.set(key, move value)
 ..
 
 # Returns a non-owning value for key.
@@ -345,8 +305,7 @@ Object.set(key str, value $Value) !void:
 # @example
 #   name := try object.get("name")
 Object.get(key str) !Value:
-    value := try this.entries.get(key)
-    ret value.borrowed()
+    ret try this.data.entries.get(key)
 ..
 
 # Removes key and frees its owned value.
@@ -355,7 +314,7 @@ Object.get(key str) !Value:
 # @example
 #   try object.delete("temporary")
 Object.delete(key str) !void:
-    try this.entries.delete(key)
+    try this.data.entries.delete(key)
 ..
 
 # Removes key and transfers its value to the caller without freeing it.
@@ -365,7 +324,7 @@ Object.delete(key str) !void:
 # @example
 #   value := try object.take("payload")
 Object.take(key str) !$Value:
-    ret try this.entries.take(key)
+    ret try this.data.entries.take(key)
 ..
 
 # Returns the number of object members.
@@ -373,15 +332,21 @@ Object.take(key str) !$Value:
 # @example
 #   fields := object.count()
 Object.count() u64:
-    ret this.entries.count()
+    ret this.data.entries.count()
 ..
 
-# Frees all keys, owned values, and object storage.
-# @complexity O(N)
-# @example
-#   object.free()
-destr Object.free() void:
-    this.entries.free()
+# Copies text and inserts it under key.
+Object.setString(key str, value str) !void:
+    text := try string(value)
+    try this.set(key, move text)
+..
+
+Object.setInt(key str, value i64) !void:
+    try this.set(key, numberInt(value))
+..
+
+Object.setBool(key str, value bool) !void:
+    try this.set(key, bool(value))
 ..
 
 # Appends a value and transfers its ownership into the array.
@@ -390,7 +355,12 @@ destr Object.free() void:
 # @example
 #   try items.append(json.numberInt(1))
 Array.append(value $Value) !void:
-    try this.values.pushRight(this.allocator, move value)
+    index u64, expandError error = this.data.values.expandRight(this.data.allocator)
+    if expandError.nok():
+        valueCleanup(move value)
+        throw expandError
+    ..
+    try this.data.values.set(this.data.allocator, index, move value, arrayValueCleanup)
 ..
 
 arrayValueCleanup(a alc.Allocator, val $Value) void:
@@ -402,7 +372,7 @@ arrayValueCleanup(a alc.Allocator, val $Value) void:
 # @example
 #   length := items.count()
 Array.count() u64:
-    ret this.values.count()
+    ret this.data.values.count()
 ..
 
 # Returns a non-owning value at index.
@@ -414,19 +384,574 @@ Array.get(index u64) !Value:
     if index >= this.count():
         throw errors.invalidArgument("JSON array index out of bounds")
     ..
-    values := this.values.view()
+    values := this.data.values.view()
     bounded index < values.count():
-        value := values[index]
-        ret value.borrowed()
+        ret values[index]
     ..
 ..
 
-# Frees all owned values and array storage.
-# @complexity O(N)
-# @example
-#   items.free()
-destr Array.free() void:
-    this.values.free(this.allocator, arrayValueCleanup)
+# Object operations forwarded through an owned or borrowed Value.
+Value.get(key str) !Value:
+    view := try this.asObject()
+    ret try view.get(key)
+..
+
+Value.set(key str, value $Value) !void:
+    view Object, viewError error = this.asObject()
+    if viewError.nok():
+        valueCleanup(move value)
+        throw viewError
+    ..
+    try view.set(key, move value)
+..
+
+Value.setString(key str, value str) !void:
+    view := try this.asObject()
+    try view.setString(key, value)
+..
+
+Value.setInt(key str, value i64) !void:
+    view := try this.asObject()
+    try view.setInt(key, value)
+..
+
+Value.setBool(key str, value bool) !void:
+    view := try this.asObject()
+    try view.setBool(key, value)
+..
+
+# Returns a borrowed array element. Named `at` because Magma does not overload
+# Value.get for both string keys and integer indices.
+Value.at(index u64) !Value:
+    view := try this.asArray()
+    ret try view.get(index)
+..
+
+Value.append(value $Value) !void:
+    view Array, viewError error = this.asArray()
+    if viewError.nok():
+        valueCleanup(move value)
+        throw viewError
+    ..
+    try view.append(move value)
+..
+
+Value.count() !u64:
+    if this.kind == 4:
+        view := try this.asObject()
+        ret view.count()
+    elif this.kind == 5:
+        view := try this.asArray()
+        ret view.count()
+    ..
+    throw errors.invalidType("json value is not a container")
+..
+
+const MAX_PARSE_DEPTH u64 = 128
+
+Parser(
+    source str
+    index u64
+)
+
+Parser.count() u64:
+    ret this.source.countBytes()
+..
+
+Parser.has(count u64) bool:
+    size := this.count()
+    ret this.index <= size && count <= size - this.index
+..
+
+Parser.current() u8:
+    ret strings.byteAt(this.source, this.index)
+..
+
+isJsonWhitespace(byte u8) bool:
+    ret byte == 32 || byte == 9 || byte == 10 || byte == 13
+..
+
+Parser.skipWhitespace() void:
+    loop this.index < this.count() && isJsonWhitespace(this.current()):
+        this.index = this.index + 1
+    ..
+..
+
+Parser.view(start u64, end u64) str:
+    # SAFETY: parser-produced offsets are bounded by source.countBytes().
+    unsafe:
+        startPtr := cast.utop(cast.ptou(strings.toPtr(this.source)) + start)
+        ret strings.fromPtrNoCopy(startPtr, end - start)
+    ..
+..
+
+hexValue(byte u8) !u32:
+    if byte >= 48 && byte <= 57:
+        ret cast.u64to32(cast.u8to64(byte - 48))
+    elif byte >= 65 && byte <= 70:
+        ret cast.u64to32(cast.u8to64(byte - 65) + 10)
+    elif byte >= 97 && byte <= 102:
+        ret cast.u64to32(cast.u8to64(byte - 97) + 10)
+    ..
+    throw errors.invalidArgument("invalid hexadecimal digit in JSON escape")
+..
+
+Parser.parseHexUnit() !u32:
+    if this.has(4) == false:
+        throw errors.invalidArgument("truncated Unicode escape in JSON string")
+    ..
+    value u32 = 0
+    for offset u64 = 0 to 4:
+        value = (value << 4) | try hexValue(strings.byteAt(this.source, this.index + offset))
+    ..
+    this.index = this.index + 4
+    ret value
+..
+
+Parser.appendScalar(output builder.Builder*, scalar u32) !void:
+    bytes := array u8[4]
+    view := slices.fromPtr(slices.toPtr(bytes), 4)
+    width := try utf8.encode(scalar, view)
+    encoded := strings.fromPtrNoCopy(slices.toPtr(bytes), width)
+    try output.appendCopy(encoded)
+..
+
+Parser.parseString() !$str:
+    if this.has(1) == false || this.current() != 34:
+        throw errors.invalidArgument("expected JSON string")
+    ..
+    this.index = this.index + 1
+    segmentStart := this.index
+    output := try builder.new()
+    defer output.free()
+
+    loop this.index < this.count():
+        byte := this.current()
+        if byte == 34:
+            if this.index > segmentStart:
+                try output.appendBorrowed(this.view(segmentStart, this.index))
+            ..
+            this.index = this.index + 1
+            result := try output.build()
+            if utf8.validate(result) == false:
+                result.free(ctx.procAlloc)
+                throw errors.invalidArgument("invalid UTF-8 in JSON string")
+            ..
+            ret move result
+        elif byte < 32:
+            throw errors.invalidArgument("unescaped control character in JSON string")
+        elif byte != 92:
+            this.index = this.index + 1
+            continue
+        ..
+
+        if this.index > segmentStart:
+            try output.appendBorrowed(this.view(segmentStart, this.index))
+        ..
+        this.index = this.index + 1
+        if this.has(1) == false:
+            throw errors.invalidArgument("truncated escape in JSON string")
+        ..
+        escape := this.current()
+        this.index = this.index + 1
+        if escape == 34:
+            try output.appendBorrowed("\"")
+        elif escape == 92:
+            try output.appendBorrowed("\\")
+        elif escape == 47:
+            try output.appendBorrowed("/")
+        elif escape == 98:
+            try output.appendBorrowed("\b")
+        elif escape == 102:
+            try output.appendBorrowed("\f")
+        elif escape == 110:
+            try output.appendBorrowed("\n")
+        elif escape == 114:
+            try output.appendBorrowed("\r")
+        elif escape == 116:
+            try output.appendBorrowed("\t")
+        elif escape == 117:
+            scalar := try this.parseHexUnit()
+            if scalar >= 55296 && scalar <= 56319:
+                if this.has(6) == false || this.current() != 92 || strings.byteAt(this.source, this.index + 1) != 117:
+                    throw errors.invalidArgument("high surrogate is missing its low surrogate")
+                ..
+                this.index = this.index + 2
+                low := try this.parseHexUnit()
+                if low < 56320 || low > 57343:
+                    throw errors.invalidArgument("invalid low surrogate in JSON string")
+                ..
+                scalar = 65536 + ((scalar - 55296) << 10) + (low - 56320)
+            elif scalar >= 56320 && scalar <= 57343:
+                throw errors.invalidArgument("unexpected low surrogate in JSON string")
+            ..
+            try this.appendScalar(addrof output, scalar)
+        else:
+            throw errors.invalidArgument("invalid escape in JSON string")
+        ..
+        segmentStart = this.index
+    ..
+    throw errors.invalidArgument("unterminated JSON string")
+..
+
+Parser.consumeLiteral(expected str) !void:
+    size := expected.countBytes()
+    if this.has(size) == false:
+        throw errors.invalidArgument("truncated JSON literal")
+    ..
+    for offset u64 = 0 to size:
+        if strings.byteAt(this.source, this.index + offset) != strings.byteAt(expected, offset):
+            throw errors.invalidArgument("invalid JSON literal")
+        ..
+    ..
+    this.index = this.index + size
+..
+
+isDigit(byte u8) bool:
+    ret byte >= 48 && byte <= 57
+..
+
+Parser.parseInteger(start u64, end u64, negative bool) Value:
+    position := start
+    if negative:
+        position = position + 1
+    ..
+    limit u64 = 9223372036854775807
+    if negative:
+        limit = 9223372036854775808
+    ..
+    magnitude u64 = 0
+    loop position < end:
+        digit := cast.u8to64(strings.byteAt(this.source, position) - 48)
+        if magnitude > limit / 10 || (magnitude == limit / 10 && digit > limit % 10):
+            ret memory.zeroValue[Value]()
+        ..
+        magnitude = magnitude * 10 + digit
+        position = position + 1
+    ..
+    if negative:
+        if magnitude == 9223372036854775808:
+            ret numberInt(cast.utoi(magnitude))
+        ..
+        ret numberInt(0 - cast.utoi(magnitude))
+    ..
+    ret numberInt(cast.utoi(magnitude))
+..
+
+power10(value f64, exponent i64) f64:
+    result := value
+    remaining := exponent
+    if remaining > 0:
+        loop remaining > 0:
+            result = result * 10.0
+            remaining = remaining - 1
+        ..
+    else:
+        loop remaining < 0:
+            result = result / 10.0
+            remaining = remaining + 1
+        ..
+    ..
+    ret result
+..
+
+Parser.parseNumber() !Value:
+    start := this.index
+    negative bool = false
+    if this.current() == 45:
+        negative = true
+        this.index = this.index + 1
+        if this.has(1) == false:
+            throw errors.invalidArgument("truncated JSON number")
+        ..
+    ..
+
+    if this.current() == 48:
+        this.index = this.index + 1
+        if this.index < this.count() && isDigit(this.current()):
+            throw errors.invalidArgument("leading zero in JSON number")
+        ..
+    elif this.current() >= 49 && this.current() <= 57:
+        loop this.index < this.count() && isDigit(this.current()):
+            this.index = this.index + 1
+        ..
+    else:
+        throw errors.invalidArgument("invalid integer part in JSON number")
+    ..
+
+    integerEnd := this.index
+    fractionDigits u64 = 0
+    hasFraction bool = false
+    if this.index < this.count() && this.current() == 46:
+        hasFraction = true
+        this.index = this.index + 1
+        fractionStart := this.index
+        loop this.index < this.count() && isDigit(this.current()):
+            this.index = this.index + 1
+        ..
+        fractionDigits = this.index - fractionStart
+        if fractionDigits == 0:
+            throw errors.invalidArgument("JSON fraction requires a digit")
+        ..
+    ..
+
+    explicitExponent i64 = 0
+    exponentNegative bool = false
+    hasExponent bool = false
+    if this.index < this.count() && (this.current() == 101 || this.current() == 69):
+        hasExponent = true
+        this.index = this.index + 1
+        if this.index < this.count() && (this.current() == 43 || this.current() == 45):
+            exponentNegative = this.current() == 45
+            this.index = this.index + 1
+        ..
+        exponentStart := this.index
+        loop this.index < this.count() && isDigit(this.current()):
+            digit := cast.u8to64(this.current() - 48)
+            if explicitExponent < 10000:
+                explicitExponent = explicitExponent * 10 + cast.utoi(digit)
+                if explicitExponent > 10000:
+                    explicitExponent = 10000
+                ..
+            ..
+            this.index = this.index + 1
+        ..
+        if this.index == exponentStart:
+            throw errors.invalidArgument("JSON exponent requires a digit")
+        ..
+        if exponentNegative:
+            explicitExponent = 0 - explicitExponent
+        ..
+    ..
+
+    if hasFraction == false && hasExponent == false:
+        integer := this.parseInteger(start, integerEnd, negative)
+        if integer.kind == 6:
+            ret integer
+        ..
+    ..
+
+    mantissa f64 = 0.0
+    significantTotal u64 = 0
+    kept u64 = 0
+    leadingDigits u64 = 0
+    leadingCount u64 = 0
+    nonzeroAfterLeading bool = false
+    seenNonzero bool = false
+    position := start
+    if negative:
+        position = position + 1
+    ..
+    numberEnd := this.index
+    loop position < numberEnd:
+        byte := strings.byteAt(this.source, position)
+        if byte == 101 || byte == 69:
+            break
+        elif byte == 46:
+            position = position + 1
+            continue
+        ..
+        digit := cast.u8to64(byte - 48)
+        if digit != 0:
+            seenNonzero = true
+        ..
+        if seenNonzero:
+            significantTotal = significantTotal + 1
+            if leadingCount < 20:
+                leadingDigits = leadingDigits * 10 + digit
+                leadingCount = leadingCount + 1
+            elif digit != 0:
+                nonzeroAfterLeading = true
+            ..
+            if kept < 19:
+                mantissa = mantissa * 10.0 + cast.utof(digit)
+                kept = kept + 1
+            ..
+        ..
+        position = position + 1
+    ..
+    if seenNonzero == false:
+        if negative:
+            ret numberFloat(0.0 - 0.0)
+        ..
+        ret numberFloat(0.0)
+    ..
+
+    # The largest finite f64 begins 1.7976931348623157081e308. Checking the
+    # decimal order and its first 20 significant digits prevents conversion
+    # rounding from silently turning a mathematically out-of-range number into
+    # the largest finite value.
+    decimalOrder := explicitExponent - cast.utoi(fractionDigits)
+    decimalOrder = decimalOrder + cast.utoi(significantTotal) - 1
+    if decimalOrder > 308:
+        throw errors.invalidArgument("JSON number is outside f64 range")
+    elif decimalOrder == 308:
+        loop leadingCount < 20:
+            leadingDigits = leadingDigits * 10
+            leadingCount = leadingCount + 1
+        ..
+        if leadingDigits > 17976931348623157081 || (leadingDigits == 17976931348623157081 && nonzeroAfterLeading):
+            throw errors.invalidArgument("JSON number is outside f64 range")
+        ..
+    ..
+
+    decimalExponent := explicitExponent - cast.utoi(fractionDigits)
+    skipped := significantTotal - kept
+    if skipped > 10000:
+        # Explicit exponents are clamped to 10,000, so 10,001 is sufficient
+        # to preserve the fact that the effective exponent remains positive.
+        decimalExponent = decimalExponent + 10001
+    else:
+        decimalExponent = decimalExponent + cast.utoi(skipped)
+    ..
+    if decimalExponent > 400:
+        throw errors.invalidArgument("JSON number is outside f64 range")
+    elif decimalExponent < -400:
+        mantissa = 0.0
+    else:
+        mantissa = power10(mantissa, decimalExponent)
+    ..
+    if negative:
+        mantissa = 0.0 - mantissa
+    ..
+    if finite(mantissa) == false:
+        throw errors.invalidArgument("JSON number is outside f64 range")
+    ..
+    ret numberFloat(mantissa)
+..
+
+setParsedObjectValue(view Object, key str, value $Value) !bool:
+    try view.set(key, move value)
+    ret true
+..
+
+Parser.parseObject(depth u64) !$Value:
+    a := ctx.procAlloc
+    this.index = this.index + 1
+    out := try object()
+    onerror valueCleanup(move out)
+    objectView := try out.asObject()
+    this.skipWhitespace()
+    if this.index < this.count() && this.current() == 125:
+        this.index = this.index + 1
+        ret move out
+    ..
+    loop true:
+        if this.index >= this.count() || this.current() != 34:
+            throw errors.invalidArgument("JSON object key must be a string")
+        ..
+        key := try this.parseString()
+        this.skipWhitespace()
+        if this.index >= this.count() || this.current() != 58:
+            key.free(a)
+            throw errors.invalidArgument("expected colon after JSON object key")
+        ..
+        this.index = this.index + 1
+        value $Value, parseError error = this.parseValue(depth + 1)
+        if parseError.nok():
+            key.free(a)
+            throw parseError
+        ..
+        inserted bool, setError error = setParsedObjectValue(objectView, key, move value)
+        key.free(a)
+        if setError.nok():
+            throw setError
+        ..
+        this.skipWhitespace()
+        if this.index >= this.count():
+            throw errors.invalidArgument("unterminated JSON object")
+        elif this.current() == 125:
+            this.index = this.index + 1
+            ret move out
+        elif this.current() != 44:
+            throw errors.invalidArgument("expected comma or closing brace in JSON object")
+        ..
+        this.index = this.index + 1
+        this.skipWhitespace()
+        if this.index < this.count() && this.current() == 125:
+            throw errors.invalidArgument("trailing comma in JSON object")
+        ..
+    ..
+..
+
+Parser.parseArray(depth u64) !$Value:
+    this.index = this.index + 1
+    out := try array()
+    onerror valueCleanup(move out)
+    arrayView := try out.asArray()
+    this.skipWhitespace()
+    if this.index < this.count() && this.current() == 93:
+        this.index = this.index + 1
+        ret move out
+    ..
+    loop true:
+        value := try this.parseValue(depth + 1)
+        try arrayView.append(move value)
+        this.skipWhitespace()
+        if this.index >= this.count():
+            throw errors.invalidArgument("unterminated JSON array")
+        elif this.current() == 93:
+            this.index = this.index + 1
+            ret move out
+        elif this.current() != 44:
+            throw errors.invalidArgument("expected comma or closing bracket in JSON array")
+        ..
+        this.index = this.index + 1
+        this.skipWhitespace()
+        if this.index < this.count() && this.current() == 93:
+            throw errors.invalidArgument("trailing comma in JSON array")
+        ..
+    ..
+..
+
+Parser.parseValue(depth u64) !$Value:
+    this.skipWhitespace()
+    if this.index >= this.count():
+        throw errors.invalidArgument("expected JSON value")
+    ..
+    byte := this.current()
+    if byte == 110:
+        try this.consumeLiteral("null")
+        ret null()
+    elif byte == 116:
+        try this.consumeLiteral("true")
+        ret bool(true)
+    elif byte == 102:
+        try this.consumeLiteral("false")
+        ret bool(false)
+    elif byte == 34:
+        value := try this.parseString()
+        ret stringOwned(move value)
+    elif byte == 123:
+        if depth >= MAX_PARSE_DEPTH:
+            throw errors.invalidArgument("JSON nesting limit exceeded")
+        ..
+        ret try this.parseObject(depth)
+    elif byte == 91:
+        if depth >= MAX_PARSE_DEPTH:
+            throw errors.invalidArgument("JSON nesting limit exceeded")
+        ..
+        ret try this.parseArray(depth)
+    elif byte == 45 || isDigit(byte):
+        ret try this.parseNumber()
+    ..
+    throw errors.invalidArgument("unexpected character while parsing JSON value")
+..
+
+# Parses one complete JSON text into an owned value.
+# Duplicate object keys use last-value-wins semantics.
+# @throws invalidArgument for malformed JSON or nesting deeper than 128 containers
+# @ownership Release the returned value with Value.free.
+# @complexity O(N), excluding linear object-key lookup
+pub parse(source str) !$Value:
+    parser := Parser(source=source, index=0)
+    value := try parser.parseValue(0)
+    parser.skipWhitespace()
+    if parser.index != source.countBytes():
+        value.free()
+        throw errors.invalidArgument("trailing content after JSON value")
+    ..
+    ret move value
 ..
 
 writeEscaped(w writer.Writer, value str) !void:
@@ -486,11 +1011,11 @@ finite(value f64) bool:
     ret (*bits & 0x7FF0000000000000) != 0x7FF0000000000000
 ..
 
-writeObject(w writer.Writer, value Object*, precision u64) !void:
+writeObject(w writer.Writer, value Object, precision u64) !void:
     try value.write(w, precision)
 ..
 
-writeArray(w writer.Writer, value Array*, precision u64) !void:
+writeArray(w writer.Writer, value Array, precision u64) !void:
     try value.write(w, precision)
 ..
 
@@ -508,20 +1033,20 @@ writeValue(w writer.Writer, value Value, precision u64) !void:
         ..
         try w.writeFloat64(*floatNumber, precision)
     elif valueCopy.kind == 3:
-        string str* = cast.reinterpret[str](addrof valueCopy.value)
-        try writeEscaped(w, *string)
+        text str* = cast.reinterpret[str](addrof valueCopy.value)
+        try writeEscaped(w, *text)
     elif valueCopy.kind == 4:
-        object Object** = cast.reinterpret[Object*](addrof valueCopy.value)
-        if *object == none:
+        objectView Object* = cast.reinterpret[Object](addrof valueCopy.value)
+        if objectView.data == none:
             throw errors.invalidArgument("JSON object pointer is null")
         ..
-        try writeObject(w, *object, precision)
+        try writeObject(w, *objectView, precision)
     elif valueCopy.kind == 5:
-        array Array** = cast.reinterpret[Array*](addrof valueCopy.value)
-        if *array == none:
+        arrayView Array* = cast.reinterpret[Array](addrof valueCopy.value)
+        if arrayView.data == none:
             throw errors.invalidArgument("JSON array pointer is null")
         ..
-        try writeArray(w, *array, precision)
+        try writeArray(w, *arrayView, precision)
     elif valueCopy.kind == 6:
         intNumber i64* = cast.reinterpret[i64](addrof valueCopy.value)
         try w.writeInt64(*intNumber)
@@ -530,11 +1055,16 @@ writeValue(w writer.Writer, value Value, precision u64) !void:
     ..
 ..
 
-# Serializes this value as compact JSON, using precision for fractional numbers.
+# Serializes this value as compact JSON with six fractional digits.
 # @complexity O(N) for serialized byte count
 # @example
-#   try value.write(output, 6)
-Value.write(w writer.Writer, precision u64) !void:
+#   try value.write(output)
+Value.write(w writer.Writer) !void:
+    try writeValue(w, *this, 6)
+..
+
+# Serializes this value with an explicit fractional precision.
+Value.writeWithPrecision(w writer.Writer, precision u64) !void:
     try writeValue(w, *this, precision)
 ..
 
@@ -544,8 +1074,8 @@ Value.write(w writer.Writer, precision u64) !void:
 #   try object.write(output, 6)
 Object.write(w writer.Writer, precision u64) !void:
     try w.writeAll("{")
-    keys := this.entries.keysView()
-    values := this.entries.valuesView()
+    keys := this.data.entries.keysView()
+    values := this.data.entries.valuesView()
     for i u64 = 0 to this.count():
         bounded i < keys.count(), i < values.count():
             if i != 0:
@@ -565,7 +1095,7 @@ Object.write(w writer.Writer, precision u64) !void:
 #   try items.write(output, 6)
 Array.write(w writer.Writer, precision u64) !void:
     try w.writeAll("[")
-    values := this.values.view()
+    values := this.data.values.view()
     for i u64 = 0 to this.count():
         bounded i < values.count():
             if i != 0:

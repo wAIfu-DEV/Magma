@@ -43,6 +43,7 @@ type docIndex struct {
 	memberTypes           map[string]*types.NodeType
 	expressionSymbols     map[string]map[string]completionItem
 	functionReturns       map[string]*types.NodeType
+	functionDefs          map[string]*types.NodeFuncDef
 	primitiveModules      map[string]string
 	publicModuleAliases   map[string]map[string]string
 }
@@ -59,7 +60,7 @@ type completionBinding struct {
 }
 
 func buildDocIndex(state *types.SharedState) *docIndex {
-	index := &docIndex{byNode: map[any]string{}, modules: map[string]string{}, symbols: map[string]string{}, hoverSymbols: map[string]string{}, hoverByName: map[string]string{}, valueHovers: map[string]string{}, completionVisible: map[string]bool{}, completionKinds: map[string]int{}, completionDestructors: map[string]bool{}, memberTypes: map[string]*types.NodeType{}, expressionSymbols: map[string]map[string]completionItem{}, functionReturns: map[string]*types.NodeType{}, primitiveModules: map[string]string{}, publicModuleAliases: map[string]map[string]string{}}
+	index := &docIndex{byNode: map[any]string{}, modules: map[string]string{}, symbols: map[string]string{}, hoverSymbols: map[string]string{}, hoverByName: map[string]string{}, valueHovers: map[string]string{}, completionVisible: map[string]bool{}, completionKinds: map[string]int{}, completionDestructors: map[string]bool{}, memberTypes: map[string]*types.NodeType{}, expressionSymbols: map[string]map[string]completionItem{}, functionReturns: map[string]*types.NodeType{}, functionDefs: map[string]*types.NodeFuncDef{}, primitiveModules: map[string]string{}, publicModuleAliases: map[string]map[string]string{}}
 	for _, file := range state.Files {
 		if file == nil || file.GlNode == nil {
 			continue
@@ -96,6 +97,7 @@ func buildDocIndex(state *types.SharedState) *docIndex {
 				index.completionKinds[key] = kind
 				index.completionDestructors[key] = node.IsDestructor
 				index.functionReturns[file.PackageName+"\x00"+name] = node.ReturnType
+				index.functionDefs[file.PackageName+"\x00"+name] = node
 				if !strings.Contains(name, ".") {
 					index.addExpressionSymbol(file.PackageName, completionItem{Label: name, Kind: 3, Detail: formatFunction(node), Documentation: markdownContent(index.hoverSymbols[file.PackageName+"\x00"+name])})
 				}
@@ -156,6 +158,7 @@ func buildDocIndex(state *types.SharedState) *docIndex {
 					docs := index.add(file, node.Alias.Name, node.Alias.Tk.Pos.Line, node.Alias, byLine)
 					index.addHover(file.PackageName, node.Alias.Name, joinHover(code("alias "+node.Alias.Name+" = "+formatType(node.Alias.Target)), docs))
 					index.completionVisible[file.PackageName+"\x00"+node.Alias.Name] = node.Alias.IsPublic
+					index.completionKinds[file.PackageName+"\x00"+node.Alias.Name] = 25 // CompletionItemKind.TypeParameter
 				}
 			}
 		}

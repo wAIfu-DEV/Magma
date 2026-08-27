@@ -25,6 +25,14 @@ func (m *monoCtx) rewriteType(module string, gl *t.NodeGlobal, tp *t.NodeType) e
 			if e == nil {
 				if target := m.modules[targetModule]; target != nil {
 					if definition, ok := target.StructDefs[baseName]; ok {
+						if len(definition.TypeParams) != 0 {
+							return m.genericInstantiationError(gl, nameToken(n.NameNode), &genericInstantiationFailure{
+								kind:     "struct",
+								name:     baseName,
+								expected: len(definition.TypeParams),
+								got:      0,
+							})
+						}
 						if targetModule != module && !definition.IsPublic {
 							return fmt.Errorf("struct '%s' is private and cannot be used from another module", flattenName(n.NameNode))
 						}

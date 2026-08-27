@@ -253,10 +253,44 @@ func TestBorrowedParameterIsNotAnOwnershipObligation(t *testing.T) {
 	out := flow{states: map[*types.NodeExprVarDef]State{}, deferred: map[*types.NodeExprVarDef]bool{}}
 
 	a.use(&out, borrowed)
-	a.checkExit(&out)
+	a.checkExit(&out, types.Token{})
 
 	if len(a.diagnostics) != 0 {
 		t.Fatalf("borrow created ownership diagnostics: %+v", a.diagnostics)
+	}
+}
+
+func TestCleanupWarningCollectsEveryLeakingExit(t *testing.T) {
+	a, resourceType := fixture()
+	value := &types.NodeExprVarDef{Name: &types.NodeNameSingle{
+		Tk:   types.Token{Pos: types.FilePos{Line: 2, Col: 5}},
+		Name: "value",
+	}, Type: resourceType}
+	base := flow{
+		states:     map[*types.NodeExprVarDef]State{value: stateLive},
+		absent:     map[placeKey]types.Token{},
+		deferred:   map[*types.NodeExprVarDef]bool{},
+		consumedAt: map[*types.NodeExprVarDef]types.Token{},
+		deferredAt: map[*types.NodeExprVarDef]types.Token{},
+		conditions: map[*types.NodeExprVarDef]*types.NodeExprVarDef{},
+		errorFacts: map[*types.NodeExprVarDef]int8{},
+		ranges:     map[rangeRelation]*types.RangeProof{},
+		provenance: map[placeKey]pointerProvenance{},
+		allocators: map[placeKey]allocatorFact{},
+		retentions: map[placeKey]pointerProvenance{},
+		scopes:     []deferScope{{locals: map[*types.NodeExprVarDef]bool{value: true}}},
+	}
+
+	first := cloneFlow(base)
+	a.statement(&first, &types.NodeStmtRet{Tk: types.Token{Pos: types.FilePos{Line: 10, Col: 5}}, Expression: &types.NodeExprVoid{}})
+	second := cloneFlow(base)
+	a.statement(&second, &types.NodeStmtThrow{Tk: types.Token{Pos: types.FilePos{Line: 20, Col: 5}}, Expression: &types.NodeExprVoid{}})
+
+	if len(a.diagnostics) != 1 || len(a.diagnostics[0].Related) != 2 {
+		t.Fatalf("diagnostics = %+v, want one warning with two exit locations", a.diagnostics)
+	}
+	if a.diagnostics[0].Related[0].Token.Pos.Line != 10 || a.diagnostics[0].Related[1].Token.Pos.Line != 20 {
+		t.Fatalf("related exits = %+v, want lines 10 and 20", a.diagnostics[0].Related)
 	}
 }
 
@@ -284,7 +318,7 @@ func TestPlainReturnInitializesBorrowedLocal(t *testing.T) {
 	out := flow{states: map[*types.NodeExprVarDef]State{}, deferred: map[*types.NodeExprVarDef]bool{}}
 
 	a.valueInto(&out, destination, callReturning(resourceType, false))
-	a.checkExit(&out)
+	a.checkExit(&out, types.Token{})
 
 	if out.states[destination] != stateBorrowed {
 		t.Fatalf("plain return state = %v, want borrowed", out.states[destination])
@@ -441,6 +475,45 @@ func TestBorrowedReturnCannotBeConsumed(t *testing.T) {
 	}
 }
 
+func TestTakingDestructorMethodConsumesReceiver(t *testing.T) {
+	a, resourceType := fixture()
+	value := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "value"}, Type: resourceType}
+	out := flow{states: map[*types.NodeExprVarDef]State{value: stateLive}, deferred: map[*types.NodeExprVarDef]bool{}}
+	method := &types.NodeExprMemberAccess{
+		Target:    name(value),
+		Member:    "close",
+		MethodDef: &types.NodeFuncDef{IsDestructor: true},
+	}
+
+	a.borrowExpr(&out, method)
+
+	if out.states[value] != stateLive || !out.deferred[value] {
+		t.Fatalf("receiver state = %v, pending = %v; want live with scheduled destruction", out.states[value], out.deferred[value])
+	}
+	if len(a.diagnostics) != 0 {
+		t.Fatalf("taking destructor method produced diagnostics: %+v", a.diagnostics)
+	}
+}
+
+func TestTakingCompositeNameDestructorMethodConsumesReceiver(t *testing.T) {
+	a, resourceType := fixture()
+	value := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "value"}, Type: resourceType}
+	out := flow{states: map[*types.NodeExprVarDef]State{value: stateLive}, deferred: map[*types.NodeExprVarDef]bool{}}
+	method := &types.NodeExprName{
+		AssociatedNode: &types.NodeFuncDef{IsDestructor: true},
+		MethodReceiver: name(value),
+	}
+
+	a.borrowExpr(&out, method)
+
+	if out.states[value] != stateLive || !out.deferred[value] {
+		t.Fatalf("receiver state = %v, pending = %v; want live with scheduled destruction", out.states[value], out.deferred[value])
+	}
+	if len(a.diagnostics) != 0 {
+		t.Fatalf("taking destructor method produced diagnostics: %+v", a.diagnostics)
+	}
+}
+
 func destructorCall(variable *types.NodeExprVarDef) *types.NodeExprCall {
 	return &types.NodeExprCall{
 		AssociatedFnDef: &types.NodeFuncDef{IsDestructor: true},
@@ -530,6 +603,32 @@ func TestThrowRunsOnErrorCleanup(t *testing.T) {
 	}
 }
 
+func TestInfiniteLoopDoesNotFabricateSuccessfulScopeExit(t *testing.T) {
+	a, resourceType := fixture()
+	value := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "value"}, Type: resourceType}
+	out := flow{states: map[*types.NodeExprVarDef]State{}, deferred: map[*types.NodeExprVarDef]bool{}}
+	body := types.NodeBody{Statements: []types.NodeStatement{
+		&types.NodeStmtExpr{Expression: &types.NodeExprVarDefAssign{VarDef: value, AssignExpr: callReturning(resourceType, true)}},
+		&types.NodeStmtDefer{Expression: destructorCall(value), OnError: true},
+		&types.NodeStmtWhile{
+			CondExpr: &types.NodeExprLit{Value: "1", LitType: types.TokLitBool},
+			Body:     types.NodeBody{},
+		},
+		// This throw is unreachable, but if it were reached it would execute the
+		// onerror cleanup. Neither interpretation permits a successful fallthrough.
+		&types.NodeStmtThrow{Expression: &types.NodeExprLit{Value: "failure"}},
+	}}
+
+	a.body(&out, &body)
+
+	if len(a.diagnostics) != 0 {
+		t.Fatalf("infinite loop fabricated a successful scope exit: %+v", a.diagnostics)
+	}
+	if !out.terminated {
+		t.Fatal("unbroken while true should terminate the continuation")
+	}
+}
+
 func TestOnErrorCleanupDoesNotRunOnSuccess(t *testing.T) {
 	a, resourceType := fixture()
 	value := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "value"}, Type: resourceType}
@@ -571,7 +670,7 @@ func TestUninitializedDestructibleStartsAsZeroValue(t *testing.T) {
 	out := flow{states: map[*types.NodeExprVarDef]State{}, deferred: map[*types.NodeExprVarDef]bool{}, scopes: []deferScope{{locals: map[*types.NodeExprVarDef]bool{}}}}
 
 	a.expression(&out, value)
-	a.unwindTo(&out, 0, false)
+	a.unwindTo(&out, 0, false, types.Token{})
 
 	if len(a.diagnostics) != 0 {
 		t.Fatalf("zero-valued declaration produced diagnostics: %+v", a.diagnostics)

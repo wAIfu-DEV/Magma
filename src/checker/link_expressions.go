@@ -220,6 +220,19 @@ func clExprMemberAccess(c *ctx, member *t.NodeExprMemberAccess, lvalue bool) err
 		return e
 	}
 
+	// Calls already resolve member functions in clExprCall. For a standalone
+	// member expression, prefer the same method lookup and expose the method as
+	// an unbound function value whose first argument is the implicit receiver.
+	// This keeps function values pointer-sized and lets callers store the
+	// receiver separately as an opaque context pointer.
+	if !lvalue {
+		if fnDef, _, _, _, methodErr := clResolveMemberFunc(c, member.Target.GetInferredType(), member.Member); methodErr == nil {
+			member.MethodDef = fnDef
+			member.InfType = makeFuncPtrTypeFromDef(fnDef)
+			return nil
+		}
+	}
+
 	access, e := clResolveFieldAccess(c, member.Target.GetInferredType(), member.Member, lvalue)
 	if e != nil {
 		return e

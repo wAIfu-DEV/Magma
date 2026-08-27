@@ -308,35 +308,19 @@ func irExprName(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 	} else if nameExpr.Storage.IsSSA() {
 		ssa = ptrSsa
 	} else if isFuncName {
-		irWritef(ctx, "  %s = bitcast ptr @", ssa.Repr)
-
+		symbol := fnDef.AbsName
 		if nameExpr.NativeContextThunk {
-			irWrite(ctx, nativeContextThunkSymbol(fnDef))
+			symbol = nativeContextThunkSymbol(fnDef)
 		} else if nameExpr.ContextAdapter {
-			irWrite(ctx, contextAdapterSymbol(fnDef))
+			symbol = contextAdapterSymbol(fnDef)
 		} else if fnDef.NoAliasName != "" {
 			// NoAliasName has precedence, used for extern func aliasing
-			irWrite(ctx, fnDef.NoAliasName)
-		} else {
-			irWrite(ctx, fnDef.AbsName)
+			symbol = fnDef.NoAliasName
 		}
-		/*
-			e := irName(ctx, fnDef.Class.NameNode, true)
-			if e != nil {
-				return ssaName(""), e
-			}*/
-
-		irWrite(ctx, " to ")
-
-		functionType, ok := typeNd.KindNode.(*t.NodeTypeFunc)
-		if !ok {
+		if _, ok := typeNd.KindNode.(*t.NodeTypeFunc); !ok {
 			return SsaName{}, fmt.Errorf("cannot lower function value with non-function type")
 		}
-		e := irFuncPtrType(ctx, functionType)
-		if e != nil {
-			return ssaName(""), e
-		}
-		irWrite(ctx, "\n")
+		ssa = ssaName("@" + symbol)
 	} else {
 		irWritef(ctx, "  %s = load ", ssa.Repr)
 
@@ -365,6 +349,9 @@ func irExprName(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 func irExprMemberAccess(ctx *IrCtx, member *t.NodeExprMemberAccess) (SsaName, error) {
 	if member == nil || member.Target == nil {
 		return SsaName{}, fmt.Errorf("member access has no target")
+	}
+	if member.MethodDef != nil {
+		return ssaName("@" + member.MethodDef.AbsName), nil
 	}
 	if member.Access == nil || member.Access.Type == nil {
 		return SsaName{}, fmt.Errorf("member access '%s' has no resolved access info", member.Member)

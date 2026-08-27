@@ -1,0 +1,4 @@
+- In alias statements, EOF after last type leads to error
+- should error when defining a struct member that has a generic type, but no generic argument is specified
+- error appears at top of file, not at token "consuming argument requires an owned value, but this expression is borrowed"
+- silent error on trying to use 'this' in non-method function

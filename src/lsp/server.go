@@ -42,11 +42,12 @@ type server struct {
 	safetyWarnings bool
 }
 type analysis struct {
-	file        *types.FileCtx
-	err         error
-	warnings    []types.Diagnostic
-	docs        *docIndex
-	definitions map[string]location
+	file            *types.FileCtx
+	err             error
+	warnings        []types.Diagnostic
+	docs            *docIndex
+	definitions     map[string]location
+	nodeDefinitions map[any]location
 }
 
 type rangePosition struct {
@@ -199,7 +200,7 @@ func (s *server) handle(msg message) error {
 				s.safetyWarnings = true
 			}
 		}
-		return s.respond(msg.ID, map[string]any{"capabilities": map[string]any{"textDocumentSync": 1, "hoverProvider": true, "definitionProvider": true, "completionProvider": map[string]any{"triggerCharacters": []string{".", "\"", "/", ":"}}, "codeActionProvider": true, "semanticTokensProvider": map[string]any{"legend": map[string]any{"tokenTypes": []string{"keyword"}, "tokenModifiers": []string{}}, "full": true}}})
+		return s.respond(msg.ID, map[string]any{"capabilities": map[string]any{"textDocumentSync": 1, "hoverProvider": true, "definitionProvider": true, "inlayHintProvider": true, "signatureHelpProvider": map[string]any{"triggerCharacters": []string{"(", ","}, "retriggerCharacters": []string{","}}, "completionProvider": map[string]any{"triggerCharacters": []string{".", "\"", "/", ":", " "}}, "codeActionProvider": true, "semanticTokensProvider": map[string]any{"legend": map[string]any{"tokenTypes": []string{"keyword"}, "tokenModifiers": []string{}}, "full": true}}})
 	case "shutdown":
 		return s.respond(msg.ID, nil)
 	case "initialized", "$/cancelRequest", "textDocument/didSave":
@@ -208,12 +209,15 @@ func (s *server) handle(msg message) error {
 		var p struct {
 			Settings struct {
 				SafetyWarnings bool `json:"safetyWarnings"`
+				Magma          struct {
+					SafetyWarnings bool `json:"safetyWarnings"`
+				} `json:"magma"`
 			} `json:"settings"`
 		}
 		if err := json.Unmarshal(msg.Params, &p); err != nil {
 			return err
 		}
-		s.safetyWarnings = p.Settings.SafetyWarnings
+		s.safetyWarnings = p.Settings.SafetyWarnings || p.Settings.Magma.SafetyWarnings
 		for uri, d := range s.documents {
 			d.result = nil
 			if err := s.publishDiagnostics(uri); err != nil {
@@ -323,6 +327,10 @@ func (s *server) handle(msg message) error {
 			return s.respond(msg.ID, completionList{IsIncomplete: true, Items: []completionItem{}})
 		}
 		return s.respond(msg.ID, completionList{IsIncomplete: true, Items: complete(d.URI, d.Text, p.Position, s.stdRoot)})
+	case "textDocument/signatureHelp":
+		return s.handleSignatureHelp(msg)
+	case "textDocument/inlayHint":
+		return s.handleInlayHints(msg)
 	case "textDocument/semanticTokens/full":
 		return s.handleSemanticTokens(msg)
 	case "textDocument/codeAction":
@@ -405,6 +413,7 @@ func analyzeWithRecoveryPolicy(rawURI, source, stdRoot string, recoverSyntax, sa
 	file := state.Files[path]
 	docs := buildDocIndex(state)
 	definitions := buildDefinitionIndex(state)
+	nodeDefinitions := buildNodeDefinitionIndex(state)
 	if recoverSyntax && err != nil {
 		for _, syntaxError := range comp_err.Diagnostics(err) {
 			if syntaxError.Ctx != nil && filepath.Clean(syntaxError.Ctx.FilePath) == path {
@@ -420,7 +429,7 @@ func analyzeWithRecoveryPolicy(rawURI, source, stdRoot string, recoverSyntax, sa
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "magma-lsp: analysis failed for %s: %v\n", path, err)
 		}
-		return &analysis{file: file, err: err, docs: docs, definitions: definitions}
+		return &analysis{file: file, err: err, docs: docs, definitions: definitions, nodeDefinitions: nodeDefinitions}
 	}
 	// The parser returns the portion of the global tree completed before a
 	// syntax error. Keep that tree useful for editor features: a half-written
@@ -428,7 +437,7 @@ func analyzeWithRecoveryPolicy(rawURI, source, stdRoot string, recoverSyntax, sa
 	// declarations that were parsed successfully.
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "magma-lsp: partial analysis for %s: %v\n", path, err)
-		return &analysis{file: file, err: err, docs: docs, definitions: definitions}
+		return &analysis{file: file, err: err, docs: docs, definitions: definitions, nodeDefinitions: nodeDefinitions}
 	}
 	specialized, err := compilerpipeline.Specialize(parsed)
 	if err == nil {
@@ -452,7 +461,7 @@ func analyzeWithRecoveryPolicy(rawURI, source, stdRoot string, recoverSyntax, sa
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "magma-lsp: semantic analysis failed for %s: %v\n", path, err)
 	}
-	return &analysis{file: file, err: err, warnings: state.Warnings, docs: docs, definitions: definitions}
+	return &analysis{file: file, err: err, warnings: state.Warnings, docs: docs, definitions: definitions, nodeDefinitions: nodeDefinitions}
 }
 
 func buildDefinitionIndex(state *types.SharedState) map[string]location {
@@ -477,6 +486,63 @@ func buildDefinitionIndex(state *types.SharedState) map[string]location {
 			}
 			index[file.PackageName+"\x00"+sourceName(name)] = tokenLocation(file.FilePath, token)
 		}
+		for _, declaration := range file.GlNode.Declarations {
+			switch node := declaration.(type) {
+			case *types.NodeStructDef:
+				if token, ok := declarationNameToken(node.Class.NameNode); ok {
+					name := flattenName(node.Class.NameNode)
+					index[file.PackageName+"\x00"+name] = tokenLocation(file.FilePath, token)
+					for _, field := range node.Class.ArgsNode.Args {
+						index[file.PackageName+"\x00"+name+"."+field.Name] = tokenLocation(file.FilePath, field.Tk)
+					}
+				}
+			case *types.NodeTypeAlias:
+				if node.Alias != nil {
+					index[file.PackageName+"\x00"+node.Alias.Name] = tokenLocation(file.FilePath, node.Alias.Tk)
+				}
+			case *types.NodeExprVarDef:
+				if token, ok := declarationNameToken(node.Name); ok {
+					index[file.PackageName+"\x00"+flattenName(node.Name)] = tokenLocation(file.FilePath, token)
+				}
+			case *types.NodeConstDef:
+				if node.VarDef != nil {
+					if token, ok := declarationNameToken(node.VarDef.Name); ok {
+						index[file.PackageName+"\x00"+flattenName(node.VarDef.Name)] = tokenLocation(file.FilePath, token)
+					}
+				}
+			}
+		}
+	}
+	return index
+}
+
+func buildNodeDefinitionIndex(state *types.SharedState) map[any]location {
+	index := map[any]location{}
+	for _, file := range state.Files {
+		if file == nil || file.GlNode == nil {
+			continue
+		}
+		walkAST(file.GlNode, func(value any) bool {
+			switch node := value.(type) {
+			case *types.NodeFuncDef:
+				if token, ok := declarationNameToken(node.Class.NameNode); ok {
+					index[node] = tokenLocation(file.FilePath, token)
+				}
+			case *types.NodeStructDef:
+				if token, ok := declarationNameToken(node.Class.NameNode); ok {
+					index[node] = tokenLocation(file.FilePath, token)
+				}
+			case *types.NodeExprVarDef:
+				if token, ok := declarationNameToken(node.Name); ok {
+					index[node] = tokenLocation(file.FilePath, token)
+				}
+			case *types.NodeTypeAlias:
+				if node.Alias != nil {
+					index[node] = tokenLocation(file.FilePath, node.Alias.Tk)
+				}
+			}
+			return true
+		})
 	}
 	return index
 }
@@ -520,6 +586,9 @@ func (a *analysis) definition(pos position) (location, bool) {
 	if definition, ok := a.resolvedMemberDefinition(pos); ok {
 		return definition, true
 	}
+	if definition, ok := a.resolvedNodeDefinition(pos); ok {
+		return definition, true
+	}
 	for i, token := range a.file.Tokens {
 		if token.Type != types.TokName || !tokenAt(token, pos) {
 			continue
@@ -542,6 +611,53 @@ func (a *analysis) definition(pos position) (location, bool) {
 		return definition, ok
 	}
 	return location{}, false
+}
+
+func (a *analysis) resolvedNodeDefinition(pos position) (location, bool) {
+	if a.file == nil || a.file.GlNode == nil || a.nodeDefinitions == nil {
+		return location{}, false
+	}
+	var result location
+	found := false
+	walkAST(a.file.GlNode, func(value any) bool {
+		if found {
+			return false
+		}
+		name, ok := value.(*types.NodeExprName)
+		if !ok {
+			return true
+		}
+		if composite, ok := name.Name.(*types.NodeNameComposite); ok {
+			for i := 1; i < len(composite.Tokens) && i-1 < len(name.MemberAccesses); i++ {
+				if !tokenAt(composite.Tokens[i], pos) {
+					continue
+				}
+				access := name.MemberAccesses[i-1]
+				if access != nil && access.OwnerDef != nil {
+					key := access.OwnerDef.Module + "\x00" + access.OwnerDef.Name + "." + composite.Parts[i]
+					result, found = a.definitions[key]
+					return !found
+				}
+			}
+		}
+		if name.AssociatedNode == nil {
+			return true
+		}
+		at := false
+		switch source := name.Name.(type) {
+		case *types.NodeNameSingle:
+			at = tokenAt(source.Tk, pos)
+		case *types.NodeNameComposite:
+			if len(source.Tokens) != 0 {
+				at = tokenAt(source.Tokens[len(source.Tokens)-1], pos)
+			}
+		}
+		if at {
+			result, found = a.nodeDefinitions[name.AssociatedNode]
+		}
+		return !found
+	})
+	return result, found
 }
 
 func (a *analysis) resolvedMemberDefinition(pos position) (location, bool) {
@@ -625,14 +741,9 @@ func (a *analysis) hover(pos position) string {
 			break
 		}
 	}
-	if sourceToken != nil {
-		switch sourceToken.Repr {
-		case "move":
-			return "`move value` transfers ownership from a named place."
-		case "bounded":
-			return "`bounded condition:` establishes a reusable range proof for its lexical block."
-		case "unsafe":
-			return "`unsafe:` localizes operations whose validity the compiler cannot prove."
+	if sourceTokenIndex >= 0 {
+		if value := a.keywordHover(sourceTokenIndex); value != "" {
+			return value
 		}
 	}
 	// Prefer information indexed from the intact source tree. Transformed nodes
@@ -976,11 +1087,16 @@ func formatType(node *types.NodeType) string {
 			out += "[" + strings.Join(a, ", ") + "]"
 		}
 	case *types.NodeTypeAbsolute:
-		out = types.DisplayType(node)
+		// DisplayType includes top-level modifiers. Apply those exactly once below,
+		// as for every other type kind.
+		kindOnly := *node
+		kindOnly.Throws = false
+		kindOnly.Owned = false
+		out = types.DisplayType(&kindOnly)
 	case *types.NodeTypeCompilerKnown:
 		out = k.Name
 	case *types.NodeTypePointer:
-		out = "*" + formatType(&types.NodeType{KindNode: k.Kind})
+		out = formatType(&types.NodeType{KindNode: k.Kind}) + "*"
 	case *types.NodeTypeRfc:
 		out = "&" + formatType(&types.NodeType{KindNode: k.Kind})
 	case *types.NodeTypeSlice:

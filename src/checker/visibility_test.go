@@ -71,6 +71,29 @@ func checkModuleSet(t *testing.T, files map[string]string) error {
 	return err
 }
 
+func TestTopLevelFunctionMayUseThisAsExplicitFirstParameter(t *testing.T) {
+	err := checkModules(t, "mod library\n", `mod main
+
+Thing(value u64)
+
+assign(this Thing*, value u64) void:
+    this.value = value
+..
+
+Thing.assign(value u64) void:
+    assign(this, value)
+..
+
+main() void:
+    thing := Thing(value=0)
+    thing.assign(1)
+..
+`)
+	if err != nil {
+		t.Fatalf("top-level function with explicit 'this' parameter failed: %v", err)
+	}
+}
+
 func TestPublicUseReexportsModuleNamespace(t *testing.T) {
 	err := checkModuleSet(t, map[string]string{
 		"heap.mg": `mod heap

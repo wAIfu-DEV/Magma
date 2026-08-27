@@ -251,8 +251,8 @@ func irExprUnary(ctx *IrCtx, expectedType *t.NodeType, unaryExpr *t.NodeExprUnar
 		if isFloatType(operandType) {
 			return SsaName{}, fmt.Errorf("bitwise not (~) is not supported for floating-point types")
 		}
-		if !isBoolType(operandType) && !isNumberType(operandType) {
-			return SsaName{}, fmt.Errorf("bitwise not (~) requires an integer or bool operand")
+		if !isNumberType(operandType) {
+			return SsaName{}, fmt.Errorf("bitwise not (~) requires an integer operand")
 		}
 
 		resSsa := irSsaLocal(ctx)
@@ -264,6 +264,15 @@ func irExprUnary(ctx *IrCtx, expectedType *t.NodeType, unaryExpr *t.NodeExprUnar
 		irWrite(ctx, " ")
 		irPossibleLitSsa(ctx, operandSsa)
 		irWrite(ctx, ", -1\n")
+		return resSsa, nil
+	case t.KwNot:
+		if !isBoolType(operandType) {
+			return SsaName{}, fmt.Errorf("boolean not requires a bool operand")
+		}
+		resSsa := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = xor i1 ", resSsa.Repr)
+		irPossibleLitSsa(ctx, operandSsa)
+		irWrite(ctx, ", true\n")
 		return resSsa, nil
 	default:
 		return SsaName{}, fmt.Errorf("unsupported unary expression")

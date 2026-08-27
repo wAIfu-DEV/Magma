@@ -5,6 +5,7 @@ use "std:builder" builder
 use "std:errors" errors
 use "std:heap" heap
 use "std:strings" strings
+use "std:writer" writer
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()
@@ -37,6 +38,19 @@ pub main() !void:
     if value.isEmpty() == false || value.byteCount() != 0:
         throw errors.failure("builder reset changed")
     ..
+    output := value.proto[writer.Writer]()
+    temporary := try strings.copy("writer copy")
+    writeCount := try output.write(temporary)
+    temporary.free(a)
+    if writeCount != 11:
+        throw errors.failure("builder writer count changed")
+    ..
+    written := try value.build()
+    defer written.free(a)
+    if strings.compare(written, "writer copy") == false:
+        throw errors.failure("builder writer did not copy input")
+    ..
+    try value.reset()
     try value.addBorrowed("borrowed")
     value.releaseCopies()
     try value.reset()

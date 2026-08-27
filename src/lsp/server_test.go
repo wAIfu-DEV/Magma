@@ -239,8 +239,10 @@ func TestExpressionCompletionContextsIncludeGenericScope(t *testing.T) {
 			}
 			items := complete("file:///"+filepath.ToSlash(path), source, position{Line: line, Character: character}, testStdRoot())
 			labels := map[string]bool{}
+			byLabel := map[string]completionItem{}
 			for _, item := range items {
 				labels[item.Label] = true
+				byLabel[item.Label] = item
 			}
 			for _, want := range []string{"GLOBAL", "LIMIT", "helper", "dep", "arg", "holder", "values", "local"} {
 				if !labels[want] {
@@ -276,6 +278,113 @@ func TestExpressionCompletionIsDisabledInStructFields(t *testing.T) {
 	items := complete("file:///"+filepath.ToSlash(path), source, position{Line: 3, Character: 4}, testStdRoot())
 	if len(items) != 0 {
 		t.Fatalf("struct field completion = %#v, want none", items)
+	}
+}
+
+func TestTypeCompletionAfterDeclaredNames(t *testing.T) {
+	directory := t.TempDir()
+	dependency := filepath.Join(directory, "dependency.mg")
+	if err := os.WriteFile(dependency, []byte("mod dependency\npub External(value u64)\nHidden(value u64)\npub alias ExternalID = u64\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, declaration string
+		want, not         []string
+	}{
+		{name: "variable", declaration: "main() void:\n    value |\n..", want: []string{"u64", "Local", "LocalID", "dep"}},
+		{name: "function return", declaration: "make() |:\n..", want: []string{"bool", "Local", "LocalID"}},
+		{name: "function argument", declaration: "take(value |) void:\n..", want: []string{"str", "Local", "LocalID"}},
+		{name: "struct field", declaration: "Container(value |)", want: []string{"error", "Local", "LocalID"}},
+		{name: "imported struct", declaration: "take(value dep.Ex|) void:\n..", want: []string{"External", "ExternalID"}, not: []string{"Hidden", "u64"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := "mod completion\nuse \"./dependency.mg\" dep\nLocal(value u64)\nalias LocalID = u64\n" + test.declaration + "\n"
+			marker := strings.Index(source, "|")
+			before := source[:marker]
+			line := uint32(strings.Count(before, "\n"))
+			character := uint32(len([]rune(before[strings.LastIndex(before, "\n")+1:])))
+			source = source[:marker] + source[marker+1:]
+			path := filepath.Join(directory, test.name+".mg")
+			if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			items := complete("file:///"+filepath.ToSlash(path), source, position{Line: line, Character: character}, testStdRoot())
+			labels := map[string]bool{}
+			byLabel := map[string]completionItem{}
+			for _, item := range items {
+				labels[item.Label] = true
+				byLabel[item.Label] = item
+			}
+			for _, want := range test.want {
+				if !labels[want] {
+					t.Errorf("completion labels %v do not include %q", labels, want)
+				}
+			}
+			for _, not := range test.not {
+				if labels[not] {
+					t.Errorf("completion labels %v unexpectedly include %q", labels, not)
+				}
+			}
+			if test.name == "variable" && byLabel["dep"].Kind != 9 {
+				t.Errorf("module completion = %#v, want module kind", byLabel["dep"])
+			}
+		})
+	}
+}
+
+func TestStructConstructorFieldCompletion(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		line   uint32
+		char   uint32
+		want   []string
+		not    []string
+	}{
+		{
+			name:   "empty constructor",
+			source: "mod completion\nThing(first u64, second bool)\nmain() void:\n    value := Thing()\n..\n",
+			line:   3, char: 19, want: []string{"first", "second"},
+		},
+		{
+			name:   "typed prefix and assigned field",
+			source: "mod completion\nThing(first u64, second bool)\nmain() void:\n    value := Thing(first=1, se)\n..\n",
+			line:   3, char: 30, want: []string{"second"}, not: []string{"first"},
+		},
+		{
+			name:   "generic multiline constructor",
+			source: "mod completion\nBox[T](value T, valid bool)\nmain[T](item T) void:\n    value := Box[T](\n        va\n    )\n..\n",
+			line:   4, char: 10, want: []string{"valid", "value"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "completion.mg")
+			if err := os.WriteFile(path, []byte(test.source), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			items := complete("file:///"+filepath.ToSlash(path), test.source, position{Line: test.line, Character: test.char}, testStdRoot())
+			byLabel := map[string]completionItem{}
+			for _, item := range items {
+				byLabel[item.Label] = item
+			}
+			for _, want := range test.want {
+				item, ok := byLabel[want]
+				if !ok {
+					t.Errorf("completion labels %v do not include %q", byLabel, want)
+					continue
+				}
+				if item.Kind != 5 || item.InsertText != want+"=" {
+					t.Errorf("completion %q = %#v", want, item)
+				}
+			}
+			for _, unwanted := range test.not {
+				if _, ok := byLabel[unwanted]; ok {
+					t.Errorf("completion unexpectedly includes %q", unwanted)
+				}
+			}
+		})
 	}
 }
 

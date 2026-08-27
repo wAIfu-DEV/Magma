@@ -35,3 +35,14 @@ func TestSingleTrailingNumberDoesNotBecomeDecodeFailure(t *testing.T) {
 		t.Fatalf("tokens = %#v", tokens)
 	}
 }
+
+func TestNotIsKeyword(t *testing.T) {
+	ctx := &types.FileCtx{FilePath: "not.mg", Content: []byte("not value")}
+	tokens, err := Tokenize(ctx, ctx.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tokens) != 2 || tokens[0].Type != types.TokKeyword || tokens[0].KeywType != types.KwNot {
+		t.Fatalf("tokens = %#v", tokens)
+	}
+}

@@ -89,7 +89,7 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 		for i, g := range n.GenericArgs {
 			genericArgs[i] = cloneType(g)
 		}
-		return &t.NodeExprName{Tk: n.Tk, Name: cloneName(n.Name), GenericArgs: genericArgs, InfType: cloneType(n.InfType), ContextAdapter: n.ContextAdapter, NativeContextThunk: n.NativeContextThunk}
+		return &t.NodeExprName{Tk: n.Tk, Name: cloneName(n.Name), GenericArgs: genericArgs, InfType: cloneType(n.InfType), MethodReceiver: cloneExpr(n.MethodReceiver), ContextAdapter: n.ContextAdapter, NativeContextThunk: n.NativeContextThunk}
 	case *t.NodeExprCall:
 		args := make([]t.NodeExpr, len(n.Args))
 		for i, a := range n.Args {
@@ -116,11 +116,12 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 		return &t.NodeExprProtoView{Tk: n.Tk, Target: cloneExpr(n.Target), ProtoType: cloneType(n.ProtoType), InfType: cloneType(n.InfType)}
 	case *t.NodeExprMemberAccess:
 		return &t.NodeExprMemberAccess{
-			Tk:      n.Tk,
-			Target:  cloneExpr(n.Target),
-			Member:  n.Member,
-			Access:  n.Access,
-			InfType: cloneType(n.InfType),
+			Tk:        n.Tk,
+			Target:    cloneExpr(n.Target),
+			Member:    n.Member,
+			Access:    n.Access,
+			InfType:   cloneType(n.InfType),
+			MethodDef: n.MethodDef,
 		}
 	case *t.NodeExprSubscript:
 		candidate := make([]*t.NodeType, len(n.GenericCandidate))
@@ -255,7 +256,7 @@ func cloneBody(in *t.NodeBody) t.NodeBody {
 	if in == nil {
 		return t.NodeBody{}
 	}
-	out := t.NodeBody{Statements: make([]t.NodeStatement, len(in.Statements))}
+	out := t.NodeBody{Statements: make([]t.NodeStatement, len(in.Statements)), EndTk: in.EndTk}
 	for i, s := range in.Statements {
 		out.Statements[i] = cloneStmt(s)
 	}

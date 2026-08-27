@@ -778,6 +778,15 @@ func expressionValid(file *t.FileCtx, expression t.NodeExpr) error {
 		}
 		return expressionValid(file, node.Expr)
 	case *t.NodeExprMemberAccess:
+		if node.MethodDef != nil {
+			if node.Target == nil || !typeComplete(node.Target.GetInferredType()) || !typeComplete(node.InfType) {
+				return invalid(file, &node.Tk, "method value has no resolved target or function type")
+			}
+			if _, ok := node.InfType.KindNode.(*t.NodeTypeFunc); !ok {
+				return invalid(file, &node.Tk, "method value does not have function type")
+			}
+			return expressionValid(file, node.Target)
+		}
 		if node.Access == nil || !typeComplete(node.Access.OwnerType) || !typeComplete(node.Access.Type) || node.Access.FieldNb < 0 {
 			return invalid(file, &node.Tk, "member expression has no resolved field metadata")
 		}

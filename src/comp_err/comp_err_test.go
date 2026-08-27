@@ -71,3 +71,26 @@ func TestEnsureDiagnosticAddsSourceAndPreservesExistingDiagnostic(t *testing.T) 
 		t.Fatal("existing source diagnostic was replaced")
 	}
 }
+
+func TestFprintDiagnosticIncludesRelatedSourceLocations(t *testing.T) {
+	ctx := &types.FileCtx{FilePath: "main.mg", Content: []byte("value $Resource = make()\nthrow err\nret value\n")}
+	diagnostic := &types.Diagnostic{
+		Severity: types.SeverityWarning,
+		Stage:    "ownership checking",
+		Ctx:      ctx,
+		FilePath: ctx.FilePath,
+		Token:    types.Token{Pos: types.FilePos{Line: 1, Col: 1}},
+		Message:  "destructible value 'value' is not consumed on every scope exit path",
+		Related: []types.DiagnosticRelated{
+			{FilePath: ctx.FilePath, Token: types.Token{Pos: types.FilePos{Line: 2, Col: 1}}, Message: "value remains unconsumed when this path exits the scope"},
+			{FilePath: ctx.FilePath, Token: types.Token{Pos: types.FilePos{Line: 3, Col: 1}}, Message: "value remains unconsumed when this path exits the scope"},
+		},
+	}
+
+	var output bytes.Buffer
+	FprintDiagnostic(&output, diagnostic)
+	text := output.String()
+	if strings.Count(text, "here: value remains unconsumed") != 2 || !strings.Contains(text, "2| throw err") || !strings.Contains(text, "3| ret value") {
+		t.Fatalf("related locations were not rendered:\n%s", text)
+	}
+}

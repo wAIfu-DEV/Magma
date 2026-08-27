@@ -230,7 +230,7 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 			definedArgs := n.AssociatedFnDef.Class.ArgsNode.Args
 			defArgCount = len(definedArgs)
 
-			if defArgCount > 0 {
+			if n.IsMemberFunc && defArgCount > 0 {
 				firstArg := definedArgs[0]
 				if firstArg.Name == "this" {
 					definedArgs = definedArgs[1:]
@@ -367,7 +367,7 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 	case *t.NodeExprLit:
 		switch n.LitType {
 		case t.TokLitNum:
-			n.InfType = makeNamedType("i64")
+			n.InfType = numericLiteralDefaultType(n.Value)
 			return nil
 		case t.TokLitStr:
 			n.InfType = makeNamedType("str")
@@ -527,14 +527,17 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 			return nil
 		case t.KwTilde:
 			operandT := n.Operand.GetInferredType()
-			if isBoolType(operandT) {
-				n.InfType = makeNamedType("bool")
-				return nil
-			}
 			if !isIntegerType(operandT) {
-				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("bitwise not requires an integer or 'bool' operand, but got '%s'", flattenType(operandT)), "")
+				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("bitwise not requires an integer operand, but got '%s'", flattenType(operandT)), "")
 			}
 			n.InfType = operandT
+			return nil
+		case t.KwNot:
+			operandT := n.Operand.GetInferredType()
+			if !isBoolType(operandT) {
+				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("boolean not requires a 'bool' operand, but got '%s'", flattenType(operandT)), "")
+			}
+			n.InfType = makeNamedType("bool")
 			return nil
 		default:
 			operator := t.KwTypeToRepr[n.Operator]

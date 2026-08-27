@@ -90,6 +90,7 @@ const (
 	KwBounded
 	KwUnsafe
 	KwNoCtx
+	KwNot
 )
 
 var KwTypeToRepr []string = []string{
@@ -158,6 +159,7 @@ var KwTypeToRepr []string = []string{
 	KwBounded:    "bounded",
 	KwUnsafe:     "unsafe",
 	KwNoCtx:      "noctx",
+	KwNot:        "not",
 }
 
 var KwReprToType map[string]KwType = map[string]KwType{
@@ -225,6 +227,7 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"bounded":  KwBounded,
 	"unsafe":   KwUnsafe,
 	"noctx":    KwNoCtx,
+	"not":      KwNot,
 }
 
 type Token struct {

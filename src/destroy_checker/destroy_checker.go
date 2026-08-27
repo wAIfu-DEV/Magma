@@ -826,7 +826,9 @@ func (a *analyzer) setProvenance(out *flow, destination place.Place, value types
 	}
 	// Converting the representation-free `ptr` value into a typed pointer
 	// fabricates provenance which the compiler cannot validate.
-	if !hasProvenance && !nullLiteral && isOpaquePointerType(value.GetInferredType()) {
+	destinationKind := destinationType(destination)
+	_, destinationIsTypedPointer := pointerKind(destinationKind)
+	if !hasProvenance && !nullLiteral && isOpaquePointerType(value.GetInferredType()) && destinationIsTypedPointer {
 		provenance = pointerProvenance{unknown: true}
 		hasProvenance = true
 		if a.unsafeDepth == 0 {
@@ -844,6 +846,46 @@ func (a *analyzer) setProvenance(out *flow, destination place.Place, value types
 	if hasProvenance {
 		out.provenance[key] = provenance
 	}
+}
+
+func pointerKind(node *types.NodeType) (*types.NodeTypePointer, bool) {
+	if node == nil {
+		return nil, false
+	}
+	pointer, ok := node.KindNode.(*types.NodeTypePointer)
+	return pointer, ok
+}
+
+func destinationType(destination place.Place) *types.NodeType {
+	result := destination.Root.Type
+	for _, projection := range destination.Projections {
+		switch projection.Kind {
+		case place.Field:
+			if projection.FieldOwner == nil || projection.FieldIndex < 0 || projection.FieldIndex >= len(projection.FieldOwner.FieldOrder) {
+				return nil
+			}
+			result = projection.FieldOwner.Fields[projection.FieldOwner.FieldOrder[projection.FieldIndex]]
+		case place.ConstantIndex, place.DynamicIndex:
+			if result == nil {
+				return nil
+			}
+			slice, ok := result.KindNode.(*types.NodeTypeSlice)
+			if !ok {
+				return nil
+			}
+			result = &types.NodeType{KindNode: slice.ElemKind}
+		case place.Dereference:
+			if result == nil {
+				return nil
+			}
+			pointer, ok := result.KindNode.(*types.NodeTypePointer)
+			if !ok {
+				return nil
+			}
+			result = &types.NodeType{KindNode: pointer.Kind}
+		}
+	}
+	return result
 }
 
 // retentionForExpr returns the lifetime dependency carried by an owned handle.
@@ -1077,6 +1119,28 @@ func (a *analyzer) diagnostic(token types.Token, message string, safety bool) {
 func (a *analyzer) diagnosticRelated(token types.Token, message string, safety bool, related []types.DiagnosticRelated) {
 	key := fmt.Sprintf("%s\x00%d\x00%d\x00%t\x00%s", a.file.FilePath, token.Pos.Line, token.Pos.Col, safety, message)
 	if a.seen[key] {
+		// Path-sensitive checks can rediscover the same primary finding at
+		// several exits. Preserve those exits as related locations instead of
+		// letting primary-diagnostic deduplication discard them.
+		for index := range a.diagnostics {
+			diagnostic := &a.diagnostics[index]
+			if diagnostic.FilePath != a.file.FilePath || diagnostic.Token.Pos != token.Pos || diagnostic.Safety != safety || diagnostic.Message != message {
+				continue
+			}
+			for _, candidate := range related {
+				duplicate := false
+				for _, existing := range diagnostic.Related {
+					if existing.FilePath == candidate.FilePath && existing.Token.Pos == candidate.Token.Pos && existing.Message == candidate.Message {
+						duplicate = true
+						break
+					}
+				}
+				if !duplicate {
+					diagnostic.Related = append(diagnostic.Related, candidate)
+				}
+			}
+			break
+		}
 		return
 	}
 	a.seen[key] = true
@@ -1125,11 +1189,15 @@ func (a *analyzer) safetyErrorRelated(token types.Token, message string, prior t
 func rangeExprKey(expr types.NodeExpr) string {
 	switch node := expr.(type) {
 	case *types.NodeExprName:
-		if variable := directVariable(node); variable != nil {
+		if resolved, ok := resolvedPlace(node); ok {
+			variable := resolved.Root
 			if variable.IsConst {
 				if value, ok := literalUint(variable.Initializer); ok {
 					return fmt.Sprintf("c:%d", value)
 				}
+			}
+			if len(resolved.Projections) != 0 {
+				return fmt.Sprintf("p:%p:%s", variable, keyFor(resolved).path)
 			}
 			return fmt.Sprintf("v:%p", variable)
 		}
@@ -1401,9 +1469,11 @@ func knownNonNegative(expr types.NodeExpr) bool {
 
 func invalidateVariableRanges(out *flow, variable *types.NodeExprVarDef) {
 	valueKey := fmt.Sprintf("v:%p", variable)
+	placePrefix := fmt.Sprintf("p:%p:", variable)
 	countPrefix := fmt.Sprintf("n:%p:", variable)
 	for relation := range out.ranges {
 		if relation.lower == valueKey || relation.upper == valueKey ||
+			strings.HasPrefix(relation.lower, placePrefix) || strings.HasPrefix(relation.upper, placePrefix) ||
 			strings.HasPrefix(relation.lower, countPrefix) || strings.HasPrefix(relation.upper, countPrefix) {
 			delete(out.ranges, relation)
 		}
@@ -1496,6 +1566,18 @@ func (a *analyzer) authorizeAddressedSubscript(out *flow, node *types.NodeExprSu
 
 func (a *analyzer) warn(token types.Token, message string) {
 	a.diagnostic(token, message, false)
+}
+
+func (a *analyzer) warnAtExit(token types.Token, message string, exit types.Token) {
+	related := []types.DiagnosticRelated(nil)
+	if exit.Pos.Line != 0 {
+		related = []types.DiagnosticRelated{{
+			FilePath: a.file.FilePath,
+			Token:    exit,
+			Message:  "value remains unconsumed when this path exits the scope",
+		}}
+	}
+	a.diagnosticRelated(token, message, false, related)
 }
 
 func (a *analyzer) safetyError(token types.Token, message string) {
@@ -1772,6 +1854,10 @@ func (a *analyzer) consumeAt(out *flow, variable *types.NodeExprVarDef, reason s
 func (a *analyzer) borrowExpr(out *flow, expr types.NodeExpr) {
 	switch node := expr.(type) {
 	case *types.NodeExprName:
+		if method, ok := node.AssociatedNode.(*types.NodeFuncDef); ok && method.IsDestructor && node.MethodReceiver != nil {
+			a.scheduleTakenDestructor(out, node.MethodReceiver, node.Tk)
+			return
+		}
 		if resolved, ok := resolvedPlace(node); ok {
 			a.usePlace(out, resolved, node.Tk)
 		}
@@ -1794,6 +1880,14 @@ func (a *analyzer) borrowExpr(out *flow, expr types.NodeExpr) {
 		a.validateDereference(out, node)
 		a.borrowExpr(out, node.Operand)
 	case *types.NodeExprMemberAccess:
+		// Taking a destructor method value transfers the same ownership as calling
+		// it. The resulting function pointer can invoke the destructor later with
+		// a separately stored receiver, so leaving that receiver live here would
+		// incorrectly require a second destruction at the end of the scope.
+		if node.MethodDef != nil && node.MethodDef.IsDestructor {
+			a.scheduleTakenDestructor(out, node.Target, node.Tk)
+			return
+		}
 		// Validate every projected operation in the target (notably a
 		// subscript) before using the combined place. Treating the combined
 		// member as a place must not bypass the target's bounds proof.
@@ -1829,6 +1923,29 @@ func (a *analyzer) borrowExpr(out *flow, expr types.NodeExpr) {
 	case *types.NodeExprProtoView:
 		a.borrowExpr(out, node.Target)
 	}
+}
+
+func (a *analyzer) scheduleTakenDestructor(out *flow, receiver types.NodeExpr, token types.Token) {
+	a.borrowExpr(out, receiver)
+	resolved, ok := resolvedPlace(receiver)
+	if !ok {
+		return
+	}
+	owner := resolved.Root
+	state, tracked := out.states[owner]
+	if !tracked || state == stateBorrowed {
+		a.safetyError(token, fmt.Sprintf("borrowed destructible value '%s' cannot have its destructor taken", variableName(owner)))
+		return
+	}
+	if state != stateLive || out.deferred[owner] {
+		a.safetyErrorRelated(token, fmt.Sprintf("destructible value '%s' may have its destructor taken more than once", variableName(owner)), out.deferredAt[owner], "destructor was first taken here")
+		return
+	}
+	out.deferred[owner] = true
+	if out.deferredAt == nil {
+		out.deferredAt = map[*types.NodeExprVarDef]types.Token{}
+	}
+	out.deferredAt[owner] = token
 }
 
 // A struct constructor is an ownership boundary for its fields. Tracked local
@@ -2398,12 +2515,12 @@ func mergeFlows(left, right flow) flow {
 	return out
 }
 
-func (a *analyzer) checkExit(out *flow) {
+func (a *analyzer) checkExit(out *flow, exitSite types.Token) {
 	exit := cloneFlow(*out)
-	a.unwindTo(&exit, 0, false)
+	a.unwindTo(&exit, 0, false, exitSite)
 	for variable, state := range exit.states {
-		if (state == stateLive || state == stateMaybeConsumed || state == stateConditional) && !a.destructorReceivers[variable] {
-			a.warn(variableToken(variable), fmt.Sprintf("destructible value '%s' is not consumed on every exit path", variableName(variable)))
+		if (state == stateLive || state == stateMaybeConsumed || state == stateConditional) && !a.destructorReceivers[variable] && !exit.deferred[variable] {
+			a.warnAtExit(variableToken(variable), fmt.Sprintf("destructible value '%s' is not consumed on every exit path", variableName(variable)), exitSite)
 		}
 	}
 }
@@ -2434,7 +2551,7 @@ func deferredDestructorOwner(deferred *types.NodeStmtDefer) *types.NodeExprVarDe
 	return directVariable(call.MemberOwnerName)
 }
 
-func (a *analyzer) unwindScope(out *flow, checkLocals bool, failing bool) {
+func (a *analyzer) unwindScope(out *flow, checkLocals bool, failing bool, exitSite types.Token) {
 	index := len(out.scopes) - 1
 	scope := out.scopes[index]
 	out.scopes = out.scopes[:index]
@@ -2517,46 +2634,64 @@ func (a *analyzer) unwindScope(out *flow, checkLocals bool, failing bool) {
 			}
 		}
 		state, tracked := out.states[variable]
-		if checkLocals && tracked && (state == stateLive || state == stateMaybeConsumed || state == stateConditional) && !a.destructorReceivers[variable] {
-			a.warn(variableToken(variable), fmt.Sprintf("destructible value '%s' is not consumed on every scope exit path", variableName(variable)))
+		if checkLocals && tracked && (state == stateLive || state == stateMaybeConsumed || state == stateConditional) && !a.destructorReceivers[variable] && !out.deferred[variable] {
+			a.warnAtExit(variableToken(variable), fmt.Sprintf("destructible value '%s' is not consumed on every scope exit path", variableName(variable)), exitSite)
 		}
-		delete(out.states, variable)
-		delete(out.deferred, variable)
-		delete(out.deferredAt, variable)
-		delete(out.consumedAt, variable)
-		for key := range out.absent {
-			if key.root == variable {
-				delete(out.absent, key)
-			}
-		}
-		for key := range out.provenance {
-			if key.root == variable {
-				delete(out.provenance, key)
-			}
-		}
-		for key := range out.allocators {
-			if key.root == variable {
-				delete(out.allocators, key)
-			}
-		}
-		for key := range out.retentions {
-			if key.root == variable {
-				delete(out.retentions, key)
-			}
-		}
-		delete(out.conditions, variable)
+		forgetLocal(out, variable)
 	}
 }
 
-func (a *analyzer) unwindTo(out *flow, depth int, failing bool) {
+func forgetLocal(out *flow, variable *types.NodeExprVarDef) {
+	delete(out.states, variable)
+	delete(out.deferred, variable)
+	delete(out.deferredAt, variable)
+	delete(out.consumedAt, variable)
+	for key := range out.absent {
+		if key.root == variable {
+			delete(out.absent, key)
+		}
+	}
+	for key := range out.provenance {
+		if key.root == variable {
+			delete(out.provenance, key)
+		}
+	}
+	for key := range out.allocators {
+		if key.root == variable {
+			delete(out.allocators, key)
+		}
+	}
+	for key := range out.retentions {
+		if key.root == variable {
+			delete(out.retentions, key)
+		}
+	}
+	delete(out.conditions, variable)
+}
+
+// discardTo removes analysis-only scope state for a continuation which cannot
+// be reached. Unlike unwinding, it must not run deferred statements or validate
+// ownership obligations because no runtime scope exit occurs on this path.
+func discardTo(out *flow, depth int) {
 	for len(out.scopes) > depth {
-		a.unwindScope(out, true, failing)
+		index := len(out.scopes) - 1
+		scope := out.scopes[index]
+		out.scopes = out.scopes[:index]
+		for variable := range scope.locals {
+			forgetLocal(out, variable)
+		}
+	}
+}
+
+func (a *analyzer) unwindTo(out *flow, depth int, failing bool, exitSite types.Token) {
+	for len(out.scopes) > depth {
+		a.unwindScope(out, true, failing, exitSite)
 	}
 }
 
 func (a *analyzer) unwindTryFailure(out *flow) {
 	for len(out.scopes) > 0 {
-		a.unwindScope(out, false, true)
+		a.unwindScope(out, false, true, types.Token{})
 	}
 }
 
@@ -2618,6 +2753,13 @@ func (a *analyzer) conditional(out *flow, statement *types.NodeStmtIf) {
 	a.addRangePredicates(&remaining, statement.CondExpr, false, false)
 	a.body(&first, &statement.Body)
 	branches = append(branches, first)
+	// A literal true condition is exhaustive. Keeping the fabricated false
+	// flow would make ownership initialized or consumed by the body appear only
+	// conditional after the join.
+	if isLiteralTrue(statement.CondExpr) {
+		*out = first
+		return
+	}
 
 	next := statement.NextCondStmt
 	hasElse := false
@@ -2630,6 +2772,11 @@ func (a *analyzer) conditional(out *flow, statement *types.NodeStmtIf) {
 			a.borrowExpr(&candidate, branch.CondExpr)
 			a.body(&candidate, &branch.Body)
 			branches = append(branches, candidate)
+			if isLiteralTrue(branch.CondExpr) {
+				hasElse = true
+				next = nil
+				continue
+			}
 			remaining = falseFlow
 			next = branch.NextCondStmt
 		case *types.NodeStmtElse:
@@ -2704,8 +2851,8 @@ func (a *analyzer) statement(out *flow, statement types.NodeStatement) {
 		} else {
 			a.borrowExpr(out, node.Expression)
 		}
-		a.unwindTo(out, 0, false)
-		a.checkExit(out)
+		a.unwindTo(out, 0, false, node.Tk)
+		a.checkExit(out, node.Tk)
 		out.terminated = true
 	case *types.NodeStmtThrow:
 		a.borrowExpr(out, node.Expression)
@@ -2729,14 +2876,14 @@ func (a *analyzer) statement(out *flow, statement types.NodeStatement) {
 			// Throwing an error exits only for a non-OK value. Validate that
 			// failure edge independently while retaining the OK continuation.
 			failure := cloneFlow(*out)
-			a.unwindTo(&failure, 0, true)
-			a.checkExit(&failure)
+			a.unwindTo(&failure, 0, true, node.Tk)
+			a.checkExit(&failure, node.Tk)
 			if errVariable != nil {
 				*out = refineConditionalOwnership(*out, errVariable, true)
 			}
 		} else {
-			a.unwindTo(out, 0, true)
-			a.checkExit(out)
+			a.unwindTo(out, 0, true, node.Tk)
+			a.checkExit(out, node.Tk)
 			out.terminated = true
 		}
 	case *types.NodeStmtIf:
@@ -2839,7 +2986,7 @@ func (a *analyzer) statement(out *flow, statement types.NodeStatement) {
 	case *types.NodeStmtBreak:
 		if len(a.loopBreaks) != 0 {
 			index := len(a.loopBreaks) - 1
-			a.unwindTo(out, a.loopDepths[index], false)
+			a.unwindTo(out, a.loopDepths[index], false, node.Tk)
 			exit := cloneFlow(*out)
 			exit.terminated = false
 			a.loopBreaks[index] = append(a.loopBreaks[index], exit)
@@ -2848,7 +2995,7 @@ func (a *analyzer) statement(out *flow, statement types.NodeStatement) {
 	case *types.NodeStmtContinue:
 		if len(a.loopNext) != 0 {
 			index := len(a.loopNext) - 1
-			a.unwindTo(out, a.loopDepths[index], false)
+			a.unwindTo(out, a.loopDepths[index], false, node.Tk)
 			next := cloneFlow(*out)
 			next.terminated = false
 			a.loopNext[index] = append(a.loopNext[index], next)
@@ -2881,7 +3028,11 @@ func (a *analyzer) body(out *flow, body *types.NodeBody) {
 	}
 	a.futureUses = outerFuture
 	if len(out.scopes) > depth {
-		a.unwindTo(out, depth, false)
+		if out.terminated {
+			discardTo(out, depth)
+		} else {
+			a.unwindTo(out, depth, false, body.EndTk)
+		}
 	}
 }
 
@@ -3001,7 +3152,7 @@ func collectStatementUses(statement types.NodeStatement, out map[*types.NodeExpr
 
 func isLiteralTrue(expr types.NodeExpr) bool {
 	literal, ok := expr.(*types.NodeExprLit)
-	return ok && literal.LitType == types.TokLitBool && literal.Value == "true"
+	return ok && literal.LitType == types.TokLitBool && (literal.Value == "1" || literal.Value == "true")
 }
 
 func (a *analyzer) function(function *types.NodeFuncDef) {
@@ -3031,8 +3182,8 @@ func (a *analyzer) function(function *types.NodeFuncDef) {
 	}
 	a.body(&out, &function.Body)
 	if !out.terminated {
-		a.unwindTo(&out, 0, false)
-		a.checkExit(&out)
+		a.unwindTo(&out, 0, false, function.Body.EndTk)
+		a.checkExit(&out, function.Body.EndTk)
 	}
 }
 

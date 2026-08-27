@@ -22,10 +22,9 @@ pub List[T](
 # @example
 #   values := try list.new[Value](a, freeValue)
 pub new[T](a alc.Allocator, cleanup (alc.Allocator, $T) void) !$List[T]:
-	array := try arr.new[T](a)
 	ret List[T](
         allocator=a,
-		array=move array,
+		array=try arr.new[T](a),
         cleanup=cleanup,
     )
 ..

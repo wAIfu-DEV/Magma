@@ -13,35 +13,6 @@ func callReturnType(call *t.NodeExprCall) *t.NodeType {
 	return call.InfType
 }
 
-func irFuncPtrType(ctx *IrCtx, fnType *t.NodeTypeFunc) error {
-	e := irThrowingType(ctx, fnType.RetType)
-	if e != nil {
-		return e
-	}
-
-	irWrite(ctx, " (")
-	wrote := false
-	if fnType.ContextABI == t.ContextABIContextful {
-		irWrite(ctx, "ptr")
-		wrote = true
-	}
-
-	for _, n := range fnType.Args {
-		if wrote {
-			irWrite(ctx, ", ")
-		}
-		e := irType(ctx, n)
-		if e != nil {
-			return e
-		}
-
-		wrote = true
-	}
-
-	irWrite(ctx, ")*")
-	return nil
-}
-
 func irExprCallFuncPtr(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (SsaName, error) {
 	irWrite(ctx, "  ; call fnptr\n")
 
@@ -69,15 +40,6 @@ func irExprCallFuncPtr(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (SsaNa
 	if e != nil {
 		return ssaName(""), e
 	}
-	bitCastPtr := irSsaLocal(ctx)
-
-	irWritef(ctx, "  %s = bitcast ptr %s to ", bitCastPtr.Repr, fnPtrSsa.Repr)
-
-	e = irFuncPtrType(ctx, fnType)
-	if e != nil {
-		return SsaName{}, e
-	}
-	irWrite(ctx, "\n")
 
 	ssa := irSsaLocal(ctx)
 
@@ -97,7 +59,7 @@ func irExprCallFuncPtr(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (SsaNa
 		return ssaName(""), e
 	}
 
-	irWritef(ctx, " %s(", bitCastPtr.Repr)
+	irWritef(ctx, " %s(", fnPtrSsa.Repr)
 	wrote := false
 	if fnType.ContextABI == t.ContextABIContextful {
 		if ctx.ContextPtr.Repr == "" {

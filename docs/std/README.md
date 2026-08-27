@@ -27,7 +27,8 @@ written as `!T`, and `$T` marks ownership transfer.
 [`slices`](slices.md), [`strings`](strings.md), [`bytes`](bytes.md),
 [`builder`](builder.md), [`unicode`](unicode.md), [`utf8`](utf8.md),
 [`utf16`](utf16.md), [`strconv`](strconv.md), [`fmt`](fmt.md),
-[`base64`](base64.md), [`hex`](hex.md), and [`percent`](percent.md).
+[`base64`](base64.md), [`hex`](hex.md), [`percent`](percent.md), and
+[`sha1`](sha1.md).
 
 ## I/O, system, and data formats
 
@@ -51,6 +52,7 @@ Start with the [networking overview](net.md). Individual references cover
 [`net/tcp`](net-tcp.md), [`net/udp`](net-udp.md), [`net/dns`](net-dns.md),
 [`net/poll`](net-poll.md), [`net/event_loop`](net-event-loop.md),
 [`net/listener`](net-listener.md), and [`net/tls`](net-tls.md).
+The client protocol layer includes [`websocket`](websocket.md).
 
 ## Other bindings
 

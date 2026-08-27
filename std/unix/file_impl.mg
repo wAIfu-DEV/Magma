@@ -103,29 +103,10 @@ pub read(handle ptr, buff u8[], n u64) !u64:
    if slices.count(buff) < n:
       throw errors.invalidArgument("read would overflow buffer")
    ..
-   fd i32 = ptoi32(handle)
-   bound u64 = n
-   p ptr = slices.toPtr(buff)
-
    if n == 0:
       ret 0
    ..
-
-   total u64 = 0
-
-   loop total < bound:
-      toRead u64 = bound - total
-
-      next ptr = cast.utop(cast.ptou(p) + total)
-      bytesRead u64 = try readOnce(fd, next, toRead)
-
-      total = total + bytesRead
-
-      if bytesRead == 0:
-         break
-      ..
-   ..
-   ret total
+   ret try readOnce(ptoi32(handle), slices.toPtr(buff), n)
 ..
 
 # Returns a writer for standard output.

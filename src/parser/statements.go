@@ -186,6 +186,7 @@ func parseBody(ctx *ParseCtx, tk t.Token) (t.NodeBody, error) {
 
 		if tk.KeywType == t.KwDots {
 			consume(ctx)
+			n.EndTk = tk
 			return n, nil
 		}
 
@@ -223,6 +224,7 @@ func parseDeferBody(ctx *ParseCtx, tk t.Token) (t.NodeBody, error) {
 
 		if tk.KeywType == t.KwDots {
 			consume(ctx)
+			n.EndTk = tk
 			return n, nil
 		}
 
@@ -269,6 +271,7 @@ func parseIfBody(ctx *ParseCtx, tk t.Token, ifStmt *t.NodeStmtIf) (t.NodeBody, e
 
 		if tk.KeywType == t.KwDots {
 			consume(ctx)
+			n.EndTk = tk
 			return n, nil
 		}
 

@@ -59,6 +59,36 @@ func TestExplicitMovePassesFatalOwnershipStageAndLowers(t *testing.T) {
 	}
 }
 
+func TestLiteralTrueConditionalMakesOwnedInitializationDefinite(t *testing.T) {
+	validated := validateTestProgram(t, ownershipProgramPrefix+`main() void:
+    value $Resource
+    if true:
+        value = makeResource()
+    ..
+    consume(move value)
+..
+`)
+	if _, err := CheckSafety(validated, false); err != nil {
+		t.Fatalf("literal-true initialization was treated as conditional: %v", err)
+	}
+}
+
+func TestLiteralTrueElifIsExhaustiveForOwnedInitialization(t *testing.T) {
+	validated := validateTestProgram(t, ownershipProgramPrefix+`main(flag bool) void:
+    value $Resource
+    if flag:
+        value = makeResource()
+    elif true:
+        value = makeResource()
+    ..
+    consume(move value)
+..
+`)
+	if _, err := CheckSafety(validated, false); err != nil {
+		t.Fatalf("literal-true elif was not treated as exhaustive: %v", err)
+	}
+}
+
 func TestInferredCallResultResolvesGenericMember(t *testing.T) {
 	validateTestProgram(t, `mod main
 use "std:heap" heap
@@ -1147,6 +1177,21 @@ read(values u64[], i i64) u64:
 `)
 	if _, err := CheckSafety(validated, false); err == nil || !strings.Contains(err.Error(), "non-negative") {
 		t.Fatalf("signed index without lower bound was accepted: %v", err)
+	}
+}
+
+func TestProjectedFieldRangeAndOpaquePointerConstructorAssignment(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+Holder(arg ptr)
+Register(data Holder[], head u64)
+Register.store(arg ptr) void:
+    bounded this.head < this.data.count():
+        this.data[this.head] = Holder(arg=arg)
+    ..
+..
+`)
+	if _, err := CheckSafety(validated, false); err != nil {
+		t.Fatalf("projected range proof and ptr field copy failed: %v", err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"Magma/src/magma_types"
 	"Magma/src/types"
 	"os"
 	"path/filepath"
@@ -51,9 +52,72 @@ type expressionCompletionContext struct {
 	lineEnd    int
 }
 
+type structFieldCompletionContext struct {
+	typeName string
+	prefix   string
+	used     map[string]bool
+}
+
+type typeCompletionContext struct {
+	prefix, moduleAlias string
+	startByte, endByte  int
+}
+
 func complete(uri, source string, pos position, stdRoot string) []completionItem {
 	if context, ok := usePathCompletionAt(source, pos); ok {
 		return usePathCompletions(uri, context, stdRoot)
+	}
+	if prefix, ok := topLevelKeywordCompletionAt(source, pos); ok {
+		return topLevelKeywordCompletions(prefix)
+	}
+	if context, ok := typeCompletionAt(source, pos); ok {
+		// Substitute a valid type so declarations whose type is still being typed
+		// do not prevent the normal module/import index from being built.
+		clean := source[:context.startByte] + "u64" + source[context.endByte:]
+		result := analyze(uri, clean, stdRoot)
+		if result == nil || result.file == nil || result.docs == nil {
+			return []completionItem{}
+		}
+		if context.moduleAlias != "" {
+			module := result.importedPackage(context.moduleAlias)
+			if module == "" {
+				return []completionItem{}
+			}
+			return result.docs.typeCompletions(module, context.prefix, true, false)
+		}
+		items := result.docs.typeCompletions(result.file.PackageName, context.prefix, false, true)
+		for alias, module := range result.importedPackages() {
+			if strings.HasPrefix(alias, "__") || !strings.HasPrefix(alias, context.prefix) {
+				continue
+			}
+			items = append(items, completionItem{
+				Label:         alias,
+				Kind:          9, // CompletionItemKind.Module
+				Detail:        "module " + alias,
+				Documentation: markdownContent(result.docs.modules[module]),
+			})
+		}
+		sort.Slice(items, func(i, j int) bool { return items[i].Label < items[j].Label })
+		return items
+	}
+	if context, ok := structFieldCompletionAt(source, pos); ok {
+		analysisSource := sourceWithoutEnclosingFunction(source, pos)
+		result := analyze(uri, analysisSource, stdRoot)
+		if result == nil || result.file == nil || result.docs == nil {
+			return []completionItem{}
+		}
+		parts := strings.Split(context.typeName, ".")
+		module := result.file.PackageName
+		owner := parts[len(parts)-1]
+		if len(parts) == 2 {
+			module = result.importedPackage(parts[0])
+		}
+		if module == "" {
+			return []completionItem{}
+		}
+		if result.docs.completionKinds[module+"\x00"+owner] == 22 {
+			return result.docs.structFieldCompletions(module, owner, context.prefix, context.used)
+		}
 	}
 	context, ok := completionAt(source, pos)
 	if !ok {
@@ -67,7 +131,7 @@ func complete(uri, source string, pos position, stdRoot string) []completionItem
 		if result == nil || result.file == nil || result.docs == nil {
 			return []completionItem{}
 		}
-		return result.expressionCompletions(expression.prefix, pos.Line+1)
+		return result.expressionCompletions(expression.prefix, pos.Line+1, expectedTypeAt(source, pos, result))
 	}
 	analysisSource := sanitizeOtherSelectors(source, int(pos.Line))
 	// A selector without a member is intentionally invalid Magma. Removing the
@@ -150,6 +214,283 @@ func complete(uri, source string, pos position, stdRoot string) []completionItem
 		return result.docs.moduleCompletions(module, context.prefix)
 	}
 	return result.docs.memberCompletions(module, owner, context.prefix)
+}
+
+// typeCompletionAt recognizes the source positions where the grammar expects
+// a type after a declared name. This remains intentionally textual: incomplete
+// declarations do not have an AST yet.
+func typeCompletionAt(source string, pos position) (typeCompletionContext, bool) {
+	lines := strings.SplitAfter(source, "\n")
+	if int(pos.Line) >= len(lines) {
+		return typeCompletionContext{}, false
+	}
+	lineStart := 0
+	for i := 0; i < int(pos.Line); i++ {
+		lineStart += len(lines[i])
+	}
+	line := strings.TrimSuffix(strings.TrimSuffix(lines[pos.Line], "\n"), "\r")
+	runes := []rune(line)
+	if int(pos.Character) > len(runes) {
+		return typeCompletionContext{}, false
+	}
+	cursor := lineStart + len(string(runes[:pos.Character]))
+	start := cursor
+	for start > lineStart && isIdentRune(rune(source[start-1])) {
+		start--
+	}
+	alias := ""
+	if start > lineStart && source[start-1] == '.' {
+		aliasEnd := start - 1
+		aliasStart := aliasEnd
+		for aliasStart > lineStart && isIdentRune(rune(source[aliasStart-1])) {
+			aliasStart--
+		}
+		if aliasStart == aliasEnd {
+			return typeCompletionContext{}, false
+		}
+		alias = source[aliasStart:aliasEnd]
+		start = aliasStart
+	}
+	end := cursor
+	for end < lineStart+len(line) && (isIdentRune(rune(source[end])) || source[end] == '.') {
+		end++
+	}
+	typed := source[start:cursor]
+	prefix := typed
+	if alias != "" {
+		prefix = strings.TrimPrefix(typed, alias+".")
+	}
+	if prefix != "" && !identifier(prefix) {
+		return typeCompletionContext{}, false
+	}
+	before := source[lineStart:start]
+	if start == cursor && (len(before) == 0 || (before[len(before)-1] != ' ' && before[len(before)-1] != '\t')) {
+		return typeCompletionContext{}, false
+	}
+	trimmed := strings.TrimSpace(before)
+	if trimmed == "" {
+		return typeCompletionContext{}, false
+	}
+
+	// A top-level declaration ending in ')' expects its return type.
+	indented := len(before) != len(strings.TrimLeft(before, " \t"))
+	expects := !indented && strings.HasSuffix(trimmed, ")")
+	// A plain declaration line consists of modifiers followed by the name.
+	if !expects && strings.IndexAny(trimmed, "=:.()[],") < 0 {
+		fields := strings.Fields(trimmed)
+		reserved := map[string]bool{"if": true, "elif": true, "else": true, "while": true, "for": true, "ret": true, "throw": true, "use": true, "mod": true}
+		expects = len(fields) > 0 && !reserved[fields[len(fields)-1]]
+	}
+	// Inside a top-level function/struct declaration, the current comma-delimited
+	// argument must contain its name followed by whitespace.
+	if !expects {
+		open := unmatchedOpenParen(source[:start])
+		if open >= 0 {
+			declLine := strings.LastIndex(source[:open], "\n") + 1
+			if len(source[declLine:]) == len(strings.TrimLeft(source[declLine:], " \t")) {
+				segment := source[open+1 : start]
+				if comma := strings.LastIndex(segment, ","); comma >= 0 {
+					segment = segment[comma+1:]
+				}
+				fields := strings.Fields(segment)
+				expects = len(fields) == 1 && identifier(fields[0]) && len(segment) > len(strings.TrimRight(segment, " \t\r\n"))
+			}
+		}
+	}
+	if !expects {
+		return typeCompletionContext{}, false
+	}
+	return typeCompletionContext{prefix: prefix, moduleAlias: alias, startByte: start, endByte: end}, true
+}
+
+func sourceWithoutEnclosingFunction(source string, pos position) string {
+	lines := strings.SplitAfter(source, "\n")
+	if int(pos.Line) >= len(lines) {
+		return source
+	}
+	start := -1
+	for i := int(pos.Line) - 1; i >= 0; i-- {
+		text := strings.TrimRight(lines[i], "\r\n")
+		if strings.TrimSpace(text) == "" || len(text) != len(strings.TrimLeft(text, " \t")) {
+			continue
+		}
+		if strings.HasSuffix(strings.TrimSpace(text), ":") {
+			start = i
+		}
+		break
+	}
+	if start < 0 {
+		return source
+	}
+	end := len(lines)
+	for i := int(pos.Line) + 1; i < len(lines); i++ {
+		text := strings.TrimRight(lines[i], "\r\n")
+		if len(text) == len(strings.TrimLeft(text, " \t")) && strings.TrimSpace(text) == ".." {
+			end = i + 1
+			break
+		}
+	}
+	return strings.Join(append(append([]string{}, lines[:start]...), lines[end:]...), "")
+}
+
+// structFieldCompletionAt recognizes the unfinished named argument at the
+// cursor. It deliberately works on source text because `Type(fi` is not yet a
+// valid AST, which is precisely when completion is most useful.
+func structFieldCompletionAt(source string, pos position) (structFieldCompletionContext, bool) {
+	lines := strings.SplitAfter(source, "\n")
+	if int(pos.Line) >= len(lines) {
+		return structFieldCompletionContext{}, false
+	}
+	offset := 0
+	for i := 0; i < int(pos.Line); i++ {
+		offset += len(lines[i])
+	}
+	line := strings.TrimSuffix(strings.TrimSuffix(lines[pos.Line], "\n"), "\r")
+	runes := []rune(line)
+	if int(pos.Character) > len(runes) {
+		return structFieldCompletionContext{}, false
+	}
+	cursor := offset + len(string(runes[:pos.Character]))
+	open := unmatchedOpenParen(source[:cursor])
+	if open < 0 {
+		return structFieldCompletionContext{}, false
+	}
+	typeName := constructorTypeBefore(source, open)
+	if typeName == "" {
+		return structFieldCompletionContext{}, false
+	}
+	body := source[open+1 : cursor]
+	segmentStart := topLevelSegmentStart(body)
+	segment := strings.TrimSpace(body[segmentStart:])
+	if strings.Contains(segment, "=") || !identifier(segment) {
+		return structFieldCompletionContext{}, false
+	}
+	used := map[string]bool{}
+	for _, segment := range topLevelSegments(body[:segmentStart]) {
+		if equal := strings.IndexByte(segment, '='); equal >= 0 {
+			name := strings.TrimSpace(segment[:equal])
+			if name != "" && identifier(name) {
+				used[name] = true
+			}
+		}
+	}
+	return structFieldCompletionContext{typeName: typeName, prefix: segment, used: used}, true
+}
+
+func unmatchedOpenParen(source string) int {
+	stack := []int{}
+	inString, escaped, comment := false, false, false
+	for i := 0; i < len(source); i++ {
+		c := source[i]
+		if comment {
+			if c == '\n' {
+				comment = false
+			}
+			continue
+		}
+		if inString {
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		if c == '#' {
+			comment = true
+			continue
+		}
+		if c == '"' {
+			inString = true
+			continue
+		}
+		if c == '(' {
+			stack = append(stack, i)
+		}
+		if c == ')' && len(stack) > 0 {
+			stack = stack[:len(stack)-1]
+		}
+	}
+	if len(stack) == 0 {
+		return -1
+	}
+	return stack[len(stack)-1]
+}
+
+func constructorTypeBefore(source string, open int) string {
+	i := open
+	for i > 0 && (source[i-1] == ' ' || source[i-1] == '\t') {
+		i--
+	}
+	if i > 0 && source[i-1] == ']' {
+		depth := 1
+		i--
+		for i > 0 && depth > 0 {
+			i--
+			if source[i] == ']' {
+				depth++
+			} else if source[i] == '[' {
+				depth--
+			}
+		}
+		if depth != 0 {
+			return ""
+		}
+	}
+	end := i
+	for i > 0 && (isIdentRune(rune(source[i-1])) || source[i-1] == '.') {
+		i--
+	}
+	name := source[i:end]
+	if !identifierPath(name) {
+		return ""
+	}
+	return name
+}
+
+func topLevelSegmentStart(body string) int {
+	depth := 0
+	start := 0
+	for i, r := range body {
+		switch r {
+		case '(', '[':
+			depth++
+		case ')', ']':
+			if depth > 0 {
+				depth--
+			}
+		case ',', '\n':
+			if depth == 0 {
+				start = i + len(string(r))
+			}
+		}
+	}
+	return start
+}
+
+func topLevelSegments(body string) []string {
+	segments := []string{}
+	start := 0
+	depth := 0
+	for i, r := range body {
+		switch r {
+		case '(', '[':
+			depth++
+		case ')', ']':
+			if depth > 0 {
+				depth--
+			}
+		case ',', '\n':
+			if depth == 0 {
+				segments = append(segments, body[start:i])
+				start = i + len(string(r))
+			}
+		}
+	}
+	segments = append(segments, body[start:])
+	return segments
 }
 
 type usePathCompletionContext struct {
@@ -398,23 +739,45 @@ func insideFunctionBody(lines []string, line int) bool {
 	return false
 }
 
-func (a *analysis) expressionCompletions(prefix string, line uint32) []completionItem {
+func (a *analysis) expressionCompletions(prefix string, line uint32, expectedTypes ...string) []completionItem {
+	expected := ""
+	if len(expectedTypes) != 0 {
+		expected = expectedTypes[0]
+	}
 	items := map[string]completionItem{}
 	for _, keyword := range []struct{ label, detail, insert string }{
+		{"if", "conditional block", "if ${1:condition}:\n    ${0}\n.."},
+		{"loop", "conditional loop", "loop ${1:condition}:\n    ${0}\n.."},
+		{"for", "index loop", "for ${1:i} := 0 to ${2:bound}:\n    ${0}\n.."},
+		{"ret", "return from the current function", "ret "},
+		{"throw", "return an error", "throw "},
+		{"try", "propagate a failing call", "try "},
+		{"defer", "run cleanup when the scope exits", "defer "},
+		{"onerror", "run cleanup when the scope fails", "onerror "},
+		{"break", "exit the nearest loop", "break"},
+		{"continue", "continue the nearest loop", "continue"},
 		{"move", "transfer ownership", "move "},
 		{"bounded", "establish a range proof", "bounded ${1:condition}:\n    ${0}\n.."},
 		{"unsafe", "localize an unverifiable operation", "unsafe:\n    ${0}\n.."},
+		{"sizeof", "size of a type", "sizeof "},
+		{"addrof", "address of a value", "addrof "},
+		{"not", "invert a boolean", "not "},
+		{"true", "boolean literal", "true"},
+		{"false", "boolean literal", "false"},
+		{"none", "null pointer or function value", "none"},
 	} {
 		if strings.HasPrefix(keyword.label, prefix) {
 			item := completionItem{Label: keyword.label, Kind: 14, Detail: keyword.detail, InsertText: keyword.insert}
 			if strings.Contains(keyword.insert, "${") {
 				item.InsertTextFormat = 2
 			}
+			item.SortText = "2:" + keyword.label
 			items[keyword.label] = item
 		}
 	}
 	for name, item := range a.docs.expressionSymbols[a.file.PackageName] {
 		if strings.HasPrefix(name, prefix) {
+			item.SortText = completionSortText(item.Detail, expected, name)
 			items[name] = item
 		}
 	}
@@ -423,20 +786,117 @@ func (a *analysis) expressionCompletions(prefix string, line uint32) []completio
 			continue
 		}
 		detail := binding.name + " " + formatType(binding.valueType)
-		items[binding.name] = completionItem{Label: binding.name, Kind: 6, Detail: detail, Documentation: markdownContent(code(detail))}
+		items[binding.name] = completionItem{Label: binding.name, Kind: 6, Detail: detail, SortText: completionSortText(formatType(binding.valueType), expected, binding.name), Documentation: markdownContent(code(detail))}
 	}
 	for alias, module := range a.importedPackages() {
 		if strings.HasPrefix(alias, "__") || !strings.HasPrefix(alias, prefix) {
 			continue
 		}
-		items[alias] = completionItem{Label: alias, Kind: 9, Detail: "module " + alias, Documentation: markdownContent(a.docs.modules[module])}
+		items[alias] = completionItem{Label: alias, Kind: 9, Detail: "module " + alias, SortText: "1:" + alias, Documentation: markdownContent(a.docs.modules[module])}
 	}
 	result := make([]completionItem, 0, len(items))
 	for _, item := range items {
 		result = append(result, item)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Label < result[j].Label })
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].SortText != result[j].SortText {
+			return result[i].SortText < result[j].SortText
+		}
+		return result[i].Label < result[j].Label
+	})
 	return result
+}
+
+func completionSortText(detail, expected, label string) string {
+	if expected != "" && (detail == expected || strings.HasSuffix(detail, " "+expected) || strings.HasSuffix(detail, ") "+expected)) {
+		return "0:" + label
+	}
+	return "1:" + label
+}
+
+func expectedTypeAt(source string, pos position, a *analysis) string {
+	lines := strings.Split(source, "\n")
+	if int(pos.Line) >= len(lines) {
+		return ""
+	}
+	line := lines[pos.Line]
+	if equal := strings.Index(line, "="); equal >= 0 && !strings.HasPrefix(strings.TrimSpace(line[equal:]), "==") {
+		fields := strings.Fields(strings.TrimSpace(line[:equal]))
+		if len(fields) >= 2 && fields[len(fields)-1] != ":" {
+			return fields[len(fields)-1]
+		}
+	}
+	if strings.HasPrefix(strings.TrimSpace(line), "throw ") {
+		return "error"
+	}
+	if !strings.HasPrefix(strings.TrimSpace(line), "ret ") || a == nil || a.docs == nil {
+		return ""
+	}
+	for i := int(pos.Line) - 1; i >= 0; i-- {
+		candidate := strings.TrimSpace(lines[i])
+		if !strings.HasSuffix(candidate, ":") || strings.HasPrefix(lines[i], " ") || strings.HasPrefix(lines[i], "\t") {
+			continue
+		}
+		open := strings.Index(candidate, "(")
+		if open <= 0 {
+			continue
+		}
+		name := strings.TrimSpace(candidate[:open])
+		if space := strings.LastIndex(name, " "); space >= 0 {
+			name = name[space+1:]
+		}
+		if fn := a.docs.functionDefs[a.file.PackageName+"\x00"+name]; fn != nil {
+			return formatType(fn.ReturnType)
+		}
+	}
+	return ""
+}
+
+func topLevelKeywordCompletionAt(source string, pos position) (string, bool) {
+	lines := strings.SplitAfter(source, "\n")
+	if int(pos.Line) >= len(lines) {
+		return "", false
+	}
+	if insideFunctionBody(lines, int(pos.Line)) {
+		return "", false
+	}
+	runes := []rune(strings.TrimSuffix(strings.TrimSuffix(lines[pos.Line], "\n"), "\r"))
+	if int(pos.Character) > len(runes) {
+		return "", false
+	}
+	before := string(runes[:pos.Character])
+	if before != strings.TrimLeft(before, " \t") {
+		return "", false
+	}
+	if !identifier(before) {
+		return "", false
+	}
+	return before, true
+}
+
+func topLevelKeywordCompletions(prefix string) []completionItem {
+	definitions := []struct{ label, detail, insert string }{
+		{"mod", "declare this file's module", "mod ${1:name}"},
+		{"use", "import a module", "use \"${1:path}\" ${2:alias}"},
+		{"pub", "export a declaration", "pub "},
+		{"const", "declare a module constant", "const ${1:name} ${2:Type} = ${0:value}"},
+		{"alias", "declare a type alias", "alias ${1:Name} = ${0:Type}"},
+		{"proto", "declare a prototype", "proto ${1:Name}(\n    ${0}\n)"},
+		{"noctx", "declare a contextless function", "noctx "},
+		{"destr", "declare a destructor method", "destr "},
+		{"ext", "declare an external function", "ext ${1:name}(${2}) ${0:void}"},
+		{"link", "link a native library", "link \"${0:library}\""},
+		{"bundle", "bundle a native object", "bundle \"${0:path}\""},
+		{"llvm", "emit inline LLVM", "llvm \"${0}\""},
+	}
+	items := []completionItem{}
+	for _, definition := range definitions {
+		if !strings.HasPrefix(definition.label, prefix) {
+			continue
+		}
+		items = append(items, completionItem{Label: definition.label, Kind: 14, Detail: definition.detail, InsertText: definition.insert, InsertTextFormat: 2, SortText: definition.label})
+	}
+	return items
 }
 
 func markdownContent(value string) map[string]any {
@@ -667,6 +1127,33 @@ func (d *docIndex) moduleCompletions(module, prefix string) []completionItem {
 	return items
 }
 
+func (d *docIndex) typeCompletions(module, prefix string, exportedOnly, intrinsic bool) []completionItem {
+	items := []completionItem{}
+	keyPrefix := module + "\x00"
+	for key, kind := range d.completionKinds {
+		if !strings.HasPrefix(key, keyPrefix) || (kind != 22 && kind != 25) {
+			continue
+		}
+		name := strings.TrimPrefix(key, keyPrefix)
+		if strings.Contains(name, ".") || !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		if exportedOnly && !d.completionVisible[key] {
+			continue
+		}
+		items = append(items, completionItem{Label: name, Kind: kind, Detail: firstCodeLine(d.hoverSymbols[key]), Documentation: markdownContent(d.hoverSymbols[key])})
+	}
+	if intrinsic {
+		for name := range magmatypes.BasicTypes {
+			if strings.HasPrefix(name, prefix) {
+				items = append(items, completionItem{Label: name, Kind: 25, Detail: "intrinsic type"})
+			}
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Label < items[j].Label })
+	return items
+}
+
 func (d *docIndex) publicModuleAlias(module, alias string) string {
 	if d == nil {
 		return ""
@@ -676,6 +1163,24 @@ func (d *docIndex) publicModuleAlias(module, alias string) string {
 
 func (d *docIndex) memberCompletions(module, owner, prefix string) []completionItem {
 	return d.completions(module+"\x00"+owner+".", owner+".", prefix)
+}
+
+func (d *docIndex) structFieldCompletions(module, owner, prefix string, used map[string]bool) []completionItem {
+	keyPrefix := module + "\x00" + owner + "."
+	items := []completionItem{}
+	for key, fieldType := range d.memberTypes {
+		if !strings.HasPrefix(key, keyPrefix) {
+			continue
+		}
+		name := strings.TrimPrefix(key, keyPrefix)
+		if strings.Contains(name, ".") || used[name] || !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		detail := name + " " + formatType(fieldType)
+		items = append(items, completionItem{Label: name, Kind: 5, Detail: detail, InsertText: name + "="})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Label < items[j].Label })
+	return items
 }
 
 func (d *docIndex) completions(keyPrefix, forbiddenDotPrefix, typedPrefix string) []completionItem {

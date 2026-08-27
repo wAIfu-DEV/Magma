@@ -191,6 +191,18 @@ func FprintDiagnostic(out io.Writer, diagnostic *types.Diagnostic) {
 		printLine(out, diagnostic.Ctx, line)
 		printLine(out, diagnostic.Ctx, line+1)
 	}
+	for _, related := range diagnostic.Related {
+		message := related.Message
+		if message == "" {
+			message = "related location"
+		}
+		if diagnostic.Ctx != nil && (related.FilePath == "" || related.FilePath == diagnostic.FilePath) {
+			fmt.Fprintf(out, "here: %s\n", message)
+			printLine(out, diagnostic.Ctx, int(related.Token.Pos.Line))
+		} else {
+			fmt.Fprintf(out, "%s:l%d:c%d: note: %s\n", related.FilePath, related.Token.Pos.Line, related.Token.Pos.Col, message)
+		}
+	}
 	if diagnostic.Additional != "" {
 		fmt.Fprintln(out, diagnostic.Additional)
 	}

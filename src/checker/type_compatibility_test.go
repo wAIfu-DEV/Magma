@@ -64,3 +64,21 @@ func TestConstArrayIndexCharacterization(t *testing.T) {
 		}
 	}
 }
+
+func TestNumericLiteralDefaultType(t *testing.T) {
+	tests := []struct {
+		value string
+		want  string
+	}{
+		{value: "0", want: "i64"},
+		{value: "0xFF", want: "i64"},
+		{value: "0.0", want: "f64"},
+		{value: "12.75", want: "f64"},
+	}
+
+	for _, test := range tests {
+		if got := flattenType(numericLiteralDefaultType(test.value)); got != test.want {
+			t.Errorf("numericLiteralDefaultType(%q) = %q, want %q", test.value, got, test.want)
+		}
+	}
+}

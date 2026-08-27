@@ -768,11 +768,11 @@ addrof value
 Unary operators:
 
 ```magma
--x      # numeric negation
-!x      # unary not
-*x      # dereference-like unary operator
-&x      # unary address/reference-like operator
-~x      # bitwise not
+-x        # numeric negation
+not x     # boolean inversion
+*x        # dereference-like unary operator
+&x        # unary address/reference-like operator
+~x        # integer bitwise complement
 ```
 
 Binary operators, from highest to lowest precedence:

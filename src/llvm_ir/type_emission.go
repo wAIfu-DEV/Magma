@@ -169,10 +169,10 @@ func irTypeKind(ctx *IrCtx, typeKind t.NodeTypeKind) error {
 		irWrite(ctx, "ptr")
 		return nil
 	case *t.NodeTypeFunc:
-		e := irFuncPtrType(ctx, tn)
-		if e != nil {
-			return e
-		}
+		// LLVM's opaque-pointer representation does not encode a pointee
+		// signature in stored function values. The resolved Magma signature is
+		// retained on the AST and emitted at definitions and indirect calls.
+		irWrite(ctx, "ptr")
 		return nil
 	case *t.NodeTypeNamed:
 		switch n := tn.NameNode.(type) {

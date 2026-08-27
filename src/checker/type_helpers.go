@@ -4,6 +4,7 @@ import (
 	magmatypes "Magma/src/magma_types"
 	t "Magma/src/types"
 	"fmt"
+	"strings"
 )
 
 func makeNamedType(name string) *t.NodeType {
@@ -13,6 +14,13 @@ func makeNamedType(name string) *t.NodeType {
 			NameNode: &t.NodeNameSingle{Name: name},
 		},
 	}
+}
+
+func numericLiteralDefaultType(value string) *t.NodeType {
+	if strings.Contains(value, ".") {
+		return makeNamedType("f64")
+	}
+	return makeNamedType("i64")
 }
 
 func makeFuncPtrTypeFromDef(fnDef *t.NodeFuncDef) *t.NodeType {

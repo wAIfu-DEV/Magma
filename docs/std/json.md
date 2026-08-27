@@ -3,44 +3,77 @@
 ## Example
 
 ```magma
-object := try json.newObject(heap.allocator())
-defer object.free()
-try object.set("answer", json.numberInt(42))
-value := try object.get("answer")
-answer := try value.asInt()
+document := try json.parse(source)
+defer document.free()
+
+try document.setBool("processed", true)
+name := try document.get("name").asString()
+try document.write(output)
 ```
 
-In-memory JSON values and serialization. This module constructs and writes JSON; it does not parse JSON text.
+Parsing, value construction, lookup, mutation, ownership, and serialization of
+JSON values. Public operations pass values rather than pointers.
 
-## Types
+## Value model
 
-- `Value(value u128, kind u8, owned bool, allocator alc.Allocator)` stores a
-  tagged payload plus the ownership metadata needed to release owned strings or
-  containers.
-- `Object(entries linear_map.LinearMap[Value])` owns copied keys and uses the
-  JSON value destructor for owned values.
-- `Array(allocator alc.Allocator, values arr.Array[Value])` owns values marked
-  as owned.
+- `Value` is the only owning public JSON type. Its `free()` destructor
+  recursively releases strings, arrays, and objects.
+- `Object` and `Array` are borrowed, copyable value views returned by
+  `Value.asObject()` and `Value.asArray()`. Their internal storage is not exposed.
+- `Object.get` and `Array.get` return borrowed `Value`s. `Object.take` returns
+  `$Value` and transfers ownership to the caller.
+- Containers consume inserted `$Value`s. Normal nesting uses
+  `object.set("child", move child)` or `array.append(move child)`.
+- Values have no runtime borrowed/owned or boxed/unboxed flags. Magma's
+  ownership checker distinguishes borrowed `Value` returns from `$Value`
+  transfers.
 
-## Value creation and access
+## Construction and access
 
-- `pub null() Value`, `pub bool(value bool) Value`, `pub numberFloat(value f64) Value`, and `pub numberInt(value i64) Value` construct scalar values.
-- `stringBorrowed`, `objectBorrowed`, and `arrayBorrowed` construct borrowed
-  values. `stringOwned`, `objectOwned`, and `arrayOwned` transfer ownership.
-  `stringCopy(a, value) !$Value` allocates an owned copy.
-- `Value.borrowed() Value` returns a non-owning view of any value.
-- `Value.asNull() !ptr`, `asBool() !bool`, `asFloat() !f64`, `asInt() !i64`, `asString() !str`, `asObject() !Object*`, and `asArray() !Array*` return the payload or `invalidType` when the tag differs.
+- `object() !$Value` and `array() !$Value` create owned containers.
+- `null() $Value`, `bool(value) $Value`, `numberInt(value) $Value`, and
+  `numberFloat(value) $Value` create scalar values.
+- `string(value) !$Value` copies text into an owned JSON string.
+- `asNull() !void`, `asBool`, `asInt`, `asFloat`, `asString`, `asObject`, and `asArray`
+  validate the kind and return `invalidType` on mismatch.
 
-## Containers
+Object views provide `set`, `get`, `take`, `delete`, and `count`, plus
+`setString`, `setInt`, and `setBool` conveniences. Array views provide `append`,
+`get`, and `count`.
 
-- `pub newObject(a alc.Allocator) !$Object` and `pub newArray(a alc.Allocator) !$Array` allocate empty containers with JSON value cleanup configured internally.
-- `Object.set(key str, value $Value) !void`, `get(key str) !Value`, `delete(key str) !void`, `take(key str) !$Value`, and `count() u64` manage entries. `set` takes the value; `take` transfers a removed value without cleanup.
-- `Object.free() void` frees copied keys, owned values, and map storage.
-- `Array.append(value $Value) !void` appends a value; `count() u64` returns its
-  count and `get(index u64) !Value` borrows an indexed value.
-- `Array.free() void` frees owned values and array storage.
+The common operations are also forwarded by `Value`:
+
+```magma
+document := try json.object()
+defer document.free()
+
+try document.setString("name", "Magma")
+try document.setInt("version", 2)
+name := try document.get("name").asString()
+
+items := try json.array()
+defer items.free()
+try items.append(json.numberInt(10))
+second := try items.at(0).asInt()
+```
+
+`Value.at` is the array counterpart of object-key `Value.get`; Magma does not
+overload a single method name for string and integer arguments. One `try`
+handles every throwing call in a chained expression.
+
+## Parsing
+
+- `parse(source) !$Value` parses exactly one complete JSON text.
+- Every JSON kind is accepted at the root.
+- Parsing rejects trailing content and commas, malformed numbers, invalid UTF-8,
+  invalid escapes, unescaped control characters, and unpaired UTF-16 surrogates.
+- Duplicate object keys use last-value-wins semantics.
+- Nesting is limited to 128 arrays or objects.
 
 ## Serialization
 
-- `Value.write(w writer.Writer, precision u64) !void`, `Object.write(...)`, and `Array.write(...)` emit compact JSON. `precision` controls digits after the decimal point for floats; non-finite floats fail.
-- `writeEscaped`, `finite`, `writeObject`, `writeArray`, and `writeValue` are internal serialization helpers.
+- `Value.write(writer)` emits compact JSON and uses six fractional digits for
+  floating-point values.
+- `Value.writeWithPrecision(writer, precision)` selects fractional precision.
+- Object members are emitted in their current map order. Non-finite floats are
+  rejected because JSON has no representation for them.

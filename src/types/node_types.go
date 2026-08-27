@@ -308,6 +308,9 @@ type NodeExprName struct {
 
 	AssociatedNode Node
 	Storage        VariableStorage
+	// MethodReceiver preserves the receiver place of a standalone method value
+	// after AssociatedNode is changed to the selected method definition.
+	MethodReceiver NodeExpr
 	// ContextAdapter requests the compiler-generated ABI shim which discards an
 	// incoming implicit context before calling a contextless function.
 	ContextAdapter bool
@@ -468,6 +471,10 @@ type NodeExprMemberAccess struct {
 
 	Access  *MemberAccess
 	InfType *NodeType
+	// MethodDef is set when this member expression denotes an unbound method
+	// value rather than a struct field. Its function type includes the implicit
+	// receiver as the first argument.
+	MethodDef *NodeFuncDef
 }
 
 func (n *NodeExprSubscript) GetInferredType() *NodeType {
@@ -963,6 +970,9 @@ func (n *NodeArgList) Print(indent int) {
 type NodeBody struct {
 	Statements []NodeStatement
 	Scope      *Scope
+	// EndTk identifies the closing `..`, which is also the implicit fallthrough
+	// exit site for diagnostics produced by control-flow analyses.
+	EndTk Token
 }
 
 func (n *NodeBody) Print(indent int) {

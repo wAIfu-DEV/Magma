@@ -8,6 +8,7 @@ use "std:memory" mem
 use "std:cast" cast
 use "std:errors" errors
 use "std:checked" checked
+use "std:writer" writer
 
 const FLAG_OWNED u8 = 1
 const FLAG_BYTE u8 = 2
@@ -18,7 +19,7 @@ Segment(
 )
 
 # Accumulates borrowed and owned string segments before producing one owned string.
-pub Builder(
+pub Builder impl writer.Writer(
     allocator alc.Allocator
     segments ptr
     count u64
@@ -156,6 +157,15 @@ Builder.appendCopy(s str) !void:
     this.totalBytes = newTotal
 ..
 
+# Writes bytes by copying them into an owned segment.
+# Writer does not communicate the lifetime of its input, so retaining a
+# borrowed segment here would allow the bytes to become invalid before build.
+# @complexity O(N), where N is the string byte length
+Builder.write(bytes str) !u64:
+    try this.appendCopy(bytes)
+    ret bytes.countBytes()
+..
+
 # Concatenates all segments into a newly allocated owned string.
 # Building does not clear the builder or release copied segments.
 # @complexity O(N), where N is the total output byte length
@@ -167,7 +177,18 @@ Builder.build() !$str:
         ret try strings.alloc(0)
     ..
     result str = try strings.alloc(this.totalBytes)
-    out u8* = strings.toPtr(result)
+    slc u8[] = slices.fromPtr(strings.toPtr(result), result.countBytes())
+
+    try this.buildToBuff(slc)
+    ret move result
+..
+
+Builder.buildToBuff(buff u8[]) !void:
+    if buff.count() < this.byteCount():
+        throw errors.wouldOverflow("buildToBuff would overflow buffer")
+    ..
+
+    out u8* = slices.toPtr(buff)
     offset u64 = 0
     i u64 = 0
 
@@ -194,7 +215,6 @@ Builder.build() !$str:
             i = i + 1
         ..
     ..
-    ret move result
 ..
 
 # Returns the byte length of the string that build would produce.
@@ -242,4 +262,8 @@ destr Builder.free() void:
     this.count = 0
     this.capacity = 0
     this.totalBytes = 0
+..
+
+Builder.writer() writer.Writer:
+    ret this.proto()
 ..

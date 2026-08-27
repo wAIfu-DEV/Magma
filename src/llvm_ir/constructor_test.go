@@ -86,6 +86,25 @@ func compileSourceTarget(t *testing.T, source string, target *magmatarget.Target
 	return string(ir), err
 }
 
+func TestBooleanNotLowersToBooleanInversion(t *testing.T) {
+	ir, err := compileSource(t, `mod main
+
+invert(value bool) bool:
+    ret not value
+..
+
+main() void:
+    result := invert(false)
+..
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ir, "xor i1") || !strings.Contains(ir, ", true") {
+		t.Fatalf("boolean inversion was not lowered with xor i1 true:\n%s", ir)
+	}
+}
+
 func TestPrototypeViewGeneratesVtableAndReusesOrdinaryPrototypeMethods(t *testing.T) {
 	ir, err := compileSource(t, `mod main
 
@@ -993,13 +1012,26 @@ const table := VTable(
 make() VTable:
     ret VTable(context=none, fn_call=identity)
 ..
+
+invoke(vt VTable, value ptr) ptr:
+    ret vt.fn_call(value)
+..
 `
 	ir, err := compileSource(t, source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(ir, "private constant") || !strings.Contains(ir, "* @test_") {
+	if !strings.Contains(ir, "private constant") || !strings.Contains(ir, "ptr @test_") {
 		t.Fatalf("expected aggregate LLVM constant, got:\n%s", ir)
+	}
+	if !strings.Contains(ir, "VTable = type { ptr, ptr }") {
+		t.Fatalf("expected function field to use opaque pointer storage, got:\n%s", ir)
+	}
+	if !strings.Contains(ir, "; call fnptr") || !strings.Contains(ir, "call ptr %") {
+		t.Fatalf("expected an indirect opaque-pointer call, got:\n%s", ir)
+	}
+	if strings.Contains(ir, "bitcast ptr") {
+		t.Fatalf("unexpected legacy typed function-pointer cast, got:\n%s", ir)
 	}
 	if !strings.Contains(ir, "insertvalue") {
 		t.Fatalf("expected runtime constructor to use insertvalue, got:\n%s", ir)

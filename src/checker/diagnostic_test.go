@@ -89,6 +89,47 @@ fail(value Box[u64]*) !void:
 	}
 }
 
+func TestBooleanNotRejectsNonBooleanOperand(t *testing.T) {
+	diagnostic, message := checkSource(t, `mod test
+
+test() void:
+    value := not 1
+..
+`)
+	if diagnostic.Token.Repr != "not" || !strings.Contains(message, "boolean not requires a 'bool' operand") {
+		t.Fatalf("diagnostic = %#v: %s", diagnostic, message)
+	}
+}
+
+func TestBitwiseNotRejectsBooleanOperand(t *testing.T) {
+	diagnostic, message := checkSource(t, `mod test
+
+test() void:
+    value := ~true
+..
+`)
+	if diagnostic.Token.Repr != "~" || !strings.Contains(message, "bitwise not requires an integer operand") {
+		t.Fatalf("diagnostic = %#v: %s", diagnostic, message)
+	}
+}
+
+func TestGenericStructTypeRequiresTypeArguments(t *testing.T) {
+	diagnostic, message := checkSource(t, `mod test
+
+use "std:linear_map" lm
+
+pub encode(kv lm.LinearMap) void:
+..
+`)
+
+	if want := "generic struct 'LinearMap' expects 1 type arguments but got 0"; !strings.Contains(message, want) {
+		t.Fatalf("diagnostic = %q, want it to contain %q", message, want)
+	}
+	if diagnostic.Token.Repr != "LinearMap" {
+		t.Fatalf("diagnostic token = %q, want %q", diagnostic.Token.Repr, "LinearMap")
+	}
+}
+
 func TestFunctionDeclarationCannotBeAssigned(t *testing.T) {
 	diagnostic, message := checkSource(t, `mod test
 

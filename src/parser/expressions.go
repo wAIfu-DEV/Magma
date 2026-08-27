@@ -880,7 +880,7 @@ func parseUnaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
 
 			return &t.NodeExprAddrof{Tk: tk, Expr: exprNd}, nil
 
-		case t.KwExclam, t.KwMinus, t.KwAsterisk, t.KwAmpersand, t.KwTilde:
+		case t.KwNot, t.KwMinus, t.KwAsterisk, t.KwAmpersand, t.KwTilde:
 			consume(ctx)
 			next, e := peek(ctx)
 			if e != nil {
