@@ -7,12 +7,18 @@ guide retained at the former topic URL.
 ```magma
 pool := try thread_pool.newDefault(a)
 defer pool.close()
-ctx = context.new(a, a, pool.executor())
+ctx = context.new(a, pool.executor())
 
 source := try fileHandle.reader()
 pending := try source.readAsync(512)
 bytes := try pending.await()
 ```
+
+Every `Future` accepts advisory cancellation through `abort()` and
+`abortAfter(relativeMs)`. It must still be awaited so worker cleanup completes.
+APIs suffixed with `AsyncAbort` additionally observe a caller-owned
+`std:abort.Signal`, allowing one request to cover synchronous and asynchronous
+work.
 
 Implicit `ctx` borrows allocators and an executor. `Reader.readAsync` copies the
 `Reader` interface and requested byte count into private future work storage,

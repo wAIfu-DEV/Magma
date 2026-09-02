@@ -835,7 +835,8 @@ type NodeStmtBounded struct {
 }
 
 // NodeStmtUnsafe is a lexical permission boundary for unverifiable operations.
-// Normal type, ownership, range, and control-flow checking remains active.
+// Normal type, ownership, range, and control-flow checking remains active,
+// except that an explicit move may assert ownership of a borrowed value.
 type NodeStmtUnsafe struct {
 	Tk   Token
 	Body NodeBody

@@ -121,7 +121,7 @@ pub newContext() !ptr:
     a := heap.allocator()
     state ContextState* = cast.reinterpret[ContextState](try a.alloc(sizeof ContextState))
     memory.zero(state, sizeof ContextState)
-    package := try utf8.utf8To16NT(a, "Schannel")
+    package := try utf8.utf8To16NT("Schannel")
     credentials SchannelCred
     memory.zero(addrof credentials, sizeof SchannelCred)
     credentials.version = SCHANNEL_CRED_VERSION
@@ -143,7 +143,7 @@ pub open(context ptr, a allocator.Allocator, transport socket.Socket*, host str)
     state.allocator = a
     state.transport = transport
     state.credential = addrof owner.credential
-    target := try utf8.utf8To16NT(a, host)
+    target := try utf8.utf8To16NT(host)
     onerror:
         slices.free(target)
         a.free(state)

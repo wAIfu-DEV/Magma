@@ -67,7 +67,7 @@ shutdownResult(pool thread_pool.ThreadPool*) !bool:
 ..
 
 expectInvalidSizes() !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     zeroWorkers thread_pool.ThreadPool, workerErr error = thread_pool.new(a, 0, 1, 1, 1)
     if workerErr.ok():
         footgun.drop[thread_pool.ThreadPool](move zeroWorkers)

@@ -207,9 +207,9 @@ setFilters(a allocator.Allocator, dialog ptr, rawFilters ptr, count u64) !void:
         patterns[built] = none
     ..
     for built u64 = 0 to count:
-        nameUnits := try utf8.utf8To16NT(a, filters[built].name)
+        nameUnits := try utf8.utf8To16NT(filters[built].name)
         pattern := try extensionPattern(a, filters[built].extensions)
-        patternUnits := try utf8.utf8To16NT(a, pattern)
+        patternUnits := try utf8.utf8To16NT(pattern)
         pattern.free(a)
         names[built] = slices.toPtr(nameUnits)
         patterns[built] = slices.toPtr(patternUnits)
@@ -233,7 +233,7 @@ setDefaultPath(a allocator.Allocator, dialog ptr, path str) !void:
     if path.countBytes() == 0:
         ret
     ..
-    wide := try utf8.utf8To16NT(a, path)
+    wide := try utf8.utf8To16NT(path)
     defer slices.free(wide)
     item ptr = none
     result := ext_SHCreateItemFromParsingName(slices.toPtr(wide), none, guidShellItem(), addrof item)
@@ -251,7 +251,7 @@ setDefaultPath(a allocator.Allocator, dialog ptr, path str) !void:
 configureText(a allocator.Allocator, dialog ptr, title str, defaultName str) !void:
     table := dialogTable(dialog)
     if title.countBytes() > 0:
-        wideTitle := try utf8.utf8To16NT(a, title)
+        wideTitle := try utf8.utf8To16NT(title)
         result := table.setTitle(dialog, slices.toPtr(wideTitle))
         slices.free(wideTitle)
         if succeeded(result) == false:
@@ -259,7 +259,7 @@ configureText(a allocator.Allocator, dialog ptr, title str, defaultName str) !vo
         ..
     ..
     if defaultName.countBytes() > 0:
-        wideName := try utf8.utf8To16NT(a, defaultName)
+        wideName := try utf8.utf8To16NT(defaultName)
         result := table.setFileName(dialog, slices.toPtr(wideName))
         slices.free(wideName)
         if succeeded(result) == false:
@@ -287,7 +287,7 @@ selectionFromDialog(a allocator.Allocator, dialog ptr) !$str:
     loop wide[count] != 0:
         count = count + 1
     ..
-    path := try utf8.utf16to8(a, slices.fromPtr(wide, count))
+    path := try utf8.utf16to8(slices.fromPtr(wide, count))
     ret path
 ..
 

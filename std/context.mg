@@ -4,15 +4,13 @@ use "std:allocator" alc
 use "std:executor" exe
 
 pub Ctx(
-    procAlloc alc.Allocator
-    tempAlloc alc.Allocator
+    alloc alc.Allocator
     exec exe.Executor
 )
 
-pub noctx new(procAllocator alc.Allocator, tempAllocator alc.Allocator, executor exe.Executor) Ctx:
+pub noctx new(allocator alc.Allocator, executor exe.Executor) Ctx:
     ret Ctx(
-        procAlloc=procAllocator,
-        tempAlloc=tempAllocator,
+        alloc=allocator,
         exec=executor,
     )
 ..

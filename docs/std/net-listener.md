@@ -5,7 +5,7 @@ Callback-driven TCP listener built from `std/net/tcp` and
 `(context ptr, stream $tcp.Stream) !void`; every callback receives ownership of
 the accepted stream and must close it or transfer it onward.
 
-- `new(a, endpoint, backlog, capacity, commandCapacity, callback, context)`
+- `new(endpoint, backlog, capacity, commandCapacity, callback, context)`
   creates a nonblocking server and registers its accept callback.
 - `localEndpoint()` is useful after binding port zero.
 - `run()` or `runOnce(timeoutMs)` dispatch accepts synchronously; `stop()`

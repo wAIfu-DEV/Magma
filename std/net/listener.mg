@@ -49,7 +49,7 @@ onReady(raw ptr, token u64, flags u32) !void:
 ..
 
 pub new(endpoint address.Endpoint, backlog u32, capacity u64, commandCapacity u64, callback AcceptCallback, context ptr) !$Listener:
-    a := ctx.procAlloc
+    a := ctx.alloc
     # SAFETY: state is freshly allocated and receives unique ownership of the
     # server before being published to the listener and callback.
     unsafe:
@@ -58,9 +58,8 @@ pub new(endpoint address.Endpoint, backlog u32, capacity u64, commandCapacity u6
     ..
     state State* = try a.allocT[State](1)
     onerror a.free(state)
-    server := try tcp.listen(endpoint, backlog)
+    server := try tcp.listenNonBlocking(endpoint, backlog)
     onerror server.close()
-    try server.setNonBlocking(true)
     evloop := try event_loop.new(a, capacity, commandCapacity)
     onerror evloop.close()
     state.allocator = a

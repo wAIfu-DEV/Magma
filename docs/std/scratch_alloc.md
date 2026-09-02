@@ -4,7 +4,7 @@ Provides a fixed-capacity free-list allocator. It splits free blocks, reuses
 individually freed storage, and coalesces adjacent free blocks. The allocator
 never grows beyond its backing region.
 
-Use `new(allocator, capacity)` for a chosen capacity, `newDefault(allocator)`
+Use `new(capacity)` for a chosen capacity, `newDefault()`
 for 64 KiB, or `fromBuffer(buffer)` for caller-owned storage. `reset()` releases
 all allocations at once. The `destroy()` destructor releases owned backing
 storage but not a buffer supplied through `fromBuffer`. Individual calls to the

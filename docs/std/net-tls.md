@@ -5,8 +5,8 @@ Windows and Linux have native implementations; other currently declared
 targets report unsupported operation.
 
 - `newContext() !$Context` creates a reusable client TLS context.
-- `Context.open(a, socket, host) !$Session` creates a session over a borrowed,
-  connected transport. The socket and allocator must remain valid until the
+- `Context.open(socket, host) !$Session` creates a session over a borrowed,
+  connected transport. The socket and `ctx.alloc` must remain valid until the
   session is closed. `host` is used for server-name indication and certificate
   hostname verification.
 - `Session.handshake()` advances negotiation and returns whether it completed.

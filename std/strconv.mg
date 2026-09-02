@@ -51,7 +51,7 @@ pub parseBool(s str) !bool:
 # @example
 #   text := try strconv.formatUint(a, 42)
 pub formatUint(value u64) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     remaining := value
     digits u64 = 1
     tmp := value

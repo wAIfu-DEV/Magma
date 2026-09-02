@@ -20,7 +20,7 @@ pub LinearMap[T](
 )
 
 release[T](cleanup ($T) void, value $T) void:
-    a := ctx.procAlloc
+    a := ctx.alloc
     if cleanup == none:
         abandoned := array T[1]
         abandoned[0] = move value
@@ -35,7 +35,7 @@ release[T](cleanup ($T) void, value $T) void:
 # @example
 #   map := try linear_map.new[Value](freeValue)
 pub new[T](cleanup ($T) void) !$LinearMap[T]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     keys str* = try a.allocT[str](8)
     onerror a.free(keys)
     values T* = try a.allocT[T](8)

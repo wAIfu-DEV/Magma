@@ -4,6 +4,8 @@ mod process
 use "std:allocator" allocator
 use "std:future" future
 use "std:thread_pool" thread_pool
+use "std:abort" abort
+use "std:time" time
 
 @platform("windows")
 use "std:win/process_impl" impl_process
@@ -20,6 +22,8 @@ pub Process(
 SpawnTask(
     executable str
     arguments str[]
+    external abort.Signal
+    hasExternal bool
 )
 
 # Starts executable with arguments. The executable becomes argv[0], so callers
@@ -78,8 +82,35 @@ pub exec(executable str, arguments str[]) !u32:
     ret try child.await()
 ..
 
-runExecTask(task SpawnTask*) !u32:
-    ret try exec(task.executable, task.arguments)
+checkSignals(task SpawnTask*, signal abort.Signal) !bool:
+    try signal.check()
+    if task.hasExternal: try task.external.check() ..
+    ret true
+..
+
+runExecTask(task SpawnTask*, signal abort.Signal) !u32:
+    try checkSignals(task, signal)
+    child := try spawn(task.executable, task.arguments)
+    finished bool, pollError error = child.isFinished()
+    if pollError.nok():
+        child.kill()
+        throw pollError
+    ..
+    loop finished == false:
+        checked bool, abortError error = checkSignals(task, signal)
+        if abortError.nok():
+            child.kill()
+            throw abortError
+        ..
+        time.sleep(5)
+        nextFinished bool, nextError error = child.isFinished()
+        if nextError.nok():
+            child.kill()
+            throw nextError
+        ..
+        finished = nextFinished
+    ..
+    ret try child.await()
 ..
 
 # Runs exec on the supplied pool and resolves to the child's exit code. The
@@ -93,6 +124,12 @@ runExecTask(task SpawnTask*) !u32:
 # @example
 #   pending := try process.execAsync(pool, a, "tool", arguments)
 pub execAsync(executable str, arguments str[]) !$future.Future[u32]:
-    task := SpawnTask(executable=executable, arguments=arguments)
-    ret try future.new[u32, SpawnTask](ctx.exec, runExecTask, task)
+    task := SpawnTask(executable=executable, arguments=arguments, external=abort.Signal(state=none), hasExternal=false)
+    ret try future.newAbort[u32, SpawnTask](ctx.exec, runExecTask, task)
+..
+
+# Executes a process asynchronously while observing a caller-owned signal.
+pub execAsyncAbort(executable str, arguments str[], signal abort.Signal) !$future.Future[u32]:
+    task := SpawnTask(executable=executable, arguments=arguments, external=signal, hasExternal=true)
+    ret try future.newAbort[u32, SpawnTask](ctx.exec, runExecTask, task)
 ..

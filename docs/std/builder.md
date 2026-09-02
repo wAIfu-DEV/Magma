@@ -3,7 +3,7 @@
 ## Example
 
 ```magma
-b := try builder.new(heap.allocator())
+b := try builder.new()
 defer b.free()
 try b.appendBorrowed("hello ")
 try b.appendCopy("world")
@@ -19,8 +19,8 @@ Builds a string from borrowed or copied segments while avoiding repeated concate
 
 ## API
 
-- `pub new(a alc.Allocator) !$Builder` creates an empty builder.
-- `pub newWithCapacity(a alc.Allocator, chunkCapacity u64) !$Builder` creates
+- `pub new() !$Builder` creates an empty builder using `ctx.alloc`.
+- `pub newWithCapacity(chunkCapacity u64) !$Builder` creates
   one with a chosen initial segment capacity.
 - `Builder.addBorrowed` and `addOwned` append one segment without coalescing it
   with the previous segment. The `appendBorrowed` and `appendOwned` variants

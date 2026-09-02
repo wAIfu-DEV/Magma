@@ -13,16 +13,33 @@ ext ext_win32_HeapAlloc      HeapAlloc(hHeap win.HANDLE, dwFlags win.DWORD, dwBy
 ext ext_win32_HeapReAlloc    HeapReAlloc(hHeap win.HANDLE, dwFlags win.DWORD, lpMem win.LPVOID, dwBytes win.SIZE_T) win.LPVOID
 ext ext_win32_HeapFree       HeapFree(hHeap win.HANDLE, dwFlags win.DWORD, lpMem win.LPVOID) win.BOOL
 
-# Heap handle caching for performance
-gl_heap ptr
+# The process heap is immutable. Keep the cache process-global rather than in a
+# Magma global, which would create one cache per thread.
+llvm "@magma.heap.process = internal global ptr null, align 8\n"
+
+loadHeap() ptr:
+    unsafe:
+        llvm "  %value = load atomic ptr, ptr @magma.heap.process acquire, align 8\n"
+        llvm "  ret ptr %value\n"
+    ..
+..
+
+publishHeap(value ptr) void:
+    unsafe:
+        llvm "  store atomic ptr %value, ptr @magma.heap.process release, align 8\n"
+        llvm "  ret void\n"
+    ..
+..
 
 # Gets the process heap handle, cached for performance
 # O(1) after first call.
 getHeap() ptr:
-    if gl_heap == none:
-        gl_heap = ext_win32_GetProcessHeap()
+    heap := loadHeap()
+    if heap == none:
+        heap = ext_win32_GetProcessHeap()
+        if heap != none: publishHeap(heap) ..
     ..
-    ret gl_heap
+    ret heap
 ..
 
 # Internals for alloc, used by both alloc() and HeapAllocator.alloc()

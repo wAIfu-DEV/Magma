@@ -8,6 +8,7 @@ use "std:strings"   strings
 use "std:errors"    errors
 use "std:cast"      cast
 use "std:future"    future
+use "std:abort"     abort
 
 # Reader interface for pulling bytes into strings or buffers.
 # @complexity O(1) wrapper calls; underlying reader decides cost.
@@ -18,14 +19,13 @@ pub proto Reader(
 # Reads up to nBytes and returns a string containing the bytes read.
 # @warning returned string is backed by allocator-owned memory.
 # @complexity O(N) for nBytes.
-# @param a allocator to use
 # @param nBytes maximum bytes to read
 # @returns string with read bytes
 # @ownership Release the returned string with a.
 # @example
-#   chunk := try input.read(a, 4096)
+#   chunk := try input.read(4096)
 Reader.read(nBytes u64) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     if nBytes == 0:
         ret try strings.alloc(0)
     ..
@@ -70,13 +70,27 @@ ReaderReadTask(
     allocator alc.Allocator
     source Reader*
     count u64
+    external abort.Signal
+    hasExternal bool
 )
 
-runReadTask(task ReaderReadTask*) !str:
+runReadTask(task ReaderReadTask*, signal abort.Signal) !str:
+    ctx.alloc = task.allocator
+    try signal.check()
+    if task.hasExternal:
+        try task.external.check()
+    ..
     ret try task.source.read(task.count)
 ..
 
 Reader.readAsync(nBytes u64) !$future.Future[str]:
-    task := ReaderReadTask(source=this, allocator=ctx.procAlloc, count=nBytes)
-    ret try future.new[str, ReaderReadTask](ctx.exec, runReadTask, task)
+    task := ReaderReadTask(source=this, allocator=ctx.alloc, count=nBytes, external=abort.Signal(state=none), hasExternal=false)
+    ret try future.newAbort[str, ReaderReadTask](ctx.exec, runReadTask, task)
+..
+
+# Asynchronously reads while also observing a caller-owned abort signal.
+# The signal's Controller and Reader must remain alive through await.
+Reader.readAsyncAbort(nBytes u64, signal abort.Signal) !$future.Future[str]:
+    task := ReaderReadTask(source=this, allocator=ctx.alloc, count=nBytes, external=signal, hasExternal=true)
+    ret try future.newAbort[str, ReaderReadTask](ctx.exec, runReadTask, task)
 ..

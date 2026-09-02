@@ -710,9 +710,9 @@ uses that context to package `Reader.read` as a future:
 ```magma
 pool := try thread_pool.newDefault(a)
 defer pool.close()
-ctx = context.new(a, a, pool.executor())
+ctx = context.new(a, pool.executor())
 
-f := try file.open(a, "main.go", file.mode().read())
+f := try file.open("main.go", file.mode().read())
 defer f.close()
 
 source := try f.reader()

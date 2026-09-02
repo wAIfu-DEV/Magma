@@ -14,8 +14,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -24,6 +26,24 @@ type message struct {
 	ID      json.RawMessage `json:"id,omitempty"`
 	Method  string          `json:"method,omitempty"`
 	Params  json.RawMessage `json:"params,omitempty"`
+}
+type incomingMessage struct {
+	msg message
+	err error
+}
+type documentSnapshot struct {
+	URI, Text string
+	Version   int
+}
+type analysisJob struct {
+	generation     uint64
+	documents      []documentSnapshot
+	safetyWarnings bool
+}
+type analysisResult struct {
+	generation uint64
+	documents  []documentSnapshot
+	results    map[string]*analysis
 }
 type position struct {
 	Line      uint32 `json:"line"`
@@ -35,11 +55,12 @@ type document struct {
 	result    *analysis
 }
 type server struct {
-	in             *bufio.Reader
-	out            io.Writer
-	stdRoot        string
-	documents      map[string]*document
-	safetyWarnings bool
+	in                   *bufio.Reader
+	out                  io.Writer
+	stdRoot              string
+	documents            map[string]*document
+	publishedDiagnostics map[string]bool
+	safetyWarnings       bool
 }
 type analysis struct {
 	file            *types.FileCtx
@@ -135,28 +156,194 @@ func Serve(input io.Reader, output io.Writer, stdRoot string) error {
 // by the command-line compiler. Clients may subsequently update it through
 // workspace/didChangeConfiguration.
 func ServeWithPolicy(input io.Reader, output io.Writer, stdRoot string, safetyWarnings bool) error {
+	return serveWithAnalyzer(input, output, stdRoot, safetyWarnings, analyzeJob)
+}
+
+func serveWithAnalyzer(input io.Reader, output io.Writer, stdRoot string, safetyWarnings bool, analyzer func(analysisJob, string) analysisResult) error {
 	s := &server{in: bufio.NewReader(input), out: output, stdRoot: stdRoot, documents: map[string]*document{}, safetyWarnings: safetyWarnings}
+	incoming := make(chan incomingMessage, 64)
+	go func() {
+		defer close(incoming)
+		for {
+			payload, err := readMessage(s.in)
+			if err != nil {
+				incoming <- incomingMessage{err: err}
+				return
+			}
+			var msg message
+			if err := json.Unmarshal(payload, &msg); err != nil {
+				incoming <- incomingMessage{err: fmt.Errorf("decode LSP message: %w", err)}
+				return
+			}
+			incoming <- incomingMessage{msg: msg}
+		}
+	}()
+
+	jobs := make(chan analysisJob, 1)
+	completed := make(chan analysisResult, 1)
+	go func() {
+		for job := range jobs {
+			completed <- analyzer(job, stdRoot)
+		}
+	}()
+	defer close(jobs)
+
+	var generation uint64
+	var debounce *time.Timer
+	var debounceC <-chan time.Time
+	var nextJob analysisJob
+	scheduleAnalysis := func() {
+		generation++
+		nextJob = analysisJob{generation: generation, documents: snapshotDocuments(s.documents), safetyWarnings: s.safetyWarnings}
+		if debounce == nil {
+			debounce = time.NewTimer(50 * time.Millisecond)
+		} else {
+			if !debounce.Stop() {
+				select {
+				case <-debounce.C:
+				default:
+				}
+			}
+			debounce.Reset(50 * time.Millisecond)
+		}
+		debounceC = debounce.C
+	}
+	dispatchLatest := func() {
+		select {
+		case <-jobs:
+		default:
+		}
+		jobs <- nextJob
+		debounceC = nil
+	}
+
 	for {
-		payload, err := readMessage(s.in)
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		var msg message
-		if err := json.Unmarshal(payload, &msg); err != nil {
-			return fmt.Errorf("decode LSP message: %w", err)
-		}
-		if msg.Method == "exit" {
-			return nil
-		}
-		if err := s.handle(msg); err != nil && len(msg.ID) != 0 {
-			if responseErr := s.respondError(msg.ID, -32603, err.Error()); responseErr != nil {
-				return responseErr
+		select {
+		case <-debounceC:
+			dispatchLatest()
+			continue
+		case result := <-completed:
+			if result.generation == generation {
+				for uri, analysis := range result.results {
+					if d := s.documents[uri]; d != nil && documentVersion(result.documents, uri) == d.Version {
+						d.result = analysis
+					}
+				}
+				if err := s.publishWorkspaceDiagnostics(); err != nil {
+					return err
+				}
+			}
+			continue
+		case item, ok := <-incoming:
+			if !ok {
+				return nil
+			}
+			if item.err != nil {
+				if errors.Is(item.err, io.EOF) {
+					return nil
+				}
+				return item.err
+			}
+			msg := item.msg
+			if msg.Method == "exit" {
+				return nil
+			}
+			if msg.Method == "textDocument/didOpen" {
+				if err := s.applyDidOpen(msg); err != nil {
+					return err
+				}
+				scheduleAnalysis()
+				continue
+			}
+			if msg.Method == "textDocument/didChange" {
+				if err := s.applyDidChange(msg); err != nil {
+					return err
+				}
+				scheduleAnalysis()
+				continue
+			}
+			if msg.Method == "textDocument/didClose" {
+				var p struct {
+					TextDocument struct {
+						URI string `json:"uri"`
+					} `json:"textDocument"`
+				}
+				if err := json.Unmarshal(msg.Params, &p); err != nil {
+					return err
+				}
+				delete(s.documents, p.TextDocument.URI)
+				for _, d := range s.documents {
+					d.result = nil
+				}
+				scheduleAnalysis()
+				continue
+			}
+			if msg.Method == "workspace/didChangeConfiguration" {
+				if err := s.applyConfiguration(msg); err != nil {
+					return err
+				}
+				for _, d := range s.documents {
+					d.result = nil
+				}
+				scheduleAnalysis()
+				continue
+			}
+			if err := s.handle(msg); err != nil && len(msg.ID) != 0 {
+				if responseErr := s.respondError(msg.ID, -32603, err.Error()); responseErr != nil {
+					return responseErr
+				}
 			}
 		}
 	}
+}
+
+func snapshotDocuments(documents map[string]*document) []documentSnapshot {
+	result := make([]documentSnapshot, 0, len(documents))
+	for _, d := range documents {
+		result = append(result, documentSnapshot{URI: d.URI, Text: d.Text, Version: d.Version})
+	}
+	return result
+}
+
+func documentVersion(documents []documentSnapshot, uri string) int {
+	for _, d := range documents {
+		if d.URI == uri {
+			return d.Version
+		}
+	}
+	return -1
+}
+
+func analyzeJob(job analysisJob, stdRoot string) analysisResult {
+	overrides := make(map[string][]byte, len(job.documents))
+	for _, d := range job.documents {
+		path, err := uriPath(d.URI)
+		if err != nil {
+			continue
+		}
+		path, err = filepath.Abs(path)
+		if err != nil {
+			continue
+		}
+		overrides[path] = []byte(d.Text)
+	}
+	results := make(map[string]*analysis, len(job.documents))
+	for _, d := range job.documents {
+		results[d.URI] = analyzePolicyWithOverrides(d.URI, d.Text, stdRoot, job.safetyWarnings, overrides)
+	}
+	return analysisResult{generation: job.generation, documents: job.documents, results: results}
+}
+
+func documentChangeURI(msg message) string {
+	var p struct {
+		TextDocument struct {
+			URI string `json:"uri"`
+		} `json:"textDocument"`
+	}
+	if json.Unmarshal(msg.Params, &p) != nil {
+		return ""
+	}
+	return p.TextDocument.URI
 }
 
 func readMessage(r *bufio.Reader) ([]byte, error) {
@@ -206,18 +393,9 @@ func (s *server) handle(msg message) error {
 	case "initialized", "$/cancelRequest", "textDocument/didSave":
 		return nil
 	case "workspace/didChangeConfiguration":
-		var p struct {
-			Settings struct {
-				SafetyWarnings bool `json:"safetyWarnings"`
-				Magma          struct {
-					SafetyWarnings bool `json:"safetyWarnings"`
-				} `json:"magma"`
-			} `json:"settings"`
-		}
-		if err := json.Unmarshal(msg.Params, &p); err != nil {
+		if err := s.applyConfiguration(msg); err != nil {
 			return err
 		}
-		s.safetyWarnings = p.Settings.SafetyWarnings || p.Settings.Magma.SafetyWarnings
 		for uri, d := range s.documents {
 			d.result = nil
 			if err := s.publishDiagnostics(uri); err != nil {
@@ -226,37 +404,15 @@ func (s *server) handle(msg message) error {
 		}
 		return nil
 	case "textDocument/didOpen":
-		var p struct {
-			TextDocument struct {
-				URI     string `json:"uri"`
-				Text    string `json:"text"`
-				Version int    `json:"version"`
-			} `json:"textDocument"`
-		}
-		if err := json.Unmarshal(msg.Params, &p); err != nil {
+		if err := s.applyDidOpen(msg); err != nil {
 			return err
 		}
-		s.documents[p.TextDocument.URI] = &document{URI: p.TextDocument.URI, Text: p.TextDocument.Text, Version: p.TextDocument.Version}
-		return s.publishDiagnostics(p.TextDocument.URI)
+		return s.publishDiagnostics(documentChangeURI(msg))
 	case "textDocument/didChange":
-		var p struct {
-			TextDocument struct {
-				URI     string `json:"uri"`
-				Version int    `json:"version"`
-			} `json:"textDocument"`
-			ContentChanges []struct {
-				Text string `json:"text"`
-			} `json:"contentChanges"`
-		}
-		if err := json.Unmarshal(msg.Params, &p); err != nil {
+		if err := s.applyDidChange(msg); err != nil {
 			return err
 		}
-		if d := s.documents[p.TextDocument.URI]; d != nil && len(p.ContentChanges) > 0 {
-			d.Text = p.ContentChanges[len(p.ContentChanges)-1].Text
-			d.Version = p.TextDocument.Version
-			d.result = nil
-			return s.publishDiagnostics(p.TextDocument.URI)
-		}
+		return s.publishDiagnostics(documentChangeURI(msg))
 	case "textDocument/didClose":
 		var p struct {
 			TextDocument struct {
@@ -267,7 +423,7 @@ func (s *server) handle(msg message) error {
 			return err
 		}
 		delete(s.documents, p.TextDocument.URI)
-		return s.write(map[string]any{"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": map[string]any{"uri": p.TextDocument.URI, "diagnostics": []diagnostic{}}})
+		return s.publishWorkspaceDiagnostics()
 	case "textDocument/hover":
 		var p struct {
 			TextDocument struct {
@@ -343,29 +499,155 @@ func (s *server) handle(msg message) error {
 	return nil
 }
 
+func (s *server) applyConfiguration(msg message) error {
+	var p struct {
+		Settings struct {
+			SafetyWarnings bool `json:"safetyWarnings"`
+			Magma          struct {
+				SafetyWarnings bool `json:"safetyWarnings"`
+			} `json:"magma"`
+		} `json:"settings"`
+	}
+	if err := json.Unmarshal(msg.Params, &p); err != nil {
+		return err
+	}
+	s.safetyWarnings = p.Settings.SafetyWarnings || p.Settings.Magma.SafetyWarnings
+	return nil
+}
+
+func (s *server) applyDidOpen(msg message) error {
+	var p struct {
+		TextDocument struct {
+			URI     string `json:"uri"`
+			Text    string `json:"text"`
+			Version int    `json:"version"`
+		} `json:"textDocument"`
+	}
+	if err := json.Unmarshal(msg.Params, &p); err != nil {
+		return err
+	}
+	s.documents[p.TextDocument.URI] = &document{URI: p.TextDocument.URI, Text: p.TextDocument.Text, Version: p.TextDocument.Version}
+	return nil
+}
+
+func (s *server) applyDidChange(msg message) error {
+	var p struct {
+		TextDocument struct {
+			URI     string `json:"uri"`
+			Version int    `json:"version"`
+		} `json:"textDocument"`
+		ContentChanges []struct {
+			Text string `json:"text"`
+		} `json:"contentChanges"`
+	}
+	if err := json.Unmarshal(msg.Params, &p); err != nil {
+		return err
+	}
+	if d := s.documents[p.TextDocument.URI]; d != nil && len(p.ContentChanges) > 0 {
+		d.Text = p.ContentChanges[len(p.ContentChanges)-1].Text
+		d.Version = p.TextDocument.Version
+		d.result = nil
+	}
+	return nil
+}
+
 func (s *server) publishDiagnostics(uri string) error {
-	d := s.documents[uri]
-	if d == nil {
+	if s.documents[uri] == nil {
 		return nil
 	}
-	d.result = analyzePolicy(d.URI, d.Text, s.stdRoot, s.safetyWarnings)
-	path, err := uriPath(uri)
-	if err != nil {
-		return err
+	overrides := make(map[string][]byte, len(s.documents))
+	for _, document := range s.documents {
+		path, err := uriPath(document.URI)
+		if err != nil {
+			return err
+		}
+		path, err = filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		overrides[path] = []byte(document.Text)
 	}
-	path, err = filepath.Abs(path)
-	if err != nil {
-		return err
+	// A diagnostic attached to one file may have been produced while analyzing
+	// an importer. Reanalyze every open root against the same buffer snapshot so
+	// an edit cannot leave another document's cached result republishing it.
+	for _, document := range s.documents {
+		document.result = analyzePolicyWithOverrides(document.URI, document.Text, s.stdRoot, s.safetyWarnings, overrides)
 	}
-	return s.write(map[string]any{
-		"jsonrpc": "2.0",
-		"method":  "textDocument/publishDiagnostics",
-		"params": map[string]any{
-			"uri":         uri,
-			"version":     d.Version,
-			"diagnostics": diagnosticsForFile(d.result.err, d.result.warnings, path),
-		},
-	})
+	return s.publishWorkspaceDiagnostics()
+}
+
+// publishWorkspaceDiagnostics reports errors at their actual source URI rather
+// than hiding failures in imported files behind the document that initiated
+// analysis. Rebuilding the aggregate also lets us clear diagnostics that became
+// stale after an edit fixed or removed an import.
+func (s *server) publishWorkspaceDiagnostics() error {
+	byURI := map[string][]diagnostic{}
+	for _, document := range s.documents {
+		if document.result == nil {
+			continue
+		}
+		paths := diagnosticPaths(document.result.err, document.result.warnings)
+		for _, path := range paths {
+			targetURI := fileURI(path)
+			byURI[targetURI] = append(byURI[targetURI], diagnosticsForFile(document.result.err, document.result.warnings, path)...)
+		}
+	}
+	// An open document must receive an empty set too, both on first analysis and
+	// when its final diagnostic was fixed.
+	for uri := range s.documents {
+		if _, ok := byURI[uri]; !ok {
+			byURI[uri] = []diagnostic{}
+		}
+	}
+	for uri := range s.publishedDiagnostics {
+		if _, ok := byURI[uri]; !ok {
+			byURI[uri] = []diagnostic{}
+		}
+	}
+
+	if s.publishedDiagnostics == nil {
+		s.publishedDiagnostics = map[string]bool{}
+	}
+	uris := make([]string, 0, len(byURI))
+	for uri := range byURI {
+		uris = append(uris, uri)
+	}
+	sort.Strings(uris)
+	nextPublished := map[string]bool{}
+	for _, uri := range uris {
+		params := map[string]any{"uri": uri, "diagnostics": byURI[uri]}
+		if open := s.documents[uri]; open != nil {
+			params["version"] = open.Version
+		}
+		if err := s.write(map[string]any{"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": params}); err != nil {
+			return err
+		}
+		if len(byURI[uri]) != 0 || s.documents[uri] != nil {
+			nextPublished[uri] = true
+		}
+	}
+	s.publishedDiagnostics = nextPublished
+	return nil
+}
+
+func diagnosticPaths(err error, warnings []types.Diagnostic) []string {
+	seen := map[string]bool{}
+	for _, item := range comp_err.Diagnostics(err) {
+		if item.FilePath != "" {
+			seen[filepath.Clean(item.FilePath)] = true
+		}
+	}
+	for i := range warnings {
+		if warnings[i].FilePath != "" {
+			seen[filepath.Clean(warnings[i].FilePath)] = true
+		}
+	}
+	paths := make([]string, 0, len(seen))
+	for path := range seen {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 func (s *server) respond(id json.RawMessage, result any) error {
@@ -388,7 +670,11 @@ func analyze(rawURI, source, stdRoot string) *analysis {
 }
 
 func analyzePolicy(rawURI, source, stdRoot string, safetyWarnings bool) *analysis {
-	return analyzeWithRecoveryPolicy(rawURI, source, stdRoot, true, safetyWarnings)
+	return analyzePolicyWithOverrides(rawURI, source, stdRoot, safetyWarnings, nil)
+}
+
+func analyzePolicyWithOverrides(rawURI, source, stdRoot string, safetyWarnings bool, overrides map[string][]byte) *analysis {
+	return analyzeWithRecoveryPolicyOverrides(rawURI, source, stdRoot, true, safetyWarnings, overrides)
 }
 
 func analyzeWithRecovery(rawURI, source, stdRoot string, recoverSyntax bool) *analysis {
@@ -396,6 +682,10 @@ func analyzeWithRecovery(rawURI, source, stdRoot string, recoverSyntax bool) *an
 }
 
 func analyzeWithRecoveryPolicy(rawURI, source, stdRoot string, recoverSyntax, safetyWarnings bool) *analysis {
+	return analyzeWithRecoveryPolicyOverrides(rawURI, source, stdRoot, recoverSyntax, safetyWarnings, nil)
+}
+
+func analyzeWithRecoveryPolicyOverrides(rawURI, source, stdRoot string, recoverSyntax, safetyWarnings bool, overrides map[string][]byte) *analysis {
 	path, err := uriPath(rawURI)
 	if err != nil {
 		return &analysis{err: err}
@@ -408,6 +698,9 @@ func analyzeWithRecoveryPolicy(rawURI, source, stdRoot string, recoverSyntax, sa
 	if err != nil {
 		return &analysis{err: err}
 	}
+	for overridePath, contents := range overrides {
+		state.SourceOverrides[overridePath] = contents
+	}
 	state.SourceOverrides[path] = []byte(source)
 	parsed, err := compilerpipeline.Parse(state, path)
 	file := state.Files[path]
@@ -418,8 +711,8 @@ func analyzeWithRecoveryPolicy(rawURI, source, stdRoot string, recoverSyntax, sa
 		for _, syntaxError := range comp_err.Diagnostics(err) {
 			if syntaxError.Ctx != nil && filepath.Clean(syntaxError.Ctx.FilePath) == path {
 				if recovered, ok := blankSourceLine(source, syntaxError.Token.Pos.Line); ok {
-					result := analyzeWithRecoveryPolicy(rawURI, recovered, stdRoot, false, safetyWarnings)
-					result.err = err
+					result := analyzeWithRecoveryPolicyOverrides(rawURI, recovered, stdRoot, false, safetyWarnings, overrides)
+					result.err = comp_err.Join(err, result.err)
 					return result
 				}
 			}
@@ -1100,7 +1393,7 @@ func formatType(node *types.NodeType) string {
 	case *types.NodeTypeRfc:
 		out = "&" + formatType(&types.NodeType{KindNode: k.Kind})
 	case *types.NodeTypeSlice:
-		out = "[]" + formatType(&types.NodeType{KindNode: k.ElemKind})
+		out = formatType(&types.NodeType{KindNode: k.ElemKind}) + "[]"
 	case *types.NodeTypeFunc:
 		a := []string{}
 		for _, x := range k.Args {
@@ -1111,7 +1404,7 @@ func formatType(node *types.NodeType) string {
 		out = "?"
 	}
 	if node.Owned {
-		out = "owned " + out
+		out = "$" + out
 	}
 	if node.Throws {
 		out = "!" + out

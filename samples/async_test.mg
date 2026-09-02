@@ -19,10 +19,10 @@ pub main() !void:
     ..
 
     took := time.elapsedUs(start)
-    fmt.str(ctx.procAlloc, "\nTook (µs): ").uint(took).str("\n").print()
+    fmt.str(ctx.alloc, "\nTook (µs): ").uint(took).str("\n").print()
 
     contents := try future.await()
-    defer contents.free(ctx.procAlloc)
+    defer contents.free(ctx.alloc)
 
     io.printLn(contents)
 ..

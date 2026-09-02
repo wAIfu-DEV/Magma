@@ -58,6 +58,9 @@ constWriterWriteRemaining(cw ConstWriter*, bytes str, firstWritten u64) !u64:
 #   try output.writeAll("complete payload")
 ConstWriter.writeAll(bytes str) !u64:
     firstWritten u64 = try this.write(bytes)
+    if firstWritten > bytes.countBytes():
+        throw errors.failure("writer returned more bytes than requested")
+    ..
     if firstWritten == bytes.countBytes():
         ret firstWritten
     ..
@@ -90,6 +93,10 @@ ConstWriter.toWriter() Writer:
 #   try output.writeAll("complete payload")
 Writer.writeAll(bytes str) !u64:
     firstWritten u64 = try this.write(bytes)
+
+    if firstWritten > bytes.countBytes():
+        throw errors.failure("writer returned more bytes than requested")
+    ..
 
     # Happy path, mean and lean
     if firstWritten == bytes.countBytes():

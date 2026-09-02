@@ -18,7 +18,7 @@ pub Queue[T](
 # @example
 #   pending := try queue.new[u64](a, none)
 pub new[T](cleanup (alc.Allocator, $T) void) !$Queue[T]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     data := try arr.new[T](a)
     q Queue[T]
     q.allocator = a

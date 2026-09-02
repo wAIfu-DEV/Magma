@@ -102,11 +102,23 @@ func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
 		if e != nil {
 			return nil, e
 		}
-		body, e := parseBody(ctx, next)
+		if next.KeywType == t.KwColon {
+			body, e := parseBody(ctx, next)
+			if e != nil {
+				return nil, e
+			}
+			return &t.NodeStmtUnsafe{Tk: tk, Body: body}, nil
+		}
+		expr, e := parseExpression(ctx, next, 0)
 		if e != nil {
 			return nil, e
 		}
-		return &t.NodeStmtUnsafe{Tk: tk, Body: body}, nil
+		return &t.NodeStmtUnsafe{
+			Tk: tk,
+			Body: t.NodeBody{Statements: []t.NodeStatement{
+				&t.NodeStmtExpr{Expression: expr},
+			}},
+		}, nil
 	case t.KwDefer, t.KwOnError:
 		n, e := parseDefer(ctx, tk)
 		if e != nil {

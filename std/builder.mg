@@ -33,7 +33,7 @@ pub Builder impl writer.Writer(
 # @example
 #   output := try builder.new()
 pub new() !$Builder:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try newWithCapacity(8)
 ..
 
@@ -47,7 +47,7 @@ pub new() !$Builder:
 # @example
 #   output := try builder.newWithCapacity(8)
 pub newWithCapacity(chunkCapacity u64) !$Builder:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret Builder(
         allocator=a,
         segments=try a.allocT[Segment](chunkCapacity),

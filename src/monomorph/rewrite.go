@@ -1,11 +1,17 @@
 package monomorph
 
 import (
+	"Magma/src/comp_err"
+	magmatypes "Magma/src/magma_types"
 	t "Magma/src/types"
 	"fmt"
 )
 
 func (m *monoCtx) rewriteType(module string, gl *t.NodeGlobal, tp *t.NodeType) error {
+	return m.rewriteTypeWithValidation(module, gl, tp, false)
+}
+
+func (m *monoCtx) rewriteTypeWithValidation(module string, gl *t.NodeGlobal, tp *t.NodeType, requireKnown bool) error {
 	if tp == nil {
 		return nil
 	}
@@ -13,7 +19,7 @@ func (m *monoCtx) rewriteType(module string, gl *t.NodeGlobal, tp *t.NodeType) e
 	case *t.NodeTypeNamed:
 		displayName := m.displayType(tp)
 		for _, g := range n.GenericArgs {
-			if e := m.rewriteType(module, gl, g); e != nil {
+			if e := m.rewriteTypeWithValidation(module, gl, g, true); e != nil {
 				return e
 			}
 		}
@@ -40,10 +46,27 @@ func (m *monoCtx) rewriteType(module string, gl *t.NodeGlobal, tp *t.NodeType) e
 							AbsoluteName: targetModule + "." + baseName,
 							DisplayName:  displayName,
 						}
+						return nil
+					}
+					if _, ok := target.TypeAliases[baseName]; ok {
+						return nil
 					}
 				}
 			}
-			return nil
+			if single, ok := n.NameNode.(*t.NodeNameSingle); ok {
+				if _, basic := magmatypes.BasicTypes[single.Name]; basic {
+					return nil
+				}
+			}
+			if !requireKnown {
+				return nil
+			}
+			return comp_err.CompilationErrorToken(
+				m.fileCtxForGlobal(gl),
+				nameToken(n.NameNode),
+				fmt.Sprintf("unknown type '%s'", flattenName(n.NameNode)),
+				"",
+			)
 		}
 
 		targetModule, baseName, e := resolveQualifiedName(m.modules, module, gl, n.NameNode)
@@ -68,32 +91,32 @@ func (m *monoCtx) rewriteType(module string, gl *t.NodeGlobal, tp *t.NodeType) e
 		return nil
 	case *t.NodeTypePointer:
 		tmp := &t.NodeType{KindNode: n.Kind}
-		if e := m.rewriteType(module, gl, tmp); e != nil {
+		if e := m.rewriteTypeWithValidation(module, gl, tmp, requireKnown); e != nil {
 			return e
 		}
 		n.Kind = tmp.KindNode
 		return nil
 	case *t.NodeTypeRfc:
 		tmp := &t.NodeType{KindNode: n.Kind}
-		if e := m.rewriteType(module, gl, tmp); e != nil {
+		if e := m.rewriteTypeWithValidation(module, gl, tmp, requireKnown); e != nil {
 			return e
 		}
 		n.Kind = tmp.KindNode
 		return nil
 	case *t.NodeTypeSlice:
 		tmp := &t.NodeType{KindNode: n.ElemKind}
-		if e := m.rewriteType(module, gl, tmp); e != nil {
+		if e := m.rewriteTypeWithValidation(module, gl, tmp, requireKnown); e != nil {
 			return e
 		}
 		n.ElemKind = tmp.KindNode
 		return nil
 	case *t.NodeTypeFunc:
 		for _, a := range n.Args {
-			if e := m.rewriteType(module, gl, a); e != nil {
+			if e := m.rewriteTypeWithValidation(module, gl, a, requireKnown); e != nil {
 				return e
 			}
 		}
-		return m.rewriteType(module, gl, n.RetType)
+		return m.rewriteTypeWithValidation(module, gl, n.RetType, requireKnown)
 	}
 	return nil
 }
@@ -105,7 +128,7 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 	switch n := expr.(type) {
 	case *t.NodeExprName:
 		for _, g := range n.GenericArgs {
-			if e := m.rewriteType(module, gl, g); e != nil {
+			if e := m.rewriteTypeWithValidation(module, gl, g, true); e != nil {
 				return e
 			}
 		}
@@ -174,7 +197,7 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 			}
 		}
 		for _, g := range n.GenericArgs {
-			if e := m.rewriteType(module, gl, g); e != nil {
+			if e := m.rewriteTypeWithValidation(module, gl, g, true); e != nil {
 				return e
 			}
 		}

@@ -7,6 +7,7 @@ use "std:cast" cast
 use "std:errors" errors
 use "std:memory" memory
 use "std:slices" slices
+use "std:atomic" atomic
 
 pub NativeEvent(token u64, flags u32)
 
@@ -17,6 +18,7 @@ pub Poller(
     raw u8*
     decoded NativeEvent*
     capacity u64
+    wakePending atomic.U8
 )
 
 ext ext_epoll_create1 epoll_create1(flags c.int) c.int
@@ -61,7 +63,7 @@ control(poller Poller*, operation i32, handle ptr, token u64, flags u32) !void:
 ..
 
 pub new(capacity u64) !$Poller:
-    a := ctx.procAlloc
+    a := ctx.alloc
     epollFd i32 = ext_epoll_create1(0x80000)
     if epollFd < 0:
         throw errors.failure("epoll_create1 failed")
@@ -76,7 +78,7 @@ pub new(capacity u64) !$Poller:
     onerror a.free(raw)
     decoded NativeEvent* = try a.allocT[NativeEvent](capacity)
     onerror a.free(decoded)
-    poller := Poller(allocator=a, epollFd=epollFd, wakeFd=wakeFd, raw=raw, decoded=decoded, capacity=capacity)
+    poller := Poller(allocator=a, epollFd=epollFd, wakeFd=wakeFd, raw=raw, decoded=decoded, capacity=capacity, wakePending=atomic.newU8(0))
     wakeHandle ptr = cast.utop(cast.itou(cast.i32to64(wakeFd)))
     try control(addrof poller, 1, wakeHandle, WAKE_TOKEN, 1)
     ret poller
@@ -141,6 +143,7 @@ pub wait(poller Poller*, limit u64, timeoutMs i64) !u64:
         if token == WAKE_TOKEN:
             value u64
             ext_read(poller.wakeFd, addrof value, sizeof u64)
+            poller.wakePending.store(0)
         else:
             poller.decoded[outputIndex] = NativeEvent(token=token, flags=decodeFlags(*nativeFlagsPtr))
             outputIndex = outputIndex + 1
@@ -160,10 +163,14 @@ pub eventAt(poller Poller*, index u64) NativeEvent:
 ..
 
 pub interrupt(poller Poller*) !void:
+    if poller.wakePending.exchange(1) != 0:
+        ret
+    ..
     value u64 = 1
     result i64 = ext_write(poller.wakeFd, addrof value, sizeof u64)
     # EAGAIN means an unread wake is already pending, which is sufficient.
     if result < 0:
+        poller.wakePending.store(0)
         ret
     ..
 ..

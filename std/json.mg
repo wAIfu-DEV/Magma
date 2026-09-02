@@ -54,6 +54,16 @@ ArrayData(
     values arr.Array[Value]
 )
 
+Value.stringify() !$str:
+    bld := try builder.newWithCapacity(16)
+    defer bld.free()
+
+    writer := bld.writer()
+    try this.writeTo(writer)
+
+    ret try bld.build()
+..
+
 # Validates that this value is JSON null.
 # @throws invalidType if this value has another kind
 # @complexity O(1)
@@ -193,7 +203,7 @@ destr Value.free() void:
 
 # Creates an owned empty JSON object.
 pub object() !$Value:
-    a := ctx.procAlloc
+    a := ctx.alloc
     data ObjectData* = try a.allocT[ObjectData](1)
     onerror a.free(data)
     entries := try linear_map.new[Value](valueCleanup)
@@ -209,7 +219,7 @@ pub object() !$Value:
 
 # Creates an owned empty JSON array.
 pub array() !$Value:
-    a := ctx.procAlloc
+    a := ctx.alloc
     data ArrayData* = try a.allocT[ArrayData](1)
     onerror a.free(data)
     values := try arr.new[Value](a)
@@ -270,7 +280,7 @@ pub numberInt(value i64) $Value:
 ..
 
 stringOwned(value $str) $Value:
-    a := ctx.procAlloc
+    a := ctx.alloc
     out Value = memory.zeroValue[Value]()
     out.kind = 3
     out.allocator = a
@@ -285,7 +295,7 @@ stringOwned(value $str) $Value:
 # @example
 #   value := try json.string(input)
 pub string(value str) !$Value:
-    a := ctx.procAlloc
+    a := ctx.alloc
     owned str = try strings.copy(value)
     ret stringOwned(move owned)
 ..
@@ -405,48 +415,6 @@ Value.set(key str, value $Value) !void:
     try view.set(key, move value)
 ..
 
-Value.setString(key str, value str) !void:
-    view := try this.asObject()
-    try view.setString(key, value)
-..
-
-Value.setInt(key str, value i64) !void:
-    view := try this.asObject()
-    try view.setInt(key, value)
-..
-
-Value.setBool(key str, value bool) !void:
-    view := try this.asObject()
-    try view.setBool(key, value)
-..
-
-# Returns a borrowed array element. Named `at` because Magma does not overload
-# Value.get for both string keys and integer indices.
-Value.at(index u64) !Value:
-    view := try this.asArray()
-    ret try view.get(index)
-..
-
-Value.append(value $Value) !void:
-    view Array, viewError error = this.asArray()
-    if viewError.nok():
-        valueCleanup(move value)
-        throw viewError
-    ..
-    try view.append(move value)
-..
-
-Value.count() !u64:
-    if this.kind == 4:
-        view := try this.asObject()
-        ret view.count()
-    elif this.kind == 5:
-        view := try this.asArray()
-        ret view.count()
-    ..
-    throw errors.invalidType("json value is not a container")
-..
-
 const MAX_PARSE_DEPTH u64 = 128
 
 Parser(
@@ -534,7 +502,7 @@ Parser.parseString() !$str:
             this.index = this.index + 1
             result := try output.build()
             if utf8.validate(result) == false:
-                result.free(ctx.procAlloc)
+                result.free(ctx.alloc)
                 throw errors.invalidArgument("invalid UTF-8 in JSON string")
             ..
             ret move result
@@ -826,7 +794,7 @@ setParsedObjectValue(view Object, key str, value $Value) !bool:
 ..
 
 Parser.parseObject(depth u64) !$Value:
-    a := ctx.procAlloc
+    a := ctx.alloc
     this.index = this.index + 1
     out := try object()
     onerror valueCleanup(move out)
@@ -1058,8 +1026,8 @@ writeValue(w writer.Writer, value Value, precision u64) !void:
 # Serializes this value as compact JSON with six fractional digits.
 # @complexity O(N) for serialized byte count
 # @example
-#   try value.write(output)
-Value.write(w writer.Writer) !void:
+#   try value.writeTo(output)
+Value.writeTo(w writer.Writer) !void:
     try writeValue(w, *this, 6)
 ..
 

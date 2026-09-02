@@ -203,6 +203,38 @@ main() void:
 	}
 }
 
+func TestParseUnsafeExpressionAndBlock(t *testing.T) {
+	global, err := parseTestSource(t, `mod main
+consume(value u64) void:
+..
+main() void:
+    unsafe consume(1)
+    unsafe:
+        consume(2)
+    ..
+..
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := global.FuncDefs["main"].Body.Statements
+	if len(statements) != 2 {
+		t.Fatalf("statements = %d, want 2", len(statements))
+	}
+	for i, statement := range statements {
+		unsafeStmt, ok := statement.(*mt.NodeStmtUnsafe)
+		if !ok {
+			t.Fatalf("statement %d = %T, want *NodeStmtUnsafe", i, statement)
+		}
+		if len(unsafeStmt.Body.Statements) != 1 {
+			t.Fatalf("unsafe statement %d body length = %d, want 1", i, len(unsafeStmt.Body.Statements))
+		}
+		if _, ok := unsafeStmt.Body.Statements[0].(*mt.NodeStmtExpr); !ok {
+			t.Fatalf("unsafe statement %d body = %T, want *NodeStmtExpr", i, unsafeStmt.Body.Statements[0])
+		}
+	}
+}
+
 func TestParseCharacterizesForLoop(t *testing.T) {
 	global, err := parseTestSource(t, `mod main
 main() void:

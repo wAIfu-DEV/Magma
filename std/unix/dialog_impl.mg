@@ -6,16 +6,16 @@ use "std:allocator" allocator
 use "std:errors" errors
 
 pub openFile(filters ptr, filterCount u64, defaultPath str, title str, parent ptr) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     throw errors.failure("XDG file dialog backend is not implemented")
 ..
 
 pub saveFile(filters ptr, filterCount u64, defaultPath str, defaultName str, title str, parent ptr) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     throw errors.failure("XDG file dialog backend is not implemented")
 ..
 
 pub openDir(defaultPath str, title str, parent ptr) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     throw errors.failure("XDG file dialog backend is not implemented")
 ..

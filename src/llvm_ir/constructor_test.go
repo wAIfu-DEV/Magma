@@ -105,6 +105,31 @@ main() void:
 	}
 }
 
+func TestStringEqualityUsesRuntimeHelper(t *testing.T) {
+	ir, err := compileSource(t, `mod main
+
+equal(a str, b str) bool:
+    ret a == b
+..
+
+different(a str, b str) bool:
+    ret a != b
+..
+`)
+	if err != nil {
+		t.Fatalf("compile string comparisons: %v", err)
+	}
+	if got := strings.Count(ir, "call i1 @magma.string.equal(%type.str"); got != 2 {
+		t.Fatalf("expected two string equality helper calls, got %d", got)
+	}
+	if !strings.Contains(ir, "xor i1 %") {
+		t.Fatal("string inequality did not invert the equality result")
+	}
+	if strings.Contains(ir, "icmp eq %type.str") || strings.Contains(ir, "icmp ne %type.str") {
+		t.Fatal("string comparison emitted an aggregate icmp")
+	}
+}
+
 func TestPrototypeViewGeneratesVtableAndReusesOrdinaryPrototypeMethods(t *testing.T) {
 	ir, err := compileSource(t, `mod main
 

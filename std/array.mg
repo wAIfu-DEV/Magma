@@ -13,6 +13,7 @@ use "std:memory"    mem
 use "std:iterator"  iter
 use "std:footgun"   fg
 use "std:checked"   checked
+
 # Padding is biased for append-first workloads
 const DEFAULT_PAD_LEFT u64 = 2
 const DEFAULT_PAD_RIGHT u64 = 6

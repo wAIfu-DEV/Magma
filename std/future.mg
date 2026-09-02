@@ -6,6 +6,7 @@ use "std:cast" cast
 use "std:errors" errors
 use "std:executor" executor
 use "std:time" time
+use "std:abort" abort
 
 @platform("windows")
 use "std:win/address_wait" address_wait
@@ -20,12 +21,15 @@ State[T](
     status u32
     references u32
     waiter address_wait.Wait
+    controller abort.Controller
 )
 
 Work[T, Context](
     state State[T]
     entry (Context*) !T
+    abortEntry (Context*, abort.Signal) !T
     context Context
+    abortable bool
 )
 
 # Single-consumer asynchronous result backed by worker-pool state.
@@ -85,6 +89,10 @@ releaseReference(references u32*) u32:
 releaseState[T](state State[T]*) void:
     if releaseReference(addrof state.references) == 1:
         address_wait.free(addrof state.waiter)
+        # SAFETY: the last reference uniquely owns the embedded controller.
+        unsafe:
+            state.controller.close()
+        ..
         state.allocator.free(state)
     ..
 ..
@@ -92,19 +100,33 @@ releaseState[T](state State[T]*) void:
 taskMain[T, Context](raw ptr) u64:
     work Work[T, Context]* = cast.reinterpret[Work[T, Context]](raw)
     state State[T]* = addrof work.state
-    value T, failure error = work.entry(addrof work.context)
-    if failure.ok():
-        # SAFETY: this worker has exclusive initialization access before publishDone.
-        unsafe:
-            state.value = value
+    allowed bool, abortFailure error = checkBeforeStart(state.controller.signal())
+    if abortFailure.nok():
+        state.failure = abortFailure
+    elif work.abortable:
+        abortValue T, workAbortFailure error = work.abortEntry(addrof work.context, state.controller.signal())
+        if workAbortFailure.ok():
+            unsafe: state.value = abortValue ..
+        else:
+            state.failure = workAbortFailure
         ..
     else:
-        state.failure = failure
+        plainValue T, plainFailure error = work.entry(addrof work.context)
+        if plainFailure.ok():
+            unsafe: state.value = plainValue ..
+        else:
+            state.failure = plainFailure
+        ..
     ..
     publishDone(addrof state.status)
     address_wait.wake(addrof state.waiter, addrof state.status)
     releaseState[T](state)
     ret 0
+..
+
+checkBeforeStart(signal abort.Signal) !bool:
+    try signal.check()
+    ret true
 ..
 
 submitWork[T, Context](scheduler executor.Executor, work Work[T, Context]*) !bool:
@@ -125,7 +147,7 @@ submitWork[T, Context](scheduler executor.Executor, work Work[T, Context]*) !boo
 #   scheduler := pool.executor()
 #   pending := try future.new[u64, Work](scheduler, run, work)
 pub new[T, Context](scheduler executor.Executor, entry (Context*) !T, context Context) !$Future[T]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     work Work[T, Context]* = try a.allocT[Work[T, Context]](1)
     onerror a.free(work)
     state State[T]* = addrof work.state
@@ -133,8 +155,12 @@ pub new[T, Context](scheduler executor.Executor, entry (Context*) !T, context Co
     state.failure = errors.ok()
     state.status = 0
     state.references = 2
+    state.controller = try abort.new()
+    onerror closeController[T](state)
     work.entry = entry
+    work.abortEntry = none
     work.context = context
+    work.abortable = false
 
     waiter address_wait.Wait = try address_wait.new()
     state.waiter = waiter
@@ -142,6 +168,57 @@ pub new[T, Context](scheduler executor.Executor, entry (Context*) !T, context Co
 
     try submitWork[T, Context](scheduler, work)
     ret Future[T](state=state)
+..
+
+# Creates a future whose work receives the future's abort signal.
+pub newAbort[T, Context](scheduler executor.Executor, entry (Context*, abort.Signal) !T, context Context) !$Future[T]:
+    a := ctx.alloc
+    work Work[T, Context]* = try a.allocT[Work[T, Context]](1)
+    onerror a.free(work)
+    state State[T]* = addrof work.state
+    state.allocator = a
+    state.failure = errors.ok()
+    state.status = 0
+    state.references = 2
+    state.controller = try abort.new()
+    onerror closeController[T](state)
+    work.entry = none
+    work.abortEntry = entry
+    work.context = context
+    work.abortable = true
+    waiter address_wait.Wait = try address_wait.new()
+    state.waiter = waiter
+    onerror address_wait.free(addrof state.waiter)
+    try submitWork[T, Context](scheduler, work)
+    ret Future[T](state=state)
+..
+
+closeController[T](state State[T]*) void:
+    # SAFETY: used only during construction before state is published.
+    unsafe:
+        state.controller.close()
+    ..
+..
+
+# Requests cooperative cancellation. The future must still be awaited.
+Future[T].abort() void:
+    if this.state != none:
+        this.state.controller.abort()
+    ..
+..
+
+Future[T].abortAfter(relativeMs u64) !void:
+    if this.state == none:
+        throw errors.invalidArgument("future is not active")
+    ..
+    try this.state.controller.abortAfter(relativeMs)
+..
+
+Future[T].isAbortRequested() !bool:
+    if this.state == none:
+        throw errors.invalidArgument("future is not active")
+    ..
+    ret this.state.controller.isAborted()
 ..
 
 # Reports whether the worker has published a result without consuming it.

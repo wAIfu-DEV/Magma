@@ -10,6 +10,9 @@ pub main() !void:
     if copy.countBytes() != 5 || strings.compare(copy, "magma") == false:
         throw errors.failure("strings behavior changed")
     ..
+    if copy != "magma" || copy == "magmb" || "" != "":
+        throw errors.failure("string equality operators changed")
+    ..
     copyPtr u8* = strings.toPtr(copy)
     # SAFETY: copy allocates a trailing terminator at index countBytes.
     unsafe:

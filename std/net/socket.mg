@@ -6,6 +6,7 @@ use "std:errors" errors
 use "std:reader" reader
 use "std:writer" writer
 use "std:duplex" duplex
+use "std:slices" slices
 
 @platform("windows")
 use "std:win/net/socket_impl" impl
@@ -38,7 +39,18 @@ pub open(family u8, kind u8) !$Socket:
     if kind != TYPE_STREAM && kind != TYPE_DATAGRAM:
         throw errors.invalidArgument("unsupported socket type")
     ..
-    handle := try impl.open(family, kind)
+    handle := try impl.openBlocking(family, kind)
+    ret Socket(handle=handle, family=family, kind=kind, open=true)
+..
+
+pub openNonBlocking(family u8, kind u8) !$Socket:
+    if family != address.FAMILY_IPV4 && family != address.FAMILY_IPV6:
+        throw errors.invalidArgument("unsupported socket family")
+    ..
+    if kind != TYPE_STREAM && kind != TYPE_DATAGRAM:
+        throw errors.invalidArgument("unsupported socket type")
+    ..
+    handle := try impl.openNonBlocking(family, kind)
     ret Socket(handle=handle, family=family, kind=kind, open=true)
 ..
 
@@ -63,10 +75,17 @@ Socket.listen(backlog u32) !void:
 
 Socket.accept() !$Socket:
     try this.requireOpen()
-    handle ptr, failure error = impl.accept(this.handle)
+    handle ptr, failure error = impl.acceptBlocking(this.handle)
     if failure.nok():
         throw failure
     ..
+    ret Socket(handle=handle, family=this.family, kind=TYPE_STREAM, open=true)
+..
+
+Socket.acceptNonBlocking() !$Socket:
+    try this.requireOpen()
+    handle ptr, failure error = impl.acceptNonBlocking(this.handle)
+    if failure.nok(): throw failure ..
     ret Socket(handle=handle, family=this.family, kind=TYPE_STREAM, open=true)
 ..
 
@@ -97,7 +116,14 @@ Socket.peerEndpoint() !address.Endpoint:
 
 Socket.recv(buffer u8[], count u64) !u64:
     try this.requireOpen()
-    ret try impl.recv(this.handle, buffer, count)
+    if count > slices.count(buffer):
+        throw errors.invalidArgument("receive count exceeds buffer length")
+    ..
+    received := try impl.recv(this.handle, buffer, count)
+    if received > count:
+        throw errors.failure("socket received more bytes than requested")
+    ..
+    ret received
 ..
 
 Socket.send(bytes str) !u64:
@@ -107,8 +133,14 @@ Socket.send(bytes str) !u64:
 
 Socket.recvFrom(buffer u8[], count u64) !Received:
     try this.requireOpen()
+    if count > slices.count(buffer):
+        throw errors.invalidArgument("receive count exceeds buffer length")
+    ..
     source address.Endpoint
     received u64 = try impl.recvFrom(this.handle, buffer, count, addrof source)
+    if received > count:
+        throw errors.failure("socket received more bytes than requested")
+    ..
     ret Received(count=received, source=source)
 ..
 

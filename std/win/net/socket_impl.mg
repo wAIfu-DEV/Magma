@@ -9,6 +9,8 @@ use "std:errors" errors
 use "std:slices" slices
 use "std:strings" strings
 use "std:net/address" address
+use "std:net/byte_order" byte_order
+use "std:win/net/runtime" runtime
 
 SockAddrIn(family u16, port u16, addr u32, zero u64)
 SockAddrIn6(family u16, port u16, flowInfo u32, addr0 u32, addr1 u32, addr2 u32, addr3 u32, scopeId u32)
@@ -34,10 +36,6 @@ ext ext_ioctlsocket ioctlsocket(socket u64, command c.long, value c.unsigned_lon
 ext ext_setsockopt setsockopt(socket u64, level i32, name i32, value ptr, length i32) i32
 ext ext_getsockname getsockname(socket u64, addr ptr, length i32*) i32
 ext ext_getpeername getpeername(socket u64, addr ptr, length i32*) i32
-ext ext_htons htons(value u16) u16
-ext ext_ntohs ntohs(value u16) u16
-ext ext_htonl htonl(value u32) u32
-ext ext_ntohl ntohl(value u32) u32
 
 socketValue(handle ptr) u64:
     ret cast.ptou(handle)
@@ -63,14 +61,6 @@ nativeFailure(message str) error:
     ret errors.native(cast.u64to32(cast.itou(cast.i32to64(code))), message)
 ..
 
-startWinsock() !void:
-    data WsaData
-    code i32 = ext_WSAStartup(0x0202, addrof data)
-    if code != 0:
-        throw errors.native(cast.u64to32(cast.itou(cast.i32to64(code))), "WSAStartup failed")
-    ..
-..
-
 nativeFamily(family u8) !i32:
     if family == address.FAMILY_IPV4:
         ret 2
@@ -85,19 +75,19 @@ fillAddress(endpoint address.Endpoint, storage SockAddrStorage*) !NativeAddress:
     if endpoint.address.family == address.FAMILY_IPV4:
         native SockAddrIn* = storage
         native.family = cast.u64to16(cast.itou(family))
-        native.port = ext_htons(endpoint.port)
-        native.addr = ext_htonl(endpoint.address.word0)
+        byte_order.store16(addrof native.port, endpoint.port)
+        byte_order.store32(addrof native.addr, endpoint.address.word0)
         native.zero = 0
         ret NativeAddress(pointer=native, length=cast.u64to32(sizeof SockAddrIn))
     ..
     native6 SockAddrIn6* = storage
     native6.family = cast.u64to16(cast.itou(family))
-    native6.port = ext_htons(endpoint.port)
+    byte_order.store16(addrof native6.port, endpoint.port)
     native6.flowInfo = 0
-    native6.addr0 = ext_htonl(endpoint.address.word0)
-    native6.addr1 = ext_htonl(endpoint.address.word1)
-    native6.addr2 = ext_htonl(endpoint.address.word2)
-    native6.addr3 = ext_htonl(endpoint.address.word3)
+    byte_order.store32(addrof native6.addr0, endpoint.address.word0)
+    byte_order.store32(addrof native6.addr1, endpoint.address.word1)
+    byte_order.store32(addrof native6.addr2, endpoint.address.word2)
+    byte_order.store32(addrof native6.addr3, endpoint.address.word3)
     native6.scopeId = 0
     ret NativeAddress(pointer=native6, length=cast.u64to32(sizeof SockAddrIn6))
 ..
@@ -105,13 +95,13 @@ fillAddress(endpoint address.Endpoint, storage SockAddrStorage*) !NativeAddress:
 readAddress(storage SockAddrStorage*) !address.Endpoint:
     native SockAddrIn* = storage
     if native.family == 2:
-        word u32 = ext_ntohl(native.addr)
+        word u32 = byte_order.load32(addrof native.addr)
         ip := address.ipv4(cast.u64to8((word >> 24) & 255), cast.u64to8((word >> 16) & 255), cast.u64to8((word >> 8) & 255), cast.u64to8(word & 255))
-        ret address.Endpoint(address=ip, port=ext_ntohs(native.port))
+        ret address.Endpoint(address=ip, port=byte_order.load16(addrof native.port))
     ..
     native6 SockAddrIn6* = storage
-    ip6 := address.ipv6(ext_ntohl(native6.addr0), ext_ntohl(native6.addr1), ext_ntohl(native6.addr2), ext_ntohl(native6.addr3))
-    ret address.Endpoint(address=ip6, port=ext_ntohs(native6.port))
+    ip6 := address.ipv6(byte_order.load32(addrof native6.addr0), byte_order.load32(addrof native6.addr1), byte_order.load32(addrof native6.addr2), byte_order.load32(addrof native6.addr3))
+    ret address.Endpoint(address=ip6, port=byte_order.load16(addrof native6.port))
 ..
 
 checkedLength(length u64) !i32:
@@ -121,9 +111,8 @@ checkedLength(length u64) !i32:
     ret cast.u64to32(length)
 ..
 
-pub open(family u8, kind u8) !ptr:
-    try startWinsock()
-    onerror ext_WSACleanup()
+pub openBlocking(family u8, kind u8) !ptr:
+    try runtime.ensure()
     domain := try nativeFamily(family)
     nativeKind i32 = 1
     protocol i32 = 6
@@ -136,6 +125,13 @@ pub open(family u8, kind u8) !ptr:
         throw nativeFailure("socket creation failed")
     ..
     ret socketPointer(value)
+..
+
+pub openNonBlocking(family u8, kind u8) !ptr:
+    handle := try openBlocking(family, kind)
+    onerror close(handle)
+    try setNonBlocking(handle, true)
+    ret handle
 ..
 
 pub bind(handle ptr, endpoint address.Endpoint) !void:
@@ -152,9 +148,8 @@ pub listen(handle ptr, backlog u32) !void:
     ..
 ..
 
-pub accept(handle ptr) !ptr:
-    try startWinsock()
-    onerror ext_WSACleanup()
+pub acceptBlocking(handle ptr) !ptr:
+    try runtime.ensure()
     storage SockAddrStorage
     length i32 = cast.u64to32(sizeof SockAddrStorage)
     value u64 = ext_accept(socketValue(handle), addrof storage, addrof length)
@@ -162,6 +157,13 @@ pub accept(handle ptr) !ptr:
         throw nativeFailure("socket accept failed")
     ..
     ret socketPointer(value)
+..
+
+pub acceptNonBlocking(handle ptr) !ptr:
+    accepted := try acceptBlocking(handle)
+    onerror close(accepted)
+    try setNonBlocking(accepted, true)
+    ret accepted
 ..
 
 pub connect(handle ptr, endpoint address.Endpoint) !void:
@@ -267,11 +269,7 @@ pub shutdown(handle ptr, direction u8) !void:
 
 pub close(handle ptr) !void:
     closeCode i32 = ext_closesocket(socketValue(handle))
-    cleanupCode i32 = ext_WSACleanup()
     if closeCode != 0:
         throw nativeFailure("socket close failed")
-    ..
-    if cleanupCode != 0:
-        throw nativeFailure("WSACleanup failed")
     ..
 ..

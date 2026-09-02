@@ -11,7 +11,7 @@ use "std:win/env_impl" impl
 use "std:unix/env_impl" impl
 
 pub get(name str) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try impl.get(name)
 ..
 
@@ -28,6 +28,6 @@ pub unset(name str) !void:
 ..
 
 pub list() !$list.List[str]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try impl.list()
 ..

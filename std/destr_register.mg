@@ -15,7 +15,7 @@ pub DestrRegister(
 )
 
 pub new() !$DestrRegister:
-    data := try list.new[DestrCall](ctx.procAlloc, none)
+    data := try list.new[DestrCall](ctx.alloc, none)
     ret DestrRegister(data=move data)
 ..
 

@@ -31,7 +31,7 @@ Capture.write(bytes str) !u64:
 ..
 
 render(value json.Value, precision u64) !$str:
-    temporary := ctx.tempAlloc
+    temporary := ctx.alloc
     storage u8* = try temporary.allocT[u8](1024)
     defer temporary.free(storage)
     output Capture
@@ -73,7 +73,7 @@ testParserCleanup() !void:
     defer debug.destroy()
     previous := ctx
     tracked := debug.allocator()
-    ctx = context.Ctx(procAlloc=tracked, tempAlloc=tracked, exec=previous.exec)
+    ctx = context.Ctx(alloc=tracked, exec=previous.exec)
     defer:
         ctx = previous
     ..
@@ -405,17 +405,19 @@ break\""
     # nested throwing call chain.
     document := try json.object()
     defer document.free()
-    try document.setString("name", "Magma")
-    try document.setInt("version", 2)
+    documentObject := try document.asObject()
+    try documentObject.setString("name", "Magma")
+    try documentObject.setInt("version", 2)
     if strings.compare(try document.get("name").asString(), "Magma") == false:
         throw errors.failure("JSON chained value lookup changed")
     ..
 
     items := try json.array()
     defer items.free()
-    try items.append(json.numberInt(10))
-    try items.append(json.numberInt(20))
-    if try items.at(1).asInt() != 20 || try items.count() != 2:
+    itemsArray := try items.asArray()
+    try itemsArray.append(json.numberInt(10))
+    try itemsArray.append(json.numberInt(20))
+    if try itemsArray.get(1).asInt() != 20 || itemsArray.count() != 2:
         throw errors.failure("JSON direct array API changed")
     ..
 ..

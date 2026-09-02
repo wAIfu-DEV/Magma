@@ -8,7 +8,7 @@ on Windows and Linux and reports unsupported operation on the other targets.
 ```magma
 headers http.Header[] = slices.fromPtr(none, 0)
 request := http.noBody("GET", "https://example.com/", headers)
-client := try http.new(heap.allocator(), http.defaultOptions())
+client := try http.new(http.defaultOptions())
 defer client.close()
 response := try client.send(request)
 defer response.close()
@@ -29,7 +29,7 @@ request before transmission. Responses are buffered up to `maxResponseBytes`.
 
 ## Client and responses
 
-- `new(allocator, options)` creates a reusable client.
+- `new(options)` creates a reusable client using `ctx.alloc`.
 - `Client.start(request)` creates a manually polled `Exchange`.
 - `Exchange.poll(timeoutMs)` advances one readiness cycle.
 - `Exchange.finish()` returns the completed buffered `Response`.

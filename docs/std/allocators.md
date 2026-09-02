@@ -7,7 +7,8 @@ import:
 use "std:allocators" allocators
 
 a := allocators.heap.allocator()
-arena := try allocators.arena.newDefault(a)
+ctx.alloc = a
+arena := try allocators.arena.newDefault()
 ```
 
 The public re-exports are:

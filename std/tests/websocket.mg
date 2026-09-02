@@ -7,9 +7,10 @@ use "std:slices" slices
 use "std:writer" writer
 
 # Compile-time coverage for Client's generic byte-stream adapters.
-checkInterfaces(client websocket.Client*) void:
+checkInterfaces(client websocket.Client*) !void:
     input reader.Reader = client.reader()
     output writer.Writer = client.writer()
+    try client.writeAll("")
 ..
 
 pub main() !void:

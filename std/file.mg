@@ -7,6 +7,10 @@ use "std:writer"    w
 use "std:reader"    r
 use "std:file_op_mode" fopm
 use "std:cast"      cast
+use "std:future"    future
+use "std:abort"     abort
+use "std:strings"   strings
+use "std:slices"    slices
 
 @platform("windows")
 use "std:win/file_impl" impl_file
@@ -20,6 +24,15 @@ pub File impl r.Reader w.Writer(
     handle ptr
     openMode fopm.OpenMode
     open bool
+)
+
+ReadTask(
+    file File*
+    allocator alc.Allocator
+    offset u64
+    count u64
+    external abort.Signal
+    hasExternal bool
 )
 
 # Closes the file if open.
@@ -119,18 +132,64 @@ File.count() !u64:
     ret count
 ..
 
+runReadAt(task ReadTask*, signal abort.Signal) !$str:
+    ctx.alloc = task.allocator
+    try signal.check()
+    if task.hasExternal: try task.external.check() ..
+    result $str = try strings.alloc(task.count)
+    onerror result.free(task.allocator)
+    base := strings.toPtr(result)
+    total u64 = 0
+    loop total < task.count:
+        try signal.check()
+        if task.hasExternal: try task.external.check() ..
+        amount := task.count - total
+        if amount > 262144: amount = 262144 ..
+        destination := cast.utop(cast.ptou(base) + total)
+        view := slices.fromPtr(cast.reinterpret[u8](destination), amount)
+        count := try impl_file.readAt(task.file.handle, view, amount, task.offset + total)
+        total = total + count
+        if count < amount:
+            break
+        ..
+    ..
+    unsafe: base[total] = 0 ..
+    if strings.truncate(addrof result, total) == false:
+        throw errors.failure("file read produced an invalid byte count")
+    ..
+    ret move result
+..
+
+# Starts an abortable positional read without changing the file cursor.
+# The File must remain open until the returned Future is awaited.
+File.readAsync(offset u64, count u64) !$future.Future[str]:
+    if this.open == false || (this.openMode.bits & fopm.FLAG_READ) == 0:
+        throw errors.invalidArgument("file not open in read mode")
+    ..
+    task := ReadTask(file=this, allocator=ctx.alloc, offset=offset, count=count, external=abort.Signal(state=none), hasExternal=false)
+    ret try future.newAbort[str, ReadTask](ctx.exec, runReadAt, task)
+..
+
+# Starts a positional read observing both its Future and caller-owned signal.
+File.readAsyncAbort(offset u64, count u64, signal abort.Signal) !$future.Future[str]:
+    if this.open == false || (this.openMode.bits & fopm.FLAG_READ) == 0:
+        throw errors.invalidArgument("file not open in read mode")
+    ..
+    task := ReadTask(file=this, allocator=ctx.alloc, offset=offset, count=count, external=signal, hasExternal=true)
+    ret try future.newAbort[str, ReadTask](ctx.exec, runReadAt, task)
+..
+
 # Opens a file with the provided path and mode.
 # @warning caller must close the file to avoid leaks.
 # @complexity O(1) aside from path conversion and syscalls.
-# @param a allocator to use
 # @param path file path
 # @param openMode desired open mode
 # @returns open file handle
 # @mustcall close
 # @example
-#   handle := try file.open(a, "data.bin", file.mode().read())
+#   handle := try file.open("data.bin", file.mode().read())
 pub open(path str, openMode fopm.OpenMode) !$File:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     handle ptr = try impl_file.openFile(path, openMode)
     ret File(handle=handle, openMode=openMode, open=true)
 ..

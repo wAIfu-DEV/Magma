@@ -18,7 +18,21 @@ FileTime(
     highDateTime u32,
 )
 
-gl_tickFreq u64
+llvm "@magma.time.tick.frequency = internal global i64 0, align 8\n"
+
+loadTickFrequency() u64:
+    unsafe:
+        llvm "  %value = load atomic i64, ptr @magma.time.tick.frequency acquire, align 8\n"
+        llvm "  ret i64 %value\n"
+    ..
+..
+
+publishTickFrequency(value u64) void:
+    unsafe:
+        llvm "  store atomic i64 %value, ptr @magma.time.tick.frequency release, align 8\n"
+        llvm "  ret void\n"
+    ..
+..
 
 fileTimeValue(value FileTime*) u64:
     high u64 = cast.u32to64(value.highDateTime) << 32
@@ -30,7 +44,10 @@ pub processCpuTimeNs() u64:
     exit FileTime
     kernel FileTime
     user FileTime
-    ok i32 = ext_win32_GetProcessTimes(ext_win32_GetCurrentProcess(), addrof creation, addrof exit, addrof kernel, addrof user)
+    # GetCurrentProcess returns the constant pseudo-handle -1. Supplying it
+    # directly avoids a foreign call while preserving the same semantics.
+    currentProcess win.HANDLE = cast.utop(cast.itou(-1))
+    ok i32 = ext_win32_GetProcessTimes(currentProcess, addrof creation, addrof exit, addrof kernel, addrof user)
     if ok == 0:
         ret 0
     ..
@@ -45,11 +62,13 @@ pub ticks() u64:
 ..
 
 pub tickFrequency() u64:
-    if gl_tickFreq != 0:
-        ret gl_tickFreq
+    frequency := loadTickFrequency()
+    if frequency != 0:
+        ret frequency
     ..
-    ext_win32_QueryPerformanceFrequency(addrof gl_tickFreq)
-    ret gl_tickFreq
+    ext_win32_QueryPerformanceFrequency(addrof frequency)
+    if frequency != 0: publishTickFrequency(frequency) ..
+    ret frequency
 ..
 
 unixEpochIntervals() u64:

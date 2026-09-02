@@ -36,9 +36,9 @@ pub Writer impl writer.Writer(
 pub writerBuffered(w writer.Writer) !$Writer:
     ret Writer(
         underlying=w,
-        buffer=try ctx.procAlloc.alloc(DEFAULT_BUFFER_SIZE),
+        buffer=try ctx.alloc.alloc(DEFAULT_BUFFER_SIZE),
         position=0,
-        allocator=ctx.procAlloc,
+        allocator=ctx.alloc,
     )
 ..
 
@@ -265,7 +265,7 @@ Reader.markEof() void:
 # @example
 #   bufferedReader := try buffered.readerBuffered(a, input)
 pub readerBuffered(r reader.Reader) !$Reader:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret Reader(
         underlying=r,
         buffer=try a.alloc(DEFAULT_BUFFER_SIZE),
@@ -382,8 +382,20 @@ Reader.reader() reader.Reader:
     ret this.proto()
 ..
 
+updateAfterRealloc(value str*, data ptr, capacity u64) void:
+    # SAFETY: this audited implementation updates the owned line descriptor
+    # after resizeLineBuffer successfully reallocates its backing storage.
+    unsafe:
+        llvm "  %dataPtr = getelementptr %type.str, ptr %value, i32 0, i32 0\n"
+        llvm "  store ptr %data, ptr %dataPtr\n"
+        llvm "  %capacityPtr = getelementptr %type.str, ptr %value, i32 0, i32 1\n"
+        llvm "  store i64 %capacity, ptr %capacityPtr\n"
+        llvm "  ret void\n"
+    ..
+..
+
 resizeLineBuffer(old u8*, newCapacity u64) !$u8*:
-    a := ctx.procAlloc
+    a := ctx.alloc
     if newCapacity == 0 - 1:
         throw errors.wouldOverflow("line buffer capacity overflow")
     ..
@@ -401,7 +413,7 @@ resizeLineBuffer(old u8*, newCapacity u64) !$u8*:
 # @example
 #   line := try bufferedReader.readLn(a)
 Reader.readLn() !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     # Initial capacity for line buffer
     capacity u64 = 128
     line $str = try strings.alloc(capacity)
@@ -421,7 +433,7 @@ Reader.readLn() !$str:
             newCapacity = capacity * 2
             lineBuffer = try resizeLineBuffer(lineBuffer, newCapacity)
             capacity = newCapacity
-            strings.updateAfterRealloc(addrof line, lineBuffer, capacity)
+            updateAfterRealloc(addrof line, lineBuffer, capacity)
         ..
         
         # Look for newline in current buffer
@@ -468,7 +480,7 @@ Reader.readLn() !$str:
                         newCapacity = lineLen + foundPos
                         lineBuffer = try resizeLineBuffer(lineBuffer, newCapacity)
                         capacity = newCapacity
-                        strings.updateAfterRealloc(addrof line, lineBuffer, capacity)
+                        updateAfterRealloc(addrof line, lineBuffer, capacity)
                     ..
                     
                     dstPtr = cast.utop(cast.ptou(lineBuffer) + lineLen)
@@ -493,7 +505,7 @@ Reader.readLn() !$str:
                 newCapacity = lineLen + available
                 lineBuffer = try resizeLineBuffer(lineBuffer, newCapacity)
                 capacity = newCapacity
-                strings.updateAfterRealloc(addrof line, lineBuffer, capacity)
+                updateAfterRealloc(addrof line, lineBuffer, capacity)
             ..
             
             dstPtr = cast.utop(cast.ptou(lineBuffer) + lineLen)

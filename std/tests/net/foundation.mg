@@ -14,6 +14,7 @@ use "std:thread" thread
 use "std:thread_pool" thread_pool
 use "std:time" time
 use "std:net/address" address
+use "std:net/byte_order" byte_order
 use "std:net/dns" dns
 use "std:net/event_loop" event_loop
 use "std:net/listener" net_listener
@@ -102,8 +103,26 @@ testAddress() !void:
     ..
 ..
 
+testByteOrder() !void:
+    value16 u16 = 0
+    byte_order.store16(addrof value16, 0x1234)
+    value32 u32 = 0
+    byte_order.store32(addrof value32, 0x12345678)
+    # SAFETY: each pointer addresses the complete local integer tested below.
+    unsafe:
+        bytes16 u8* = addrof value16
+        if bytes16[0] != 0x12 || bytes16[1] != 0x34 || byte_order.load16(addrof value16) != 0x1234:
+            throw errors.failure("u16 network byte-order conversion changed")
+        ..
+        bytes32 u8* = addrof value32
+        if bytes32[0] != 0x12 || bytes32[1] != 0x34 || bytes32[2] != 0x56 || bytes32[3] != 0x78 || byte_order.load32(addrof value32) != 0x12345678:
+            throw errors.failure("u32 network byte-order conversion changed")
+        ..
+    ..
+..
+
 testDns() !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     resolver := try dns.new(a, dns.defaultOptions())
     defer resolver.close()
     output := array address.Endpoint[16]
@@ -129,7 +148,7 @@ testUdp() !void:
 ..
 
 testTcpPollAndAsync() !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     listener := try tcp.listen(address.loopbackIpv4(0), 16)
     defer listener.close()
     endpoint := try listener.localEndpoint()
@@ -157,7 +176,7 @@ testTcpPollAndAsync() !void:
     cbcontext := CallbackContext(socket=addrof server.socket, calls=atomic.newU64(0))
     pool := try thread_pool.new(a, 1, 1, 8, 64)
     defer pool.close()
-    ctx = context.new(a, a, pool.executor())
+    ctx = context.new(a, pool.executor())
     running := try evloop.runAsync()
     defer:
         running.stop()
@@ -175,7 +194,7 @@ testTcpPollAndAsync() !void:
 ..
 
 testAsyncListener() !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     accontext AcceptContext* = try a.allocT[AcceptContext](1)
     # SAFETY: allocT returned one writable AcceptContext slot exclusively owned
     # by this test until after the running listener is awaited.
@@ -185,7 +204,7 @@ testAsyncListener() !void:
     listener := try net_listener.new(address.loopbackIpv4(0), 16, 8, 8, onAccept, accontext)
     endpoint := try listener.localEndpoint()
     pool := try thread_pool.new(a, 1, 1, 8, 64)
-    ctx = context.new(a, a, pool.executor())
+    ctx = context.new(a, pool.executor())
     running := try listener.runAsync()
     client := try tcp.connect(endpoint)
     try client.close()
@@ -204,7 +223,7 @@ testAsyncListener() !void:
 ..
 
 testHttpClient() !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     htcontext HttpContext* = try a.allocT[HttpContext](1)
     defer a.free(htcontext)
     # SAFETY: allocT returned one writable HttpContext slot exclusively owned
@@ -216,7 +235,7 @@ testHttpClient() !void:
     endpoint := try listener.localEndpoint()
     pool := try thread_pool.new(a, 2, 2, 8, 64)
     defer pool.close()
-    ctx = context.new(a, a, pool.executor())
+    ctx = context.new(a, pool.executor())
     running := try listener.runAsync()
     defer:
         running.stop()
@@ -262,6 +281,7 @@ testHttpClient() !void:
 pub main() !void:
     a := heap.allocator()
     try testAddress()
+    try testByteOrder()
     try testDns()
     try testUdp()
     try testTcpPollAndAsync()

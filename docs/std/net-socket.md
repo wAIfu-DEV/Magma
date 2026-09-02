@@ -5,6 +5,9 @@ Low-level owned stream and datagram sockets.
 `open(family, kind) !$Socket` accepts an address family from
 `std/net/address` and either `TYPE_STREAM` or `TYPE_DATAGRAM`. `Socket.close()`
 consumes the native resource and is safe to call on an already closed value.
+`openNonBlocking` creates the socket in nonblocking mode atomically on Linux;
+other platforms use their native fallback. `acceptNonBlocking` provides the
+matching accepted-socket operation.
 
 ## Operations
 

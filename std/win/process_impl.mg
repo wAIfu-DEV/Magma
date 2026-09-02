@@ -145,7 +145,7 @@ pub spawn(executable str, arguments str[]) !$Process:
     line str = try commandLine(a, executable, arguments)
     defer line.free(a)
     
-    line16 u16[] = try utf8.utf8To16NT(a, line)
+    line16 u16[] = try utf8.utf8To16NT(line)
     defer a.free(slices.toPtr(line16))
 
     startup StartupInfo
@@ -195,7 +195,7 @@ pub spawnWithEnv(executable str, arguments str[], environment str[]) !$Process:
     a := heap.allocator()
     line := try commandLine(a, executable, arguments)
     defer line.free(a)
-    line16 := try utf8.utf8To16NT(a, line)
+    line16 := try utf8.utf8To16NT(line)
     defer a.free(slices.toPtr(line16))
     block := try environmentBlock(a, environment)
     defer a.free(block)

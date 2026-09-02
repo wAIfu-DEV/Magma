@@ -18,7 +18,7 @@ use "std:unix/file_impl" impl_file
 # @example
 #   output := try io.stdout(a)
 pub stdout() !$buffered.Writer:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try buffered.writerBuffered(impl_file.stdout())
 ..
 
@@ -60,7 +60,7 @@ pub printLn(bytes str) !u64:
 # @complexity O(1).
 # @ownership Close the returned writer to flush and release its buffer.
 pub stderr() !$buffered.Writer:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try buffered.writerBuffered(impl_file.stderr())
 ..
 
@@ -75,7 +75,7 @@ pub stderrUnbuffered() writer.Writer:
 # @complexity O(1).
 # @ownership Close the returned reader to release its buffer.
 pub stdin() !$buffered.Reader:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try buffered.readerBuffered(impl_file.stdin())
 ..
 

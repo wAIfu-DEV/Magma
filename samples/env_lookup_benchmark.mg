@@ -1,0 +1,57 @@
+mod main
+# Unix benchmark: libc getenv versus the standard library's environ scan.
+
+use "std:env" env
+use "std:errors" errors
+use "std:heap" heap
+use "std:io" io
+use "std:strings" strings
+use "std:time" time
+
+legacyGetenv(name u8*) u8*:
+    unsafe:
+        llvm "  call void asm sideeffect \"\", \"~{memory}\"()\n"
+        llvm "  %value = call ptr @getenv(ptr %name)\n"
+        llvm "  ret ptr %value\n"
+    ..
+..
+
+const ITERATIONS u64 = 100000
+
+legacy(name u8*) u64:
+    found u64 = 0
+    for i u64 = 0 to ITERATIONS:
+        if legacyGetenv(name) != none: found = found + 1 ..
+    ..
+    ret found
+..
+
+scanned() u64:
+    found u64 = 0
+    for i u64 = 0 to ITERATIONS:
+        if env.has("PATH"): found = found + 1 ..
+    ..
+    ret found
+..
+
+pub main() !void:
+    native := try strings.toCstr("PATH")
+    defer heap.allocator().free(native)
+    start := time.ticks()
+    oldResult := legacy(native)
+    oldNs := time.ticksToNs(time.elapsedTicks(start))
+    start = time.ticks()
+    newResult := scanned()
+    newNs := time.ticksToNs(time.elapsedTicks(start))
+    if oldResult != ITERATIONS || newResult != ITERATIONS:
+        throw errors.failure("environment benchmark requires PATH")
+    ..
+    out := io.stdoutUnbuffered()
+    try out.writeAll("environment lookups=")
+    try out.writeUint64(ITERATIONS)
+    try out.writeAll("\nlegacy_getenv_ns=")
+    try out.writeUint64(oldNs)
+    try out.writeAll("\nenviron_scan_ns=")
+    try out.writeUint64(newNs)
+    try out.writeAll("\n")
+..

@@ -6,6 +6,7 @@ use "std:cast" cast
 use "std:errors" errors
 use "std:strings" strings
 use "std:net/address" address
+use "std:net/byte_order" byte_order
 
 SockAddrIn(family u16, port u16, addr u32, zero u64)
 SockAddrIn6(family u16, port u16, flowInfo u32, addr0 u32, addr1 u32, addr2 u32, addr3 u32, scopeId u32)
@@ -15,8 +16,6 @@ pub Resolved(endpoints address.Endpoint*, count u64)
 
 ext ext_getaddrinfo getaddrinfo(node u8*, service u8*, hints AddrInfo*, result AddrInfo**) i32
 ext ext_freeaddrinfo freeaddrinfo(result AddrInfo*) void
-ext ext_ntohs ntohs(value u16) u16
-ext ext_ntohl ntohl(value u32) u32
 
 @platform("linux", "android")
 nativeIpv6Family() i32:
@@ -44,21 +43,21 @@ decode(native ptr) !address.Endpoint:
     unsafe:
     ipv4 SockAddrIn* = native
     if ipv4.family == 2:
-        word u32 = ext_ntohl(ipv4.addr)
+        word u32 = byte_order.load32(addrof ipv4.addr)
         ip := address.ipv4(cast.u64to8((word >> 24) & 255), cast.u64to8((word >> 16) & 255), cast.u64to8((word >> 8) & 255), cast.u64to8(word & 255))
-        ret address.Endpoint(address=ip, port=ext_ntohs(ipv4.port))
+        ret address.Endpoint(address=ip, port=byte_order.load16(addrof ipv4.port))
     ..
     ipv6 SockAddrIn6* = native
     if ipv6.family != nativeIpv6Family():
         throw errors.failure("DNS returned an unsupported address family")
     ..
-    ip6 := address.ipv6(ext_ntohl(ipv6.addr0), ext_ntohl(ipv6.addr1), ext_ntohl(ipv6.addr2), ext_ntohl(ipv6.addr3))
-      ret address.Endpoint(address=ip6, port=ext_ntohs(ipv6.port))
+    ip6 := address.ipv6(byte_order.load32(addrof ipv6.addr0), byte_order.load32(addrof ipv6.addr1), byte_order.load32(addrof ipv6.addr2), byte_order.load32(addrof ipv6.addr3))
+      ret address.Endpoint(address=ip6, port=byte_order.load16(addrof ipv6.port))
     ..
 ..
 
 pub resolve(host str, service str, family u8, maxResults u64) !Resolved:
-    a := ctx.procAlloc
+    a := ctx.alloc
     # SAFETY: getaddrinfo owns cursor nodes until freeaddrinfo; endpoints has
     # count slots and index is checked before every write.
     unsafe:

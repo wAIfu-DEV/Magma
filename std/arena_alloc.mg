@@ -106,13 +106,13 @@ pub new(capacity u64) !$Arena:
     if capacity < HEADER_SIZE + ALIGNMENT:
         throw errors.invalidArgument("arena capacity is too small")
     ..
-    bytes := try ctx.procAlloc.alloc(capacity)
-    ret Arena(backing=ctx.procAlloc, bytes=bytes, capacityValue=capacity, offset=0, ownsBytes=true)
+    bytes := try ctx.alloc.alloc(capacity)
+    ret Arena(backing=ctx.alloc, bytes=bytes, capacityValue=capacity, offset=0, ownsBytes=true)
 ..
 
 # Creates an arena with the default 64 KiB capacity.
 pub newDefault() !$Arena:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try new(DEFAULT_CAPACITY)
 ..
 

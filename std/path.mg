@@ -51,7 +51,7 @@ pub isAbsolute(path str) bool:
 # @example
 #   name := try path.base(a, "/tmp/archive.tar")
 pub base(path str) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     n := path.countBytes()
     end := n
     loop end > 0 && isSeparator(strings.byteAt(path, end - 1)):
@@ -75,8 +75,8 @@ pub base(path str) !$str:
 # @example
 #   ext := try path.extension(a, "archive.tar.gz")
 pub extension(path str) !$str:
-    a := ctx.procAlloc
-    temporary := ctx.tempAlloc
+    a := ctx.alloc
+    temporary := ctx.alloc
     b := try base(path)
     defer b.free(temporary)
     n := b.countBytes()
@@ -103,8 +103,8 @@ borrowRange(value str, start u64, end u64) str:
 # Joins path components and normalizes the result. An absolute component
 # discards components accumulated before it.
 pub join(parts str[]) !$str:
-    a := ctx.procAlloc
-    temporary := ctx.tempAlloc
+    a := ctx.alloc
+    temporary := ctx.alloc
     out := try builder.new()
     defer out.free()
     for i u64 = 0 to parts.count():
@@ -126,8 +126,8 @@ pub join(parts str[]) !$str:
 # Lexically normalizes separators, dot components, and resolvable parent
 # components without accessing the filesystem.
 pub normalize(value str) !$str:
-    a := ctx.procAlloc
-    temporary := ctx.tempAlloc
+    a := ctx.alloc
+    temporary := ctx.alloc
     components := try array.new[Component](temporary)
     defer components.free(temporary, none)
     n := value.countBytes()
@@ -190,8 +190,8 @@ pub normalize(value str) !$str:
 
 # Returns the lexical parent of a path.
 pub parent(value str) !$str:
-    a := ctx.procAlloc
-    temporary := ctx.tempAlloc
+    a := ctx.alloc
+    temporary := ctx.alloc
     normalized := try normalize(value)
     defer normalized.free(temporary)
     n := normalized.countBytes()
@@ -216,8 +216,8 @@ pub parent(value str) !$str:
 
 # Returns the base name without its final extension.
 pub stem(value str) !$str:
-    a := ctx.procAlloc
-    temporary := ctx.tempAlloc
+    a := ctx.alloc
+    temporary := ctx.alloc
     b := try base(value)
     defer b.free(temporary)
     n := b.countBytes()
@@ -233,8 +233,8 @@ pub stem(value str) !$str:
 
 # Replaces the final extension. extension may be empty and may include its dot.
 pub changeExtension(value str, newExtension str) !$str:
-    a := ctx.procAlloc
-    temporary := ctx.tempAlloc
+    a := ctx.alloc
+    temporary := ctx.alloc
     oldExtension := try extension(value)
     defer oldExtension.free(temporary)
     keep := value.countBytes() - oldExtension.countBytes()

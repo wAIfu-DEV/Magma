@@ -47,7 +47,7 @@ storageSize[T](capacity u64) !u64:
 ..
 
 release[T](cleanup (alc.Allocator, $T) void, value $T) void:
-    a := ctx.procAlloc
+    a := ctx.alloc
     if cleanup == none:
         abandoned := array T[1]
         abandoned[0] = move value
@@ -63,7 +63,7 @@ release[T](cleanup (alc.Allocator, $T) void, value $T) void:
 # @example
 #   users := try hash_map.new[User](a, 16, freeUser)
 pub new[T](capacity u64, cleanup (alc.Allocator, $T) void) !$HashMap[T]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     if capacity == 0:
         throw errors.invalidArgument("hash map capacity must be positive")
     ..
@@ -221,6 +221,12 @@ HashMap[T].set(key str, item $T) !void:
     ..
 ..
 
+HashMap[T].setBorrowed(key str, item T) !void:
+    unsafe:
+        this.set(key, move item)
+    ..
+..
+
 # Removes key and releases its value through the configured cleanup callback.
 # @throws outOfBounds if key is absent
 # @complexity O(1) average, O(N) worst case
@@ -273,22 +279,25 @@ destr HashMap[T].free() void:
     unsafe:
     keys str* = keysPtr[T](this)
     states u8* = statesPtr[T](this)
+
     for i u64 = 0 to this.capacity:
         if states[i] == 1:
             keys[i].free(this.allocator)
         ..
     ..
+
     if this.cleanup != none:
         values T* = valuesPtr[T](this)
         for i u64 = 0 to this.capacity:
             if states[i] == 1:
-                this.cleanup(this.allocator, values[i])
+                this.cleanup(this.allocator, move values[i])
             ..
         ..
     ..
+
     this.allocator.free(this.storage)
     this.storage = none
     this.capacity = 0
-      this.length = 0
+    this.length = 0
     ..
 ..

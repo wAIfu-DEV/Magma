@@ -46,6 +46,9 @@ type docIndex struct {
 	functionDefs          map[string]*types.NodeFuncDef
 	primitiveModules      map[string]string
 	publicModuleAliases   map[string]map[string]string
+	moduleAliases         map[string]map[string]string
+	modulePaths           map[string]string
+	moduleNames           map[string]string
 }
 
 // completionBinding is captured from the source AST before monomorphization.
@@ -60,12 +63,15 @@ type completionBinding struct {
 }
 
 func buildDocIndex(state *types.SharedState) *docIndex {
-	index := &docIndex{byNode: map[any]string{}, modules: map[string]string{}, symbols: map[string]string{}, hoverSymbols: map[string]string{}, hoverByName: map[string]string{}, valueHovers: map[string]string{}, completionVisible: map[string]bool{}, completionKinds: map[string]int{}, completionDestructors: map[string]bool{}, memberTypes: map[string]*types.NodeType{}, expressionSymbols: map[string]map[string]completionItem{}, functionReturns: map[string]*types.NodeType{}, functionDefs: map[string]*types.NodeFuncDef{}, primitiveModules: map[string]string{}, publicModuleAliases: map[string]map[string]string{}}
+	index := &docIndex{byNode: map[any]string{}, modules: map[string]string{}, symbols: map[string]string{}, hoverSymbols: map[string]string{}, hoverByName: map[string]string{}, valueHovers: map[string]string{}, completionVisible: map[string]bool{}, completionKinds: map[string]int{}, completionDestructors: map[string]bool{}, memberTypes: map[string]*types.NodeType{}, expressionSymbols: map[string]map[string]completionItem{}, functionReturns: map[string]*types.NodeType{}, functionDefs: map[string]*types.NodeFuncDef{}, primitiveModules: map[string]string{}, publicModuleAliases: map[string]map[string]string{}, moduleAliases: map[string]map[string]string{}, modulePaths: map[string]string{}, moduleNames: map[string]string{}}
 	for _, file := range state.Files {
 		if file == nil || file.GlNode == nil {
 			continue
 		}
 		byLine, module := parseDocumentation(string(file.Content))
+		index.modulePaths[file.PackageName] = file.FilePath
+		index.moduleNames[file.PackageName] = file.ModuleName
+		index.moduleAliases[file.PackageName] = file.GlNode.ImportAlias
 		for alias := range file.GlNode.PublicImportAlias {
 			target := file.GlNode.ImportAlias[alias]
 			if target == "" {
@@ -296,9 +302,7 @@ func (d *docIndex) inferredCompletionType(module string, aliases map[string]stri
 	if expression == nil {
 		return nil
 	}
-	if valueType := expression.GetInferredType(); valueType != nil {
-		return valueType
-	}
+	inferredType := expression.GetInferredType()
 	switch node := expression.(type) {
 	case *types.NodeExprName:
 		switch name := node.Name.(type) {
@@ -306,13 +310,24 @@ func (d *docIndex) inferredCompletionType(module string, aliases map[string]stri
 			return bindings[name.Name]
 		case *types.NodeNameComposite:
 			if len(name.Parts) != 0 {
-				return bindings[name.Parts[0]]
+				valueType := bindings[name.Parts[0]]
+				for _, member := range name.Parts[1:] {
+					ownerModule, owner := d.completionTypeIdentity(module, aliases, valueType)
+					if owner == "" {
+						return nil
+					}
+					valueType = d.canonicalCompletionType(ownerModule, d.memberTypes[ownerModule+"\x00"+owner+"."+member])
+					if valueType == nil {
+						return nil
+					}
+				}
+				return valueType
 			}
 		}
 	case *types.NodeExprTry:
 		return d.inferredCompletionType(module, aliases, node.Call, bindings)
 	case *types.NodeExprCall:
-		if node.AssociatedFnDef != nil {
+		if node.AssociatedFnDef != nil && d.completionTypeResolutionScore(node.AssociatedFnDef.ReturnType) > 0 {
 			return node.AssociatedFnDef.ReturnType
 		}
 		if callee, ok := node.Callee.(*types.NodeExprName); ok {
@@ -322,18 +337,201 @@ func (d *docIndex) inferredCompletionType(module string, aliases map[string]stri
 			if name, ok := callee.Name.(*types.NodeNameComposite); ok && len(name.Parts) >= 2 {
 				first, member := name.Parts[0], name.Parts[len(name.Parts)-1]
 				if imported := aliases[first]; imported != "" {
-					return d.functionReturns[imported+"\x00"+member]
+					return d.canonicalCompletionType(imported, d.functionReturns[imported+"\x00"+member])
 				}
-				ownerModule, owner := d.completionTypeIdentity(module, aliases, bindings[first])
+				receiverType := bindings[first]
+				ownerModule, owner := d.completionTypeIdentity(module, aliases, receiverType)
 				if owner != "" {
-					return d.functionReturns[ownerModule+"\x00"+owner+"."+member]
+					return d.completionMemberReturnType(ownerModule, owner, member, receiverType)
 				}
 			}
 		}
 	case *types.NodeExprStructInit:
 		return node.Type
 	}
+	return inferredType
+}
+
+// completionMemberReturnType specializes source-level owner type parameters
+// without requiring monomorphization or linking to have succeeded. This keeps
+// inferred locals such as `value := try iterator.next()` useful to completion
+// when an unrelated declaration in the compilation graph is broken.
+func (d *docIndex) completionMemberReturnType(module, owner, member string, receiverType *types.NodeType) *types.NodeType {
+	key := module + "\x00" + owner + "." + member
+	result := d.canonicalCompletionType(module, d.functionReturns[key])
+	definition := d.functionDefs[key]
+	if result == nil || definition == nil || len(definition.Class.OwnerTypeParams) == 0 {
+		return result
+	}
+	named := completionNamedType(receiverType)
+	var genericArgs []*types.NodeType
+	if named != nil {
+		genericArgs = named.GenericArgs
+	}
+	if len(genericArgs) == 0 {
+		genericArgs = d.recoveredCompletionGenericArgs(receiverType)
+	}
+	if len(genericArgs) == 0 {
+		return result
+	}
+	if len(definition.Class.OwnerTypeParams) == 1 && len(genericArgs) == 1 && strings.HasSuffix(formatType(result), sourceName(definition.Class.OwnerTypeParams[0])) {
+		copy := *genericArgs[0]
+		copy.Throws = result.Throws
+		copy.Owned = result.Owned
+		return &copy
+	}
+	arguments := map[string]*types.NodeType{}
+	for index, parameter := range definition.Class.OwnerTypeParams {
+		if index < len(genericArgs) {
+			arguments[parameter] = genericArgs[index]
+			returnName := formatType(result)
+			if documentationSymbolName(strings.TrimLeft(returnName, "!$ ")) == parameter || returnName == "!"+parameter {
+				copy := *genericArgs[index]
+				copy.Throws = result.Throws
+				copy.Owned = result.Owned
+				return &copy
+			}
+		}
+	}
+	return substituteCompletionType(result, arguments)
+}
+
+func (d *docIndex) recoveredCompletionGenericArgs(node *types.NodeType) []*types.NodeType {
+	text := formatType(node)
+	open := strings.Index(text, "[")
+	close := strings.LastIndex(text, "]")
+	if open < 0 || close <= open {
+		return nil
+	}
+	parts := splitCompletionTypeArguments(text[open+1 : close])
+	result := make([]*types.NodeType, 0, len(parts))
+	for _, part := range parts {
+		if parsed := d.completionTypeFromText(part); parsed != nil {
+			result = append(result, parsed)
+		}
+	}
+	return result
+}
+
+func splitCompletionTypeArguments(text string) []string {
+	depth, start := 0, 0
+	var result []string
+	for index, r := range text {
+		switch r {
+		case '[':
+			depth++
+		case ']':
+			depth--
+		case ',':
+			if depth == 0 {
+				result = append(result, strings.TrimSpace(text[start:index]))
+				start = index + 1
+			}
+		}
+	}
+	return append(result, strings.TrimSpace(text[start:]))
+}
+
+func (d *docIndex) completionTypeFromText(text string) *types.NodeType {
+	text = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(text, "!"), "owned "))
+	owned := strings.HasPrefix(text, "$")
+	text = strings.TrimPrefix(text, "$")
+	parts := strings.Split(text, ".")
+	if len(parts) > 1 {
+		alias, owner := parts[0], documentationSymbolName(parts[len(parts)-1])
+		for _, aliases := range d.moduleAliases {
+			if target := aliases[alias]; target != "" && d.completionKinds[target+"\x00"+owner] != 0 {
+				parts[0] = target
+				break
+			}
+		}
+	}
+	name := &types.NodeNameSingle{Name: parts[0]}
+	var nodeName types.NodeName = name
+	if len(parts) > 1 {
+		nodeName = &types.NodeNameComposite{Parts: parts}
+	}
+	return &types.NodeType{KindNode: &types.NodeTypeNamed{NameNode: nodeName}, Owned: owned}
+}
+
+// canonicalCompletionType resolves aliases in the declaration's module before
+// the type is attached to a binding in another module. Compiler types normally
+// gain this identity during successful semantic analysis; editor recovery must
+// do it from the parsed import tables when that analysis stops early.
+func (d *docIndex) canonicalCompletionType(module string, node *types.NodeType) *types.NodeType {
+	if node == nil {
+		return nil
+	}
+	result := *node
+	switch kind := node.KindNode.(type) {
+	case *types.NodeTypeNamed:
+		copyKind := *kind
+		if composite, ok := kind.NameNode.(*types.NodeNameComposite); ok && len(composite.Parts) > 1 {
+			if target := d.moduleAliases[module][composite.Parts[0]]; target != "" {
+				copyName := *composite
+				copyName.Parts = append([]string(nil), composite.Parts...)
+				copyName.Parts[0] = target
+				copyKind.NameNode = &copyName
+			}
+		}
+		copyKind.GenericArgs = make([]*types.NodeType, len(kind.GenericArgs))
+		for index, argument := range kind.GenericArgs {
+			copyKind.GenericArgs[index] = d.canonicalCompletionType(module, argument)
+		}
+		result.KindNode = &copyKind
+	case *types.NodeTypePointer:
+		inner := d.canonicalCompletionType(module, &types.NodeType{KindNode: kind.Kind})
+		result.KindNode = &types.NodeTypePointer{Kind: inner.KindNode}
+	case *types.NodeTypeRfc:
+		inner := d.canonicalCompletionType(module, &types.NodeType{KindNode: kind.Kind})
+		result.KindNode = &types.NodeTypeRfc{Kind: inner.KindNode}
+	case *types.NodeTypeSlice:
+		inner := d.canonicalCompletionType(module, &types.NodeType{KindNode: kind.ElemKind})
+		result.KindNode = &types.NodeTypeSlice{ElemKind: inner.KindNode}
+	}
+	return &result
+}
+
+func completionNamedType(node *types.NodeType) *types.NodeTypeNamed {
+	if node == nil {
+		return nil
+	}
+	switch kind := node.KindNode.(type) {
+	case *types.NodeTypeNamed:
+		return kind
+	case *types.NodeTypePointer:
+		return completionNamedType(&types.NodeType{KindNode: kind.Kind})
+	case *types.NodeTypeRfc:
+		return completionNamedType(&types.NodeType{KindNode: kind.Kind})
+	}
 	return nil
+}
+
+func substituteCompletionType(node *types.NodeType, arguments map[string]*types.NodeType) *types.NodeType {
+	if node == nil {
+		return nil
+	}
+	if named, ok := node.KindNode.(*types.NodeTypeNamed); ok {
+		if replacement := arguments[documentationSymbolName(flattenInternalName(named.NameNode))]; replacement != nil {
+			copy := *replacement
+			copy.Throws = node.Throws
+			copy.Owned = node.Owned
+			return &copy
+		}
+	}
+	if absolute, ok := node.KindNode.(*types.NodeTypeAbsolute); ok {
+		name := absolute.DisplayName
+		if name == "" {
+			name = absolute.AbsoluteName
+		}
+		if replacement := arguments[documentationSymbolName(name)]; replacement != nil {
+			copy := *replacement
+			copy.Throws = node.Throws
+			copy.Owned = node.Owned
+			return &copy
+		}
+	}
+	return node
 }
 
 func (d *docIndex) completionTypeIdentity(module string, aliases map[string]string, node *types.NodeType) (string, string) {
@@ -409,7 +607,9 @@ func (d *docIndex) completionTypeAt(module, name string, line uint32) *types.Nod
 		if binding.module != module || binding.name != name || binding.functionLine > line || binding.declarationLine > line {
 			continue
 		}
-		if best == nil || binding.functionLine > best.functionLine || (binding.functionLine == best.functionLine && binding.declarationLine >= best.declarationLine) {
+		if best == nil || binding.functionLine > best.functionLine ||
+			(binding.functionLine == best.functionLine && binding.declarationLine > best.declarationLine) ||
+			(binding.functionLine == best.functionLine && binding.declarationLine == best.declarationLine && d.completionTypeResolutionScore(binding.valueType) >= d.completionTypeResolutionScore(best.valueType)) {
 			best = binding
 		}
 	}
@@ -417,6 +617,36 @@ func (d *docIndex) completionTypeAt(module, name string, line uint32) *types.Nod
 		return nil
 	}
 	return best.valueType
+}
+
+// completionTypeResolutionScore keeps a useful parsed type from being replaced
+// by a less-specific type left behind when a later semantic pass fails. Fully
+// resolved refreshes still win ties and bindings absent from the parsed index
+// remain available.
+func (d *docIndex) completionTypeResolutionScore(node *types.NodeType) int {
+	if node == nil {
+		return -1
+	}
+	if completionPrimitiveType(node) != "" {
+		return 3
+	}
+	switch kind := node.KindNode.(type) {
+	case *types.NodeTypeAbsolute:
+		return 3
+	case *types.NodeTypePointer:
+		return d.completionTypeResolutionScore(&types.NodeType{KindNode: kind.Kind})
+	case *types.NodeTypeRfc:
+		return d.completionTypeResolutionScore(&types.NodeType{KindNode: kind.Kind})
+	case *types.NodeTypeNamed:
+		name := documentationSymbolName(flattenInternalName(kind.NameNode))
+		for key := range d.completionKinds {
+			if strings.HasSuffix(key, "\x00"+name) {
+				return 3
+			}
+		}
+		return 0
+	}
+	return 1
 }
 
 func (d *docIndex) expressionBindingsAt(module string, line uint32) []completionBinding {

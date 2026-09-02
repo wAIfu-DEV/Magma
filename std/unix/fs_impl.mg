@@ -27,7 +27,33 @@ ext ext_open open(path u8*, flags c.int, mode c.int) c.int
 ext ext_close close(fd c.int) c.int
 ext ext_read read(fd c.int, data ptr, count u64) i64
 ext ext_write write(fd c.int, data ptr, count u64) i64
+ext ext_pread pread(fd c.int, data ptr, count u64, offset i64) i64
 ext ext_chmod chmod(path u8*, mode u32) c.int
+@platform("linux")
+ext ext_copy_file_range copy_file_range(input c.int, inputOffset i64*, output c.int, outputOffset i64*, count u64, flags c.unsigned_int) i64
+
+@platform("linux")
+copyNative(input i32, output i32) !bool:
+    copiedAny bool = false
+    loop true:
+        copied := ext_copy_file_range(input, none, output, none, 0x40000000, 0)
+        if copied > 0:
+            copiedAny = true
+        elif copied == 0:
+            ret true
+        elif copiedAny:
+            throw errors.failure("copy_file_range failed after a partial copy")
+        else:
+            ret false
+        ..
+    ..
+    ret true
+..
+
+@platform("android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
+copyNative(input i32, output i32) !bool:
+    ret false
+..
 
 pub NativeMetadata(
     kind u8
@@ -78,7 +104,7 @@ advance(directory Dir*) void:
 ..
 
 pub openDir(path str) !$Dir:
-    a := ctx.procAlloc
+    a := ctx.alloc
     handle := ext_opendir(strings.toCstrNoCopy(path))
     if handle == none:
         throw errors.failure("opendir failed")
@@ -129,7 +155,7 @@ destr Dir.close() !void:
 ..
 
 pub metadata(path str, followLinks bool) !NativeMetadata:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     # SAFETY: the platform stat calls initialize the 256-byte buffer; offsets
     # 24, 48, and 88 are the audited target ABI fields used below.
     unsafe:
@@ -174,7 +200,7 @@ pub metadata(path str, followLinks bool) !NativeMetadata:
 ..
 
 pub setPermissions(path str, permissions u32) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     mode u32 = 0
     if (permissions & 1) != 0:
         mode = mode | 0x124
@@ -191,33 +217,33 @@ pub setPermissions(path str, permissions u32) !void:
 ..
 
 pub makeDir(path str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     if ext_mkdir(strings.toCstrNoCopy(path), 0x1FF) != 0:
         throw errors.failure("mkdir failed")
     ..
 ..
 
 pub removeDir(path str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     if ext_rmdir(strings.toCstrNoCopy(path)) != 0:
         throw errors.failure("rmdir failed")
     ..
 ..
 
 pub rename(source str, destination str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     if ext_rename(strings.toCstrNoCopy(source), strings.toCstrNoCopy(destination)) != 0:
         throw errors.failure("rename failed")
     ..
 ..
 
 pub replace(source str, destination str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     try rename(source, destination)
 ..
 
 pub copyFile(source str, destination str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     input := ext_open(strings.toCstrNoCopy(source), 0, 0)
     if input < 0:
         throw errors.failure("open source failed")
@@ -226,6 +252,14 @@ pub copyFile(source str, destination str) !void:
     if output < 0:
         ext_close(input)
         throw errors.failure("open destination failed")
+    ..
+    if try copyNative(input, output):
+        if ext_close(input) != 0:
+            ext_close(output)
+            throw errors.failure("copy close failed")
+        ..
+        if ext_close(output) != 0: throw errors.failure("copy close failed") ..
+        ret
     ..
     buffer := array u8[16384]
     done bool = false
@@ -255,8 +289,18 @@ pub copyFile(source str, destination str) !void:
     ..
 ..
 
+pub readRange(path str, output ptr, count u64, offset u64) !u64:
+    input := ext_open(strings.toCstrNoCopy(path), 0, 0)
+    if input < 0: throw errors.failure("open source failed") ..
+    result := ext_pread(input, output, count, cast.utoi(offset))
+    closeCode := ext_close(input)
+    if result < 0: throw errors.failure("positional read failed") ..
+    if closeCode != 0: throw errors.failure("close failed") ..
+    ret cast.itou(result)
+..
+
 pub currentDir() !$str:
-    temporary := ctx.tempAlloc
+    temporary := ctx.alloc
     buffer := try temporary.alloc(4096)
     defer temporary.free(buffer)
     if ext_getcwd(buffer, 4096) == none:
@@ -266,14 +310,14 @@ pub currentDir() !$str:
 ..
 
 pub setCurrentDir(path str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     if ext_chdir(strings.toCstrNoCopy(path)) != 0:
         throw errors.failure("chdir failed")
     ..
 ..
 
 pub temporaryDir() !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     value := ext_getenv(strings.toCstrNoCopy("TMPDIR"))
     if value == none:
         ret try strings.copy("/tmp")
@@ -282,7 +326,7 @@ pub temporaryDir() !$str:
 ..
 
 pub canonicalize(path str) !$str:
-    temporary := ctx.tempAlloc
+    temporary := ctx.alloc
     buffer := try temporary.alloc(4096)
     defer temporary.free(buffer)
     if ext_realpath(strings.toCstrNoCopy(path), buffer) == none:
@@ -292,14 +336,14 @@ pub canonicalize(path str) !$str:
 ..
 
 pub removeFile(path str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     if ext_unlink(strings.toCstrNoCopy(path)) != 0:
         throw errors.failure("unlink failed")
     ..
 ..
 
 join(left str, right str) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     out := try builder.new()
     defer out.free()
     try out.appendBorrowed(left)
@@ -311,7 +355,7 @@ join(left str, right str) !$str:
 ..
 
 walkInner(root str, visit (str, bool) !void) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     # SAFETY: each readdir result is live until the next call and follows the
     # same audited dirent layout used by Dir.next.
     unsafe:
@@ -341,6 +385,6 @@ walkInner(root str, visit (str, bool) !void) !void:
 ..
 
 pub walk(root str, visit (str, bool) !void) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     try walkInner(root, visit)
 ..

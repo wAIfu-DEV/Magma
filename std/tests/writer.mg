@@ -7,6 +7,12 @@ Sink impl writer.Writer(value u8)
 Sink.write(bytes str) !u64:
     ret bytes.countBytes()
 ..
+
+OverreportSink impl writer.Writer(value u8)
+OverreportSink.write(bytes str) !u64:
+    ret bytes.countBytes() + 1
+..
+
 pub main() !void:
     sink := Sink(value=0)
     output := sink.proto[writer.Writer]()
@@ -30,5 +36,11 @@ pub main() !void:
     ..
     if try output.writeInt64(-42) != 3 || try output.writeUint64(42) != 2:
         throw errors.failure("writer integer behavior changed")
+    ..
+
+    overreport := OverreportSink(value=0)
+    invalidCount u64, invalidCountError error = overreport.proto[writer.Writer]().writeAll("x")
+    if invalidCountError.ok():
+        throw errors.failure("writer accepted an impossible write count")
     ..
 ..

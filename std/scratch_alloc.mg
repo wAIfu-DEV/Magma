@@ -152,7 +152,7 @@ Scratch.free(pointer u8*) void:
 ..
 
 initialize(bytes u8*, capacity u64, ownsBytes bool) !Scratch:
-    a := ctx.procAlloc
+    a := ctx.alloc
     if capacity < sizeof Block + ALIGNMENT:
         throw errors.invalidArgument("scratch capacity is too small")
     ..
@@ -164,7 +164,7 @@ initialize(bytes u8*, capacity u64, ownsBytes bool) !Scratch:
 
 # Creates owned scratch storage with the requested capacity.
 pub new(capacity u64) !$Scratch:
-    a := ctx.procAlloc
+    a := ctx.alloc
     if capacity < sizeof Block + ALIGNMENT:
         throw errors.invalidArgument("scratch capacity is too small")
     ..

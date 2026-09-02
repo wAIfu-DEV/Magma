@@ -30,8 +30,10 @@ destr Html.free() void:
     ..
 ..
 
-isSelfClosing(tag str) bool:
-    ret strings.compare(tag, "!doctype") || strings.compare(tag, "meta") || strings.compare(tag, "link") || strings.compare(tag, "input")
+isVoidElement(tag str) bool:
+    # HTML void elements never have end tags. Keep this centralized so the
+    # tree builder and a future tokenizer can share the same HTML vocabulary.
+    ret strings.compare(tag, "area") || strings.compare(tag, "base") || strings.compare(tag, "br") || strings.compare(tag, "col") || strings.compare(tag, "embed") || strings.compare(tag, "hr") || strings.compare(tag, "img") || strings.compare(tag, "input") || strings.compare(tag, "link") || strings.compare(tag, "meta") || strings.compare(tag, "param") || strings.compare(tag, "source") || strings.compare(tag, "track") || strings.compare(tag, "wbr") || strings.compare(tag, "!doctype")
 ..
 isWhiteSpace(char u8) bool:
     s := " \t\n\r"
@@ -56,7 +58,7 @@ pub newScanner(a alc.Allocator, r reader.Reader) !$Scanner:
     sc.allocator = a
     sc.reader = r
 
-    sc.byteView = try slices.alloc[u8](a, 1)
+    sc.byteView = try slices.alloc[u8](1)
     readCount := try sc.reader.readToBuff(sc.byteView, 1)
     sc.atEnd = readCount == 0
 
@@ -73,7 +75,7 @@ pub Scanner(
 )
 
 destr Scanner.close() void:
-    slices.free(this.allocator, this.byteView)
+    this.allocator.free(slices.toPtr(this.byteView))
     this.initialized = false
 ..
 
@@ -85,6 +87,10 @@ Scanner.peek() u8:
         ret this.byteView[0]
     ..
     ret 0
+..
+
+Scanner.ended() bool:
+    ret this.atEnd
 ..
 
 Scanner.consume() !u8:
@@ -101,6 +107,20 @@ Scanner.consume() !u8:
     readCount := try this.reader.readToBuff(this.byteView, 1)
     this.atEnd = readCount == 0
     ret byte
+..
+
+consumeComment(sc Scanner*) !void:
+    previous2 u8 = 0
+    previous1 u8 = 0
+    loop sc.ended() == false:
+        current := try sc.consume()
+        if previous2 == strings.byteAt("-", 0) && previous1 == strings.byteAt("-", 0) && current == strings.byteAt(">", 0):
+            ret
+        ..
+        previous2 = previous1
+        previous1 = current
+    ..
+    throw errors.failure("unterminated HTML comment")
 ..
 
 pub parseHtml(a alc.Allocator, r reader.Reader) !$Html:
@@ -132,15 +152,15 @@ pub parseWithScanner(a alc.Allocator, sc Scanner*, parent Html*) !$Html:
     element $Html = Html(
         tag = "",
         text = "",
-        attributes = try linear_map.new[str](a, none),
+        attributes = try linear_map.new[str](none),
         children = try list.new[Html](a, htmlCleanup),
         allocator = a,
     )
     # give tag/text real owned (allocated) empty strings, mirroring how
-    # valueless attributes use strings.alloc(a, 0) instead of a "" literal --
+    # valueless attributes use strings.alloc(0) instead of a "" literal --
     # this is needed since Html.free() unconditionally calls .free() on them
-    element.tag = try strings.alloc(a, 0)
-    element.text = try strings.alloc(a, 0)
+    element.tag = try strings.alloc(0)
+    element.text = try strings.alloc(0)
 
     onerror element.free()
 
@@ -159,7 +179,7 @@ pub parseWithScanner(a alc.Allocator, sc Scanner*, parent Html*) !$Html:
             try sc.consume() # consume /
 
             if true:
-                bld $builder.Builder = try builder.new(a)
+                bld $builder.Builder = try builder.new()
                 defer bld.free()
 
                 loop isWhiteSpace(sc.peek()) == false && sc.peek() != strings.byteAt(">", 0):
@@ -168,7 +188,7 @@ pub parseWithScanner(a alc.Allocator, sc Scanner*, parent Html*) !$Html:
 
                 rawCloseTag $str = try bld.build()
                 defer rawCloseTag.free(a)
-                closeTag $str = try strings.toLower(a, rawCloseTag)
+                closeTag $str = try strings.toLower(rawCloseTag)
                 defer closeTag.free(a)
 
                 if parent != none && strings.compare(closeTag, parent.tag) == false:
@@ -194,7 +214,7 @@ pub parseWithScanner(a alc.Allocator, sc Scanner*, parent Html*) !$Html:
 
         # tag sink
         if true:
-            bld $builder.Builder = try builder.new(a)
+            bld $builder.Builder = try builder.new()
             defer bld.free()
 
             # add tag name
@@ -205,9 +225,17 @@ pub parseWithScanner(a alc.Allocator, sc Scanner*, parent Html*) !$Html:
             rawTag $str = try bld.build()
             defer rawTag.free(a)
 
-            tmp := try strings.toLower(a, rawTag)
+            tmp := try strings.toLower(rawTag)
             element.tag.free(a)
             element.tag = move tmp
+        ..
+
+        # Comments are tokens, not elements. Represent them as an empty node so
+        # callers retain their simple one-result parser contract while layout
+        # naturally ignores them.
+        if strings.compare(element.tag, "!--"):
+            try consumeComment(sc)
+            ret move element
         ..
         
         # skip white space
@@ -215,15 +243,25 @@ pub parseWithScanner(a alc.Allocator, sc Scanner*, parent Html*) !$Html:
             try sc.consume()
         ..
 
-        # check if crime against humanity
-        if sc.peek() == strings.byteAt("/", 0):
-            throw errors.failure("invalid closing slash")
-        ..
-
         # attribute sink
+        explicitSelfClosing bool = false
         loop sc.peek() != strings.byteAt(">", 0):
+            if sc.ended():
+                throw errors.failure("unexpected end of input in start tag")
+            ..
+            if sc.peek() == strings.byteAt("/", 0):
+                try sc.consume()
+                explicitSelfClosing = true
+                loop isWhiteSpace(sc.peek()):
+                    try sc.consume()
+                ..
+                if sc.peek() != strings.byteAt(">", 0):
+                    throw errors.failure("malformed self-closing tag")
+                ..
+                break
+            ..
             # attribute name
-            bld $builder.Builder = try builder.new(a) 
+            bld $builder.Builder = try builder.new()
 
             # TODO: check for alphabetic
             loop isWhiteSpace(sc.peek()) == false && sc.peek() != strings.byteAt("=", 0) && sc.peek() != strings.byteAt(">", 0):
@@ -243,7 +281,7 @@ pub parseWithScanner(a alc.Allocator, sc Scanner*, parent Html*) !$Html:
                 try sc.consume()
             else:
                 # valueless attribute
-                try element.attributes.set(attrName, try strings.alloc(a, 0))
+                try element.attributes.set(attrName, try strings.alloc(0))
                 continue
             ..
 
@@ -251,18 +289,28 @@ pub parseWithScanner(a alc.Allocator, sc Scanner*, parent Html*) !$Html:
                 try sc.consume()
             ..
 
-            quoteChar u8 = 0
-
             # attribute value
+            quoteChar u8 = 0
             if sc.peek() == strings.byteAt("\"", 0):
                 quoteChar = try sc.consume()
             elif sc.peek() == strings.byteAt("'", 0):
                 quoteChar = try sc.consume()
             else:
-                throw errors.failure("expected double quote or single quote")
+                # HTML permits unquoted values up to whitespace or '>'.
+                bld2 $builder.Builder = try builder.new()
+                loop isWhiteSpace(sc.peek()) == false && sc.peek() != strings.byteAt(">", 0):
+                    try bld2.addByte(try sc.consume())
+                ..
+                attrVal := try bld2.build()
+                bld2.free()
+                try element.attributes.set(attrName, move attrVal)
+                loop isWhiteSpace(sc.peek()):
+                    try sc.consume()
+                ..
+                continue
             ..
             
-            bld2 $builder.Builder = try builder.new(a)
+            bld2 $builder.Builder = try builder.new()
             loop sc.peek() != quoteChar:
                 try bld2.addByte(try sc.consume())
             ..
@@ -288,13 +336,16 @@ pub parseWithScanner(a alc.Allocator, sc Scanner*, parent Html*) !$Html:
         if sc.peek() == strings.byteAt(">", 0):
             try sc.consume()
 
-            if isSelfClosing(element.tag):
+            if explicitSelfClosing || isVoidElement(element.tag):
                 ret move element
             ..
         ..
 
         # children sink
         loop true:
+            if sc.ended():
+                throw errors.failure("unexpected end of input before closing tag")
+            ..
             child, e := parseWithScanner(a, sc, addrof element)
             if e.nok():
                 if errors.hasCode(e, errors.ERR_OUT_OF_BOUNDS):
@@ -311,10 +362,10 @@ pub parseWithScanner(a alc.Allocator, sc Scanner*, parent Html*) !$Html:
     # already skipped above, so this only fires on non-whitespace content
     # or interior whitespace between the first char and a following '<')
     if true:
-        bld $builder.Builder = try builder.new(a)
+        bld $builder.Builder = try builder.new()
         defer bld.free()
 
-        loop sc.peek() != strings.byteAt("<", 0):
+        loop sc.ended() == false && sc.peek() != strings.byteAt("<", 0):
             try bld.addByte(try sc.consume())
         ..
 

@@ -1019,7 +1019,7 @@ onerror:
 `defer` can perform resource cleanup around throwing code:
 
 ```magma
-path_cstr u8* = try strings.toCstr(a, path)
+path_cstr u8* = try strings.toCstr(path)
 defer a.free(path_cstr)
 fd i32 = ext_unix_open(path_cstr, flags, mode)
 ```
@@ -1192,10 +1192,11 @@ path, allowing the dynamic loader to find bundled libraries beside them.
 
 ## Inline LLVM
 
-Inline LLVM is an unsafe-only operation inside function bodies and must be
-localized in an `unsafe:` block. The block is lexical: it permits otherwise
+Unsafe permission may cover either one expression with `unsafe expr`, or a
+block with `unsafe:` and `..`. The permission is lexical: it permits otherwise
 unverifiable low-level operations but does not disable type, ownership, bounds,
-or control-flow checking.
+or control-flow checking. Inline LLVM is a statement rather than an expression,
+so it must appear in the block form.
 
 ```magma
 rawRead(value u8*) u8:
@@ -1203,6 +1204,13 @@ rawRead(value u8*) u8:
         ret *value
     ..
 ..
+```
+
+For a single call, assignment, or other expression, the shorter form avoids an
+extra nested block:
+
+```magma
+unsafe consume(move borrowedValue)
 ```
 
 Inline LLVM is written with `llvm` followed by a string literal:
@@ -1535,7 +1543,7 @@ compiler-provided local binding and is not written in the parameter list:
 
 ```magma
 work(value u64) !Result:
-    ret try build(ctx.procAlloc, value)
+    ret try build(ctx.alloc, value)
 ..
 ```
 
@@ -1544,7 +1552,7 @@ argument:
 
 ```magma
 noctx bootstrap() !void:
-    ctx = context.new(heap.allocator(), heap.allocator(), executor.null())
+    ctx = context.new(heap.allocator(), executor.null())
     try work(1)
 ..
 

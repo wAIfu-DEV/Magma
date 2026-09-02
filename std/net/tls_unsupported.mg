@@ -11,11 +11,12 @@ pub closedContextError() error:
 ..
 
 pub newContext() !ptr:
+    throw errors.failure("portable HTTPS is not implemented for this platform")
     ret none
 ..
 
 pub open(context ptr, transport socket.Socket*, host str) !ptr:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     throw errors.failure("portable HTTPS is not implemented for this platform")
 ..
 

@@ -135,8 +135,8 @@ branch origins use the shortest possible lifetime. Unsafe casts may erase
 unknown provenance only inside `unsafe:`; known lifetime violations remain
 errors.
 
-`ctx.procAlloc` and `ctx.tempAlloc` use their actual implementation provenance;
-the field names do not imply process or temporary lifetime. In version 1,
+`ctx.alloc` uses its actual implementation provenance; the field name does not
+imply any particular lifetime. In version 1,
 `Scratch.reset()` and `Arena.reset()` are not modeled as allocation epochs.
 Reset still invalidates outstanding allocations at runtime, outside the
 checker guarantee, so callers must ensure no derived value is used afterward.

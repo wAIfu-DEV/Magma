@@ -87,7 +87,7 @@ findSchemeEnd(url str) u64:
 ..
 
 parseUrl(url str) !$ParsedUrl:
-    a := ctx.procAlloc
+    a := ctx.alloc
     n := url.countBytes()
     schemeEnd := findSchemeEnd(url)
     secure bool = false
@@ -147,9 +147,9 @@ parseUrl(url str) !$ParsedUrl:
 ..
 
 destr ParsedUrl.free() void:
-    this.host.free(ctx.procAlloc)
-    this.service.free(ctx.procAlloc)
-    this.target.free(ctx.procAlloc)
+    this.host.free(ctx.alloc)
+    this.service.free(ctx.alloc)
+    this.target.free(ctx.alloc)
 ..
 
 Client.sendRaw(bytes str) !u64:
@@ -160,11 +160,11 @@ Client.recvRaw(buffer u8[], count u64) !u64:
     ret try this.transport.recv(buffer, count)
 ..
 
-Client.writeAll(bytes str) !void:
+writeTransportAll(client Client*, bytes str) !void:
     offset u64 = 0
     loop offset < bytes.countBytes():
         part := strings.fromPtrNoCopy(cast.utop(cast.ptou(strings.toPtr(bytes)) + offset), bytes.countBytes() - offset)
-        written := try this.sendRaw(part)
+        written := try client.sendRaw(part)
         if written == 0:
             throw errors.connectionReset("WebSocket transport closed while writing")
         ..
@@ -188,7 +188,7 @@ Client.readExact(buffer u8[], count u64) !void:
 ..
 
 makeKey() !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     nonce := try strings.alloc(16)
     defer nonce.free(a)
     view u8[] = slices.fromPtr(strings.toPtr(nonce), 16)
@@ -198,18 +198,16 @@ makeKey() !$str:
 ..
 
 acceptFor(key str) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     joined := try builder.newWithCapacity(key.countBytes() + ACCEPT_GUID.countBytes())
     defer joined.free()
     try joined.appendBorrowed(key)
     try joined.appendBorrowed(ACCEPT_GUID)
     source := try joined.build()
     defer source.free(a)
-    digest := try strings.alloc(20)
-    defer digest.free(a)
     input u8[] = slices.fromPtr(strings.toPtr(source), source.countBytes())
-    output u8[] = slices.fromPtr(strings.toPtr(digest), 20)
-    try sha1.sum(input, output)
+    output u8[] = try sha1.sum(input)
+    defer slices.free(output)
     encoded := try base64.encode(output)
     ret move encoded
 ..
@@ -317,7 +315,7 @@ Client.readHeaders(maxBytes u64) !$str:
 ..
 
 Client.openingHandshake(parsed ParsedUrl*, headers Header[], maxHeaderBytes u64) !void:
-    a := ctx.procAlloc
+    a := ctx.alloc
     key := try makeKey()
     defer key.free(a)
     request := try builder.newWithCapacity(256)
@@ -346,7 +344,7 @@ Client.openingHandshake(parsed ParsedUrl*, headers Header[], maxHeaderBytes u64)
     try request.appendBorrowed("\r\n")
     serialized := try request.build()
     defer serialized.free(a)
-    try this.writeAll(serialized)
+    try writeTransportAll(this, serialized)
     response := try this.readHeaders(maxHeaderBytes)
     defer response.free(a)
     if response.countBytes() < 12 || strings.byteAt(response, 9) != 49 || strings.byteAt(response, 10) != 48 || strings.byteAt(response, 11) != 49:
@@ -366,7 +364,7 @@ Client.openingHandshake(parsed ParsedUrl*, headers Header[], maxHeaderBytes u64)
 ..
 
 connectTransport(host str, service str, secure bool, options Options) !$Client:
-    a := ctx.procAlloc
+    a := ctx.alloc
     resolver := try dns.new(a, options.dns)
     onerror resolver.close()
     endpoints := array address.Endpoint[16]
@@ -436,7 +434,7 @@ Client.sendFrame(opcode u8, payload str) !void:
         ..
     ..
     headerCount = headerCount + 4
-    try this.writeAll(strings.fromPtrNoCopy(slices.toPtr(header), headerCount))
+    try writeTransportAll(this, strings.fromPtrNoCopy(slices.toPtr(header), headerCount))
     masked := try strings.alloc(length)
     defer masked.free(this.allocator)
     output := strings.toPtr(masked)
@@ -446,7 +444,7 @@ Client.sendFrame(opcode u8, payload str) !void:
             output[i] = input[i] ^ mask[i % 4]
         ..
     ..
-    try this.writeAll(masked)
+    try writeTransportAll(this, masked)
 ..
 
 Client.sendText(message str) !void:
@@ -471,6 +469,11 @@ Client.sendBinary(message str) !void:
 Client.write(bytes str) !u64:
     try this.sendBinary(bytes)
     ret bytes.countBytes()
+..
+
+# Writes the complete input as one binary WebSocket message.
+Client.writeAll(bytes str) !u64:
+    ret try this.write(bytes)
 ..
 
 # Returns a borrowed generic writer view of this client.

@@ -71,10 +71,9 @@ processBlock(block u8[], state u32*) void:
 ..
 
 # Computes a SHA-1 digest into exactly 20 caller-owned bytes.
-pub sum(input u8[], output u8[]) !void:
-    if slices.count(output) < DIGEST_BYTES:
-        throw errors.invalidArgument("SHA-1 output buffer is too small")
-    ..
+pub sum(input u8[]) !$u8[]:
+    output u8[] = try slices.alloc[u8](20)
+
     state := array u32[5]
     state[0] = 1732584193
     state[1] = 4023233417
@@ -126,4 +125,5 @@ pub sum(input u8[], output u8[]) !void:
             output[i * 4 + 3] = cast.u64to8(cast.u32to64(word))
         ..
     ..
+    ret output
 ..

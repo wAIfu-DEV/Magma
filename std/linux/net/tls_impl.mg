@@ -69,7 +69,7 @@ pub newContext() !ptr:
 ..
 
 pub open(context ptr, transport socket.Socket*, host str) !ptr:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     session := ext_SSL_new(context)
     if session == none:
         throw errors.failure("OpenSSL TLS session creation failed")

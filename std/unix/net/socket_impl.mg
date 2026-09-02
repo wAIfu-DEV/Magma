@@ -7,6 +7,7 @@ use "std:errors" errors
 use "std:slices" slices
 use "std:strings" strings
 use "std:net/address" address
+use "std:net/byte_order" byte_order
 
 SockAddrIn(
     family u16
@@ -46,6 +47,8 @@ ext ext_socket socket(domain c.int, kind c.int, protocol c.int) c.int
 ext ext_bind bind(fd c.int, addr ptr, length c.unsigned_int) c.int
 ext ext_listen listen(fd c.int, backlog c.int) c.int
 ext ext_accept accept(fd c.int, addr ptr, length c.unsigned_int*) c.int
+@platform("linux", "android")
+ext ext_accept4 accept4(fd c.int, addr ptr, length c.unsigned_int*, flags c.int) c.int
 ext ext_connect connect(fd c.int, addr ptr, length c.unsigned_int) c.int
 ext ext_close close(fd c.int) c.int
 ext ext_recv recv(fd c.int, buffer ptr, length u64, flags c.int) i64
@@ -57,10 +60,6 @@ ext ext_fcntl fcntl(fd c.int, command c.int, value c.int) c.int
 ext ext_setsockopt setsockopt(fd c.int, level c.int, name c.int, value ptr, length c.unsigned_int) c.int
 ext ext_getsockname getsockname(fd c.int, addr ptr, length c.unsigned_int*) c.int
 ext ext_getpeername getpeername(fd c.int, addr ptr, length c.unsigned_int*) c.int
-ext ext_htons htons(value u16) u16
-ext ext_ntohs ntohs(value u16) u16
-ext ext_htonl htonl(value u32) u32
-ext ext_ntohl ntohl(value u32) u32
 
 @platform("linux", "android")
 ext ext_errno_location __errno_location() i32*
@@ -140,19 +139,19 @@ fillAddress(endpoint address.Endpoint, storage SockAddrStorage*) !NativeAddress:
     if endpoint.address.family == address.FAMILY_IPV4:
         native SockAddrIn* = storage
         native.family = cast.u64to16(cast.itou(family))
-        native.port = ext_htons(endpoint.port)
-        native.addr = ext_htonl(endpoint.address.word0)
+        byte_order.store16(addrof native.port, endpoint.port)
+        byte_order.store32(addrof native.addr, endpoint.address.word0)
         native.zero = 0
         ret NativeAddress(pointer=native, length=cast.u64to32(sizeof SockAddrIn))
     ..
     native6 SockAddrIn6* = storage
     native6.family = cast.u64to16(cast.itou(family))
-    native6.port = ext_htons(endpoint.port)
+    byte_order.store16(addrof native6.port, endpoint.port)
     native6.flowInfo = 0
-    native6.addr0 = ext_htonl(endpoint.address.word0)
-    native6.addr1 = ext_htonl(endpoint.address.word1)
-    native6.addr2 = ext_htonl(endpoint.address.word2)
-    native6.addr3 = ext_htonl(endpoint.address.word3)
+    byte_order.store32(addrof native6.addr0, endpoint.address.word0)
+    byte_order.store32(addrof native6.addr1, endpoint.address.word1)
+    byte_order.store32(addrof native6.addr2, endpoint.address.word2)
+    byte_order.store32(addrof native6.addr3, endpoint.address.word3)
     native6.scopeId = 0
     ret NativeAddress(pointer=native6, length=cast.u64to32(sizeof SockAddrIn6))
 ..
@@ -160,16 +159,16 @@ fillAddress(endpoint address.Endpoint, storage SockAddrStorage*) !NativeAddress:
 readAddress(storage SockAddrStorage*) !address.Endpoint:
     native SockAddrIn* = storage
     if native.family == 2:
-        word u32 = ext_ntohl(native.addr)
+        word u32 = byte_order.load32(addrof native.addr)
         ip := address.ipv4(cast.u64to8((word >> 24) & 255), cast.u64to8((word >> 16) & 255), cast.u64to8((word >> 8) & 255), cast.u64to8(word & 255))
-        ret address.Endpoint(address=ip, port=ext_ntohs(native.port))
+        ret address.Endpoint(address=ip, port=byte_order.load16(addrof native.port))
     ..
     native6 SockAddrIn6* = storage
-    ip6 := address.ipv6(ext_ntohl(native6.addr0), ext_ntohl(native6.addr1), ext_ntohl(native6.addr2), ext_ntohl(native6.addr3))
-    ret address.Endpoint(address=ip6, port=ext_ntohs(native6.port))
+    ip6 := address.ipv6(byte_order.load32(addrof native6.addr0), byte_order.load32(addrof native6.addr1), byte_order.load32(addrof native6.addr2), byte_order.load32(addrof native6.addr3))
+    ret address.Endpoint(address=ip6, port=byte_order.load16(addrof native6.port))
 ..
 
-pub open(family u8, kind u8) !ptr:
+pub openBlocking(family u8, kind u8) !ptr:
     domain := try nativeFamily(family)
     nativeKind i32 = 1
     if kind == 2:
@@ -180,6 +179,26 @@ pub open(family u8, kind u8) !ptr:
         throw lastFailure("socket creation failed")
     ..
     ret fdToPtr(fd)
+..
+
+@platform("linux", "android")
+pub openNonBlocking(family u8, kind u8) !ptr:
+    domain := try nativeFamily(family)
+    nativeKind i32 = 1 | 2048 | 0x80000
+    if kind == 2:
+        nativeKind = 2 | 2048 | 0x80000
+    ..
+    fd i32 = ext_socket(domain, nativeKind, 0)
+    if fd < 0: throw lastFailure("socket creation failed") ..
+    ret fdToPtr(fd)
+..
+
+@platform("darwin", "ios", "freebsd", "netbsd", "openbsd")
+pub openNonBlocking(family u8, kind u8) !ptr:
+    handle := try openBlocking(family, kind)
+    onerror close(handle)
+    try setNonBlocking(handle, true)
+    ret handle
 ..
 
 pub bind(handle ptr, endpoint address.Endpoint) !void:
@@ -196,7 +215,7 @@ pub listen(handle ptr, backlog u32) !void:
     ..
 ..
 
-pub accept(handle ptr) !ptr:
+pub acceptBlocking(handle ptr) !ptr:
     storage SockAddrStorage
     length u32 = cast.u64to32(sizeof SockAddrStorage)
     fd i32 = ext_accept(ptrToFd(handle), addrof storage, addrof length)
@@ -204,6 +223,23 @@ pub accept(handle ptr) !ptr:
         throw lastFailure("socket accept failed")
     ..
     ret fdToPtr(fd)
+..
+
+@platform("linux", "android")
+pub acceptNonBlocking(handle ptr) !ptr:
+    storage SockAddrStorage
+    length u32 = cast.u64to32(sizeof SockAddrStorage)
+    fd i32 = ext_accept4(ptrToFd(handle), addrof storage, addrof length, 2048 | 0x80000)
+    if fd < 0: throw lastFailure("socket accept failed") ..
+    ret fdToPtr(fd)
+..
+
+@platform("darwin", "ios", "freebsd", "netbsd", "openbsd")
+pub acceptNonBlocking(handle ptr) !ptr:
+    accepted := try acceptBlocking(handle)
+    onerror close(accepted)
+    try setNonBlocking(accepted, true)
+    ret accepted
 ..
 
 pub connect(handle ptr, endpoint address.Endpoint) !void:

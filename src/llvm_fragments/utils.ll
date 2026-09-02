@@ -5,6 +5,47 @@ declare void @llvm.memset.p0i8.i64(ptr, i8, i64, i32, i1)
 declare i64 @strlen(ptr nocapture readonly) nounwind
 declare i32 @printf(ptr, ...)
 
+; Byte-level equality for Magma strings. Empty strings never dereference their
+; data pointers, and identical views return without scanning their contents.
+define internal i1 @magma.string.equal(%type.str %a, %type.str %b) {
+entry:
+    %a.data = extractvalue %type.str %a, 0
+    %a.length = extractvalue %type.str %a, 1
+    %b.data = extractvalue %type.str %b, 0
+    %b.length = extractvalue %type.str %b, 1
+    %lengths.equal = icmp eq i64 %a.length, %b.length
+    br i1 %lengths.equal, label %same.length, label %return.false
+
+same.length:
+    %empty = icmp eq i64 %a.length, 0
+    %same.data = icmp eq ptr %a.data, %b.data
+    %immediate = or i1 %empty, %same.data
+    br i1 %immediate, label %return.true, label %compare
+
+compare:
+    br label %loop
+
+loop:
+    %index = phi i64 [ 0, %compare ], [ %next, %matched ]
+    %a.byte.ptr = getelementptr i8, ptr %a.data, i64 %index
+    %b.byte.ptr = getelementptr i8, ptr %b.data, i64 %index
+    %a.byte = load i8, ptr %a.byte.ptr, align 1
+    %b.byte = load i8, ptr %b.byte.ptr, align 1
+    %bytes.equal = icmp eq i8 %a.byte, %b.byte
+    br i1 %bytes.equal, label %matched, label %return.false
+
+matched:
+    %next = add nuw i64 %index, 1
+    %done = icmp eq i64 %next, %a.length
+    br i1 %done, label %return.true, label %loop
+
+return.true:
+    ret i1 true
+
+return.false:
+    ret i1 false
+}
+
 ; Error traces use a bounded, reusable 64-way sharded ring. The 16-bit handle
 ; stores a 6-bit shard and 10-bit slot. Handle zero is reserved for no trace;
 ; the otherwise corresponding physical slot is skipped. Cursors add a bounded

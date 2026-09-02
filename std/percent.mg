@@ -102,7 +102,7 @@ pub encodeTo(text str, output u8[], policy u8) !u64:
 ..
 
 pub encode(text str, policy u8) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     size := try encodedSize(text, policy)
     result $str = try strings.alloc(size)
     onerror result.free(a)
@@ -180,7 +180,7 @@ pub decodeFormTo(text str, output u8[]) !u64:
 ..
 
 decodeAllocated(text str, form bool) !$u8[]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     size := try decodedSizeKind(text, form)
     if size == 0:
         ret slices.fromPtr(none, 0)
@@ -192,11 +192,11 @@ decodeAllocated(text str, form bool) !$u8[]:
 ..
 
 pub decode(text str) !$u8[]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try decodeAllocated(text, false)
 ..
 
 pub decodeForm(text str) !$u8[]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try decodeAllocated(text, true)
 ..

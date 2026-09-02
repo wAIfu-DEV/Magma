@@ -254,6 +254,18 @@ func isBoolType(node *t.NodeType) bool {
 	return false
 }
 
+func isStrType(node *t.NodeType) bool {
+	if node == nil {
+		return false
+	}
+	named, ok := node.KindNode.(*t.NodeTypeNamed)
+	if !ok {
+		return false
+	}
+	single, ok := named.NameNode.(*t.NodeNameSingle)
+	return ok && single.Name == "str"
+}
+
 func isPointerType(node *t.NodeType) bool {
 	if node == nil {
 		return false

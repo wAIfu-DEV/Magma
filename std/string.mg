@@ -24,5 +24,5 @@ pub newA(a alc.Allocator, s $str) $String:
 ..
 
 pub new(s $str) $String:
-    ret newA(ctx.procAlloc, move s)
+    ret newA(ctx.alloc, move s)
 ..

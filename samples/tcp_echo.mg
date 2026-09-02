@@ -25,9 +25,9 @@ pub main() !void:
     pool := try thread_pool.new(a, 1, 4, 256, 256)
     defer pool.close()
 
-    ctx = context.new(a, a, pool.executor())
+    ctx = context.new(a, pool.executor())
 
-    server := try listener.new(ctx.procAlloc, address.anyIpv4(7000), 128, 1024, 256, onClient, none)
+    server := try listener.new(ctx.alloc, address.anyIpv4(7000), 128, 1024, 256, onClient, none)
     running := try server.runAsync()
 
     # A real application would do useful work or wait for a shutdown signal.

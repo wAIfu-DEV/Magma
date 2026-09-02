@@ -21,6 +21,39 @@ ext ext_win32_GetStdHandle     GetStdHandle(handleNum win.DWORD) win.HANDLE
 ext ext_win32_SetFilePointerEx SetFilePointerEx(handle win.HANDLE, distance win.LONGLONG, newPosition win.LONGLONG*, moveMethod win.DWORD) win.BOOL
 ext ext_win32_GetLastError     GetLastError() win.DWORD
 
+llvm "@magma.file.stdin = internal global ptr null, align 8\n@magma.file.stdout = internal global ptr null, align 8\n@magma.file.stderr = internal global ptr null, align 8\n"
+
+loadCachedStandardHandle(kind u32) ptr:
+   unsafe:
+      llvm "  %is.stdin = icmp eq i32 %kind, -10\n"
+      llvm "  %is.stdout = icmp eq i32 %kind, -11\n"
+      llvm "  %not.stdin = select i1 %is.stdout, ptr @magma.file.stdout, ptr @magma.file.stderr\n"
+      llvm "  %slot = select i1 %is.stdin, ptr @magma.file.stdin, ptr %not.stdin\n"
+      llvm "  %value = load atomic ptr, ptr %slot acquire, align 8\n"
+      llvm "  ret ptr %value\n"
+   ..
+..
+
+publishStandardHandle(kind u32, value ptr) void:
+   unsafe:
+      llvm "  %is.stdin = icmp eq i32 %kind, -10\n"
+      llvm "  %is.stdout = icmp eq i32 %kind, -11\n"
+      llvm "  %not.stdin = select i1 %is.stdout, ptr @magma.file.stdout, ptr @magma.file.stderr\n"
+      llvm "  %slot = select i1 %is.stdin, ptr @magma.file.stdin, ptr %not.stdin\n"
+      llvm "  store atomic ptr %value, ptr %slot release, align 8\n"
+      llvm "  ret void\n"
+   ..
+..
+
+standardHandle(kind u32) ptr:
+   value := loadCachedStandardHandle(kind)
+   if value == none:
+      value = ext_win32_GetStdHandle(kind)
+      if value != none: publishStandardHandle(kind, value) ..
+   ..
+   ret value
+..
+
 # Magma globals are thread-local by default. These syscall output slots avoid
 # repeated stack allocation without sharing state between threads.
 gl_writeOnce_written u32
@@ -126,13 +159,25 @@ pub read(handle ptr, buff u8[], n u64) !u64:
    ret try readOnce(handle, slices.toPtr(buff), 0xFFFFFFFF)
 ..
 
+# Positional fallback for synchronous Windows handles. Callers must not mix
+# this operation concurrently with cursor-based operations on the same File.
+pub readAt(handle ptr, buff u8[], n u64, offset u64) !u64:
+   previous := try seek(handle, 0, 1)
+   try seek(handle, cast.utoi(offset), 0)
+   count u64, readError error = read(handle, buff, n)
+   restored u64, restoreError error = seek(handle, cast.utoi(previous), 0)
+   if readError.nok(): throw readError ..
+   if restoreError.nok(): throw restoreError ..
+   ret count
+..
+
 # Returns a writer for the Win32 standard output handle.
 # O(1).
 Console impl writer.Writer(handle ptr, handleId u32)
 
 Console.write(bytes str) !u64:
    if this.handle == none:
-      this.handle = ext_win32_GetStdHandle(this.handleId)
+      this.handle = standardHandle(this.handleId)
    ..
    ret try write(this.handle, bytes)
 ..
@@ -150,7 +195,7 @@ gl_constStdoutHandle ptr
 
 writeConstStdout(impl ptr, bytes str) !u64:
    if gl_constStdoutHandle == none:
-      gl_constStdoutHandle = ext_win32_GetStdHandle(-11)
+      gl_constStdoutHandle = standardHandle(-11)
    ..
    ret try write(gl_constStdoutHandle, bytes)
 ..
@@ -174,7 +219,7 @@ Stdin impl reader.Reader(handle ptr)
 
 Stdin.readRaw(bytes u8[], count u64) !u64:
    if this.handle == none:
-      this.handle = ext_win32_GetStdHandle(-10)
+      this.handle = standardHandle(-10)
    ..
    ret try read(this.handle, bytes, count)
 ..
@@ -202,7 +247,7 @@ pub closeFile(handle ptr) !void:
 # @param openMode desired open mode
 # @returns handle to the opened file
 pub openFile(path str, openMode fopm.OpenMode) !$ptr:
-    a := ctx.tempAlloc
+    a := ctx.alloc
    READ  u32 = 0x80000000
    WRITE u32 = 0x40000000
    APPEND u32 = 4
@@ -240,7 +285,7 @@ pub openFile(path str, openMode fopm.OpenMode) !$ptr:
       open_mode = OPEN_EXISTING
    ..
 
-   path_u16 u16[] = try utf8.utf8To16NT(a, path)
+   path_u16 u16[] = try utf8.utf8To16NT(path)
    path_ptr u16* =  slices.toPtr(path_u16)
 
    defer a.free(path_ptr) # frees created utf16 string

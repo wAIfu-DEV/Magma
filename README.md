@@ -67,7 +67,7 @@ statements in a scope run in last-in, first-out order.
 ```magma
 use "std:file" file
 
-f := try file.open(a, path, file.mode().read())
+f := try file.open(path, file.mode().read())
 defer f.close()
 ```
 

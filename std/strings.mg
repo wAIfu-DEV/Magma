@@ -42,7 +42,7 @@ pub toPtrMove(s $str) $u8*:
 # @example
 #   text := try strings.alloc(32)
 pub alloc(size u64) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         if size == 0 - 1:
@@ -60,7 +60,7 @@ pub alloc(size u64) !$str:
 # @example
 #   padding := try strings.allocFill(8, 32)
 pub allocFill(size u64, fill u8) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         if size == 0 - 1:
@@ -74,6 +74,23 @@ pub allocFill(size u64, fill u8) !$str:
 
         p[size] = 0
         ret fromPtrMove(move p, size)
+    ..
+..
+
+pub realloc(prev $str, newSize u64) !$str:
+    a := ctx.alloc
+    defer fg.drop(move prev)
+
+    # SAFETY: checked sizes and ownership invariants bound the raw string operation.
+    unsafe:
+        if newSize == 0 - 1:
+            throw err.wouldOverflow("string allocation size overflow")
+        ..
+        prevPtr := toPtr(prev)
+
+        p u8* = try a.realloc(prevPtr, newSize + 1) # Zero terminated
+        p[newSize] = 0
+        ret fromPtrMove(move p, newSize)
     ..
 ..
 
@@ -129,19 +146,6 @@ pub truncate(value str*, byteCount u64) bool:
     ..
 ..
 
-# Updates an owned string descriptor after its backing allocation was
-# successfully reallocated. The caller retains the same ownership obligation.
-pub updateAfterRealloc(value str*, data ptr, capacity u64) void:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %dataPtr = getelementptr %type.str, ptr %value, i32 0, i32 0\n"
-        llvm "  store ptr %data, ptr %dataPtr\n"
-        llvm "  %capacityPtr = getelementptr %type.str, ptr %value, i32 0, i32 1\n"
-        llvm "  store i64 %capacity, ptr %capacityPtr\n"
-        llvm "  ret void\n"
-    ..
-..
-
 # Returns a str from a pointer and a length in bytes.
 # This copies the contents of p into a newly allocated str
 # @complexity O(N) depending on byte count
@@ -152,7 +156,7 @@ pub updateAfterRealloc(value str*, data ptr, capacity u64) void:
 # @example
 #   text := try strings.fromPtr(pointer, byteCount)
 pub fromPtr(p ptr, byteCount u64) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         if byteCount == 0:
@@ -186,7 +190,7 @@ pub fromPtr(p ptr, byteCount u64) !$str:
 # @example
 #   owned := try strings.copy(borrowed)
 pub copy(s str) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         byteCount u64 = s.countBytes()
@@ -216,7 +220,7 @@ pub copy(s str) !$str:
 # @example
 #   lower := try strings.toLower("Hello")
 pub toLower(s str) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         result $str = try copy(s)
@@ -236,7 +240,7 @@ pub toLower(s str) !$str:
 # @example
 #   upper := try strings.toUpper("Hello")
 pub toUpper(s str) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         result $str = try copy(s)
@@ -276,7 +280,7 @@ pub byteAt(s str, idx u64) u8:
 # @example
 #   cText := try strings.toCstr(text)
 pub toCstr(s str) !$u8*:
-    a := ctx.procAlloc
+    a := ctx.alloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         size u64 = s.countBytes()
@@ -366,7 +370,7 @@ pub fromCstrNoCopy(cstr u8*) str:
 # @example
 #   text := try strings.fromCstr(cText)
 pub fromCstr(cstr u8*) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         size u64 = cStrLen(cstr)
@@ -397,12 +401,11 @@ pub fromCstr(cstr u8*) !$str:
 # @example
 #   same := strings.compare("magma", candidate)
 pub compare(a str, b str) bool:
-    aLen u64 = a.countBytes()
-
-    if aLen != b.countBytes():
-        ret false
+    # SAFETY: the compiler runtime helper compares the two bounded string views.
+    unsafe:
+        llvm "  %equal = call i1 @magma.string.equal(%type.str %a, %type.str %b)\n"
+        llvm "  ret i1 %equal\n"
     ..
-    ret mem.compare(toPtr(a), toPtr(b), aLen)
 ..
 
 # Returns the first byte index containing value.
@@ -472,7 +475,7 @@ pub find(s str, needle str) !u64:
 # @example
 #   part := try strings.substring(text, 0, 5)
 pub substring(s str, start u64, end u64) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     size := s.countBytes()
     if start > end || end > size:
         throw err.outOfBounds("substring bounds are invalid")
@@ -490,7 +493,7 @@ isTrimByte(value u8) bool:
 # @example
 #   clean := try strings.trim("  magma  ")
 pub trim(s str) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         start u64 = 0
@@ -511,7 +514,7 @@ pub trim(s str) !$str:
 # @example
 #   value := try strings.trimPrefix(text, "prefix-")
 pub trimPrefix(s str, prefix str) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     prefixSize := prefix.countBytes()
     if matchesAt(s, prefix, 0):
         ret try substring(s, prefixSize, s.countBytes())
@@ -524,7 +527,7 @@ pub trimPrefix(s str, prefix str) !$str:
 # @example
 #   value := try strings.trimSuffix(text, ".mg")
 pub trimSuffix(s str, suffix str) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     sourceSize := s.countBytes()
     suffixSize := suffix.countBytes()
     if suffixSize <= sourceSize && matchesAt(s, suffix, sourceSize - suffixSize):
@@ -602,7 +605,7 @@ countParts(s str, separator str) !u64:
 # @example
 #   parts := try strings.split("a,b,c", ",")
 pub split(s str, separator str) !$Split:
-    a := ctx.procAlloc
+    a := ctx.alloc
     # SAFETY: checked sizes and ownership invariants bound the raw string operation.
     unsafe:
         partCount := try countParts(s, separator)
@@ -657,7 +660,7 @@ pub SplitIterator(
 # @example
 #   iterator := try strings.splitIter("a,b,c", ",")
 pub splitIter(s str, separator str) !$SplitIterator:
-    a := ctx.procAlloc
+    a := ctx.alloc
     if separator.countBytes() == 0:
         throw err.invalidArgument("split separator cannot be empty")
     ..
@@ -713,7 +716,7 @@ destr SplitIterator.free() void:
 # @example
 #   pair := try strings.splitOnce("name=value", "=")
 pub splitOnce(s str, separator str) !$pair.Pair[str, str]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     if separator.countBytes() == 0:
         throw err.invalidArgument("split separator cannot be empty")
     ..
@@ -735,7 +738,7 @@ pub concat(a str, b str) !$str:
         throw err.wouldOverflow("strings are too big")
     ..
 
-    region := try ctx.procAlloc.alloc(regSize + 1)
+    region := try ctx.alloc.alloc(regSize + 1)
     mem.copy(toPtr(a), region, an)
     
     region2 := cast.utop(cast.ptou(region) + an)

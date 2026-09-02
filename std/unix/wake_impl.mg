@@ -8,6 +8,7 @@ link "pthread"
 
 use "std:cast" cast
 use "std:errors" errors
+use "std:atomic" atomic
 
 const conditionStrategy u8 = 0
 
@@ -27,7 +28,8 @@ pub Wake(
     strategy u8
     lock Opaque128
     conditionVariable Opaque128
-    count u64
+    count atomic.U64
+    waiters atomic.U32
     semaphore Opaque128
 )
 
@@ -51,6 +53,8 @@ nativeError(code i32, message str) error:
 pub new(strategy u8) !$Wake:
     value Wake
     value.strategy = strategy
+    value.count = atomic.newU64(0)
+    value.waiters = atomic.newU32(0)
     code i32
     if strategy == conditionStrategy:
         code = ext_pthread_mutex_init(addrof value.lock, none)
@@ -74,18 +78,43 @@ pub new(strategy u8) !$Wake:
 pub wait(wake Wake*) !void:
     code i32
     if wake.strategy == conditionStrategy:
+        available := wake.count.loadAcquire()
+        loop available != 0:
+            observed := wake.count.compareExchange(available, available - 1)
+            if observed == available:
+                ret
+            ..
+            available = observed
+        ..
+        wake.waiters.fetchAdd(1)
         code = ext_pthread_mutex_lock(addrof wake.lock)
         if code != 0:
+            wake.waiters.fetchSub(1)
             throw nativeError(code, "pthread_mutex_lock failed")
         ..
-        loop wake.count == 0:
+        available = wake.count.loadAcquire()
+        loop available == 0:
             code = ext_pthread_cond_wait(addrof wake.conditionVariable, addrof wake.lock)
             if code != 0:
                 ext_pthread_mutex_unlock(addrof wake.lock)
+                wake.waiters.fetchSub(1)
                 throw nativeError(code, "pthread_cond_wait failed")
             ..
+            available = wake.count.loadAcquire()
         ..
-        wake.count = wake.count - 1
+        loop wake.count.compareExchange(available, available - 1) != available:
+            available = wake.count.loadAcquire()
+            loop available == 0:
+                code = ext_pthread_cond_wait(addrof wake.conditionVariable, addrof wake.lock)
+                if code != 0:
+                    ext_pthread_mutex_unlock(addrof wake.lock)
+                    wake.waiters.fetchSub(1)
+                    throw nativeError(code, "pthread_cond_wait failed")
+                ..
+                available = wake.count.loadAcquire()
+            ..
+        ..
+        wake.waiters.fetchSub(1)
         code = ext_pthread_mutex_unlock(addrof wake.lock)
         if code != 0:
             throw nativeError(code, "pthread_mutex_unlock failed")
@@ -101,11 +130,14 @@ pub wait(wake Wake*) !void:
 pub notify(wake Wake*) !void:
     code i32
     if wake.strategy == conditionStrategy:
+        wake.count.fetchAdd(1)
+        if wake.waiters.loadAcquire() == 0:
+            ret
+        ..
         code = ext_pthread_mutex_lock(addrof wake.lock)
         if code != 0:
             throw nativeError(code, "pthread_mutex_lock failed")
         ..
-        wake.count = wake.count + 1
         code = ext_pthread_cond_signal(addrof wake.conditionVariable)
         unlockCode i32 = ext_pthread_mutex_unlock(addrof wake.lock)
         if code != 0:

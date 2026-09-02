@@ -348,7 +348,7 @@ utf8to16size(s str) !u64:
 # @example
 #   wide := try utf8.utf8To16(a, text)
 pub utf8To16(s str) !$u16[]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     # SAFETY: utf8to16size computes the exact code-unit allocation and the
     # validated iterator emits exactly that many units.
     unsafe:
@@ -398,7 +398,7 @@ pub utf8To16(s str) !$u16[]:
 # @example
 #   wideC := try utf8.utf8To16NT(a, text)
 pub utf8To16NT(s str) !$u16[]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     # SAFETY: allocationCount includes the terminator and utf8to16size exactly
     # bounds all code units emitted by the validated iterator.
     unsafe:
@@ -617,7 +617,7 @@ utf16to8iter(in u16[], out u8*, i u64*, n u64) !u64:
 # @example
 #   text := try utf8.utf16to8(a, wide)
 pub utf16to8(in u16[]) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     n u64 = slices.count(in)
     if n == 0:
         ret try strings.alloc(0)

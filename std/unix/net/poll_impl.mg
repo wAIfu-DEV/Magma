@@ -5,11 +5,12 @@ use "std:c" c
 use "std:allocator" allocator
 use "std:cast" cast
 use "std:errors" errors
+use "std:atomic" atomic
 
 PollFd(fd i32, events i16, returned i16)
 Entry(token u64)
 pub NativeEvent(token u64, flags u32)
-pub Poller(allocator allocator.Allocator, descriptors PollFd*, entries Entry*, decoded NativeEvent*, capacity u64, count u64, wakeRead i32, wakeWrite i32)
+pub Poller(allocator allocator.Allocator, descriptors PollFd*, entries Entry*, decoded NativeEvent*, capacity u64, count u64, wakeRead i32, wakeWrite i32, wakePending atomic.U8)
 
 ext ext_poll poll(descriptors PollFd*, count u64, timeout i32) i32
 ext ext_pipe pipe(descriptors i32*) i32
@@ -17,7 +18,8 @@ ext ext_read read(fd i32, buffer ptr, count u64) i64
 ext ext_write write(fd i32, buffer ptr, count u64) i64
 ext ext_close close(fd i32) i32
 
-pub new(a allocator.Allocator, capacity u64) !$Poller:
+pub new(capacity u64) !$Poller:
+    a := ctx.alloc
     descriptors PollFd* = try a.allocT[PollFd](capacity + 1)
     onerror a.free(descriptors)
     entries Entry* = try a.allocT[Entry](capacity + 1)
@@ -30,7 +32,7 @@ pub new(a allocator.Allocator, capacity u64) !$Poller:
     ..
     descriptors[0] = PollFd(fd=pipes[0], events=1, returned=0)
     entries[0] = Entry(token=0 - 1)
-    ret Poller(allocator=a, descriptors=descriptors, entries=entries, decoded=decoded, capacity=capacity, count=1, wakeRead=pipes[0], wakeWrite=pipes[1])
+    ret Poller(allocator=a, descriptors=descriptors, entries=entries, decoded=decoded, capacity=capacity, count=1, wakeRead=pipes[0], wakeWrite=pipes[1], wakePending=atomic.newU8(0))
 ..
 
 find(poller Poller*, handle ptr) u64:
@@ -118,6 +120,7 @@ pub wait(poller Poller*, limit u64, timeoutMs i64) !u64:
             if i == 0:
                 byte u8
                 ext_read(poller.wakeRead, addrof byte, 1)
+                poller.wakePending.store(0)
             else:
                 poller.decoded[output] = NativeEvent(token=poller.entries[i].token, flags=decodeFlags(returned))
                 output = output + 1
@@ -134,8 +137,12 @@ pub eventAt(poller Poller*, index u64) NativeEvent:
 ..
 
 pub interrupt(poller Poller*) !void:
+    if poller.wakePending.exchange(1) != 0:
+        ret
+    ..
     byte u8 = 1
     if ext_write(poller.wakeWrite, addrof byte, 1) < 0:
+        poller.wakePending.store(0)
         throw errors.failure("poll wake failed")
     ..
 ..

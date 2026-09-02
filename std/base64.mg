@@ -211,7 +211,7 @@ pub decodeUrlTo(text str, output u8[]) !u64:
 ..
 
 encodeAllocated(input u8[], urlSafe bool) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     size := try encodedSize(slices.count(input))
     result $str = try strings.alloc(size)
     onerror result.free(a)
@@ -221,17 +221,17 @@ encodeAllocated(input u8[], urlSafe bool) !$str:
 ..
 
 pub encode(input u8[]) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try encodeAllocated(input, false)
 ..
 
 pub encodeUrl(input u8[]) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try encodeAllocated(input, true)
 ..
 
 decodeAllocated(text str, urlSafe bool) !$u8[]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     size := try decodedSizeFor(text, urlSafe)
     if size == 0:
         ret slices.fromPtr(none, 0)
@@ -243,11 +243,11 @@ decodeAllocated(text str, urlSafe bool) !$u8[]:
 ..
 
 pub decode(text str) !$u8[]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try decodeAllocated(text, false)
 ..
 
 pub decodeUrl(text str) !$u8[]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try decodeAllocated(text, true)
 ..

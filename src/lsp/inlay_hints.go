@@ -108,9 +108,6 @@ func formatInlayType(valueType *types.NodeType) string {
 	copy := *valueType
 	copy.Throws = false
 	value := formatType(&copy)
-	if strings.HasPrefix(value, "owned ") {
-		value = "$" + strings.TrimPrefix(value, "owned ")
-	}
 	return value
 }
 

@@ -109,6 +109,55 @@ func TestCompletionReceiverKinds(t *testing.T) {
 	}
 }
 
+func TestCompletionInfersGenericMemberResultDespiteImportedLinkError(t *testing.T) {
+	directory := t.TempDir()
+	broken := filepath.Join(directory, "broken.mg")
+	if err := os.WriteFile(broken, []byte("mod broken\npub fail() void:\n    missing()\n..\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := "mod completion\nuse \"std:iterator\" iter\nuse \"./broken.mg\" broken\nThing(field u64)\nThing.touch() void:\n..\nResponse(values iter.Iterator[Thing])\nmake(values iter.Iterator[Thing]) Response:\n    ret Response(values=values)\n..\ninspect(values iter.Iterator[Thing]) !void:\n    response := make(values)\n    iterator := response.values\n    value := try iterator.next()\n    value.\n..\n"
+	path := filepath.Join(directory, "completion.mg")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	items := complete(fileURI(path), source, position{Line: 14, Character: 10}, testStdRoot())
+	labels := map[string]bool{}
+	for _, item := range items {
+		labels[item.Label] = true
+	}
+	for _, want := range []string{"field", "touch"} {
+		if !labels[want] {
+			t.Fatalf("completion labels %#v do not include %q", labels, want)
+		}
+	}
+}
+
+func TestCompletionInfersImportedFactoryResultAfterDuplicateDot(t *testing.T) {
+	directory := t.TempDir()
+	dependency := filepath.Join(directory, "dependency.mg")
+	dependencySource := "mod dependency\npub Thing(value u64)\nThing.touch() !void:\n..\npub make() Thing:\n    ret Thing(value=1)\n..\npub broken() void:\n    missing()\n..\n"
+	if err := os.WriteFile(dependency, []byte(dependencySource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := "mod completion\nuse \"./dependency.mg\" dep\nmain() !void:\n    item := dep.make()\n    try item..touch()\n..\n"
+	path := filepath.Join(directory, "completion.mg")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, character := range []uint32{13, 14} {
+		items := complete(fileURI(path), source, position{Line: 4, Character: character}, testStdRoot())
+		labels := map[string]bool{}
+		for _, item := range items {
+			labels[item.Label] = true
+		}
+		for _, want := range []string{"touch", "value"} {
+			if !labels[want] {
+				t.Fatalf("completion at character %d returned labels %#v without %q", character, labels, want)
+			}
+		}
+	}
+}
+
 func TestPrototypeViewCompletion(t *testing.T) {
 	source := "mod completion\nproto Reader(read() u64)\nBox impl Reader(value u64)\nBox.read() u64:\n    ret this.value\n..\ninspect(item Box) void:\n    item.\n..\n"
 	path := filepath.Join(t.TempDir(), "completion.mg")

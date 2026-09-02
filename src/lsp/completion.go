@@ -3,6 +3,7 @@ package lsp
 import (
 	"Magma/src/magma_types"
 	"Magma/src/types"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,15 +12,16 @@ import (
 )
 
 type completionItem struct {
-	Label            string              `json:"label"`
-	Kind             int                 `json:"kind,omitempty"`
-	Detail           string              `json:"detail,omitempty"`
-	FilterText       string              `json:"filterText,omitempty"`
-	InsertText       string              `json:"insertText,omitempty"`
-	InsertTextFormat int                 `json:"insertTextFormat,omitempty"`
-	SortText         string              `json:"sortText,omitempty"`
-	Documentation    map[string]any      `json:"documentation,omitempty"`
-	TextEdit         *completionTextEdit `json:"textEdit,omitempty"`
+	Label               string              `json:"label"`
+	Kind                int                 `json:"kind,omitempty"`
+	Detail              string              `json:"detail,omitempty"`
+	FilterText          string              `json:"filterText,omitempty"`
+	InsertText          string              `json:"insertText,omitempty"`
+	InsertTextFormat    int                 `json:"insertTextFormat,omitempty"`
+	SortText            string              `json:"sortText,omitempty"`
+	Documentation       map[string]any      `json:"documentation,omitempty"`
+	TextEdit            *completionTextEdit `json:"textEdit,omitempty"`
+	AdditionalTextEdits []textEdit          `json:"additionalTextEdits,omitempty"`
 }
 
 type completionList struct {
@@ -134,6 +136,7 @@ func complete(uri, source string, pos position, stdRoot string) []completionItem
 		return result.expressionCompletions(expression.prefix, pos.Line+1, expectedTypeAt(source, pos, result))
 	}
 	analysisSource := sanitizeOtherSelectors(source, int(pos.Line))
+	topLevelReceiver := strings.TrimSpace(analysisSource[context.lineOffset:context.startByte]) == ""
 	// A selector without a member is intentionally invalid Magma. Removing the
 	// dot makes the preceding program analyzable, allowing normal inference to
 	// determine the receiver type.
@@ -164,6 +167,11 @@ func complete(uri, source string, pos position, stdRoot string) []completionItem
 	if result == nil || result.file == nil || result.docs == nil {
 		return []completionItem{}
 	}
+	if topLevelReceiver {
+		if items := missingProtoMethodCompletions(result, source, stdRoot, context.receiver, context.prefix); len(items) > 0 {
+			return items
+		}
+	}
 	receiverParts, ok := selectorParts(context.receiver)
 	if !ok {
 		return []completionItem{}
@@ -184,6 +192,11 @@ func complete(uri, source string, pos position, stdRoot string) []completionItem
 			receiverType = result.docs.completionTypeAt(result.file.PackageName, receiverParts[0].name, pos.Line+1)
 			if receiverType == nil {
 				receiverType = findValueType(result.file.GlNode, receiverParts[0].name)
+			}
+			if result.docs.completionTypeResolutionScore(receiverType) <= 0 {
+				if recovered := inferredLocalTypeFromSource(result, analysisSource, receiverParts[0].name, pos.Line+1); recovered != nil {
+					receiverType = recovered
+				}
 			}
 		}
 		module, owner = completionType(result, receiverType)
@@ -210,10 +223,317 @@ func complete(uri, source string, pos position, stdRoot string) []completionItem
 		}
 		module, owner = completionType(result, receiverType)
 	}
+	// A partially analyzed local can carry a syntactically valid type that does
+	// not resolve to a completion owner. Recover its initializer type before
+	// falling back to module completions; otherwise completion immediately after
+	// the first of two adjacent dots can exit here with an empty result.
+	if owner == "" && len(receiverParts) == 1 && !receiverParts[0].call {
+		if recovered := inferredLocalTypeFromSource(result, analysisSource, receiverParts[0].name, pos.Line+1); recovered != nil {
+			recoveredModule, recoveredOwner := completionType(result, recovered)
+			if recoveredOwner != "" {
+				module, owner = recoveredModule, recoveredOwner
+			}
+		}
+	}
 	if owner == "" {
 		return result.docs.moduleCompletions(module, context.prefix)
 	}
-	return result.docs.memberCompletions(module, owner, context.prefix)
+	items := result.docs.memberCompletions(module, owner, context.prefix)
+	if len(items) == 0 && len(receiverParts) == 1 && !receiverParts[0].call {
+		if recovered := inferredLocalTypeFromSource(result, analysisSource, receiverParts[0].name, pos.Line+1); recovered != nil {
+			recoveredModule, recoveredOwner := completionType(result, recovered)
+			if recoveredOwner != "" {
+				items = result.docs.memberCompletions(recoveredModule, recoveredOwner, context.prefix)
+			}
+		}
+	}
+	return items
+}
+
+// missingProtoMethodCompletions turns a top-level `StructName.` selector into
+// implementation stubs for requirements that are not already defined. At file
+// scope a struct name is not an expression receiver, so these completions are
+// deliberately kept separate from ordinary member completion.
+func missingProtoMethodCompletions(result *analysis, source, stdRoot, receiver, prefix string) []completionItem {
+	if result == nil || result.file == nil || result.file.GlNode == nil || strings.Contains(receiver, ".") {
+		return nil
+	}
+	global := result.file.GlNode
+	definition := global.StructDefs[receiver]
+	if definition == nil || definition.IsProto {
+		return nil
+	}
+	items := []completionItem{}
+	seen := map[string]bool{}
+	for _, implementation := range definition.Implements {
+		if implementation == nil || implementation.Proto == nil {
+			continue
+		}
+		for _, method := range implementation.Proto.Methods {
+			if method == nil || seen[method.Name] || definition.Funcs[method.Name] != nil || !strings.HasPrefix(method.Name, prefix) {
+				continue
+			}
+			seen[method.Name] = true
+			formatter := newCompletionTypeFormatter(result, stdRoot)
+			args := make([]string, 0, len(method.Args))
+			for _, arg := range method.Args {
+				args = append(args, arg.Name+" "+formatter.format(arg.TypeNode))
+			}
+			signature := method.Name + "(" + strings.Join(args, ", ") + ") " + formatter.format(method.Ret)
+			insert := signature + ":\n.."
+			if method.ContextABI == types.ContextABIContextless {
+				insert = "noctx " + insert
+			}
+			item := completionItem{
+				Label:         method.Name,
+				Kind:          2, // CompletionItemKind.Method
+				Detail:        signature,
+				FilterText:    method.Name,
+				InsertText:    insert,
+				Documentation: markdownContent("Implements `" + implementation.Proto.Name + "." + method.Name + "`."),
+			}
+			if edit, ok := formatter.importEdit(source); ok {
+				item.AdditionalTextEdits = []textEdit{edit}
+			}
+			items = append(items, item)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Label < items[j].Label })
+	return items
+}
+
+type completionTypeFormatter struct {
+	result  *analysis
+	stdRoot string
+	aliases map[string]string
+	pending map[string]string
+}
+
+func newCompletionTypeFormatter(result *analysis, stdRoot string) *completionTypeFormatter {
+	aliases := map[string]string{}
+	for alias, module := range result.importedPackages() {
+		aliases[module] = alias
+	}
+	return &completionTypeFormatter{result: result, stdRoot: stdRoot, aliases: aliases, pending: map[string]string{}}
+}
+
+func (f *completionTypeFormatter) format(node *types.NodeType) string {
+	if node == nil {
+		return "?"
+	}
+	copy := *node
+	copy.Throws, copy.Owned = false, false
+	var out string
+	switch kind := node.KindNode.(type) {
+	case *types.NodeTypeAbsolute:
+		module, name := splitAbsoluteType(kind.AbsoluteName)
+		out = name
+		if module != "" && module != f.result.file.PackageName {
+			if alias := f.aliasFor(module); alias != "" {
+				out = alias + "." + name
+			}
+		}
+	case *types.NodeTypeNamed:
+		out = flattenName(kind.NameNode)
+		if len(kind.GenericArgs) > 0 {
+			args := make([]string, len(kind.GenericArgs))
+			for i, arg := range kind.GenericArgs {
+				args[i] = f.format(arg)
+			}
+			out += "[" + strings.Join(args, ", ") + "]"
+		}
+	case *types.NodeTypePointer:
+		out = f.format(&types.NodeType{KindNode: kind.Kind}) + "*"
+	case *types.NodeTypeRfc:
+		out = "&" + f.format(&types.NodeType{KindNode: kind.Kind})
+	case *types.NodeTypeSlice:
+		out = f.format(&types.NodeType{KindNode: kind.ElemKind}) + "[]"
+	case *types.NodeTypeFunc:
+		args := make([]string, len(kind.Args))
+		for i, arg := range kind.Args {
+			args[i] = f.format(arg)
+		}
+		out = "fn(" + strings.Join(args, ", ") + "): " + f.format(kind.RetType)
+	default:
+		out = formatType(&copy)
+	}
+	if node.Owned {
+		out = "$" + out
+	}
+	if node.Throws {
+		out = "!" + out
+	}
+	return out
+}
+
+func splitAbsoluteType(name string) (string, string) {
+	index := strings.LastIndex(name, ".")
+	if index < 0 {
+		return "", types.SourceName(name)
+	}
+	return name[:index], types.SourceName(name[index+1:])
+}
+
+func (f *completionTypeFormatter) aliasFor(module string) string {
+	if alias := f.aliases[module]; alias != "" {
+		return alias
+	}
+	if alias := f.pending[module]; alias != "" {
+		return alias
+	}
+	base := "module"
+	if f.result.docs != nil && f.result.docs.moduleNames[module] != "" {
+		base = f.result.docs.moduleNames[module]
+	}
+	used := map[string]bool{}
+	for alias := range f.result.importedPackages() {
+		used[alias] = true
+	}
+	for name := range f.result.file.GlNode.StructDefs {
+		used[name] = true
+	}
+	for name := range f.result.file.GlNode.FuncDefs {
+		used[name] = true
+	}
+	for _, alias := range f.pending {
+		used[alias] = true
+	}
+	alias := base
+	for suffix := 2; used[alias]; suffix++ {
+		alias = base + fmt.Sprint(suffix)
+	}
+	f.pending[module] = alias
+	return alias
+}
+
+func (f *completionTypeFormatter) importEdit(source string) (textEdit, bool) {
+	if len(f.pending) == 0 || f.result.docs == nil {
+		return textEdit{}, false
+	}
+	modules := make([]string, 0, len(f.pending))
+	for module := range f.pending {
+		modules = append(modules, module)
+	}
+	sort.Slice(modules, func(i, j int) bool { return f.pending[modules[i]] < f.pending[modules[j]] })
+	lines := make([]string, 0, len(modules))
+	for _, module := range modules {
+		path := f.result.docs.modulePaths[module]
+		specifier, ok := completionImportSpecifier(f.result.file.FilePath, path, f.stdRoot)
+		if !ok {
+			continue
+		}
+		lines = append(lines, "use \""+specifier+"\" "+f.pending[module])
+	}
+	if len(lines) == 0 {
+		return textEdit{}, false
+	}
+	line := completionImportLine(source)
+	position := position{Line: uint32(line), Character: 0}
+	newline := "\n"
+	if strings.Contains(source, "\r\n") {
+		newline = "\r\n"
+	}
+	return textEdit{Range: rangePosition{Start: position, End: position}, NewText: strings.Join(lines, newline) + newline}, true
+}
+
+func completionImportSpecifier(currentPath, targetPath, stdRoot string) (string, bool) {
+	if targetPath == "" {
+		return "", false
+	}
+	targetPath = filepath.Clean(targetPath)
+	if absoluteStd, err := filepath.Abs(stdRoot); err == nil {
+		if relative, err := filepath.Rel(absoluteStd, targetPath); err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return "std:" + strings.TrimSuffix(filepath.ToSlash(relative), ".mg"), true
+		}
+	}
+	relative, err := filepath.Rel(filepath.Dir(currentPath), targetPath)
+	if err != nil {
+		return "", false
+	}
+	relative = strings.TrimSuffix(filepath.ToSlash(relative), ".mg")
+	if !strings.HasPrefix(relative, ".") {
+		relative = "./" + relative
+	}
+	return relative, true
+}
+
+func completionImportLine(source string) int {
+	lines := strings.Split(source, "\n")
+	line := 1
+	for line < len(lines) {
+		trimmed := strings.TrimSpace(lines[line])
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			line++
+			continue
+		}
+		break
+	}
+	lastUse := -1
+	for index := line; index < len(lines); index++ {
+		trimmed := strings.TrimSpace(lines[index])
+		if strings.HasPrefix(trimmed, "use ") || strings.HasPrefix(trimmed, "pub use ") {
+			lastUse = index
+			continue
+		}
+		if trimmed != "" {
+			break
+		}
+	}
+	if lastUse >= 0 {
+		return lastUse + 1
+	}
+	return line
+}
+
+func inferredLocalTypeFromSource(result *analysis, source, name string, line uint32) *types.NodeType {
+	lines := strings.Split(source, "\n")
+	limit := int(line)
+	if limit > len(lines) {
+		limit = len(lines)
+	}
+	needle := name + " :="
+	for index := limit - 1; index >= 0; index-- {
+		text := strings.TrimSpace(lines[index])
+		if !strings.HasPrefix(text, needle) {
+			continue
+		}
+		rhs := strings.TrimSpace(strings.TrimPrefix(text, needle))
+		rhs = strings.TrimSpace(strings.TrimPrefix(rhs, "try "))
+		parts, ok := selectorParts(rhs)
+		if !ok || len(parts) == 0 {
+			return nil
+		}
+		valueType := result.docs.completionTypeAt(result.file.PackageName, parts[0].name, uint32(index+1))
+		module, owner := completionType(result, valueType)
+		if imported := result.importedPackage(parts[0].name); imported != "" && !parts[0].call {
+			module = imported
+			owner = ""
+		}
+		for _, part := range parts[1:] {
+			if part.call {
+				if owner == "" {
+					valueType = result.docs.functionReturns[module+"\x00"+part.name]
+				} else {
+					valueType = result.docs.completionMemberReturnType(module, owner, part.name, valueType)
+				}
+			} else {
+				if owner == "" {
+					if imported := result.docs.publicModuleAlias(module, part.name); imported != "" {
+						module = imported
+						continue
+					}
+					return nil
+				}
+				valueType = result.docs.canonicalCompletionType(module, result.docs.memberTypes[module+"\x00"+owner+"."+part.name])
+			}
+			if valueType == nil {
+				return nil
+			}
+			module, owner = completionType(result, valueType)
+		}
+		return valueType
+	}
+	return nil
 }
 
 // typeCompletionAt recognizes the source positions where the grammar expects
@@ -278,7 +598,7 @@ func typeCompletionAt(source string, pos position) (typeCompletionContext, bool)
 	// A plain declaration line consists of modifiers followed by the name.
 	if !expects && strings.IndexAny(trimmed, "=:.()[],") < 0 {
 		fields := strings.Fields(trimmed)
-		reserved := map[string]bool{"if": true, "elif": true, "else": true, "while": true, "for": true, "ret": true, "throw": true, "use": true, "mod": true}
+		reserved := map[string]bool{"if": true, "elif": true, "else": true, "while": true, "for": true, "ret": true, "throw": true, "try": true, "defer": true, "onerror": true, "use": true, "mod": true}
 		expects = len(fields) > 0 && !reserved[fields[len(fields)-1]]
 	}
 	// Inside a top-level function/struct declaration, the current comma-delimited
@@ -929,7 +1249,14 @@ func completionAt(source string, pos position) (completionContext, bool) {
 	if !identifier(prefix) {
 		return completionContext{}, false
 	}
-	start := dot
+	// Treat a run of dots immediately before the completion prefix as one
+	// unfinished selector. This keeps an accidental second dot from turning
+	// the first dot into an invalid trailing component of the receiver.
+	selectorDot := dot
+	for selectorDot > 0 && before[selectorDot-1] == '.' {
+		selectorDot--
+	}
+	start := selectorDot
 	depth := 0
 	for start > 0 {
 		r, size := lastRune(before[:start])
@@ -945,14 +1272,14 @@ func completionAt(source string, pos position) (completionContext, bool) {
 		}
 		start -= size
 	}
-	receiver := before[start:dot]
+	receiver := before[start:selectorDot]
 	if receiver == "" {
 		return completionContext{}, false
 	}
 	if _, ok := selectorParts(receiver); !ok {
 		return completionContext{}, false
 	}
-	return completionContext{receiver: receiver, prefix: prefix, startByte: lineStart + len(before[:start]), dotByte: lineStart + len(before[:dot]), endByte: lineStart + len(before), lineOffset: lineStart}, true
+	return completionContext{receiver: receiver, prefix: prefix, startByte: lineStart + len(before[:start]), dotByte: lineStart + len(before[:selectorDot]), endByte: lineStart + len(before), lineOffset: lineStart}, true
 }
 
 func lastRune(value string) (rune, int) {

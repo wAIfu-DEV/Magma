@@ -23,7 +23,7 @@ use "std:unix/fs_impl" impl_fs
 # @example
 #   contents := try fs.readFile(a, "settings.json")
 pub readFile(path str) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     mode := file.mode()
     mode = mode.read()
     f := try file.open(path, mode)
@@ -31,6 +31,20 @@ pub readFile(path str) !$str:
     count := try f.count()
     r := try f.reader()
     ret try r.read(count)
+..
+
+# Reads at most count bytes starting at offset without exposing or mutating a
+# persistent file cursor. Platform-specific positional handles remain private.
+pub readRange(path str, offset u64, count u64) !$str:
+    a := ctx.alloc
+    output := try strings.alloc(count)
+    onerror output.free(a)
+    written := try impl_fs.readRange(path, strings.toPtr(output), count, offset)
+    if written > count:
+        throw errors.failure("platform range read exceeded its destination")
+    ..
+    strings.truncate(addrof output, written)
+    ret move output
 ..
 
 # Replaces a file with the complete contents, creating it when absent.
@@ -42,7 +56,7 @@ pub readFile(path str) !$str:
 # @example
 #   try fs.writeFile(a, "output.txt", "complete")
 pub writeFile(path str, contents str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     mode := file.mode()
     mode = mode.write().create().truncate()
     f := try file.open(path, mode)
@@ -59,7 +73,7 @@ pub writeFile(path str, contents str) !void:
 # @example
 #   try fs.removeFile(a, "obsolete.tmp")
 pub removeFile(path str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     try impl_fs.removeFile(path)
 ..
 
@@ -72,7 +86,7 @@ pub removeFile(path str) !void:
 # @example
 #   try fs.walk(a, root, visitEntry)
 pub walk(root str, visit (str, bool) !void) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     try impl_fs.walk(root, visit)
 ..
 
@@ -141,7 +155,7 @@ pub Metadata.modified() i64:
 ..
 
 pub metadata(path str) !Metadata:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     native := try impl_fs.metadata(path, true)
     ret Metadata(
         kindValue=FileKind(value=native.kind),
@@ -152,7 +166,7 @@ pub metadata(path str) !Metadata:
 ..
 
 pub linkMetadata(path str) !Metadata:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     native := try impl_fs.metadata(path, false)
     ret Metadata(
         kindValue=FileKind(value=native.kind),
@@ -163,7 +177,7 @@ pub linkMetadata(path str) !Metadata:
 ..
 
 pub setPermissions(path str, permissions Permissions) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     try impl_fs.setPermissions(path, permissions.bits)
 ..
 
@@ -185,7 +199,7 @@ pub Dir(
 )
 
 pub openDir(path str) !$Dir:
-    a := ctx.procAlloc
+    a := ctx.alloc
     native := try impl_fs.openDir(path)
     ret Dir(native=move native)
 ..
@@ -234,7 +248,7 @@ pub WalkOptions(
 )
 
 walkEntriesInner(root str, options WalkOptions, visit (str, Metadata) !void) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     directory := try openDir(root)
     defer directory.close()
     loop directory.hasData():
@@ -258,7 +272,7 @@ walkEntriesInner(root str, options WalkOptions, visit (str, Metadata) !void) !vo
 ..
 
 pub walkWithOptions(root str, options WalkOptions, visit (str, Metadata) !void) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     if options.includeRoot:
         try visit(root, try linkMetadata(root))
     ..
@@ -266,17 +280,17 @@ pub walkWithOptions(root str, options WalkOptions, visit (str, Metadata) !void) 
 ..
 
 pub walkDefault(root str, visit (str, Metadata) !void) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     try walkWithOptions(root, WalkOptions(followLinks=false, includeRoot=false), visit)
 ..
 
 pub makeDir(path str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     try impl_fs.makeDir(path)
 ..
 
 pub makeDirs(path str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     existing Metadata, existingError error = metadata(path)
     if existingError.ok():
         if existing.kind().isDir():
@@ -293,12 +307,12 @@ pub makeDirs(path str) !void:
 ..
 
 pub removeDir(path str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     try impl_fs.removeDir(path)
 ..
 
 pub removeTree(root str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     info := try linkMetadata(root)
     if info.kind().isDir() == false:
         try removeFile(root)
@@ -309,7 +323,7 @@ pub removeTree(root str) !void:
 ..
 
 removeTreeContents(root str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     directory := try openDir(root)
     defer directory.close()
     loop directory.hasData():
@@ -324,38 +338,38 @@ removeTreeContents(root str) !void:
 ..
 
 pub rename(source str, destination str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     try impl_fs.rename(source, destination)
 ..
 
 pub replace(source str, destination str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     try impl_fs.replace(source, destination)
 ..
 
 pub copyFile(source str, destination str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     sourceInfo := try metadata(source)
     try impl_fs.copyFile(source, destination)
     try setPermissions(destination, sourceInfo.permissions())
 ..
 
 pub currentDir() !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try impl_fs.currentDir()
 ..
 
 pub setCurrentDir(path str) !void:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     try impl_fs.setCurrentDir(path)
 ..
 
 pub temporaryDir() !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try impl_fs.temporaryDir()
 ..
 
 pub canonicalize(path str) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try impl_fs.canonicalize(path)
 ..

@@ -3,10 +3,10 @@
 Percent encoding with explicit policies.
 
 ```magma
-component := try percent.encode(a, value, percent.URI_COMPONENT)
-segment := try percent.encode(a, value, percent.PATH_SEGMENT)
-form := try percent.encode(a, value, percent.FORM)
-bytes := try percent.decode(a, component)
+component := try percent.encode(value, percent.URI_COMPONENT)
+segment := try percent.encode(value, percent.PATH_SEGMENT)
+form := try percent.encode(value, percent.FORM)
+bytes := try percent.decode(component)
 ```
 
 `URI_COMPONENT` preserves only unreserved characters. `PATH_SEGMENT` also

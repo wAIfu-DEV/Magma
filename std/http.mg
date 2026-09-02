@@ -7,6 +7,7 @@ use "std:builder" builder
 use "std:cast" cast
 use "std:errors" errors
 use "std:future" future
+use "std:abort" abort
 use "std:memory" memory
 use "std:mutex" mutex
 use "std:reader" reader
@@ -110,10 +111,12 @@ pub Exchange(
 SendTask(
     client Client*
     request Request
+    external abort.Signal
+    hasExternal bool
 )
 
 pub new(options Options) !$Client:
-    a := ctx.procAlloc
+    a := ctx.alloc
     if options.ioTimeoutMs < 0 || options.maxResponseBytes == 0 || options.readBufferBytes == 0 || options.dns.maxResults > 16 || options.connectionCapacity == 0:
         throw errors.invalidArgument("invalid HTTP client limits")
     ..
@@ -153,7 +156,7 @@ findSchemeEnd(url str) u64:
 ..
 
 parseUrl(url str) !$ParsedUrl:
-    a := ctx.procAlloc
+    a := ctx.alloc
     n := url.countBytes()
     schemeEnd := findSchemeEnd(url)
     if schemeEnd == n || schemeEnd == 0:
@@ -213,14 +216,14 @@ parseUrl(url str) !$ParsedUrl:
 ..
 
 destr ParsedUrl.free() void:
-    a := ctx.procAlloc
+    a := ctx.alloc
     this.host.free(a)
     this.service.free(a)
     this.target.free(a)
 ..
 
 buildRequest(request Request, parsed ParsedUrl*) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     if request.method.countBytes() == 0:
         throw errors.invalidArgument("HTTP method is empty")
     ..
@@ -854,7 +857,7 @@ parseStatus(bytes u8*, count u64) !u16:
 ..
 
 decodeChunks(bytes u8*, start u64, count u64) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     # SAFETY: scanChunks validates framing within count; decodedBytes sizes the
     # destination exactly and the second pass copies only validated chunks.
     unsafe:
@@ -939,8 +942,22 @@ Client.send(request Request) !$Response:
     ret move response
 ..
 
-runSend(task SendTask*) !$Response:
-    ret try task.client.send(task.request)
+runSend(task SendTask*, signal abort.Signal) !$Response:
+    try signal.check()
+    if task.hasExternal: try task.external.check() ..
+    exchange := try task.client.start(task.request)
+    onerror exchange.close()
+    done bool = false
+    loop done == false:
+        try signal.check()
+        if task.hasExternal: try task.external.check() ..
+        pollMs := task.client.options.ioTimeoutMs
+        if pollMs > 25: pollMs = 25 ..
+        done = try exchange.poll(pollMs)
+    ..
+    response := try exchange.finish()
+    exchange.releaseFinished()
+    ret move response
 ..
 
 # Runs the polling state machine on the Async worker pool and returns an awaitable response.
@@ -948,8 +965,17 @@ Client.sendAsync(request Request) !$future.Future[Response]:
     if this.active == false:
         throw errors.invalidArgument("HTTP client is closed")
     ..
-    task := SendTask(client=this, request=request)
-    ret try future.new[Response, SendTask](ctx.exec, runSend, task)
+    task := SendTask(client=this, request=request, external=abort.Signal(state=none), hasExternal=false)
+    ret try future.newAbort[Response, SendTask](ctx.exec, runSend, task)
+..
+
+# Starts an asynchronous exchange that also observes a caller-owned signal.
+Client.sendAsyncAbort(request Request, signal abort.Signal) !$future.Future[Response]:
+    if this.active == false:
+        throw errors.invalidArgument("HTTP client is closed")
+    ..
+    task := SendTask(client=this, request=request, external=signal, hasExternal=true)
+    ret try future.newAbort[Response, SendTask](ctx.exec, runSend, task)
 ..
 
 destr Exchange.close() !void:

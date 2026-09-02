@@ -36,6 +36,7 @@ func TestRuntimeDefinitionsHaveInternalLinkage(t *testing.T) {
 	}
 	text := string(ir)
 	for _, name := range []string{
+		"magma.string.equal",
 		"magma.error.trace.capacity",
 		"magma.error.push",
 		"magma.error.trace",

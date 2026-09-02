@@ -90,7 +90,7 @@ pub subslice[T](in T[], start u64, end u64) !T[]:
 #   values := try slices.alloc[u64](16)
 #   slices.free(values)
 pub alloc[T](elemCount u64) !$T[]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     p T* = try a.allocT[T](elemCount)
     ret fromPtr(p, elemCount)
 ..
@@ -104,7 +104,7 @@ pub alloc[T](elemCount u64) !$T[]:
 # @example
 #   slices.free(values)
 pub free(s slice) void:
-    a := ctx.procAlloc
+    a := ctx.alloc
     p ptr = toPtr(s)
     a.free(p)
 ..

@@ -3,6 +3,8 @@ mod net_tls
 
 use "std:allocator" allocator
 use "std:net/socket" socket
+use "std:errors" errors
+use "std:slices" slices
 
 @platform("linux")
 use "std:linux/net/tls_impl" impl
@@ -35,7 +37,7 @@ pub newContext() !$Context:
 ..
 
 Context.open(transport socket.Socket*, host str) !$Session:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     if this.active == false:
         throw impl.closedContextError()
     ..
@@ -57,7 +59,13 @@ Session.send(bytes str) !u64:
 ..
 
 Session.recv(buffer u8[], count u64) !u64:
+    if count > slices.count(buffer):
+        throw errors.invalidArgument("receive count exceeds buffer length")
+    ..
     result := try impl.recv(this.native, buffer, count)
+    if result.count > count:
+        throw errors.failure("TLS received more bytes than requested")
+    ..
     this.want = result.want
     ret result.count
 ..

@@ -16,6 +16,7 @@ ext ext_unix_open  open(path u8*, flags c.int, mode c.int) c.int
 ext ext_unix_close close(fd c.int) c.int
 ext ext_unix_write write(fd c.int, buf ptr, count u64) i64
 ext ext_unix_read  read(fd c.int, buf ptr, count u64) i64
+ext ext_unix_pread pread(fd c.int, buf ptr, count u64, offset i64) i64
 ext ext_unix_lseek lseek(fd c.int, offset i64, whence c.int) i64
 
 # Magma globals are thread-local by default. These syscall result slots avoid
@@ -109,6 +110,19 @@ pub read(handle ptr, buff u8[], n u64) !u64:
    ret try readOnce(ptoi32(handle), slices.toPtr(buff), n)
 ..
 
+# Positional read that does not modify the shared file cursor.
+pub readAt(handle ptr, buff u8[], n u64, offset u64) !u64:
+   if slices.count(buff) < n:
+      throw errors.invalidArgument("read would overflow buffer")
+   ..
+   if n == 0: ret 0 ..
+   result i64 = ext_unix_pread(ptoi32(handle), slices.toPtr(buff), n, cast.utoi(offset))
+   if result < 0:
+      throw errors.failure("positional read failed")
+   ..
+   ret cast.itou(result)
+..
+
 # Returns a writer for standard output.
 # O(1).
 Console impl writer.Writer(fd u64)
@@ -175,7 +189,7 @@ pub closeFile(handle ptr) !void:
 # @param openMode desired open mode
 # @returns handle to the opened file
 pub openFile(path str, openMode fopm.OpenMode) !$ptr:
-    a := ctx.tempAlloc
+    a := ctx.alloc
     O_RDONLY i32 = 0
     O_WRONLY i32 = 1
     O_RDWR   i32 = 2

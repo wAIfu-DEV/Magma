@@ -113,3 +113,100 @@ func TestDidOpenPublishesCompilerWarnings(t *testing.T) {
 		t.Fatalf("compiler warning was not published: %s", got)
 	}
 }
+
+func TestImportedDiagnosticsArePublishedAndCleared(t *testing.T) {
+	directory := t.TempDir()
+	dependency := filepath.Join(directory, "dependency.mg")
+	broken := "mod dependency\npub run() void:\n    missing()\n..\n"
+	if err := os.WriteFile(dependency, []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "main.mg")
+	source := "mod main\nuse \"./dependency.mg\" dependency\nmain() void:\n    dependency.\n..\n"
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	uri := fileURI(path)
+	openParams, err := json.Marshal(map[string]any{"textDocument": map[string]any{
+		"uri": uri, "text": source, "version": 1,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	s := &server{in: bufio.NewReader(nil), out: &output, stdRoot: testStdRoot(), documents: map[string]*document{}}
+	if err := s.handle(message{Method: "textDocument/didOpen", Params: openParams}); err != nil {
+		t.Fatal(err)
+	}
+	dependencyURI := fileURI(dependency)
+	if got := output.String(); !strings.Contains(got, `"uri":"`+dependencyURI+`"`) || !strings.Contains(got, "unknown function") {
+		t.Fatalf("imported diagnostic was not published at its source URI: %s", got)
+	}
+
+	if err := os.WriteFile(dependency, []byte("mod dependency\npub run() void:\n..\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	changeParams, err := json.Marshal(map[string]any{
+		"textDocument":   map[string]any{"uri": uri, "version": 2},
+		"contentChanges": []map[string]any{{"text": source}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if err := s.handle(message{Method: "textDocument/didChange", Params: changeParams}); err != nil {
+		t.Fatal(err)
+	}
+	if got := output.String(); !strings.Contains(got, `"diagnostics":[],"uri":"`+dependencyURI+`"`) {
+		t.Fatalf("stale imported diagnostic was not cleared: %s", got)
+	}
+}
+
+func TestChangingOpenDependencyClearsImporterDiagnostic(t *testing.T) {
+	directory := t.TempDir()
+	dependency := filepath.Join(directory, "dependency.mg")
+	broken := "mod dependency\npub run() void:\n    missing()\n..\n"
+	if err := os.WriteFile(dependency, []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "main.mg")
+	source := "mod main\nuse \"./dependency.mg\" dependency\nmain() void:\n    dependency.run()\n..\n"
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	s := &server{in: bufio.NewReader(nil), out: &output, stdRoot: testStdRoot(), documents: map[string]*document{}}
+	open := func(uri, text string, version int) {
+		t.Helper()
+		params, err := json.Marshal(map[string]any{"textDocument": map[string]any{"uri": uri, "text": text, "version": version}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.handle(message{Method: "textDocument/didOpen", Params: params}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	open(fileURI(path), source, 1)
+	open(fileURI(dependency), broken, 1)
+	if !strings.Contains(output.String(), "unknown function") {
+		t.Fatalf("imported diagnostic was not published: %s", output.String())
+	}
+
+	fixed := "mod dependency\npub run() void:\n..\n"
+	changeParams, err := json.Marshal(map[string]any{
+		"textDocument":   map[string]any{"uri": fileURI(dependency), "version": 2},
+		"contentChanges": []map[string]any{{"text": fixed}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if err := s.handle(message{Method: "textDocument/didChange", Params: changeParams}); err != nil {
+		t.Fatal(err)
+	}
+	got := output.String()
+	if strings.Contains(got, "unknown function") || !strings.Contains(got, `"diagnostics":[],"uri":"`+fileURI(dependency)+`"`) {
+		t.Fatalf("stale imported diagnostic was not cleared after dependency edit: %s", got)
+	}
+}

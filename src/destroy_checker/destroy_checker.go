@@ -124,8 +124,7 @@ type analyzer struct {
 }
 
 const (
-	allocatorOriginCtxProc = -1
-	allocatorOriginCtxTemp = -2
+	allocatorOriginCtxAlloc = -1
 )
 
 func cloneFlow(in flow) flow {
@@ -283,6 +282,8 @@ func variableToken(variable *types.NodeExprVarDef) types.Token {
 
 func expressionToken(expr types.NodeExpr) types.Token {
 	switch node := expr.(type) {
+	case *types.NodeExprLit:
+		return node.Tk
 	case *types.NodeExprName:
 		return node.Tk
 	case *types.NodeExprMove:
@@ -443,12 +444,8 @@ func (a *analyzer) allocatorFactForExpr(out *flow, expr types.NodeExpr) (allocat
 		}
 		var result allocatorFact
 		for _, parameter := range a.allocatorReturns[node.AssociatedFnDef] {
-			if parameter == allocatorOriginCtxProc || parameter == allocatorOriginCtxTemp {
-				field := "procAlloc"
-				if parameter == allocatorOriginCtxTemp {
-					field = "tempAlloc"
-				}
-				if fact, ok := a.implicitContextAllocatorFact(out, field); ok {
+			if parameter == allocatorOriginCtxAlloc {
+				if fact, ok := a.implicitContextAllocatorFact(out, "alloc"); ok {
 					result = mergeAllocatorFacts(result, fact)
 				}
 				continue
@@ -566,7 +563,7 @@ func (a *analyzer) setContextAllocatorFields(out *flow, destination place.Place,
 	if definition == nil {
 		return
 	}
-	for argument, fieldName := range []string{"procAlloc", "tempAlloc"} {
+	for argument, fieldName := range []string{"alloc"} {
 		index, exists := definition.FieldNb[fieldName]
 		if !exists || !a.isAllocatorType(definition.Fields[fieldName]) {
 			continue
@@ -700,12 +697,8 @@ func (a *analyzer) provenanceForExpr(out *flow, expr types.NodeExpr) (pointerPro
 		if origins := a.allocationReturns[node.AssociatedFnDef]; len(origins) != 0 {
 			var result pointerProvenance
 			for _, parameter := range origins {
-				if parameter == allocatorOriginCtxProc || parameter == allocatorOriginCtxTemp {
-					field := "procAlloc"
-					if parameter == allocatorOriginCtxTemp {
-						field = "tempAlloc"
-					}
-					if allocator, ok := a.implicitContextAllocatorFact(out, field); ok {
+				if parameter == allocatorOriginCtxAlloc {
+					if allocator, ok := a.implicitContextAllocatorFact(out, "alloc"); ok {
 						result.unknown = result.unknown || allocator.unknown
 						for _, origin := range allocator.origins {
 							origin.allocation = node.Tk
@@ -1751,6 +1744,13 @@ func (a *analyzer) movePlace(out *flow, resolved place.Place, token types.Token)
 	a.checkLiveLoans(out, resolved, token, "move")
 	if len(resolved.Projections) == 0 {
 		if !a.tracked(out, resolved.Root) {
+			if a.unsafeDepth > 0 {
+				// An explicit move inside unsafe is an ownership assertion: the
+				// programmer promises that this borrowed or otherwise untracked
+				// value may be consumed exactly once. There is no local ownership
+				// state to update; the receiving ownership position assumes it.
+				return true
+			}
 			a.safetyError(token, fmt.Sprintf("cannot move borrowed or unowned value '%s'", variableName(resolved.Root)))
 			return false
 		}
@@ -3341,10 +3341,8 @@ func inferredAllocatorOrigins(expr types.NodeExpr, parameters map[*types.NodeExp
 				continue
 			}
 			switch projection.FieldOwner.FieldOrder[projection.FieldIndex] {
-			case "procAlloc":
-				return []int{allocatorOriginCtxProc}
-			case "tempAlloc":
-				return []int{allocatorOriginCtxTemp}
+			case "alloc":
+				return []int{allocatorOriginCtxAlloc}
 			}
 		}
 	}
@@ -3364,7 +3362,7 @@ func inferredAllocatorOrigins(expr types.NodeExpr, parameters map[*types.NodeExp
 	case *types.NodeExprCall:
 		var out []int
 		for _, parameter := range summaries[node.AssociatedFnDef] {
-			if parameter == allocatorOriginCtxProc || parameter == allocatorOriginCtxTemp {
+			if parameter == allocatorOriginCtxAlloc {
 				out = appendOrigin(out, parameter)
 				continue
 			}
@@ -3490,7 +3488,7 @@ func allocationExprOrigins(expr types.NodeExpr, parameters map[*types.NodeExprVa
 	}
 	var out []int
 	for _, parameter := range allocationSummaries[call.AssociatedFnDef] {
-		if parameter == allocatorOriginCtxProc || parameter == allocatorOriginCtxTemp {
+		if parameter == allocatorOriginCtxAlloc {
 			out = appendOrigin(out, parameter)
 			continue
 		}

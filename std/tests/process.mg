@@ -67,7 +67,7 @@ runSpawnTest() !void:
     asyncArgs[0] = "/d"
     asyncArgs[1] = "/c exit 11"
 
-    ctx = context.new(a, a, pool.executor())
+    ctx = context.new(a, pool.executor())
     execPending := try process.execAsync("cmd.exe", asyncArgs)
     if try execPending.await() != 11:
         try pool.close()
@@ -127,7 +127,7 @@ runSpawnTest() !void:
     asyncArgs[0] = "-c"
     asyncArgs[1] = "exit 11"
 
-    ctx = context.new(a, a, pool.executor())
+    ctx = context.new(a, pool.executor())
     execPending := try process.execAsync("sh", asyncArgs)
     if try execPending.await() != 11:
         try pool.close()

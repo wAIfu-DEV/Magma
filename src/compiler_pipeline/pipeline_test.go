@@ -59,6 +59,97 @@ func TestExplicitMovePassesFatalOwnershipStageAndLowers(t *testing.T) {
 	}
 }
 
+func TestUnsafeExplicitMoveMayClaimBorrowedValue(t *testing.T) {
+	validated := validateTestProgram(t, ownershipProgramPrefix+`forward(value Resource) void:
+    unsafe:
+        consume(move value)
+    ..
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatalf("unsafe borrowed move failed: %v", err)
+	}
+	if _, err := Lower(ready); err != nil {
+		t.Fatalf("lower unsafe borrowed move: %v", err)
+	}
+}
+
+func TestUnsafeExpressionMayClaimBorrowedValue(t *testing.T) {
+	validated := validateTestProgram(t, ownershipProgramPrefix+`forward(value Resource) void:
+    unsafe consume(move value)
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatalf("unsafe expression was rejected: %v", err)
+	}
+	if _, err := Lower(ready); err != nil {
+		t.Fatalf("lower unsafe expression: %v", err)
+	}
+}
+
+func TestBorrowedMoveStillRequiresUnsafe(t *testing.T) {
+	validated := validateTestProgram(t, ownershipProgramPrefix+`forward(value Resource) void:
+    consume(move value)
+..
+`)
+	_, err := CheckSafety(validated, false)
+	if err == nil || !strings.Contains(err.Error(), "cannot move borrowed or unowned value") {
+		t.Fatalf("error = %v, want borrowed move diagnostic", err)
+	}
+}
+
+func TestUnsafeBorrowedTransferStillRequiresExplicitMove(t *testing.T) {
+	validated := validateTestProgram(t, ownershipProgramPrefix+`forward(value Resource) void:
+    unsafe:
+        consume(value)
+    ..
+..
+`)
+	_, err := CheckSafety(validated, false)
+	if err == nil || !strings.Contains(err.Error(), "cannot be consumed (consuming argument)") {
+		t.Fatalf("error = %v, want explicit move diagnostic", err)
+	}
+}
+
+func TestBorrowedLiteralConsumptionReportsLiteralSource(t *testing.T) {
+	parsed, path := testProgram(t, ownershipProgramPrefix+`forward(value $str) void:
+..
+main() void:
+    forward("borrowed")
+..
+`)
+	specialized, err := Specialize(*parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked, err := Link(specialized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typed, err := CheckTypes(linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validated, err := ValidateLowering(typed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = CheckSafety(validated, false)
+	if err == nil {
+		t.Fatal("expected borrowed literal consumption to fail")
+	}
+	diagnostics := comp_err.Diagnostics(err)
+	if len(diagnostics) != 1 {
+		t.Fatalf("diagnostics = %#v", diagnostics)
+	}
+	diagnostic := diagnostics[0]
+	if diagnostic.FilePath != path || diagnostic.Token.Pos.Line != 14 || diagnostic.Token.Pos.Col != 14 || diagnostic.Token.Repr != "borrowed" {
+		t.Fatalf("diagnostic provenance = %#v", diagnostic)
+	}
+}
+
 func TestLiteralTrueConditionalMakesOwnedInitializationDefinite(t *testing.T) {
 	validated := validateTestProgram(t, ownershipProgramPrefix+`main() void:
     value $Resource
@@ -268,8 +359,8 @@ use "std:executor" executor
 bad() !$u8*:
     scratch := try scratch_alloc.new(1024)
     a := scratch.allocator()
-    ctx = context.new(a, a, executor.null())
-    ret try ctx.procAlloc.alloc(8)
+    ctx = context.new(a, executor.null())
+    ret try ctx.alloc.alloc(8)
 ..
 main() void:
 ..
@@ -407,6 +498,33 @@ main() void:
 	comp_err.Fprint(&rendered, err)
 	if text := rendered.String(); strings.Contains(text, "fatal error") || !strings.Contains(text, path+":l7:") {
 		t.Fatalf("opaque specialization rendering:\n%s", text)
+	}
+}
+
+func TestUnknownGenericTypeArgumentFailsAtCallSiteDuringSpecialization(t *testing.T) {
+	parsed, path := testProgram(t, `mod main
+Box[T](value T)
+make[T](value T) Box[T]:
+    ret Box[T](value=value)
+..
+main() void:
+    value := make[Missing](1)
+..
+`)
+	_, err := Specialize(*parsed)
+	if err == nil {
+		t.Fatal("expected unknown generic type argument to fail specialization")
+	}
+	diagnostics := comp_err.Diagnostics(err)
+	if len(diagnostics) != 1 {
+		t.Fatalf("diagnostics = %#v", diagnostics)
+	}
+	diagnostic := diagnostics[0]
+	if diagnostic.FilePath != path || diagnostic.Token.Pos.Line != 7 || diagnostic.Token.Repr != "Missing" || diagnostic.Stage != "specialization" {
+		t.Fatalf("diagnostic provenance = %#v", diagnostic)
+	}
+	if !strings.Contains(diagnostic.ShortDesc, "unknown type 'Missing'") {
+		t.Fatalf("diagnostic = %q", diagnostic.ShortDesc)
 	}
 }
 

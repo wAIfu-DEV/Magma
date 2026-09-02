@@ -4,6 +4,9 @@ use "std:file" file
 use "std:heap" heap
 use "std:errors" errors
 use "std:fs" fs
+use "std:context" context
+use "std:thread_pool" thread_pool
+use "std:strings" strings
 pub main() !void:
     a allocator.Allocator = heap.allocator()
     output := try file.open("std_checked_test_file.tmp", file.mode().read().write().create().truncate())
@@ -19,6 +22,18 @@ pub main() !void:
         try output.close()
         throw errors.failure("file read changed")
     ..
+    pool := try thread_pool.new(a, 1, 1, 8, 1)
+    ctx = context.new(a, pool.executor())
+    pending := try output.readAsync(0, 7)
+    asyncContents := try pending.await()
+    if strings.compare(asyncContents, "checked") == false:
+        asyncContents.free(a)
+        try pool.close()
+        try output.close()
+        throw errors.failure("positional asynchronous read changed")
+    ..
+    asyncContents.free(a)
+    try pool.close()
     try output.close()
 
     # Write access alone must preserve the existing file and must not imply

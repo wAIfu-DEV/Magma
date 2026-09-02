@@ -34,7 +34,7 @@ var keywordHovers = map[string]string{
 	"llvm":     "`llvm` inserts an inline LLVM fragment. Its validity remains the programmer's responsibility.",
 	"noctx":    "`noctx` removes the hidden context argument from a function or function-pointer type.",
 	"bounded":  "`bounded condition:` checks one or more range predicates on entry and establishes reusable proofs for its lexical block.",
-	"unsafe":   "`unsafe:` localizes operations whose validity the compiler cannot prove. It does not disable unrelated type checks.",
+	"unsafe":   "`unsafe:` localizes operations whose validity the compiler cannot prove, including explicit ownership claims with `move`. It does not disable unrelated type checks.",
 	"move":     "`move value` transfers ownership from a named place and prevents subsequent use until reinitialization.",
 	"this":     "`this` is the implicit pointer-like receiver available inside a method body.",
 }

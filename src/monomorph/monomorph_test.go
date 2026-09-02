@@ -137,7 +137,7 @@ func TestInferredLocalTracksCompositeFieldInitializer(test *testing.T) {
 		"Ctx": {
 			Module: "context",
 			Name:   "Ctx",
-			Fields: map[string]*t.NodeType{"procAlloc": allocatorType},
+			Fields: map[string]*t.NodeType{"alloc": allocatorType},
 		},
 	}}
 	allocatorGlobal := &t.NodeGlobal{StructDefs: map[string]*t.StructDef{
@@ -153,7 +153,7 @@ func TestInferredLocalTracksCompositeFieldInitializer(test *testing.T) {
 	declaration := &t.NodeExprVarDefAssign{
 		VarDef: &t.NodeExprVarDef{Name: &t.NodeNameSingle{Name: "a"}},
 		AssignExpr: &t.NodeExprName{Name: &t.NodeNameComposite{
-			Parts: []string{"ctx", "procAlloc"},
+			Parts: []string{"ctx", "alloc"},
 		}},
 	}
 

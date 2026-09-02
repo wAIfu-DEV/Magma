@@ -2,7 +2,7 @@ mod vector
 
 use "std:slices" slices
 
-Vec2[T](
+pub Vec2[T](
     i0 T
     i1 T
 )
@@ -11,7 +11,7 @@ Vec2[T].view() T[]:
     ret slices.fromPtr(addrof this.i0, 2)
 ..
 
-Vec3[T](
+pub Vec3[T](
     i0 T
     i1 T
     i2 T
@@ -21,7 +21,7 @@ Vec3[T].view() T[]:
     ret slices.fromPtr(addrof this.i0, 3)
 ..
 
-Vec4[T](
+pub Vec4[T](
     i0 T
     i1 T
     i2 T

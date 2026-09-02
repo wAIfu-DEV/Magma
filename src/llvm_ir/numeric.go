@@ -786,6 +786,20 @@ func irExprBinCmp(ctx *IrCtx, binaryExpr *t.NodeExprBinary) (SsaName, error) {
 		return SsaName{}, e
 	}
 
+	if isStrType(binaryExpr.Left.GetInferredType()) && isStrType(binaryExpr.Right.GetInferredType()) {
+		if binaryExpr.Operator != t.KwCmpEq && binaryExpr.Operator != t.KwCmpNeq {
+			return SsaName{}, fmt.Errorf("unsupported string comparison operator")
+		}
+		equalSsa := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = call i1 @magma.string.equal(%%type.str %s, %%type.str %s)\n", equalSsa.Repr, lhsSsa.Repr, rhsSsa.Repr)
+		if binaryExpr.Operator == t.KwCmpEq {
+			return equalSsa, nil
+		}
+		resultSsa := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = xor i1 %s, true\n", resultSsa.Repr, equalSsa.Repr)
+		return resultSsa, nil
+	}
+
 	cmpType := binaryExpr.Left.GetInferredType()
 
 	if isNumberType(binaryExpr.Left.GetInferredType()) && isNumberType(binaryExpr.Right.GetInferredType()) {

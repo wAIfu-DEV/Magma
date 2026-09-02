@@ -20,27 +20,40 @@ freeString(a allocator.Allocator, value $str) void:
 ..
 
 name16(name str) !$u16[]:
-    ret try utf8.utf8To16NT(heap.allocator(), name)
+    ret try utf8.utf8To16NT(name)
 ..
 
 pub get(name str) !$str:
-    temporary := ctx.tempAlloc
+    temporary := ctx.alloc
     wide := try name16(name)
     defer heap.allocator().free(slices.toPtr(wide))
-    needed := ext_GetEnvironmentVariableW(slices.toPtr(wide), none, 0)
-    if needed == 0:
-        if ext_GetLastError() == 203:
+    local := array u16[256]
+    written := ext_GetEnvironmentVariableW(slices.toPtr(wide), slices.toPtr(local), 256)
+    if written == 0:
+        code := ext_GetLastError()
+        if code == 203:
             throw errors.notFound("environment variable was not found")
         ..
-        throw errors.native(ext_GetLastError(), "GetEnvironmentVariableW failed")
+        if code != 0:
+            throw errors.native(code, "GetEnvironmentVariableW failed")
+        ..
+        ret try utf16.toUtf8(ctx.alloc, slices.fromPtr(slices.toPtr(local), 0))
     ..
-    buffer := try temporary.allocT[u16](needed)
-    written := ext_GetEnvironmentVariableW(slices.toPtr(wide), buffer, needed)
-    if written == 0 && ext_GetLastError() != 0:
+    if written < 256:
+        ret try utf16.toUtf8(ctx.alloc, slices.fromPtr(slices.toPtr(local), written))
+    ..
+    buffer := try temporary.allocT[u16](written)
+    needed := written
+    written = ext_GetEnvironmentVariableW(slices.toPtr(wide), buffer, needed)
+    if written == 0:
+        code := ext_GetLastError()
         temporary.free(buffer)
-        throw errors.native(ext_GetLastError(), "GetEnvironmentVariableW failed")
+        throw errors.native(code, "GetEnvironmentVariableW failed")
+    elif written >= needed:
+        temporary.free(buffer)
+        throw errors.failure("environment variable changed while it was read")
     ..
-    result str, conversionError error = utf16.toUtf8(ctx.procAlloc, slices.fromPtr(buffer, written))
+    result str, conversionError error = utf16.toUtf8(ctx.alloc, slices.fromPtr(buffer, written))
     temporary.free(buffer)
     if conversionError.nok():
         throw conversionError
@@ -59,7 +72,7 @@ pub has(name str) bool:
 pub set(name str, value str) !void:
     n := try name16(name)
     defer heap.allocator().free(slices.toPtr(n))
-    v := try utf8.utf8To16NT(heap.allocator(), value)
+    v := try utf8.utf8To16NT(value)
     defer heap.allocator().free(slices.toPtr(v))
     if ext_SetEnvironmentVariableW(slices.toPtr(n), slices.toPtr(v)) == 0:
         throw errors.native(ext_GetLastError(), "SetEnvironmentVariableW failed")
@@ -75,7 +88,7 @@ pub unset(name str) !void:
 ..
 
 pub list() !$list.List[str]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     block := ext_GetEnvironmentStringsW()
     if block == none: throw errors.native(ext_GetLastError(), "GetEnvironmentStringsW failed") ..
     entries := try list.new[str](a, freeString)

@@ -6,7 +6,8 @@
 document := try json.parse(source)
 defer document.free()
 
-try document.setBool("processed", true)
+object := try document.asObject()
+try object.setBool("processed", true)
 name := try document.get("name").asString()
 try document.write(output)
 ```
@@ -41,25 +42,24 @@ Object views provide `set`, `get`, `take`, `delete`, and `count`, plus
 `setString`, `setInt`, and `setBool` conveniences. Array views provide `append`,
 `get`, and `count`.
 
-The common operations are also forwarded by `Value`:
+Generic object `get` and `set` are also forwarded by `Value`. Convenience
+setters remain on the `Object` view:
 
 ```magma
 document := try json.object()
 defer document.free()
 
-try document.setString("name", "Magma")
-try document.setInt("version", 2)
+object := try document.asObject()
+try object.setString("name", "Magma")
+try object.setInt("version", 2)
 name := try document.get("name").asString()
 
 items := try json.array()
 defer items.free()
-try items.append(json.numberInt(10))
-second := try items.at(0).asInt()
+array := try items.asArray()
+try array.append(json.numberInt(10))
+second := try array.get(0).asInt()
 ```
-
-`Value.at` is the array counterpart of object-key `Value.get`; Magma does not
-overload a single method name for string and integer arguments. One `try`
-handles every throwing call in a chained expression.
 
 ## Parsing
 

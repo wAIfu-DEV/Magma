@@ -83,7 +83,7 @@ pub decodeTo(text str, output u8[]) !u64:
 ..
 
 encodeAllocated(input u8[], uppercase bool) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     size := try encodedSize(slices.count(input))
     result $str = try strings.alloc(size)
     onerror result.free(a)
@@ -93,17 +93,17 @@ encodeAllocated(input u8[], uppercase bool) !$str:
 ..
 
 pub encode(input u8[]) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try encodeAllocated(input, false)
 ..
 
 pub encodeUpper(input u8[]) !$str:
-    a := ctx.procAlloc
+    a := ctx.alloc
     ret try encodeAllocated(input, true)
 ..
 
 pub decode(text str) !$u8[]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     size := try decodedSize(text)
     if size == 0:
         ret slices.fromPtr(none, 0)

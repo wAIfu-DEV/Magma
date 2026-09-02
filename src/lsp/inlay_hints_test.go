@@ -62,7 +62,7 @@ func TestInlayHintCollapsesCompilerBindingPhases(t *testing.T) {
 
 func TestFormatAbsoluteTypeDoesNotDuplicateModifiers(t *testing.T) {
 	valueType := &types.NodeType{KindNode: &types.NodeTypeAbsolute{AbsoluteName: "main_id.Value", DisplayName: "Value"}, Throws: true, Owned: true}
-	if got, want := formatType(valueType), "!owned Value"; got != want {
+	if got, want := formatType(valueType), "!$Value"; got != want {
 		t.Fatalf("formatType() = %q, want %q", got, want)
 	}
 }

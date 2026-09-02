@@ -307,6 +307,17 @@ U64.exchange(value u64) u64:
     ..
 ..
 
+# Replaces expected with desired when the current value equals expected and
+# returns the value observed before the operation.
+U64.compareExchange(expected u64, desired u64) u64:
+    # SAFETY: this audited implementation injects the required low-level IR.
+    unsafe:
+        llvm "  %result = cmpxchg ptr %this, i64 %expected, i64 %desired seq_cst seq_cst, align 8\n"
+        llvm "  %previous = extractvalue { i64, i1 } %result, 0\n"
+        llvm "  ret i64 %previous\n"
+    ..
+..
+
 # Reads atomically without synchronizing other memory accesses.
 # @complexity O(1)
 # @warning Use only when atomicity is needed but cross-variable ordering is not.

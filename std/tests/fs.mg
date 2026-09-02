@@ -21,6 +21,11 @@ pub main() !void:
     if strings.compare(contents, "checked fs") == false:
         throw errors.failure("filesystem behavior changed")
     ..
+    range := try fs.readRange("std_checked_test_fs.tmp", 2, 5)
+    defer range.free(a)
+    if strings.compare(range, "ecked") == false:
+        throw errors.failure("positional filesystem read changed")
+    ..
     try fs.walk("std", visit)
     if found == false:
         throw errors.failure("directory walk did not find std/fs.mg")

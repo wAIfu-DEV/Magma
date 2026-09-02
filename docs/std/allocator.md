@@ -32,7 +32,7 @@ not the interface variable. Moving the implementation preserves that identity;
 copying or losing an interface value does not extend it. Storage from local
 scratch, arena, or custom allocator implementations therefore cannot escape
 their owners. The same rule applies when an allocator flows through implicit
-`ctx.procAlloc` or `ctx.tempAlloc`.
+`ctx.alloc`.
 
 ## Methods
 

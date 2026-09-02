@@ -7,6 +7,7 @@ use "std:strings" strings
 use "std:errors" errors
 use "std:c" c
 use "std:list" list
+use "std:cast" cast
 
 ext ext_getenv getenv(name u8*) u8*
 ext ext_setenv setenv(name u8*, value u8*, overwrite c.int) c.int
@@ -31,11 +32,35 @@ environmentAt(environment u8**, index u64) u8*:
     ..
 ..
 
+findValue(name str) u8*:
+    if name.countBytes() == 0: ret none ..
+    # SAFETY: each environ entry is a null-terminated NAME=VALUE string and
+    # the scan stops at the terminating environment pointer.
+    unsafe:
+        environment := environmentPointer()
+        index u64 = 0
+        entry := environmentAt(environment, index)
+        loop entry != none:
+            matched bool = true
+            for i u64 = 0 to name.countBytes():
+                if entry[i] == 0 || entry[i] != strings.byteAt(name, i):
+                    matched = false
+                    break
+                ..
+            ..
+            if matched && entry[name.countBytes()] == 61:
+                ret cast.utop(cast.ptou(entry) + name.countBytes() + 1)
+            ..
+            index = index + 1
+            entry = environmentAt(environment, index)
+        ..
+        ret none
+    ..
+..
+
 pub get(name str) !$str:
-    a := ctx.procAlloc
-    native := try strings.toCstr(name)
-    defer heap.allocator().free(native)
-    value := ext_getenv(native)
+    a := ctx.alloc
+    value := findValue(name)
     if value == none:
         throw errors.notFound("environment variable was not found")
     ..
@@ -43,10 +68,7 @@ pub get(name str) !$str:
 ..
 
 pub has(name str) bool:
-    native u8*, e error = strings.toCstr(name)
-    if e.nok(): ret false ..
-    defer heap.allocator().free(native)
-    ret ext_getenv(native) != none
+    ret findValue(name) != none
 ..
 
 pub set(name str, value str) !void:
@@ -68,7 +90,7 @@ pub unset(name str) !void:
 ..
 
 pub list() !$list.List[str]:
-    a := ctx.procAlloc
+    a := ctx.alloc
     entries := try list.new[str](a, freeString)
     onerror entries.free()
     environment := environmentPointer()
