@@ -7,7 +7,7 @@ Do not copy a mutex after it is shared or locked. Call `free() !void` only while
 it is unlocked and after all users have stopped. `locker()` returns a non-owning
 `std/locker.Locker`; the mutex must outlive that view.
 
-On Windows, mutex state uses an atomic unlocked/locked/contended word. The
-uncontended lock, unlock, creation, and destruction paths make no system call;
-contended threads park with `WaitOnAddress` and are resumed with
-`WakeByAddressSingle`. This backend requires Windows 8 or newer.
+On Windows, `Mutex` uses an exclusive SRW lock. Its zero-initialized,
+pointer-sized state requires no separate initialization or destruction call.
+Locking and unlocking use `AcquireSRWLockExclusive` and
+`ReleaseSRWLockExclusive`; Windows handles spinning and parking internally.

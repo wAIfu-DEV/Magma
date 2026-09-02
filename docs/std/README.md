@@ -41,6 +41,7 @@ written as `!T`, and `$T` marks ownership transfer.
 ## Concurrency and execution
 
 [`atomic`](atomic.md), [`mutex`](mutex.md), [`spinlock`](spinlock.md),
+[`adaptive_spinlock`](adaptive_spinlock.md),
 [`locker`](locker.md), [`wake`](wake.md), [`thread`](thread.md),
 [`thread_pool`](thread_pool.md), [`executor`](executor.md), [`context`](context.md),
 [`future`](future.md), and the [`async`](async.md) cross-module guide.
