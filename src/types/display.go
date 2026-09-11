@@ -3,8 +3,8 @@ package types
 import "strings"
 
 // SourceName converts an internal qualified identifier to source spelling.
-// Package names carry a random ten-character suffix, and specializations carry
-// a __g__ suffix; neither is part of the Magma language.
+// Package names carry a stable ten-character identity suffix, and
+// specializations carry a __g__ suffix; neither is part of the Magma language.
 func SourceName(name string) string {
 	parts := strings.Split(name, ".")
 	if len(parts) > 1 {

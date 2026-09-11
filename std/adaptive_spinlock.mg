@@ -1,45 +1,34 @@
 mod adaptive_spinlock
-# Windows adaptive TTAS lock optimized for very short critical sections.
+# Adaptive TTAS lock optimized for very short critical sections.
 
-use "std:atomic" atomic
-use "std:locker" locker
+use "std:atomic" as atomic
+use "std:locker" as locker
+use "std:llvm" as ll
+
 @platform("windows")
-use "std:win/thread_impl" thread_impl
+use "std:win/thread_impl" as thread_impl
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/thread_impl" thread_impl
+use "std:unix/thread_impl" as thread_impl
 
 pub AdaptiveSpinLock impl locker.Locker(
     state atomic.U32
 )
 
 compareExchange(value atomic.U32*, expected u32, desired u32) u32:
-    unsafe:
-        llvm "  %result = cmpxchg ptr %value, i32 %expected, i32 %desired acquire monotonic, align 4\n"
-        llvm "  %observed = extractvalue { i32, i1 } %result, 0\n"
-        llvm "  ret i32 %observed\n"
-    ..
+    ret ll.atomicCompareExchangeAcquireU32(value, expected, desired)
 ..
 
 loadRelaxed(value atomic.U32*) u32:
-    unsafe:
-        llvm "  %observed = load atomic i32, ptr %value monotonic, align 4\n"
-        llvm "  ret i32 %observed\n"
-    ..
+    ret ll.atomicLoadRelaxedU32(value)
 ..
 
 storeRelease(value atomic.U32*, desired u32) void:
-    unsafe:
-        llvm "  store atomic i32 %desired, ptr %value release, align 4\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreReleaseU32(value, desired)
 ..
 
 cpuRelax() void:
-    unsafe:
-        llvm "  call void asm sideeffect \"pause\", \"~{memory}\"()\n"
-        llvm "  ret void\n"
-    ..
+    ll.pause()
 ..
 
 lockSlow(value AdaptiveSpinLock*) void:

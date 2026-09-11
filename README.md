@@ -1,8 +1,9 @@
 # Magma
 
 Magma is a statically typed systems programming language. Its compiler is
-written in Go, lowers whole programs to LLVM IR, and invokes Clang to optimize
-that IR and produce LLVM, object, or executable output.
+written in Go. Native builds cache per-module LLVM bitcode, link it into a
+whole program for optimization, and emit an object or executable. The older
+whole-program textual LLVM IR backend remains available but is deprecated.
 
 The language includes pointers, manual allocation, external symbols, inline
 LLVM, generics, methods, deferred statements, and typed error propagation. The
@@ -18,7 +19,7 @@ Magma to `PATH` with the included script.
 ```magma
 mod main
 
-use "std:io" io
+use "std:io" as io
 
 pub main() void:
     io.printLn("Hello, World!")
@@ -27,7 +28,7 @@ pub main() void:
 
 Magma uses `:` to open a block and `..` to close it. Declarations place the name
 before the type, `:=` infers the type of a local variable, and `!void` indicates
-that a function can return an error. `use "std:io" io` is the canonical form
+that a function can return an error. `use "std:io" as io` is the canonical form
 for standard-library imports: `std:` resolves from the standard library shipped
 beside the compiler, the `.mg` extension is optional, and the final `io` is the
 local namespace alias.
@@ -65,7 +66,7 @@ if err.nok():
 statements in a scope run in last-in, first-out order.
 
 ```magma
-use "std:file" file
+use "std:file" as file
 
 f := try file.open(path, file.mode().read())
 defer f.close()
@@ -126,7 +127,7 @@ and the [`future` reference](docs/std/future.md).
 ### Platform and C interoperability
 
 `@platform(...)` conditionally includes the next top-level declaration or
-import. Target-dependent C integer aliases are available from `std:c`; `ext`
+import by target OS or architecture. Target-dependent C integer aliases are available from `std:c`; `ext`
 declares imported native functions, `link` records libraries required for
 executable emission, and `bundle` copies runtime files beside a completed
 executable. See [Magma Syntax](docs/SYNTAX.md) for their exact forms and ABI
@@ -156,9 +157,9 @@ module documentation records any narrower platform support.
 Import installed modules with their canonical `std:` paths:
 
 ```magma
-use "std:heap" heap
-use "std:array" array
-use "std:fmt" fmt
+use "std:heap" as heap
+use "std:array" as array
+use "std:fmt" as fmt
 ```
 
 ## Install and Run
@@ -229,8 +230,18 @@ import-path completion, safety quick fixes, and semantic highlighting. Use
 
 ## Building from Source
 
-Source development requires [Go](https://go.dev/) 1.24.6 or later and a usable
-LLVM Clang installation. From a complete development checkout:
+Source development requires [Go](https://go.dev/) 1.24.6 or later and LLVM 22
+development libraries as well as Clang. On Linux, build the default go-llvm
+backend with:
+
+```sh
+go build -tags "llvm_object llvm22" -o Magma .
+./Magma --std ./std --out hello samples/hello_world.mg
+./hello
+```
+
+The Windows backend is not yet part of the go-llvm rollout. Its current build
+remains:
 
 ```powershell
 go build

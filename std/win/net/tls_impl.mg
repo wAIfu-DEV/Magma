@@ -3,15 +3,15 @@ mod net_tls_impl_win
 
 link "secur32"
 
-use "std:allocator" allocator
-use "std:cast" cast
-use "std:errors" errors
-use "std:heap" heap
-use "std:memory" memory
-use "std:net/socket" socket
-use "std:slices" slices
-use "std:strings" strings
-use "std:utf8" utf8
+use "std:allocator" as allocator
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:memory" as memory
+use "std:net/socket" as socket
+use "std:slices" as slices
+use "std:strings" as strings
+use "std:utf8" as utf8
 
 Handle(lower ptr, upper ptr)
 Timestamp(low u32, high i32)

@@ -1,8 +1,8 @@
 mod main
 
-use "std:scratch_alloc" scratch_alloc
-use "std:errors" errors
-use "std:heap" heap
+use "std:scratch_alloc" as scratch_alloc
+use "std:errors" as errors
+use "std:heap" as heap
 
 pub main() !void:
     scratch := try scratch_alloc.new(1024)

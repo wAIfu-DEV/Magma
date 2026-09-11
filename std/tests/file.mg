@@ -1,12 +1,12 @@
 mod main
-use "std:allocator" allocator
-use "std:file" file
-use "std:heap" heap
-use "std:errors" errors
-use "std:fs" fs
-use "std:context" context
-use "std:thread_pool" thread_pool
-use "std:strings" strings
+use "std:allocator" as allocator
+use "std:file" as file
+use "std:heap" as heap
+use "std:errors" as errors
+use "std:fs" as fs
+use "std:context" as context
+use "std:thread_pool" as thread_pool
+use "std:strings" as strings
 pub main() !void:
     a allocator.Allocator = heap.allocator()
     output := try file.open("std_checked_test_file.tmp", file.mode().read().write().create().truncate())
@@ -27,12 +27,12 @@ pub main() !void:
     pending := try output.readAsync(0, 7)
     asyncContents := try pending.await()
     if strings.compare(asyncContents, "checked") == false:
-        asyncContents.free(a)
+        asyncContents.free()
         try pool.close()
         try output.close()
         throw errors.failure("positional asynchronous read changed")
     ..
-    asyncContents.free(a)
+    asyncContents.free()
     try pool.close()
     try output.close()
 

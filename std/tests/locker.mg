@@ -1,11 +1,11 @@
 mod main
 
-use "std:atomic" atomic
-use "std:errors" errors
-use "std:locker" locker
-use "std:mutex" mutex
-use "std:spinlock" spinlock
-use "std:thread" thread
+use "std:atomic" as atomic
+use "std:errors" as errors
+use "std:locker" as locker
+use "std:mutex" as mutex
+use "std:spinlock" as spinlock
+use "std:thread" as thread
 
 const workerCount u64 = 4
 const incrementsPerWorker u64 = 10000

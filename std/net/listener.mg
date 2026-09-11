@@ -1,13 +1,13 @@
 mod net_listener
 # Callback-driven TCP listener with synchronous and worker-pool execution modes.
 
-use "std:allocator" allocator
-use "std:context" context
-use "std:errors" errors
-use "std:net/address" address
-use "std:net/event_loop" event_loop
-use "std:net/poll" poll
-use "std:net/tcp" tcp
+use "std:allocator" as allocator
+use "std:context" as context
+use "std:errors" as errors
+use "std:net/address" as address
+use "std:net/event_loop" as event_loop
+use "std:net/poll" as poll
+use "std:net/tcp" as tcp
 
 pub alias AcceptCallback = (ptr, $tcp.Stream) !void
 

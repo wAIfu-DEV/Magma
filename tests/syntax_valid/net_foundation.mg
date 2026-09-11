@@ -1,14 +1,14 @@
 mod main
 
-use "std:net/address" address
-use "std:net/socket" socket
-use "std:net/tcp" tcp
-use "std:net/udp" udp
-use "std:net/dns" dns
-use "std:heap" heap
-use "std:net/poll" poll
-use "std:net/event_loop" event_loop
-use "std:net/listener" listener
+use "std:net/address" as address
+use "std:net/socket" as socket
+use "std:net/tcp" as tcp
+use "std:net/udp" as udp
+use "std:net/dns" as dns
+use "std:heap" as heap
+use "std:net/poll" as poll
+use "std:net/event_loop" as event_loop
+use "std:net/listener" as listener
 
 main() void:
     endpoint := address.loopbackIpv4(8080)

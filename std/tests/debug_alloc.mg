@@ -1,8 +1,8 @@
 mod main
 
-use "std:debug_alloc" debug_alloc
-use "std:errors" errors
-use "std:heap" heap
+use "std:debug_alloc" as debug_alloc
+use "std:errors" as errors
+use "std:heap" as heap
 
 pub main() !void:
     options := debug_alloc.Options(initialCapacity=1, canGrow=true, rejectUntrackedFree=true)

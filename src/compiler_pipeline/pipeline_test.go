@@ -59,6 +59,34 @@ func TestExplicitMovePassesFatalOwnershipStageAndLowers(t *testing.T) {
 	}
 }
 
+func TestUnionConstructionAndMatchLower(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+union Value(
+    Null
+    String(value str)
+)
+Value.String.length() u64:
+    ret this.value.countBytes()
+..
+main() void:
+	empty := Value.Null()
+	value := Value.String(value="hello")
+    match value as selected:
+    case Value.String:
+		bytes := selected.length()
+    else:
+    ..
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Lower(ready); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUnsafeExplicitMoveMayClaimBorrowedValue(t *testing.T) {
 	validated := validateTestProgram(t, ownershipProgramPrefix+`forward(value Resource) void:
     unsafe:
@@ -72,6 +100,46 @@ func TestUnsafeExplicitMoveMayClaimBorrowedValue(t *testing.T) {
 	}
 	if _, err := Lower(ready); err != nil {
 		t.Fatalf("lower unsafe borrowed move: %v", err)
+	}
+}
+
+func TestCapturelessLambdaLowers(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+apply(callback (u64) u64, value u64) u64:
+    ret callback(value)
+..
+main() void:
+    result := apply(fn(value u64) u64:
+        ret value + 1
+    .., 41)
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Lower(ready); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLambdaCannotCaptureEnclosingLocal(t *testing.T) {
+	parsed, _ := testProgram(t, `mod main
+main() void:
+    offset := 1
+    callback := fn(value u64) u64:
+        ret value + offset
+    ..
+    callback(1)
+..
+`)
+	specialized, err := Specialize(*parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Link(specialized)
+	if err == nil || !strings.Contains(err.Error(), "offset") || !strings.Contains(err.Error(), "captureless lambda") {
+		t.Fatalf("capture diagnostic = %v", err)
 	}
 }
 
@@ -182,7 +250,7 @@ func TestLiteralTrueElifIsExhaustiveForOwnedInitialization(t *testing.T) {
 
 func TestInferredCallResultResolvesGenericMember(t *testing.T) {
 	validateTestProgram(t, `mod main
-use "std:heap" heap
+use "std:heap" as heap
 main() !void:
     a := heap.allocator()
     block := try a.allocT[u64](1)
@@ -237,7 +305,7 @@ main() void:
 
 func TestNoCtxInitializationAcrossAllBranchesAllowsContextfulCall(t *testing.T) {
 	validateTestProgram(t, `mod main
-use "std:context" context
+use "std:context" as context
 noctx seed() context.Ctx:
     value context.Ctx
     ret value
@@ -309,8 +377,8 @@ main() void:
 
 func TestLocalAllocatorStorageCannotEscape(t *testing.T) {
 	validated := validateTestProgram(t, `mod main
-use "std:scratch_alloc" scratch_alloc
-use "std:heap" heap
+use "std:scratch_alloc" as scratch_alloc
+use "std:heap" as heap
 bad() !$u8*:
     scratch := try scratch_alloc.new(1024)
     a := scratch.allocator()
@@ -327,9 +395,9 @@ main() void:
 
 func TestAllocatorRegionPropagatesThroughHelpers(t *testing.T) {
 	validated := validateTestProgram(t, `mod main
-use "std:allocator" allocator
-use "std:scratch_alloc" scratch_alloc
-use "std:heap" heap
+use "std:allocator" as allocator
+use "std:scratch_alloc" as scratch_alloc
+use "std:heap" as heap
 allocate(a allocator.Allocator) !$u8*:
     ret try a.alloc(8)
 ..
@@ -352,10 +420,10 @@ main() void:
 
 func TestReboundContextPreservesAllocatorRegion(t *testing.T) {
 	validated := validateTestProgram(t, `mod main
-use "std:scratch_alloc" scratch_alloc
-use "std:heap" heap
-use "std:context" context
-use "std:executor" executor
+use "std:scratch_alloc" as scratch_alloc
+use "std:heap" as heap
+use "std:context" as context
+use "std:executor" as executor
 bad() !$u8*:
     scratch := try scratch_alloc.new(1024)
     a := scratch.allocator()
@@ -373,8 +441,8 @@ main() void:
 
 func TestMismatchedAllocatorReleaseIsRejected(t *testing.T) {
 	validated := validateTestProgram(t, `mod main
-use "std:scratch_alloc" scratch_alloc
-use "std:heap" heap
+use "std:scratch_alloc" as scratch_alloc
+use "std:heap" as heap
 main() !void:
     left := try scratch_alloc.new(1024)
     right := try scratch_alloc.new(1024)
@@ -394,8 +462,8 @@ main() !void:
 
 func TestAllocatorImplementationCanMoveAfterInterfaceLastUse(t *testing.T) {
 	validated := validateTestProgram(t, `mod main
-use "std:scratch_alloc" scratch_alloc
-use "std:heap" heap
+use "std:scratch_alloc" as scratch_alloc
+use "std:heap" as heap
 main() !void:
     first := try scratch_alloc.new(1024)
     a := first.allocator()
@@ -413,8 +481,8 @@ main() !void:
 
 func TestLiveAllocatorInterfacePreventsImplementationRelocation(t *testing.T) {
 	validated := validateTestProgram(t, `mod main
-use "std:scratch_alloc" scratch_alloc
-use "std:heap" heap
+use "std:scratch_alloc" as scratch_alloc
+use "std:heap" as heap
 main() !void:
     first := try scratch_alloc.new(1024)
     a := first.allocator()
@@ -431,9 +499,9 @@ main() !void:
 
 func TestOwnedAsyncLikeResultRetainsAllocatorOwner(t *testing.T) {
 	validated := validateTestProgram(t, `mod main
-use "std:allocator" allocator
-use "std:scratch_alloc" scratch_alloc
-use "std:heap" heap
+use "std:allocator" as allocator
+use "std:scratch_alloc" as scratch_alloc
+use "std:heap" as heap
 Handle(a allocator.Allocator)
 destr Handle.close() void:
 ..
@@ -456,8 +524,8 @@ main() void:
 
 func TestScratchResetRemainsOutsideAllocationEpochModel(t *testing.T) {
 	validated := validateTestProgram(t, `mod main
-use "std:scratch_alloc" scratch_alloc
-use "std:heap" heap
+use "std:scratch_alloc" as scratch_alloc
+use "std:heap" as heap
 main() !void:
     scratch := try scratch_alloc.new(1024)
     a := scratch.allocator()
@@ -530,13 +598,13 @@ main() void:
 
 func TestOwnedGlobalInitializationEscapesLocalOwnershipFlow(t *testing.T) {
 	validated := validateTestProgram(t, ownershipProgramPrefix+`initialized bool
-global Resource
+resourceGlobal Resource
 get() Resource:
     if initialized == false:
         initialized = true
-        global = makeResource()
+        resourceGlobal = makeResource()
     ..
-    ret global
+    ret resourceGlobal
 ..
 `)
 	if _, err := CheckSafety(validated, false); err != nil {
@@ -610,8 +678,9 @@ read(values u64[], i u64) u64:
 
 func TestUnsafeBlockIsRequiredForUnknownPointerDereference(t *testing.T) {
 	validated := validateTestProgram(t, `mod main
+use "std:cast" as cast
 read(address ptr) u64:
-    value u64* = address
+    value u64* = cast.reinterpret[u64](address)
     ret *value
 ..
 `)
@@ -958,7 +1027,7 @@ main() u64:
 
 func TestCanonicalLoopOverSavedSliceCountCarriesRangeProof(t *testing.T) {
 	validated := validateTestProgram(t, `mod main
-use "std:slices" slices
+use "std:slices" as slices
 sum(values u64[]) u64:
     count := slices.count(values)
     total u64 = 0
@@ -1007,8 +1076,8 @@ main() str:
 
 func TestSafeContainerViewRetainsReceiverRangeIdentity(t *testing.T) {
 	validated := validateTestProgram(t, `mod main
-use "std:allocator" allocator
-use "std:array" array
+use "std:allocator" as allocator
+use "std:array" as array
 Item(value u64)
 readLast(a allocator.Allocator, items array.Array[Item]) !u64:
     count := items.count()
@@ -1025,7 +1094,7 @@ readLast(a allocator.Allocator, items array.Array[Item]) !u64:
 
 func TestShortCircuitExactCountGuardsRightHandSubscript(t *testing.T) {
 	validated := validateTestProgram(t, `mod main
-use "std:slices" slices
+use "std:slices" as slices
 valid(values u8[]) bool:
     ret slices.count(values) == 3 && values[2] == 7
 ..
@@ -1057,7 +1126,7 @@ readUnchecked(values u8[], index u64) u8:
 
 func TestThrowErrorRetainsOkContinuationForSafetyAnalysis(t *testing.T) {
 	validated := validateTestProgram(t, `mod main
-use "std:errors" errors
+use "std:errors" as errors
 writeAfterPropagation(value u64*, failure error) !void:
     throw failure
     *value = 7
@@ -1108,7 +1177,7 @@ dangling() u8[]:
 
 func TestCheckedSubslicePreservesSourceProvenance(t *testing.T) {
 	validated := validateTestProgram(t, `mod main
-use "std:slices" slices
+use "std:slices" as slices
 dangling() !u8[]:
     values := array u8[4]
     ret try slices.subslice[u8](values, 0, 2)
@@ -1119,7 +1188,7 @@ dangling() !u8[]:
 	}
 
 	validated = validateTestProgram(t, `mod main
-use "std:slices" slices
+use "std:slices" as slices
 prefix(values u8[]) !u8[]:
     ret try slices.subslice[u8](values, 0, values.count())
 ..
@@ -1412,6 +1481,60 @@ func testProgram(t *testing.T, source string) (*ParsedProgram, string) {
 	return &parsed, path
 }
 
+func TestParseBootstrapsCoreTypeDefinitions(t *testing.T) {
+	parsed, _ := testProgram(t, "mod main\nmain() void:\n..\n")
+	state := parsed.State()
+	for _, role := range []types.CoreTypeRole{types.CoreTypeString, types.CoreTypeError, types.CoreTypeSlice} {
+		definition := state.CoreTypes[role]
+		if definition == nil {
+			t.Fatalf("core role %q was not registered from std/core.mg", role.Name())
+		}
+		if definition.CoreRole != role {
+			t.Fatalf("core definition %q carries role %v, want %v", definition.Name, definition.CoreRole, role)
+		}
+	}
+}
+
+func TestParseAssignsStableSharedModuleIdentity(t *testing.T) {
+	dir := t.TempDir()
+	mainPath := filepath.Join(dir, "main.mg")
+	libraryPath := filepath.Join(dir, "library.mg")
+	if err := os.WriteFile(mainPath, []byte("mod main\nuse \"library.mg\" as first\nmain() void:\n..\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(libraryPath, []byte("mod duplicate\npub value() u64:\n    ret 1\n..\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdRoot, err := filepath.Abs(filepath.Join("..", "..", "std"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compile := func() *types.SharedState {
+		state, err := shared.MakeShared(dir, stdRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Parse(state, mainPath); err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	first := compile()
+	second := compile()
+	for _, path := range []string{mainPath, libraryPath} {
+		left, right := first.Files[path], second.Files[path]
+		if left == nil || right == nil {
+			t.Fatalf("module %q was not loaded", path)
+		}
+		if left.ModuleID == "" || left.ModuleID != right.ModuleID || left.PackageName != right.PackageName {
+			t.Fatalf("unstable identity for %q: (%q, %q) != (%q, %q)", path, left.ModuleID, left.PackageName, right.ModuleID, right.PackageName)
+		}
+	}
+	if got := first.Files[mainPath].GlNode.ImportAlias["first"]; got != first.Files[libraryPath].PackageName {
+		t.Fatalf("alias resolved to %q, want stable backing package %q", got, first.Files[libraryPath].PackageName)
+	}
+}
+
 func TestStagesPreserveProgramIdentityAndLower(t *testing.T) {
 	parsed, path := testProgram(t, "mod main\nmain() void:\n..\n")
 	if err := RequireMainModule(*parsed, path); err != nil {
@@ -1449,11 +1572,58 @@ func TestStagesPreserveProgramIdentityAndLower(t *testing.T) {
 	}
 }
 
+func TestTypedLLVMExpressionLowersThroughTextBackend(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+castPointer(value ptr) u64:
+    unsafe:
+        ret @llvm("ptrtoint", value, u64)
+    ..
+..
+main() void:
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ir, err := Lower(ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(ir), "ptrtoint ptr") {
+		t.Fatalf("typed LLVM expression was not lowered:\n%s", ir)
+	}
+}
+
+func TestTypedLLVMExpressionRejectsInvalidSignature(t *testing.T) {
+	parsed, _ := testProgram(t, `mod main
+bad(value u64) u64:
+    unsafe:
+        ret @llvm("ptrtoint", value, u64)
+    ..
+..
+main() void:
+..
+`)
+	specialized, err := Specialize(*parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked, err := Link(specialized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = CheckTypes(linked)
+	if err == nil || !strings.Contains(err.Error(), "requires a pointer operand") {
+		t.Fatalf("error = %v, want typed ptrtoint signature diagnostic", err)
+	}
+}
+
 func TestPublicUseReexportLowers(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{
 		"heap.mg":    "mod heap\npub allocator() u64:\n    ret 7\n..\n",
-		"library.mg": "mod library\npub use \"heap.mg\" heap\n",
+		"library.mg": "mod library\npub use \"heap.mg\" as heap\n",
 		"main.mg":    "mod main\nuse \"library.mg\" lib\nmain() void:\n    value u64 = lib.heap.allocator()\n..\n",
 	}
 	for name, source := range files {
@@ -1496,6 +1666,62 @@ func TestPublicUseReexportLowers(t *testing.T) {
 	}
 	if _, err := Lower(ready); err != nil {
 		t.Fatalf("lower: %v", err)
+	}
+}
+
+func TestCyclicModulesLowerAsOneProgram(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"alpha.mg": "mod alpha\nuse \"beta.mg\" as beta\npub Alpha(peer beta.Beta*)\npub alpha() u64:\n    ret beta.beta()\n..\n",
+		"beta.mg":  "mod beta\nuse \"alpha.mg\" as alpha\npub Beta(peer alpha.Alpha*)\npub beta() u64:\n    ret 7\n..\n",
+		"main.mg":  "mod main\nuse \"alpha.mg\" as alpha\nmain() void:\n    value u64 = alpha.alpha()\n..\n",
+	}
+	for name, source := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stdRoot, err := filepath.Abs(filepath.Join("..", "..", "std"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := shared.MakeShared(dir, stdRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse(state, filepath.Join(dir, "main.mg"))
+	if err != nil {
+		t.Fatalf("parse cyclic modules: %v", err)
+	}
+	specialized, err := Specialize(parsed)
+	if err != nil {
+		t.Fatalf("specialize cyclic modules: %v", err)
+	}
+	linked, err := Link(specialized)
+	if err != nil {
+		t.Fatalf("link cyclic modules: %v", err)
+	}
+	typed, err := CheckTypes(linked)
+	if err != nil {
+		t.Fatalf("type-check cyclic modules: %v", err)
+	}
+	validated, err := ValidateLowering(typed)
+	if err != nil {
+		t.Fatalf("validate cyclic modules: %v", err)
+	}
+	ready, err := CheckSafety(validated, true)
+	if err != nil {
+		t.Fatalf("safety-check cyclic modules: %v", err)
+	}
+	ir, err := Lower(ready)
+	if err != nil {
+		t.Fatalf("lower cyclic modules: %v", err)
+	}
+	text := string(ir)
+	for _, symbol := range []string{".alpha(", ".beta(", ".main("} {
+		if !strings.Contains(text, symbol) {
+			t.Fatalf("single-program IR does not contain %q", symbol)
+		}
 	}
 }
 

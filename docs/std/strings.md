@@ -5,7 +5,7 @@
 ```magma
 a := ctx.alloc
 owned := try strings.copy("magma")
-defer owned.free(a)
+defer owned.free()
 bytes := owned.countBytes() # 5
 same := strings.compare(owned, "magma")
 ```
@@ -26,7 +26,8 @@ Byte-level string, pointer, and C-string utilities. Magma `str` values are byte 
   length exceeds the current length.
 - `pub toLower(s) !$str` and `toUpper(s) !$str` return owned ASCII-case
   conversions; non-ASCII bytes are unchanged.
-- Owned strings are released with the intrinsic `s.free(a)` destructor.
+- Owned strings retain their originating allocator and are released with the
+  intrinsic `s.free()` destructor.
 - `pub compare(a str, b str) bool` tests byte-for-byte equality.
 - `findByte(s, value) !u64` and `find(s, needle) !u64` return the first byte
   index or `outOfBounds`.

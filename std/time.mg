@@ -1,13 +1,13 @@
 mod time
 # Monotonic timing, wall-clock timestamps, and duration conversion helpers.
 
-use "std:cast" cast
+use "std:cast" as cast
 
 @platform("windows")
-use "std:win/time_impl" impl_time
+use "std:win/time_impl" as impl_time
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/time_impl" impl_time
+use "std:unix/time_impl" as impl_time
 
 # Reads the platform's monotonic high-resolution clock. Use this value only for
 # measuring durations; it has no relationship to calendar time.

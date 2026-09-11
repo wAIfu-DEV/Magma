@@ -1,13 +1,13 @@
 mod mutex
 # Portable blocking mutual exclusion implementing the Locker interface.
 
-use "std:locker" locker
+use "std:locker" as locker
 
 @platform("windows")
-use "std:win/mutex_impl" impl_mutex
+use "std:win/mutex_impl" as impl_mutex
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/mutex_impl" impl_mutex
+use "std:unix/mutex_impl" as impl_mutex
 
 # Owned native mutex providing blocking mutual exclusion between threads.
 # @warning Do not copy a Mutex after it has been shared or locked.

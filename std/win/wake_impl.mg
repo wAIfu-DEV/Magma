@@ -2,10 +2,10 @@ mod wake_impl_win
 # Windows wait-and-notify backend used by the portable wake module.
 
 
-use "std:win/types" win
-use "std:cast" cast
-use "std:errors" errors
-use "std:atomic" atomic
+use "std:win/types" as win
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:atomic" as atomic
 
 const condition u8 = 0
 const infinite u32 = 0xFFFFFFFF

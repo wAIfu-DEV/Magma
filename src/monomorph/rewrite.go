@@ -45,6 +45,7 @@ func (m *monoCtx) rewriteTypeWithValidation(module string, gl *t.NodeGlobal, tp 
 						tp.KindNode = &t.NodeTypeAbsolute{
 							AbsoluteName: targetModule + "." + baseName,
 							DisplayName:  displayName,
+							CoreRole:     definition.CoreRole,
 						}
 						return nil
 					}
@@ -328,6 +329,16 @@ func (m *monoCtx) rewriteExpr(module string, gl *t.NodeGlobal, expr t.NodeExpr, 
 			return e
 		}
 		return m.rewriteExpr(module, gl, n.Expr, env)
+	case *t.NodeExprLlvm:
+		if e := m.rewriteType(module, gl, n.ResultType); e != nil {
+			return e
+		}
+		for _, arg := range n.Args {
+			if e := m.rewriteExpr(module, gl, arg, env); e != nil {
+				return e
+			}
+		}
+		return nil
 	case *t.NodeExprDestructureAssign:
 		if e := m.rewriteType(module, gl, n.ValueDef.Type); e != nil {
 			return e

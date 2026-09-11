@@ -1,6 +1,6 @@
 mod vector
 
-use "std:slices" slices
+use "std:slices" as slices
 
 pub Vec2[T](
     i0 T

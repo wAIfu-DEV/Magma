@@ -1,7 +1,7 @@
 mod main
 
-use "std:atomic" atomic
-use "std:errors" errors
+use "std:atomic" as atomic
+use "std:errors" as errors
 
 pub main() !void:
     byte := atomic.newU8(10)

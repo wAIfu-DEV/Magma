@@ -1,20 +1,19 @@
 mod main
-use "std:errors" errors
-use "std:sort" sort
-compare(a u64, b u64) i64:
-    if a < b:
-        ret -1
-    elif a > b:
-        ret 1
-    ..
-    ret 0
-..
+use "std:errors" as errors
+use "std:sort" as sort
 pub main() !void:
     values := array u64[3]
     values[0] = 3
     values[1] = 1
     values[2] = 2
-    sort.insertion[u64](values, compare)
+    sort.insertion[u64](values, fn(a u64, b u64) i64:
+        if a < b:
+            ret -1
+        elif a > b:
+            ret 1
+        ..
+        ret 0
+    ..)
     if values[0] != 1 || values[1] != 2 || values[2] != 3:
         throw errors.failure("sort behavior changed")
     ..

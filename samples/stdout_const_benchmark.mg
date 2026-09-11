@@ -1,7 +1,7 @@
 mod main
 
-use "../std/io.mg"   io
-use "../std/time.mg" time
+use "../std/io.mg"   as io
+use "../std/time.mg" as time
 
 const ITERATIONS u64 = 200000
 const ROUNDS u64 = 8

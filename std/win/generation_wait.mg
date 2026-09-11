@@ -2,9 +2,10 @@ mod generation_wait_win
 # Windows generation-counter wait backend used by synchronization APIs.
 
 
-use "std:win/types" win
-use "std:cast" cast
-use "std:errors" errors
+use "std:win/types" as win
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:llvm" as ll
 
 link "synchronization"
 
@@ -24,19 +25,11 @@ pub new() !$Wait:
 ..
 
 pub observe(generation u32*) u32:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %value = load atomic i32, ptr %generation acquire, align 4\n"
-        llvm "  ret i32 %value\n"
-    ..
+    ret ll.atomicLoadAcquireU32(generation)
 ..
 
 advance(generation u32*) void:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw add ptr %generation, i32 1 release, align 4\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicFetchAddReleaseU32(generation, 1)
 ..
 
 pub signal(generation u32*) void:

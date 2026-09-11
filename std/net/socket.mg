@@ -1,18 +1,18 @@
 mod net_socket
 # Owned portable stream and datagram sockets.
 
-use "std:net/address" address
-use "std:errors" errors
-use "std:reader" reader
-use "std:writer" writer
-use "std:duplex" duplex
-use "std:slices" slices
+use "std:net/address" as address
+use "std:errors" as errors
+use "std:reader" as reader
+use "std:writer" as writer
+use "std:duplex" as duplex
+use "std:slices" as slices
 
 @platform("windows")
-use "std:win/net/socket_impl" impl
+use "std:win/net/socket_impl" as impl
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/net/socket_impl" impl
+use "std:unix/net/socket_impl" as impl
 
 pub const TYPE_STREAM u8 = 1
 pub const TYPE_DATAGRAM u8 = 2

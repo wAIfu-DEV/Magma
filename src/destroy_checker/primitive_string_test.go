@@ -60,10 +60,10 @@ func TestOwnedPrimitiveStringCanBeDestroyedByMethod(t *testing.T) {
 	}
 	allocatorPath := filepath.Clean(filepath.Join(filepath.Dir(testFile), "..", "..", "std", "allocator.mg"))
 	diagnostics := checkSource(t, `mod main
-use "`+filepath.ToSlash(allocatorPath)+`" alc
+use "`+filepath.ToSlash(allocatorPath)+`" as alc
 
 release(value $str, allocator alc.Allocator) void:
-    value.free(allocator)
+    value.free()
 ..
 `)
 	if len(diagnostics) != 0 {
@@ -115,6 +115,118 @@ borrowed() void:
 `)
 	if len(diagnostics) != 0 {
 		t.Fatalf("diagnostics = %+v, want no obligation for borrowed string literal", diagnostics)
+	}
+}
+
+func TestAdjacentDereferencedFieldDestroyThenReplaceIsProven(t *testing.T) {
+	diagnostics := checkSource(t, `mod main
+
+Resource(value u64)
+destr Resource.free() void: ..
+
+Holder(value $Resource)
+Holder.replace(next $Resource) void:
+    this.value.free()
+    this.value = move next
+..
+`)
+	if len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %+v, want adjacent destroy-then-replace to be proven", diagnostics)
+	}
+}
+
+func TestAdjacentDereferencedFieldDestroyThenThrowingReplaceIsRejected(t *testing.T) {
+	diagnostics := checkSource(t, `mod main
+
+Resource(value u64)
+destr Resource.free() void: ..
+
+makeResource() !$Resource:
+    ret Resource(value=1)
+..
+
+Holder(value $Resource)
+Holder.replace() !void:
+    this.value.free()
+    this.value = try makeResource()
+..
+`)
+	if len(diagnostics) != 1 || !strings.Contains(diagnostics[0].Message, "replacement may throw after the previous value has been destroyed") {
+		t.Fatalf("diagnostics = %+v, want throwing replacement rejection", diagnostics)
+	}
+}
+
+func TestAdjacentDereferencedFieldDestroyThenNestedThrowingReplaceIsRejected(t *testing.T) {
+	diagnostics := checkSource(t, `mod main
+
+Resource(value u64)
+destr Resource.free() void: ..
+
+makeValue() !u64:
+    ret 1
+..
+
+Holder(value $Resource)
+Holder.replace() !void:
+    this.value.free()
+    this.value = Resource(value=try makeValue())
+..
+`)
+	if len(diagnostics) != 1 || !strings.Contains(diagnostics[0].Message, "replacement may throw after the previous value has been destroyed") {
+		t.Fatalf("diagnostics = %+v, want nested throwing replacement rejection", diagnostics)
+	}
+}
+
+func TestDereferencedFieldDestroyThenNonAdjacentReplaceIsRejected(t *testing.T) {
+	diagnostics := checkSource(t, `mod main
+
+Resource(value u64)
+destr Resource.free() void: ..
+
+Holder(value $Resource)
+Holder.replace(next $Resource) void:
+    this.value.free()
+    next.value = next.value
+    this.value = move next
+..
+`)
+	if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "cannot move or destroy ownership place") {
+		t.Fatalf("diagnostics = %+v, want non-adjacent replacement rejection", diagnostics)
+	}
+}
+
+func TestDereferencedDestroyThenDifferentFieldReplaceIsRejected(t *testing.T) {
+	diagnostics := checkSource(t, `mod main
+
+Resource(value u64)
+destr Resource.free() void: ..
+
+Holder(left $Resource, right $Resource)
+Holder.replace(next $Resource) void:
+    this.left.free()
+    this.right = move next
+..
+`)
+	if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "cannot move or destroy ownership place") {
+		t.Fatalf("diagnostics = %+v, want different-field replacement rejection", diagnostics)
+	}
+}
+
+func TestDereferencedMoveThenReplaceIsNotTreatedAsDestroyReplace(t *testing.T) {
+	diagnostics := checkSource(t, `mod main
+
+Resource(value u64)
+destr Resource.free() void: ..
+
+Holder(value $Resource)
+Holder.replace(next $Resource) void:
+    old := move this.value
+    this.value = move next
+    old.free()
+..
+`)
+	if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "cannot move or destroy ownership place") {
+		t.Fatalf("diagnostics = %+v, want dereferenced move rejection", diagnostics)
 	}
 }
 

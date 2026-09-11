@@ -1,12 +1,12 @@
 mod main
 
-use "../std/allocator.mg" allocator
-use "../std/cpu.mg" cpu
-use "../std/errors.mg" errors
-use "../std/heap.mg" heap
-use "../std/io.mg" io
-use "../std/thread_pool.mg" thread_pool
-use "../std/time.mg" time
+use "../std/allocator.mg" as allocator
+use "../std/cpu.mg" as cpu
+use "../std/errors.mg" as errors
+use "../std/heap.mg" as heap
+use "../std/io.mg" as io
+use "../std/thread_pool.mg" as thread_pool
+use "../std/time.mg" as time
 
 TASKS u64 = 1000000
 ROUNDS u64 = 5

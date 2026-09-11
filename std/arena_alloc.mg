@@ -1,12 +1,12 @@
 mod arena_alloc
 # Fast bump allocation for groups of values that share a lifetime.
 
-use "std:allocator" allocator
-use "std:cast" cast
-use "std:errors" errors
-use "std:memory" memory
-use "std:slices" slices
-use "std:checked" checked
+use "std:allocator" as allocator
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:memory" as memory
+use "std:slices" as slices
+use "std:checked" as checked
 
 const DEFAULT_CAPACITY u64 = 65536
 const ALIGNMENT u64 = 16
@@ -45,7 +45,7 @@ arenaAlloc(raw ptr, byteCount u64) !u8*:
     header.size = byteCount
     header.previousOffset = arena.offset
     arena.offset = dataOffset + byteCount
-    ret cast.utop(cast.ptou(arena.bytes) + dataOffset)
+    ret cast.reinterpret[u8](cast.utop(cast.ptou(arena.bytes) + dataOffset))
 ..
 
 arenaRealloc(raw ptr, block u8*, byteCount u64) !u8*:
@@ -93,12 +93,12 @@ Arena.alloc(byteCount u64) !$u8*:
     ret try arenaAlloc(this, byteCount)
 ..
 
-Arena.realloc(block u8*, byteCount u64) !$u8*:
-    ret try arenaRealloc(this, block, byteCount)
+Arena.realloc(block ptr, byteCount u64) !$u8*:
+    ret try arenaRealloc(this, cast.reinterpret[u8](block), byteCount)
 ..
 
-Arena.free(block u8*) void:
-    arenaFree(this, block)
+Arena.free(block ptr) void:
+    arenaFree(this, cast.reinterpret[u8](block))
 ..
 
 # Creates an arena with owned storage of capacity bytes.
@@ -125,7 +125,7 @@ pub fromBuffer(buffer u8[]) !Arena:
     ..
     ret Arena(
         backing=allocator.null(),
-        bytes=cast.utop(address + padding),
+        bytes=cast.reinterpret[u8](cast.utop(address + padding)),
         capacityValue=buffer.count() - padding,
         offset=0,
         ownsBytes=false,

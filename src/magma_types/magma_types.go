@@ -1,6 +1,7 @@
 package magmatypes
 
 import (
+	t "Magma/src/types"
 	"io"
 )
 
@@ -56,21 +57,15 @@ var BasicTypes = map[string]string{
 	"f32":  "float",
 	"f64":  "double",
 	"f128": "fp128",
+}
 
-	"error": "%type.error",
-	"str":   "%type.str",
-	"slice": "%type.slice",
+func init() {
+	for _, role := range []t.CoreTypeRole{t.CoreTypeString, t.CoreTypeError, t.CoreTypeSlice} {
+		BasicTypes[role.Name()] = role.LLVMName()
+	}
 }
 
 func WriteIrBasicTypes(b io.StringWriter) {
-	// Error is two machine words on 64-bit targets. Trace handles and message
-	// lengths are deliberately bounded so the complete value remains 16 bytes.
-	b.WriteString("%type.error = type { ptr, i32, i16, i16 }\n")
-	b.WriteString("%type.error.site = type { ptr, ptr, i32, i32 }\n")
-	b.WriteString("%type.error.trace.node = type { i32, i16, ptr }\n")
-	b.WriteString("%type.error.trace.shard = type { i64, i8, [55 x i8] }\n")
-	b.WriteString("%type.error.trace.snapshot = type { ptr, i16, i1 }\n")
-	b.WriteString("%type.str = type { ptr, i64 }\n")
-	b.WriteString("%type.slice = type { ptr, i64 }\n")
 	b.WriteString("!9000 = !{!\"branch_weights\", i32 1, i32 2000}\n")
+	b.WriteString("!9001 = !{!\"branch_weights\", i32 2000, i32 1}\n")
 }

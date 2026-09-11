@@ -30,7 +30,7 @@ func checkContextExpr(state *contextInitState, expr t.NodeExpr, assignmentTarget
 		return nil
 	}
 	switch n := expr.(type) {
-	case *t.NodeExprVoid, *t.NodeExprLit, *t.NodeExprSizeof, *t.NodeExprVarDef, *t.NodeExprDestructor:
+	case *t.NodeExprVoid, *t.NodeExprLit, *t.NodeExprEmbed, *t.NodeExprSizeof, *t.NodeExprVarDef, *t.NodeExprDestructor:
 		return nil
 	case *t.NodeExprName:
 		if !assignmentTarget && implicitContextName(n) && !state.initialized {
@@ -113,6 +113,13 @@ func checkContextExpr(state *contextInitState, expr t.NodeExpr, assignmentTarget
 		return checkContextExpr(state, n.Expr, false)
 	case *t.NodeExprMove:
 		return checkContextExpr(state, n.Expr, false)
+	case *t.NodeExprLlvm:
+		for _, arg := range n.Args {
+			if err := checkContextExpr(state, arg, false); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	return nil
 }

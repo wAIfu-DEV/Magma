@@ -42,6 +42,25 @@ func TestCopyBundles(t *testing.T) {
 	}
 }
 
+func TestWriteEmbeddedAssetSourceUsesC23EmbedAndHandlesEmptyFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "assets.c")
+	assets := []embeddedAsset{
+		{Path: "/tmp/binary payload.bin", Symbol: "magma_embed_binary", Size: 12},
+		{Path: "/tmp/empty.bin", Symbol: "magma_embed_empty", Size: 0},
+	}
+	if err := writeEmbeddedAssetSource(path, assets); err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	if !strings.Contains(text, "#embed \"/tmp/binary payload.bin\"") || !strings.Contains(text, "const unsigned char magma_embed_empty[1] = {0}") {
+		t.Fatalf("unexpected generated source:\n%s", text)
+	}
+}
+
 func TestCopyBundlesRejectsOutputNameCollision(t *testing.T) {
 	root := t.TempDir()
 	first := filepath.Join(root, "first", "shared.dll")
@@ -114,6 +133,29 @@ func TestTimingsOption(t *testing.T) {
 	}
 	if !opts.timings {
 		t.Fatal("--timings was not retained")
+	}
+}
+
+func TestIncrementalOptionIsParsedWithoutChangingBackendDefaults(t *testing.T) {
+	opts, err := parseArgs([]string{"--incremental", "input.mg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.incremental {
+		t.Fatal("--incremental was not retained")
+	}
+	if opts.emit != "exe" {
+		t.Fatalf("incremental option changed defaults: backend=%q emit=%q", opts.backend, opts.emit)
+	}
+}
+
+func TestTextualBackendIsNonIncrementalByDefault(t *testing.T) {
+	textual, err := parseArgs([]string{"--backend", "textual", "input.mg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if textual.backend != "textual" || textual.incremental {
+		t.Fatalf("deprecated textual pipeline inherited incremental mode: %#v", textual)
 	}
 }
 

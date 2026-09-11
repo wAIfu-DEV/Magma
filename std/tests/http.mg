@@ -1,9 +1,9 @@
 mod main
 
-use "std:http" http
-use "std:slices" slices
-use "std:heap" heap
-use "std:errors" errors
+use "std:http" as http
+use "std:slices" as slices
+use "std:heap" as heap
+use "std:errors" as errors
 
 pub main() !void:
     options := http.defaultOptions()

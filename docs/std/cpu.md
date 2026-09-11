@@ -5,7 +5,7 @@ process. It always returns at least 1, including when the operating system
 cannot provide a count, so it can be used directly as a default worker count.
 
 ```magma
-use "std/cpu.mg" cpu
+use "std/cpu.mg" as cpu
 
 workers u64 = cpu.coreCount()
 ```

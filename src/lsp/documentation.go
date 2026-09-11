@@ -125,6 +125,32 @@ func buildDocIndex(state *types.SharedState) *docIndex {
 					index.completionKinds[file.PackageName+"\x00"+name] = 21
 					index.addExpressionSymbol(file.PackageName, completionItem{Label: name, Kind: 21, Detail: detail, Documentation: markdownContent(index.hoverSymbols[file.PackageName+"\x00"+name])})
 				}
+			case *types.NodeUnionDef:
+				if node.Def == nil {
+					continue
+				}
+				name := node.Def.Name
+				text := index.add(file, name, node.Tk.Pos.Line, node, byLine)
+				index.addHover(file.PackageName, name, joinHover(code("union "+name), text))
+				index.completionVisible[file.PackageName+"\x00"+name] = node.Def.IsPublic
+				index.completionKinds[file.PackageName+"\x00"+name] = 13
+				for _, variant := range node.Def.Variants {
+					key := file.PackageName + "\x00" + name + "." + variant.Name
+					fields := make([]string, 0, len(variant.Fields))
+					for _, field := range variant.Fields {
+						fields = append(fields, field.Name+" "+formatType(field.TypeNode))
+					}
+					index.hoverSymbols[key] = code(name + "." + variant.Name + "(" + strings.Join(fields, ", ") + ")")
+					index.completionVisible[key] = true
+					index.completionKinds[key] = 20
+					for _, field := range variant.Fields {
+						fieldKey := file.PackageName + "\x00" + name + "." + variant.Name + "." + field.Name
+						index.hoverSymbols[fieldKey] = code(field.Name + " " + formatType(field.TypeNode))
+						index.completionVisible[fieldKey] = true
+						index.completionKinds[fieldKey] = 5
+						index.memberTypes[fieldKey] = field.TypeNode
+					}
+				}
 			case *types.NodeStructDef:
 				name := flattenName(node.Class.NameNode)
 				text := index.add(file, name, nameLine(node.Class.NameNode), node, byLine)

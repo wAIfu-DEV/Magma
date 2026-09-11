@@ -1,9 +1,9 @@
 mod main
 
-use "../std/heap.mg" heap
-use "../std/io.mg" io
-use "../std/strconv.mg" strconv
-use "../std/strings.mg" strings
+use "../std/heap.mg" as heap
+use "../std/io.mg" as io
+use "../std/strconv.mg" as strconv
+use "../std/strings.mg" as strings
 
 main() !void:
     a := heap.allocator()
@@ -20,7 +20,7 @@ main() !void:
     try stdout.flush()
 
     text := try stdin.readLn(a)
-    defer text.free(a)
+    defer text.free()
 
     c := try strconv.parseUint(text)
     f := c * 9 / 5 + 32

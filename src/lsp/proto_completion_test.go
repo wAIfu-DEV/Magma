@@ -67,7 +67,7 @@ func TestProtoCompletionAddsRelativeImportForTransitiveType(t *testing.T) {
 		t.Fatalf("additional edits = %#v", items[0].AdditionalTextEdits)
 	}
 	edit := items[0].AdditionalTextEdits[0]
-	if edit.NewText != "use \"./models\" models\n" || edit.Range.Start != (position{Line: 5, Character: 0}) || edit.Range.End != edit.Range.Start {
+	if edit.NewText != "use \"./models\" as models\n" || edit.Range.Start != (position{Line: 5, Character: 0}) || edit.Range.End != edit.Range.Start {
 		t.Fatalf("import edit = %#v", edit)
 	}
 }

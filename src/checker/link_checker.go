@@ -4,6 +4,7 @@ import (
 	"Magma/src/comp_err"
 	t "Magma/src/types"
 	"fmt"
+	"path/filepath"
 	"sort"
 )
 
@@ -140,10 +141,28 @@ func clGlDecl(c *ctx, glDecl t.NodeGlobalDecl) error {
 	return nil
 }
 
-func clGlobal(c *ctx, gl *t.NodeGlobal) error {
-	enterScope(c, c.ScopeTree)
-	defer leaveScope(c)
+func clGlobalValue(c *ctx, declaration t.NodeGlobalDecl) error {
+	switch declaration.(type) {
+	case *t.NodeExprVarDef, *t.NodeConstDef:
+		return clGlDecl(c, declaration)
+	default:
+		return nil
+	}
+}
 
+func clGlobalBody(c *ctx, declaration t.NodeGlobalDecl) error {
+	if function, ok := declaration.(*t.NodeFuncDef); ok {
+		return clFuncDef(c, function)
+	}
+	return nil
+}
+
+// clGlobalInterface resolves every declaration shape which may be consumed by
+// another module.  It deliberately does not visit initializers or function
+// bodies: all module interfaces must be complete before any implementation is
+// linked, otherwise a circular import makes success depend on map iteration
+// order.
+func clGlobalInterface(c *ctx, gl *t.NodeGlobal) error {
 	aliasNames := make([]string, 0, len(gl.TypeAliases))
 	for name := range gl.TypeAliases {
 		aliasNames = append(aliasNames, name)
@@ -196,16 +215,212 @@ func clGlobal(c *ctx, gl *t.NodeGlobal) error {
 			}
 		}
 	}
+	// StructDef.Fields is the lookup-facing view, while the declaration retains
+	// the field nodes consumed by lowering. Resolve both representations before
+	// implementations are linked; they are not guaranteed to share NodeType
+	// pointers after parsing or specialization.
+	for _, declaration := range gl.Declarations {
+		if definition, ok := declaration.(*t.NodeStructDef); ok {
+			if err := clStructDef(c, definition); err != nil {
+				return err
+			}
+		}
+	}
 	for _, st := range gl.StructDefs {
 		if err := clResolveImplementations(c, st); err != nil {
 			return err
 		}
 	}
 
+	return nil
+}
+
+func clGlobalValues(c *ctx, gl *t.NodeGlobal) error {
+	enterScope(c, c.ScopeTree)
+	defer leaveScope(c)
+
+	var firstErr error
 	for _, dcl := range gl.Declarations {
-		e := clGlDecl(c, dcl)
-		if e != nil {
+		if e := clGlobalValue(c, dcl); e != nil {
+			if firstErr == nil {
+				firstErr = e
+			}
+		}
+	}
+	return firstErr
+}
+
+func clGlobalBodies(c *ctx, gl *t.NodeGlobal) error {
+	enterScope(c, c.ScopeTree)
+	defer leaveScope(c)
+
+	for _, dcl := range gl.Declarations {
+		if e := clGlobalBody(c, dcl); e != nil {
 			return e
+		}
+	}
+	return nil
+}
+
+func unresolvedGlobalTypes(files []*t.FileCtx) int {
+	unresolved := 0
+	for _, file := range files {
+		for _, declaration := range file.GlNode.Declarations {
+			switch node := declaration.(type) {
+			case *t.NodeExprVarDef:
+				if node.Type == nil {
+					unresolved++
+				}
+			case *t.NodeConstDef:
+				if node.VarDef.Type == nil {
+					unresolved++
+				}
+			}
+		}
+	}
+	return unresolved
+}
+
+func firstUnresolvedGlobal(files []*t.FileCtx) (*t.FileCtx, *t.Token, string) {
+	for _, file := range files {
+		for _, declaration := range file.GlNode.Declarations {
+			switch node := declaration.(type) {
+			case *t.NodeExprVarDef:
+				if node.Type == nil {
+					return file, lastNameToken(node.Name), flattenName(node.Name)
+				}
+			case *t.NodeConstDef:
+				if node.VarDef.Type == nil {
+					return file, lastNameToken(node.VarDef.Name), flattenName(node.VarDef.Name)
+				}
+			}
+		}
+	}
+	return &t.FileCtx{}, &t.Token{Pos: t.FilePos{Line: 1, Col: 1}}, "<unknown>"
+}
+
+// dependencyOrderedFiles keeps the historical dependency-before-importer
+// behavior for acyclic graphs while tolerating back-edges. Interfaces are
+// resolved in a separate whole-program pass, so either order inside a strongly
+// connected component is valid; sorting roots and edges makes it reproducible.
+func dependencyOrderedFiles(files map[string]*t.FileCtx) []*t.FileCtx {
+	byPath := make(map[string]*t.FileCtx, len(files))
+	paths := make([]string, 0, len(files))
+	for path, file := range files {
+		clean := filepath.Clean(path)
+		byPath[clean] = file
+		paths = append(paths, clean)
+	}
+	sort.Strings(paths)
+
+	state := map[*t.FileCtx]uint8{}
+	ordered := make([]*t.FileCtx, 0, len(files))
+	var visit func(*t.FileCtx)
+	visit = func(file *t.FileCtx) {
+		if file == nil || state[file] == 2 {
+			return
+		}
+		if state[file] == 1 {
+			return
+		}
+		state[file] = 1
+		imports := append([]string(nil), file.Imports...)
+		for i := range imports {
+			imports[i] = filepath.Clean(imports[i])
+		}
+		sort.Strings(imports)
+		for _, path := range imports {
+			visit(byPath[path])
+		}
+		state[file] = 2
+		ordered = append(ordered, file)
+	}
+	for _, path := range paths {
+		visit(byPath[path])
+	}
+	return ordered
+}
+
+type constantEntry struct {
+	file       *t.FileCtx
+	definition *t.NodeConstDef
+}
+
+// checkConstantInitializerCycles protects both semantic checking and LLVM
+// constant expansion, which recursively follow references to other constants.
+// Import DAGs used to make cross-module cycles impossible; accepting import
+// SCCs means the declaration graph itself must now carry that validation.
+func checkConstantInitializerCycles(files []*t.FileCtx) error {
+	constants := map[*t.NodeExprVarDef]constantEntry{}
+	constantOrder := []*t.NodeExprVarDef{}
+	for _, file := range files {
+		for _, declaration := range file.GlNode.Declarations {
+			if definition, ok := declaration.(*t.NodeConstDef); ok {
+				constants[definition.VarDef] = constantEntry{file: file, definition: definition}
+				constantOrder = append(constantOrder, definition.VarDef)
+			}
+		}
+	}
+
+	visiting := map[*t.NodeExprVarDef]bool{}
+	visited := map[*t.NodeExprVarDef]bool{}
+	var visitConstant func(*t.NodeExprVarDef) error
+	var visitExpression func(t.NodeExpr) error
+	visitExpression = func(expression t.NodeExpr) error {
+		switch node := expression.(type) {
+		case *t.NodeExprName:
+			if variable, ok := node.AssociatedNode.(*t.NodeExprVarDef); ok {
+				if _, isConstant := constants[variable]; isConstant {
+					return visitConstant(variable)
+				}
+			}
+		case *t.NodeExprArray:
+			if err := visitExpression(node.Length); err != nil {
+				return err
+			}
+			for _, item := range node.Entries {
+				if item.Index != nil {
+					if err := visitExpression(item.Index); err != nil {
+						return err
+					}
+				}
+				if err := visitExpression(item.Value); err != nil {
+					return err
+				}
+			}
+		case *t.NodeExprStructInit:
+			for _, field := range node.Fields {
+				if err := visitExpression(field.Expression); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	visitConstant = func(variable *t.NodeExprVarDef) error {
+		if visiting[variable] {
+			entry := constants[variable]
+			return comp_err.CompilationErrorToken(entry.file, &entry.definition.Tk, fmt.Sprintf("constant initializer cycle involving '%s'", flattenName(variable.Name)), "break the cycle by replacing one reference with a literal value")
+		}
+		if visited[variable] {
+			return nil
+		}
+		entry, ok := constants[variable]
+		if !ok {
+			return nil
+		}
+		visiting[variable] = true
+		if err := visitExpression(entry.definition.Initializer); err != nil {
+			return err
+		}
+		delete(visiting, variable)
+		visited[variable] = true
+		return nil
+	}
+
+	for _, variable := range constantOrder {
+		if err := visitConstant(variable); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -221,18 +436,16 @@ func CheckLinks(s *t.SharedState) error {
 		AliasStack:       map[string]bool{},
 	}
 
-	// Sorted by dependency resolution order
-	// Needed for type inference on assignment
-	// Otherwise link checker would have no idea of the shape of
-	// inferred variables.
-	// In-order link checking allows resolution of absolute names for types
-	// allowing in turn early type checking needed for type inference across modules.
-
-	pathCtxMap := map[string]*t.FileCtx{}
+	corePath := ""
+	if s.StdRoot != "" {
+		corePath = filepath.Clean(filepath.Join(s.StdRoot, "core.mg"))
+	}
 
 	for _, v := range s.Files {
 		ctx.ModuleBundle.Modules[v.PackageName] = v.GlNode
-		pathCtxMap[v.FilePath] = v
+		if (corePath != "" && filepath.Clean(v.FilePath) == corePath) || (corePath == "" && v.ModuleName == "core") {
+			ctx.CoreGlobal = v.GlNode
+		}
 		for primitive, methods := range v.GlNode.PrimitiveMethods {
 			for name, function := range methods {
 				key := primitive + "." + name
@@ -243,75 +456,91 @@ func CheckLinks(s *t.SharedState) error {
 			}
 		}
 	}
-
-	queue := []*t.FileCtx{}
-	sorted := []*t.FileCtx{}
-	graph := map[*t.FileCtx][]*t.FileCtx{}
-	n_deps := map[*t.FileCtx]int{}
-
-	for _, fCtx := range s.Files {
-		n := len(fCtx.Imports)
-		n_deps[fCtx] = n
-
-		//fmt.Println(fCtx.FilePath+":", n)
-
-		if n == 0 {
-			//fmt.Println("Added to queue (baseline):", fCtx.FilePath)
-			queue = append(queue, fCtx)
-		}
-
-		if graph[fCtx] == nil {
-			graph[fCtx] = []*t.FileCtx{}
-		}
-
-		for _, path := range fCtx.Imports {
-			p := pathCtxMap[path]
-			if graph[p] == nil {
-				graph[p] = []*t.FileCtx{}
+	if ctx.CoreGlobal != nil {
+		s.CoreTypes = make(map[t.CoreTypeRole]*t.StructDef, 3)
+		s.CoreMethods = make(map[string]*t.NodeFuncDef)
+		for _, definition := range ctx.CoreGlobal.StructDefs {
+			if definition.CoreRole != t.CoreTypeNone {
+				s.CoreTypes[definition.CoreRole] = definition
 			}
-			graph[p] = append(graph[p], fCtx)
 		}
-	}
-
-	if len(queue) == 0 {
-		cycle := firstFileByPath(s.Files, nil)
-		return comp_err.CompilationErrorToken(cycle, &t.Token{Pos: t.FilePos{Line: 1, Col: 1}}, "module import graph contains a cycle", "remove one of the imports participating in the cycle")
-	}
-
-	//fmt.Println("Resolving dependency order...")
-
-	for len(queue) > 0 {
-		curr := queue[0]
-		queue = queue[1:]
-
-		sorted = append(sorted, curr)
-
-		for _, dep := range graph[curr] {
-			n_deps[dep] = n_deps[dep] - 1
-
-			//fmt.Println(dep.FilePath+":", n_deps[dep])
-
-			if n_deps[dep] <= 0 {
-				//fmt.Println("Added to queue:", dep.FilePath)
-				queue = append(queue, dep)
+		for primitive, methods := range ctx.CoreGlobal.PrimitiveMethods {
+			for name, function := range methods {
+				s.CoreMethods[primitive+"."+name] = function
 			}
 		}
 	}
 
-	if len(sorted) != len(s.Files) {
-		cycle := firstFileByPath(s.Files, func(file *t.FileCtx) bool { return n_deps[file] > 0 })
-		return comp_err.CompilationErrorToken(cycle, &t.Token{Pos: t.FilePos{Line: 1, Col: 1}}, "module import graph contains a cycle", "remove one of the imports participating in the cycle")
-	}
+	// Parsing has already populated every module's declaration tables. Resolve
+	// interfaces for the complete program before linking implementations. This
+	// is the semantic equivalent of forward declarations and permits import
+	// strongly-connected components without splitting the generated program.
+	ordered := dependencyOrderedFiles(s.Files)
 
-	for _, fCtx := range sorted {
+	for _, fCtx := range ordered {
 		n := fCtx.GlNode
 		ctx.GlobalNode = n
 		ctx.ScopeTree = &fCtx.ScopeTree
 		ctx.FileCtx = fCtx
+		if e := clGlobalInterface(ctx, n); e != nil {
+			return comp_err.EnsureDiagnostic(fCtx, &t.Token{Pos: t.FilePos{Line: 1, Col: 1}}, e)
+		}
+	}
 
-		//fmt.Printf("check links of: %s\n", fCtx.PackageName)
-		e := clGlobal(ctx, n)
-		if e != nil {
+	// Module-level inferred values can depend on values in another member of an
+	// import cycle. Revisit them until their types stabilize. A nil result is
+	// intentionally not progress; it represents a declaration whose dependency
+	// has not acquired a type yet.
+	previousUnresolved := -1
+	pendingErrors := map[*t.FileCtx]error{}
+	for unresolved := unresolvedGlobalTypes(ordered); unresolved > 0 && unresolved != previousUnresolved; unresolved = unresolvedGlobalTypes(ordered) {
+		previousUnresolved = unresolved
+		for _, fCtx := range ordered {
+			ctx.GlobalNode = fCtx.GlNode
+			ctx.ScopeTree = &fCtx.ScopeTree
+			ctx.FileCtx = fCtx
+			if e := clGlobalValues(ctx, fCtx.GlNode); e != nil {
+				pendingErrors[fCtx] = e
+			} else {
+				delete(pendingErrors, fCtx)
+			}
+		}
+	}
+	if unresolved := unresolvedGlobalTypes(ordered); unresolved > 0 {
+		for _, file := range ordered {
+			if err := pendingErrors[file]; err != nil {
+				return comp_err.EnsureDiagnostic(file, &t.Token{Pos: t.FilePos{Line: 1, Col: 1}}, err)
+			}
+		}
+		file, token, name := firstUnresolvedGlobal(ordered)
+		return comp_err.CompilationErrorToken(file, token, fmt.Sprintf("cannot infer cyclic module-level declaration '%s'", name), "add an explicit type to at least one declaration in the inference cycle")
+	}
+
+	// Explicitly typed values were not part of the inference worklist, but their
+	// initializers still need name linking and validation once interfaces exist.
+	for _, fCtx := range ordered {
+		if fCtx.InterfaceOnly {
+			continue
+		}
+		ctx.GlobalNode = fCtx.GlNode
+		ctx.ScopeTree = &fCtx.ScopeTree
+		ctx.FileCtx = fCtx
+		if e := clGlobalValues(ctx, fCtx.GlNode); e != nil {
+			return comp_err.EnsureDiagnostic(fCtx, &t.Token{Pos: t.FilePos{Line: 1, Col: 1}}, e)
+		}
+	}
+	if err := checkConstantInitializerCycles(ordered); err != nil {
+		return err
+	}
+
+	for _, fCtx := range ordered {
+		if fCtx.InterfaceOnly {
+			continue
+		}
+		ctx.GlobalNode = fCtx.GlNode
+		ctx.ScopeTree = &fCtx.ScopeTree
+		ctx.FileCtx = fCtx
+		if e := clGlobalBodies(ctx, fCtx.GlNode); e != nil {
 			return comp_err.EnsureDiagnostic(fCtx, &t.Token{Pos: t.FilePos{Line: 1, Col: 1}}, e)
 		}
 	}

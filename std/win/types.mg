@@ -4,7 +4,7 @@ mod types
 # These aliases follow the names used by the Windows SDK. They are aliases,
 # not wrappers, so they preserve the ABI of the underlying C types.
 
-use "std:c" c
+use "std:c" as c
 
 # Fixed-width Windows scalar types.
 pub alias BOOL      = c.int

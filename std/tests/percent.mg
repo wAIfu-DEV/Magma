@@ -1,19 +1,19 @@
 mod main
-use "std:errors" errors
-use "std:heap" heap
-use "std:percent" percent
-use "std:slices" slices
-use "std:strings" strings
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:percent" as percent
+use "std:slices" as slices
+use "std:strings" as strings
 
 pub main() !void:
     a := heap.allocator()
     encoded := try percent.encode("a b/c", percent.URI_COMPONENT)
-    defer encoded.free(a)
+    defer encoded.free()
     if strings.compare(encoded, "a%20b%2Fc") == false:
         throw errors.failure("URI-component percent encoding changed")
     ..
     form := try percent.encode("a b+c", percent.FORM)
-    defer form.free(a)
+    defer form.free()
     if strings.compare(form, "a+b%2Bc") == false:
         throw errors.failure("form percent encoding changed")
     ..

@@ -9,10 +9,11 @@ import (
 // reachableFunctions computes the function bodies required by backend
 // emission. Semantic analysis deliberately runs before this pass and still
 // checks every declaration, including declarations which are not reachable.
-func reachableFunctions(files map[string]*t.FileCtx, nullContext bool) (map[*t.NodeFuncDef]bool, map[string]bool) {
+func reachableFunctions(files map[string]*t.FileCtx, nullContext bool, scanLegacyLLVMText bool, extraRoots ...*t.NodeFuncDef) (map[*t.NodeFuncDef]bool, map[string]bool) {
 	all := allFunctions(files)
 	bySymbol := make(map[string]*t.NodeFuncDef)
 	var roots []*t.NodeFuncDef
+	roots = append(roots, extraRoots...)
 	hasProgramRoot := false
 	var globalLLVM []string
 	var globalExpressions []t.NodeExpr
@@ -41,6 +42,12 @@ func reachableFunctions(files map[string]*t.FileCtx, nullContext bool) (map[*t.N
 			case *t.NodeConstDef:
 				globalExpressions = append(globalExpressions, node.Initializer)
 			}
+		}
+		if file.ModuleName == "core" {
+			roots = append(roots, file.GlNode.FuncDefs["errorTracePush"])
+		}
+		if file.ModuleName == "errors" {
+			roots = append(roots, file.GlNode.FuncDefs["printUncaught"])
 		}
 
 	}
@@ -84,13 +91,19 @@ func reachableFunctions(files map[string]*t.FileCtx, nullContext bool) (map[*t.N
 			}
 		}
 	}
-	for _, text := range globalLLVM {
-		markLLVMReferences(text)
+	if scanLegacyLLVMText {
+		for _, text := range globalLLVM {
+			markLLVMReferences(text)
+		}
 	}
 
 	walker := reachabilityWalker{
-		enqueue:              enqueue,
-		markLLVMReferences:   markLLVMReferences,
+		enqueue: enqueue,
+		markLLVMReferences: func(text string) {
+			if scanLegacyLLVMText {
+				markLLVMReferences(text)
+			}
+		},
 		reachableProtoTables: reachableVtables,
 	}
 	for _, expression := range globalExpressions {
@@ -102,6 +115,22 @@ func reachableFunctions(files map[string]*t.FileCtx, nullContext bool) (map[*t.N
 		walker.function(fn)
 	}
 	return reachable, reachableVtables
+}
+
+// ReachableFunctions exposes the current production reachability roots to the
+// object migration harness. Object identity will replace the remaining legacy
+// LLVM-text reference scan before cutover.
+func ReachableFunctions(files map[string]*t.FileCtx, nullContext bool) map[*t.NodeFuncDef]bool {
+	functions, _ := reachableFunctions(files, nullContext, true)
+	return functions
+}
+
+// ObjectReachableFunctions follows checked AST identities only. Legacy LLVM
+// text is deliberately ignored: typed directives expose their operands and
+// callees as object references and must never require symbol regex scanning.
+func ObjectReachableFunctions(files map[string]*t.FileCtx, nullContext bool, extraRoots ...*t.NodeFuncDef) map[*t.NodeFuncDef]bool {
+	functions, _ := reachableFunctions(files, nullContext, false, extraRoots...)
+	return functions
 }
 
 func allFunctions(files map[string]*t.FileCtx) map[*t.NodeFuncDef]bool {
@@ -205,6 +234,12 @@ func (w *reachabilityWalker) statement(statement t.NodeStatement) {
 		w.expression(node.CondExpr)
 		w.body(&node.Body)
 		w.statement(node.NextCondStmt)
+	case *t.NodeStmtMatch:
+		w.expression(node.Expression)
+		for _, arm := range node.Cases {
+			w.body(&arm.Body)
+		}
+		w.body(node.ElseBody)
 	case *t.NodeStmtElse:
 		w.body(&node.Body)
 	case *t.NodeStmtWhile:
@@ -291,6 +326,10 @@ func (w *reachabilityWalker) expression(expression t.NodeExpr) {
 		w.expression(node.Expr)
 	case *t.NodeExprMove:
 		w.expression(node.Expr)
+	case *t.NodeExprLlvm:
+		for _, arg := range node.Args {
+			w.expression(arg)
+		}
 	case *t.NodeExprDestructureAssign:
 		w.expression(&node.ValueDef)
 		w.expression(&node.ErrDef)

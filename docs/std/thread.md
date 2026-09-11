@@ -30,7 +30,7 @@ the worker. Concurrent access before joining still requires synchronization;
 use `std/atomic`, `std/mutex`, `std/spinlock`, or `std/wake` as appropriate.
 
 ```magma
-use "../std/thread.mg" thread
+use "../std/thread.mg" as thread
 
 worker(context ptr) u64:
     result u64* = context

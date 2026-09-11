@@ -1,8 +1,8 @@
 mod unicode
 # Allocation-free Unicode scalar and UTF-16 surrogate helpers.
 
-use "std:cast" cast
-use "std:errors" errors
+use "std:cast" as cast
+use "std:errors" as errors
 
 pub const REPLACEMENT u32 = 0xFFFD
 pub const MAX_SCALAR u32 = 0x10FFFF

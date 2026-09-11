@@ -43,7 +43,7 @@ func TestSubstituteTypeRewritesNestedFunctionTypeWithoutMutatingTemplate(test *t
 	concrete := &t.NodeType{KindNode: &t.NodeTypeAbsolute{AbsoluteName: "app.Widget"}}
 
 	result := substituteType(template, map[string]*t.NodeType{"T": concrete})
-	if got := CanonicalTypeSignature(result); got != "F__S__A_app__Widget__RET__P__A_app__Widget" {
+	if got := CanonicalTypeSignature(result); got != "THROW__F0__S__A_app__Widget__RET__P__A_app__Widget" {
 		test.Fatalf("substituted signature = %q", got)
 	}
 	if !result.Throws {
@@ -52,7 +52,7 @@ func TestSubstituteTypeRewritesNestedFunctionTypeWithoutMutatingTemplate(test *t
 	if reflect.DeepEqual(template, result) {
 		test.Fatal("substitution unexpectedly retained the template structure")
 	}
-	if got := CanonicalTypeSignature(template); got != "F__S__N_T__RET__P__N_T" {
+	if got := CanonicalTypeSignature(template); got != "THROW__F0__S__N_T__RET__P__N_T" {
 		test.Fatalf("template was mutated: %q", got)
 	}
 }

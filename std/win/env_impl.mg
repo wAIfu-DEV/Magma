@@ -1,23 +1,20 @@
 mod env_impl_win
-use "std:allocator" allocator
-use "std:win/types" win
-use "std:heap" heap
-use "std:utf8" utf8
-use "std:utf16" utf16
-use "std:slices" slices
-use "std:errors" errors
-use "std:c" c
-use "std:list" list
+use "std:allocator" as allocator
+use "std:win/types" as win
+use "std:heap" as heap
+use "std:utf8" as utf8
+use "std:utf16" as utf16
+use "std:slices" as slices
+use "std:errors" as errors
+use "std:c" as c
+use "std:list" as list
+use "std:cast" as cast
 
 ext ext_GetEnvironmentVariableW GetEnvironmentVariableW(name win.LPCWSTR, value win.LPWSTR, size win.DWORD) win.DWORD
 ext ext_SetEnvironmentVariableW SetEnvironmentVariableW(name win.LPCWSTR, value win.LPCWSTR) win.BOOL
 ext ext_GetLastError GetLastError() win.DWORD
 ext ext_GetEnvironmentStringsW GetEnvironmentStringsW() win.LPWSTR
 ext ext_FreeEnvironmentStringsW FreeEnvironmentStringsW(block win.LPWSTR) win.BOOL
-
-freeString(a allocator.Allocator, value $str) void:
-    value.free(a)
-..
 
 name16(name str) !$u16[]:
     ret try utf8.utf8To16NT(name)
@@ -28,7 +25,7 @@ pub get(name str) !$str:
     wide := try name16(name)
     defer heap.allocator().free(slices.toPtr(wide))
     local := array u16[256]
-    written := ext_GetEnvironmentVariableW(slices.toPtr(wide), slices.toPtr(local), 256)
+    written := ext_GetEnvironmentVariableW(cast.reinterpret[u16](slices.toPtr(wide)), cast.reinterpret[u16](slices.toPtr(local)), 256)
     if written == 0:
         code := ext_GetLastError()
         if code == 203:
@@ -44,7 +41,7 @@ pub get(name str) !$str:
     ..
     buffer := try temporary.allocT[u16](written)
     needed := written
-    written = ext_GetEnvironmentVariableW(slices.toPtr(wide), buffer, needed)
+    written = ext_GetEnvironmentVariableW(cast.reinterpret[u16](slices.toPtr(wide)), buffer, needed)
     if written == 0:
         code := ext_GetLastError()
         temporary.free(buffer)
@@ -58,14 +55,14 @@ pub get(name str) !$str:
     if conversionError.nok():
         throw conversionError
     ..
-    ret result
+    ret move result
 ..
 
 pub has(name str) bool:
     wide u16[], e error = name16(name)
     if e.nok(): ret false ..
     defer heap.allocator().free(slices.toPtr(wide))
-    needed := ext_GetEnvironmentVariableW(slices.toPtr(wide), none, 0)
+    needed := ext_GetEnvironmentVariableW(cast.reinterpret[u16](slices.toPtr(wide)), none, 0)
     ret needed != 0 || ext_GetLastError() != 203
 ..
 
@@ -74,7 +71,7 @@ pub set(name str, value str) !void:
     defer heap.allocator().free(slices.toPtr(n))
     v := try utf8.utf8To16NT(value)
     defer heap.allocator().free(slices.toPtr(v))
-    if ext_SetEnvironmentVariableW(slices.toPtr(n), slices.toPtr(v)) == 0:
+    if ext_SetEnvironmentVariableW(cast.reinterpret[u16](slices.toPtr(n)), cast.reinterpret[u16](slices.toPtr(v))) == 0:
         throw errors.native(ext_GetLastError(), "SetEnvironmentVariableW failed")
     ..
 ..
@@ -82,7 +79,7 @@ pub set(name str, value str) !void:
 pub unset(name str) !void:
     n := try name16(name)
     defer heap.allocator().free(slices.toPtr(n))
-    if ext_SetEnvironmentVariableW(slices.toPtr(n), none) == 0:
+    if ext_SetEnvironmentVariableW(cast.reinterpret[u16](slices.toPtr(n)), none) == 0:
         throw errors.native(ext_GetLastError(), "SetEnvironmentVariableW failed")
     ..
 ..
@@ -91,22 +88,29 @@ pub list() !$list.List[str]:
     a := ctx.alloc
     block := ext_GetEnvironmentStringsW()
     if block == none: throw errors.native(ext_GetLastError(), "GetEnvironmentStringsW failed") ..
-    entries := try list.new[str](a, freeString)
+    entries := try list.new[str](a, fn(value $str) void:
+        value.free()
+    ..)
     onerror entries.free()
-    offset u64 = 0
-    loop block[offset] != 0:
-        count u64 = 0
-        loop block[offset + count] != 0: count = count + 1 ..
-        value str, conversionError error = utf16.toUtf8(a, slices.fromPtr(addrof block[offset], count))
-        if conversionError.nok():
-            ext_FreeEnvironmentStringsW(block)
-            throw conversionError
+    # SAFETY: GetEnvironmentStringsW returns a double-NUL-terminated block;
+    # each inner scan stops at an entry terminator and the outer scan stops at
+    # the final empty entry.
+    unsafe:
+        offset u64 = 0
+        loop block[offset] != 0:
+            count u64 = 0
+            loop block[offset + count] != 0: count = count + 1 ..
+            value str, conversionError error = utf16.toUtf8(a, slices.fromPtr(addrof block[offset], count))
+            if conversionError.nok():
+                ext_FreeEnvironmentStringsW(block)
+                throw conversionError
+            ..
+            try entries.pushRight(move value)
+            offset = offset + count + 1
         ..
-        try entries.pushRight(value)
-        offset = offset + count + 1
     ..
     if ext_FreeEnvironmentStringsW(block) == 0:
         throw errors.native(ext_GetLastError(), "FreeEnvironmentStringsW failed")
     ..
-    ret entries
+    ret move entries
 ..

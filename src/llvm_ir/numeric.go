@@ -776,6 +776,37 @@ func irExprBinModulo(ctx *IrCtx, expectedType *t.NodeType, binaryExpr *t.NodeExp
 }
 
 func irExprBinCmp(ctx *IrCtx, binaryExpr *t.NodeExprBinary) (SsaName, error) {
+	if isStrType(binaryExpr.Left.GetInferredType()) && isStrType(binaryExpr.Right.GetInferredType()) {
+		if binaryExpr.Operator != t.KwCmpEq && binaryExpr.Operator != t.KwCmpNeq {
+			return SsaName{}, fmt.Errorf("unsupported string comparison operator")
+		}
+		compare := ctx.Shared.CoreMethods["str.compare"]
+		if compare == nil {
+			return SsaName{}, fmt.Errorf("core method str.compare is required for string equality")
+		}
+		call := &t.NodeExprCall{
+			Tk:                binaryExpr.Tk,
+			Args:              []t.NodeExpr{binaryExpr.Right},
+			AssociatedFnDef:   compare,
+			InfType:           binaryExpr.InfType,
+			IsMemberFunc:      true,
+			MemberOwnerType:   binaryExpr.Left.GetInferredType(),
+			MemberOwnerExpr:   binaryExpr.Left,
+			MemberOwnerIsPtr:  false,
+			MemberOwnerModule: "core",
+		}
+		equalSsa, err := irExprCallFuncMember(ctx, call, false)
+		if err != nil {
+			return SsaName{}, err
+		}
+		if binaryExpr.Operator == t.KwCmpEq {
+			return equalSsa, nil
+		}
+		resultSsa := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = xor i1 %s, true\n", resultSsa.Repr, equalSsa.Repr)
+		return resultSsa, nil
+	}
+
 	lhsSsa, e := irExpression(ctx, binaryExpr.Left.GetInferredType(), binaryExpr.Left, false)
 	if e != nil {
 		return SsaName{}, e
@@ -784,20 +815,6 @@ func irExprBinCmp(ctx *IrCtx, binaryExpr *t.NodeExprBinary) (SsaName, error) {
 	rhsSsa, e := irExpression(ctx, binaryExpr.Right.GetInferredType(), binaryExpr.Right, false)
 	if e != nil {
 		return SsaName{}, e
-	}
-
-	if isStrType(binaryExpr.Left.GetInferredType()) && isStrType(binaryExpr.Right.GetInferredType()) {
-		if binaryExpr.Operator != t.KwCmpEq && binaryExpr.Operator != t.KwCmpNeq {
-			return SsaName{}, fmt.Errorf("unsupported string comparison operator")
-		}
-		equalSsa := irSsaLocal(ctx)
-		irWritef(ctx, "  %s = call i1 @magma.string.equal(%%type.str %s, %%type.str %s)\n", equalSsa.Repr, lhsSsa.Repr, rhsSsa.Repr)
-		if binaryExpr.Operator == t.KwCmpEq {
-			return equalSsa, nil
-		}
-		resultSsa := irSsaLocal(ctx)
-		irWritef(ctx, "  %s = xor i1 %s, true\n", resultSsa.Repr, equalSsa.Repr)
-		return resultSsa, nil
 	}
 
 	cmpType := binaryExpr.Left.GetInferredType()

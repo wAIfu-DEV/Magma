@@ -1,7 +1,7 @@
 mod main
 
-use "std:allocators" allocs
-use "std:io" io
+use "std:allocators" as allocs
+use "std:io" as io
 
 main(args str[]) !void:
     i u64 = 0

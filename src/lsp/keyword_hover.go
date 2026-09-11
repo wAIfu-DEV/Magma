@@ -4,8 +4,13 @@ import "Magma/src/types"
 
 var keywordHovers = map[string]string{
 	"mod":      "`mod name` declares the source file's module. It must be the first line.",
-	"use":      "`use \"path\" alias` imports a module under a mandatory local alias.",
+	"use":      "`use \"path\" as alias` imports a module under a mandatory local alias.",
+	"as":       "`as` introduces the local alias in an import or the narrowed binding in a match.",
+	"union":    "`union Name(...)` declares a tagged union whose variants have explicit names and fields.",
+	"match":    "`match value as binding:` branches on a union and narrows the binding to the selected variant type.",
+	"case":     "`case Union.Variant:` selects an explicitly qualified tagged-union variant.",
 	"pub":      "`pub` exports the following top-level declaration or imported namespace.",
+	"global":   "`global` gives a top-level variable process-wide storage instead of the default thread-local storage.",
 	"ret":      "`ret expression` returns from the current function. The expression is optional for `void`.",
 	"throw":    "`throw expression` returns a failing `error` from a throwing function. Throwing an OK error is a no-op.",
 	"try":      "`try expression` evaluates a throwing call and propagates its error automatically.",
@@ -33,6 +38,7 @@ var keywordHovers = map[string]string{
 	"bundle":   "`bundle` includes a native object or library artifact in the build.",
 	"llvm":     "`llvm` inserts an inline LLVM fragment. Its validity remains the programmer's responsibility.",
 	"noctx":    "`noctx` removes the hidden context argument from a function or function-pointer type.",
+	"fn":       "`fn(parameters) ReturnType:` creates a captureless anonymous function. Enclosing locals must be passed explicitly as parameters.",
 	"bounded":  "`bounded condition:` checks one or more range predicates on entry and establishes reusable proofs for its lexical block.",
 	"unsafe":   "`unsafe:` localizes operations whose validity the compiler cannot prove, including explicit ownership claims with `move`. It does not disable unrelated type checks.",
 	"move":     "`move value` transfers ownership from a named place and prevents subsequent use until reinitialization.",
@@ -44,6 +50,7 @@ var directiveHovers = map[string]string{
 	"export_name":         "`@export_name(...)` exposes a non-generic Magma function through a native ABI wrapper.",
 	"no_retain":           "`@no_retain` states that an owned result does not retain pointer or slice arguments.",
 	"compiler_known_type": "`@compiler_known_type(...)` names a target-specific type supplied by the compiler for an internal alias.",
+	"embed":               "`@embed(\"path\")` embeds a file at compile time and produces a borrowed `u8[]` with static lifetime.",
 }
 
 func (a *analysis) keywordHover(index int) string {

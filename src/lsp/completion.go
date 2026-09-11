@@ -422,7 +422,7 @@ func (f *completionTypeFormatter) importEdit(source string) (textEdit, bool) {
 		if !ok {
 			continue
 		}
-		lines = append(lines, "use \""+specifier+"\" "+f.pending[module])
+		lines = append(lines, "use \""+specifier+"\" as "+f.pending[module])
 	}
 	if len(lines) == 0 {
 		return textEdit{}, false
@@ -1197,8 +1197,9 @@ func topLevelKeywordCompletionAt(source string, pos position) (string, bool) {
 func topLevelKeywordCompletions(prefix string) []completionItem {
 	definitions := []struct{ label, detail, insert string }{
 		{"mod", "declare this file's module", "mod ${1:name}"},
-		{"use", "import a module", "use \"${1:path}\" ${2:alias}"},
+		{"use", "import a module", "use \"${1:path}\" as ${2:alias}"},
 		{"pub", "export a declaration", "pub "},
+		{"global", "declare process-wide storage", "global "},
 		{"const", "declare a module constant", "const ${1:name} ${2:Type} = ${0:value}"},
 		{"alias", "declare a type alias", "alias ${1:Name} = ${0:Type}"},
 		{"proto", "declare a prototype", "proto ${1:Name}(\n    ${0}\n)"},
@@ -1458,7 +1459,7 @@ func (d *docIndex) typeCompletions(module, prefix string, exportedOnly, intrinsi
 	items := []completionItem{}
 	keyPrefix := module + "\x00"
 	for key, kind := range d.completionKinds {
-		if !strings.HasPrefix(key, keyPrefix) || (kind != 22 && kind != 25) {
+		if !strings.HasPrefix(key, keyPrefix) || (kind != 13 && kind != 22 && kind != 25) {
 			continue
 		}
 		name := strings.TrimPrefix(key, keyPrefix)
@@ -1500,7 +1501,7 @@ func (d *docIndex) structFieldCompletions(module, owner, prefix string, used map
 			continue
 		}
 		name := strings.TrimPrefix(key, keyPrefix)
-		if strings.Contains(name, ".") || used[name] || !strings.HasPrefix(name, prefix) {
+		if strings.HasPrefix(name, "__") || strings.Contains(name, ".") || used[name] || !strings.HasPrefix(name, prefix) {
 			continue
 		}
 		detail := name + " " + formatType(fieldType)
@@ -1521,7 +1522,7 @@ func (d *docIndex) completions(keyPrefix, forbiddenDotPrefix, typedPrefix string
 			continue
 		}
 		name := strings.TrimPrefix(key, keyPrefix)
-		if name == "" || strings.Contains(name, ".") || (forbiddenDotPrefix != "" && strings.HasPrefix(name, forbiddenDotPrefix)) || !strings.HasPrefix(name, typedPrefix) || seen[name] {
+		if name == "" || strings.HasPrefix(name, "__") || strings.Contains(name, ".") || (forbiddenDotPrefix != "" && strings.HasPrefix(name, forbiddenDotPrefix)) || !strings.HasPrefix(name, typedPrefix) || seen[name] {
 			continue
 		}
 		seen[name] = true

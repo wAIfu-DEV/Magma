@@ -1,24 +1,25 @@
 mod http
 # Portable HTTP/1.1 client over std/net with client-owned connection pooling.
 
-use "std:allocator" allocator
-use "std:context" context
-use "std:builder" builder
-use "std:cast" cast
-use "std:errors" errors
-use "std:future" future
-use "std:abort" abort
-use "std:memory" memory
-use "std:mutex" mutex
-use "std:reader" reader
-use "std:slices" slices
-use "std:strconv" strconv
-use "std:strings" strings
-use "std:net/address" address
-use "std:net/dns" dns
-use "std:net/poll" poll
-use "std:net/socket" socket
-use "std:net/tls" tls
+use "std:allocator" as allocator
+use "std:context" as context
+use "std:builder" as builder
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:future" as future
+use "std:abort" as abort
+use "std:memory" as memory
+use "std:adaptive_spinlock" as adaptive_spinlock
+use "std:reader" as reader
+use "std:slices" as slices
+use "std:strconv" as strconv
+use "std:strings" as strings
+use "std:net/address" as address
+use "std:net/dns" as dns
+use "std:net/poll" as poll
+use "std:net/socket" as socket
+use "std:net/tls" as tls
+use "std:checked" as checked
 
 pub Header(
     name str
@@ -66,7 +67,7 @@ pub Client(
     tlsContext tls.Context
     connections Connection*
     connectionCapacity u64
-    connectionLock mutex.Mutex
+    connectionLock adaptive_spinlock.AdaptiveSpinLock
     options Options
     active bool
 )
@@ -130,7 +131,7 @@ pub new(options Options) !$Client:
     onerror a.free(connections)
     
     memory.zero(connections, options.connectionCapacity * sizeof Connection)
-    guard := try mutex.new()
+    guard := adaptive_spinlock.new()
     client Client
     client.allocator = a
     client.resolver = move resolver
@@ -187,12 +188,12 @@ parseUrl(url str) !$ParsedUrl:
         hostEnd = colon
     ..
     host := try strings.substring(url, authorityStart, hostEnd)
-    onerror host.free(a)
+    onerror host.free()
 
     service str
     if colon < authorityEnd:
         service = try strings.substring(url, colon + 1, authorityEnd)
-        onerror service.free(a)
+        onerror service.free()
         parsedPort := try strconv.parseUint(service)
         if parsedPort == 0 || parsedPort > 65535:
             throw errors.invalidArgument("HTTP port is out of range")
@@ -204,7 +205,7 @@ parseUrl(url str) !$ParsedUrl:
             service = try strings.copy("80")
         ..
     ..
-    onerror service.free(a)
+    onerror service.free()
 
     target str
     if authorityEnd == n:
@@ -217,9 +218,9 @@ parseUrl(url str) !$ParsedUrl:
 
 destr ParsedUrl.free() void:
     a := ctx.alloc
-    this.host.free(a)
-    this.service.free(a)
-    this.target.free(a)
+    this.host.free()
+    this.service.free()
+    this.target.free()
 ..
 
 buildRequest(request Request, parsed ParsedUrl*) !$str:
@@ -229,6 +230,7 @@ buildRequest(request Request, parsed ParsedUrl*) !$str:
     ..
     output := try builder.newWithCapacity(64)
     defer output.free()
+
     try output.appendBorrowed(request.method)
     try output.appendBorrowed(" ")
     try output.appendBorrowed(parsed.target)
@@ -261,7 +263,7 @@ buildRequest(request Request, parsed ParsedUrl*) !$str:
     if request.bodyLength > 0:
         contents := try request.body.read(request.bodyLength)
         if contents.countBytes() != request.bodyLength:
-            contents.free(a)
+            contents.free()
             throw errors.failure("HTTP request body ended before its declared length")
         ..
         try output.appendOwned(move contents)
@@ -299,16 +301,16 @@ Client.acquire(host str, service str, secure bool) !u64:
     # SAFETY: connectionLock serializes occupancy metadata; active/inUse are the
     # slot state, and owned transport/host/service values are published once.
     unsafe:
-    try this.connectionLock.lock()
+    this.connectionLock.lock()
     existing := findReusable(this, host, service, secure)
     if existing < this.connectionCapacity:
         this.connections[existing].inUse = true
-        try this.connectionLock.unlock()
+        this.connectionLock.unlock()
         ret existing
     ..
     slot := findEmpty(this)
     if slot == this.connectionCapacity:
-        try this.connectionLock.unlock()
+        this.connectionLock.unlock()
         throw errors.wouldOverflow("HTTP connection pool capacity reached")
     ..
     # Reserve the slot before the native connect so concurrent requests cannot
@@ -317,7 +319,7 @@ Client.acquire(host str, service str, secure bool) !u64:
     this.connections[slot].active = true
     this.connections[slot].inUse = true
     this.connections[slot].reusable = false
-    try this.connectionLock.unlock()
+    this.connectionLock.unlock()
 
     ownedHost str, hostError error = strings.copy(host)
     if hostError.nok():
@@ -327,7 +329,7 @@ Client.acquire(host str, service str, secure bool) !u64:
     ..
     ownedService str, serviceError error = strings.copy(service)
     if serviceError.nok():
-        ownedHost.free(this.allocator)
+        ownedHost.free()
         this.connections[slot].active = false
         this.connections[slot].inUse = false
         throw serviceError
@@ -336,8 +338,8 @@ Client.acquire(host str, service str, secure bool) !u64:
     endpointView address.Endpoint[] = endpoints
     count u64, resolveError error = this.resolver.resolveTo(host, service, address.FAMILY_UNSPECIFIED, endpointView)
     if resolveError.nok() || count == 0:
-        ownedHost.free(this.allocator)
-        ownedService.free(this.allocator)
+        ownedHost.free()
+        ownedService.free()
         this.connections[slot].active = false
         this.connections[slot].inUse = false
         if resolveError.nok():
@@ -347,8 +349,8 @@ Client.acquire(host str, service str, secure bool) !u64:
     ..
     transport socket.Socket, connectError error = socket.open(endpoints[0].address.family, socket.TYPE_STREAM)
     if connectError.nok():
-        ownedHost.free(this.allocator)
-        ownedService.free(this.allocator)
+        ownedHost.free()
+        ownedService.free()
         this.connections[slot].active = false
         this.connections[slot].inUse = false
         throw connectError
@@ -356,8 +358,8 @@ Client.acquire(host str, service str, secure bool) !u64:
     connectResult bool, connectFailure error = connectSocket(addrof transport, endpoints[0])
     if connectFailure.nok():
         transport.close()
-        ownedHost.free(this.allocator)
-        ownedService.free(this.allocator)
+        ownedHost.free()
+        ownedService.free()
         this.connections[slot].active = false
         this.connections[slot].inUse = false
         throw connectFailure
@@ -371,8 +373,8 @@ Client.acquire(host str, service str, secure bool) !u64:
         secured tls.Session, tlsError error = this.tlsContext.open(addrof connection.socket, host)
         if tlsError.nok():
             connection.socket.close()
-            connection.host.free(this.allocator)
-            connection.service.free(this.allocator)
+            connection.host.free()
+            connection.service.free()
             connection.active = false
             connection.inUse = false
             throw tlsError
@@ -394,12 +396,12 @@ Client.release(index u64, reusable bool) !void:
     # SAFETY: the lock protects the capacity-sized connection table and the
     # explicit index check precedes every access.
     unsafe:
-    try this.connectionLock.lock()
+    this.connectionLock.lock()
     if index < this.connectionCapacity && this.connections[index].active:
         this.connections[index].reusable = this.connections[index].reusable && reusable
         this.connections[index].inUse = false
     ..
-      try this.connectionLock.unlock()
+      this.connectionLock.unlock()
     ..
 ..
 
@@ -418,7 +420,7 @@ Client.start(request Request) !$Exchange:
 
     transport := addrof this.connections[connectionIndex].socket
     requestBytes := try buildRequest(request, addrof parsed)
-    onerror requestBytes.free(this.allocator)
+    onerror requestBytes.free()
 
     nativePoller := try poll.new(this.allocator, 1)
     onerror nativePoller.close()
@@ -612,14 +614,19 @@ scanChunks(bytes u8*, start u64, count u64) !ChunkScan:
             ..
             ret ChunkScan(complete=true, decodedBytes=decoded)
         ..
-        if size > count - position || position + size + 2 > count:
+        if size > count - position:
+            ret ChunkScan(complete=false, decodedBytes=decoded)
+        ..
+        afterPayload := try checked.uAdd(position, size)
+        afterChunk := try checked.uAdd(afterPayload, 2)
+        if afterChunk > count:
             ret ChunkScan(complete=false, decodedBytes=decoded)
         ..
         if bytes[position + size] != 13 || bytes[position + size + 1] != 10:
             throw errors.failure("invalid HTTP chunk terminator")
         ..
-        decoded = decoded + size
-        position = position + size + 2
+        decoded = try checked.uAdd(decoded, size)
+        position = afterChunk
     ..
       ret ChunkScan(complete=false, decodedBytes=decoded)
     ..
@@ -665,7 +672,9 @@ Exchange.updateFraming() !bool:
                     if this.received[i] < 48 || this.received[i] > 57:
                         throw errors.failure("invalid HTTP Content-Length")
                     ..
-                    contentLength = contentLength * 10 + this.received[i] - 48
+                    tmp := try checked.uMul(contentLength, 10)
+                    tmp2 := try checked.uAdd(tmp, this.received[i])
+                    contentLength = try checked.uSub(tmp2, 48)
                 ..
             elif colon < lineEnd && matchesAscii(this.received, lineStart, colon, "transfer-encoding") && containsAscii(this.received, valueStart, lineEnd, "chunked"):
                 this.chunked = true
@@ -677,10 +686,10 @@ Exchange.updateFraming() !bool:
         if status < 200 || status == 204 || status == 304:
             this.expectedTotal = end
         elif this.chunked == false && hasLength:
-            if contentLength > this.maxResponseBytes - end:
+            if end > this.maxResponseBytes || contentLength > this.maxResponseBytes - end:
                 throw errors.wouldOverflow("HTTP response exceeds configured limit")
             ..
-            this.expectedTotal = end + contentLength
+            this.expectedTotal = try checked.uAdd(end, contentLength)
         elif this.chunked == false:
             this.closeDelimited = true
         ..
@@ -905,7 +914,7 @@ Exchange.finish() !$Response:
     ..
     status := try parseStatus(this.received, headerEnd)
     raw := try strings.copy(strings.fromPtrNoCopy(this.received, headerEnd))
-    onerror raw.free(this.allocator)
+    onerror raw.free()
     contents str
     if this.chunked:
         contents = try decodeChunks(this.received, headerEnd, this.receivedCount)
@@ -919,7 +928,7 @@ Exchange.finish() !$Response:
     ..
     try this.poller.close()
     try this.client.release(this.connection, this.closeDelimited == false)
-    this.request.free(this.allocator)
+    this.request.free()
     this.allocator.free(this.received)
     this.allocator.free(this.events)
     this.active = false
@@ -982,7 +991,7 @@ destr Exchange.close() !void:
     if this.active:
         try this.poller.close()
         try this.client.release(this.connection, false)
-        this.request.free(this.allocator)
+        this.request.free()
         this.allocator.free(this.received)
         this.allocator.free(this.events)
         this.active = false
@@ -991,8 +1000,8 @@ destr Exchange.close() !void:
 
 destr Response.close() void:
     if this.active:
-        this.rawHeaders.free(this.allocator)
-        this.body.free(this.allocator)
+        this.rawHeaders.free()
+        this.body.free()
         this.active = false
     ..
 ..
@@ -1009,13 +1018,12 @@ destr Client.close() !void:
                     try connection.tls.close()
                 ..
                 try connection.socket.close()
-                connection.host.free(this.allocator)
-                connection.service.free(this.allocator)
+                connection.host.free()
+                connection.service.free()
                 connection.active = false
             ..
         ..
         this.allocator.free(this.connections)
-        try this.connectionLock.free()
         try this.resolver.close()
         try this.tlsContext.close()
         this.connections = none

@@ -47,7 +47,7 @@ func cloneType(in *t.NodeType) *t.NodeType {
 		}
 		out.KindNode = n2
 	case *t.NodeTypeAbsolute:
-		out.KindNode = &t.NodeTypeAbsolute{AbsoluteName: n.AbsoluteName, DisplayName: n.DisplayName}
+		out.KindNode = &t.NodeTypeAbsolute{AbsoluteName: n.AbsoluteName, DisplayName: n.DisplayName, CoreRole: n.CoreRole}
 	case *t.NodeTypePointer:
 		out.KindNode = &t.NodeTypePointer{Kind: cloneType(&t.NodeType{KindNode: n.Kind}).KindNode}
 	case *t.NodeTypeRfc:
@@ -78,6 +78,8 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 		return &t.NodeExprUnary{Tk: n.Tk, Operator: n.Operator, Operand: cloneExpr(n.Operand), InfType: cloneType(n.InfType), ProvenanceChecked: n.ProvenanceChecked}
 	case *t.NodeExprLit:
 		return &t.NodeExprLit{Tk: n.Tk, Value: n.Value, LitType: n.LitType, InfType: cloneType(n.InfType)}
+	case *t.NodeExprEmbed:
+		return &t.NodeExprEmbed{Tk: n.Tk, Path: n.Path, Symbol: n.Symbol, Size: n.Size, InfType: cloneType(n.InfType)}
 	case *t.NodeExprArray:
 		entries := make([]t.NodeArrayInitEntry, len(n.Entries))
 		for i, entry := range n.Entries {
@@ -100,18 +102,19 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 			typeArgs[i] = cloneType(g)
 		}
 		return &t.NodeExprCall{
-			Tk:          n.Tk,
-			Callee:      cloneExpr(n.Callee),
-			Args:        args,
-			GenericArgs: typeArgs,
-			InfType:     cloneType(n.InfType),
+			Tk:           n.Tk,
+			Callee:       cloneExpr(n.Callee),
+			Args:         args,
+			GenericArgs:  typeArgs,
+			InfType:      cloneType(n.InfType),
+			UnionVariant: n.UnionVariant,
 		}
 	case *t.NodeExprStructInit:
 		fields := make([]t.NodeStructFieldInit, len(n.Fields))
 		for i, field := range n.Fields {
 			fields[i] = t.NodeStructFieldInit{Tk: field.Tk, Name: field.Name, Expression: cloneExpr(field.Expression), FieldIndex: field.FieldIndex, FieldType: cloneType(field.FieldType)}
 		}
-		return &t.NodeExprStructInit{Tk: n.Tk, Type: cloneType(n.Type), Fields: fields}
+		return &t.NodeExprStructInit{Tk: n.Tk, Type: cloneType(n.Type), Fields: fields, UnionVariant: n.UnionVariant}
 	case *t.NodeExprProtoView:
 		return &t.NodeExprProtoView{Tk: n.Tk, Target: cloneExpr(n.Target), ProtoType: cloneType(n.ProtoType), InfType: cloneType(n.InfType)}
 	case *t.NodeExprMemberAccess:
@@ -148,15 +151,19 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 		}
 	case *t.NodeExprVarDef:
 		return &t.NodeExprVarDef{
-			Name:        cloneName(n.Name),
-			Type:        cloneType(n.Type),
-			Initializer: cloneExpr(n.Initializer),
-			IsConst:     n.IsConst,
-			AbsName:     n.AbsName,
-			RetFlagId:   n.RetFlagId,
-			Storage:     n.Storage,
-			IsReturned:  n.IsReturned,
-			IsGlobal:    n.IsGlobal,
+			Name:            cloneName(n.Name),
+			Type:            cloneType(n.Type),
+			Initializer:     cloneExpr(n.Initializer),
+			IsConst:         n.IsConst,
+			AbsName:         n.AbsName,
+			RetFlagId:       n.RetFlagId,
+			Storage:         n.Storage,
+			IsReturned:      n.IsReturned,
+			IsGlobal:        n.IsGlobal,
+			IsProcessGlobal: n.IsProcessGlobal,
+			IsExternal:      n.IsExternal,
+			ExternalName:    n.ExternalName,
+			IsPublic:        n.IsPublic,
 		}
 	case *t.NodeExprVarDefAssign:
 		return &t.NodeExprVarDefAssign{
@@ -179,6 +186,12 @@ func cloneExpr(in t.NodeExpr) t.NodeExpr {
 		return &t.NodeExprAddrof{Tk: n.Tk, Expr: cloneExpr(n.Expr), InfType: cloneType(n.InfType)}
 	case *t.NodeExprMove:
 		return &t.NodeExprMove{Tk: n.Tk, Expr: cloneExpr(n.Expr), InfType: cloneType(n.InfType)}
+	case *t.NodeExprLlvm:
+		args := make([]t.NodeExpr, len(n.Args))
+		for i := range n.Args {
+			args[i] = cloneExpr(n.Args[i])
+		}
+		return &t.NodeExprLlvm{Tk: n.Tk, Operation: n.Operation, Args: args, ResultType: cloneType(n.ResultType), InfType: cloneType(n.InfType)}
 	case *t.NodeExprDestructureAssign:
 		return &t.NodeExprDestructureAssign{
 			ValueDef: *cloneExpr(&n.ValueDef).(*t.NodeExprVarDef),
@@ -214,6 +227,17 @@ func cloneStmt(in t.NodeStatement) t.NodeStatement {
 		}
 		if n.NextCondStmt != nil {
 			out.NextCondStmt = cloneStmt(n.NextCondStmt)
+		}
+		return out
+	case *t.NodeStmtMatch:
+		out := &t.NodeStmtMatch{Tk: n.Tk, Expression: cloneExpr(n.Expression), BindingTk: n.BindingTk}
+		for _, arm := range n.Cases {
+			binding := cloneExpr(arm.Binding).(*t.NodeExprVarDef)
+			out.Cases = append(out.Cases, &t.NodeMatchCase{Tk: arm.Tk, VariantName: arm.VariantName, Variant: arm.Variant, Binding: binding, Body: cloneBody(&arm.Body)})
+		}
+		if n.ElseBody != nil {
+			body := cloneBody(n.ElseBody)
+			out.ElseBody = &body
 		}
 		return out
 	case *t.NodeStmtElse:
@@ -284,6 +308,7 @@ func cloneFuncDef(in *t.NodeFuncDef) *t.NodeFuncDef {
 		IsMember:                in.IsMember,
 		IsEntryPoint:            in.IsEntryPoint,
 		IsExternal:              in.IsExternal,
+		IsLambda:                in.IsLambda,
 		NoRetain:                in.NoRetain,
 		IsPublic:                in.IsPublic,
 		ExportName:              in.ExportName,
@@ -291,6 +316,7 @@ func cloneFuncDef(in *t.NodeFuncDef) *t.NodeFuncDef {
 		ErrorPredicate:          in.ErrorPredicate,
 		ProtoDispatch:           in.ProtoDispatch,
 		NeedsNativeContextThunk: in.NeedsNativeContextThunk,
+		NeedsContextAdapter:     in.NeedsContextAdapter,
 	}
 	if in.ImplicitContext != nil {
 		out.ImplicitContext = &t.NodeExprVarDef{

@@ -1,15 +1,15 @@
 mod main
 # Windows benchmark comparing std:mutex's SRWLOCK backend with std:spinlock.
 
-use "std:atomic" atomic
-use "std:errors" errors
-use "std:io" io
-use "std:mutex" mutex
-use "std:slices" slices
-use "std:spinlock" spinlock
-use "std:thread" thread
-use "std:time" time
-use "std:writer" writer
+use "std:atomic" as atomic
+use "std:errors" as errors
+use "std:io" as io
+use "std:mutex" as mutex
+use "std:slices" as slices
+use "std:spinlock" as spinlock
+use "std:thread" as thread
+use "std:time" as time
+use "std:writer" as writer
 
 const CREATION_ITERATIONS u64 = 1000000
 const UNCONTENDED_ITERATIONS u64 = 5000000

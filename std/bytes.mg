@@ -1,9 +1,9 @@
 mod bytes
 # Allocation-free algorithms and iterators for byte slices.
 
-use "std:slices"   slc
-use "std:errors"   errors
-use "std:iterator" iter
+use "std:slices"   as slc
+use "std:errors"   as errors
+use "std:iterator" as iter
 
 # Compares two byte slices by length and contents.
 # @complexity O(N), where N is the slice length.

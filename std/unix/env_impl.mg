@@ -1,28 +1,21 @@
 mod env_impl_unix
-# SAFETY: declares the platform-owned process environment global; no access occurs here.
-llvm "@environ = external global ptr\n"
-use "std:allocator" allocator
-use "std:heap" heap
-use "std:strings" strings
-use "std:errors" errors
-use "std:c" c
-use "std:list" list
-use "std:cast" cast
+use "std:allocator" as allocator
+use "std:heap" as heap
+use "std:strings" as strings
+use "std:errors" as errors
+use "std:c" as c
+use "std:list" as list
+use "std:cast" as cast
+use "std:llvm" as ll
+
+ext environmentSlot environ ptr
 
 ext ext_getenv getenv(name u8*) u8*
 ext ext_setenv setenv(name u8*, value u8*, overwrite c.int) c.int
 ext ext_unsetenv unsetenv(name u8*) c.int
 
-freeString(a allocator.Allocator, value $str) void:
-    value.free(a)
-..
-
 environmentPointer() u8**:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %environment = load ptr, ptr @environ\n"
-        llvm "  ret ptr %environment\n"
-    ..
+    ret cast.reinterpret[u8*](ll.load[ptr](addrof environmentSlot))
 ..
 
 environmentAt(environment u8**, index u64) u8*:
@@ -91,7 +84,9 @@ pub unset(name str) !void:
 
 pub list() !$list.List[str]:
     a := ctx.alloc
-    entries := try list.new[str](a, freeString)
+    entries := try list.new[str](a, fn(value $str) void:
+        value.free()
+    ..)
     onerror entries.free()
     environment := environmentPointer()
     i u64 = 0

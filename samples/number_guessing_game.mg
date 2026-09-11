@@ -1,11 +1,11 @@
 mod main
 
-use "../std/heap.mg" heap
-use "../std/io.mg" io
-use "../std/random.mg" random
-use "../std/strconv.mg" strconv
-use "../std/strings.mg" strings
-use "../std/time.mg" time
+use "../std/heap.mg" as heap
+use "../std/io.mg" as io
+use "../std/random.mg" as random
+use "../std/strconv.mg" as strconv
+use "../std/strings.mg" as strings
+use "../std/time.mg" as time
 
 main() !void:
     a := heap.allocator()
@@ -28,7 +28,7 @@ main() !void:
 
         text := try stdin.readLn(a)
         guess := try strconv.parseUint(text)
-        text.free(a)
+        text.free()
 
         if guess < answer:
             try out.writeLn("Too low.")

@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 //go:embed VERSION.txt
@@ -32,9 +33,14 @@ options:
   --timings               print compilation phase timings
   --version, -v           print the compiler version
   --out, -o <path>        output path (default depends on --emit)
-  --emit, -e <kind>       llvm, object, or exe (default llvm)
+  --emit, -e <kind>       llvm, object, or exe (default exe)
+  --backend <kind>        object (default) or deprecated textual backend
+  --incremental           cached bitcode compilation (default; use --incremental=false to disable)
+  --cache-dir <path>      incremental cache directory (default: user cache)
+  --incremental-explain   print per-module cache hit/miss reasons
   --opt, -O <0-3>         LLVM optimization level (default 3)
   --error-trace-slots <n> trace slots per runtime shard (default 1024)
+  --compiler-arg <N=V>    provide a typed @compiler_known constant (repeatable)
   --safety-warnings       downgrade memory-safety diagnostics to warnings
   --null-context          use null allocator and executor adapters for roots
   --target <triple>       compilation target (default: Clang native target)
@@ -43,25 +49,47 @@ options:
   --clang-version, -cv    print the resolved Clang version and path`
 
 type options struct {
-	inputFile       string
-	debug           bool
-	timings         bool
-	version         bool
-	out             string
-	emit            string
-	opt             int
-	errorTraceSlots uint64
-	safetyWarnings  bool
-	nullContext     bool
-	clangVersion    bool
-	target          string
-	targetOS        string
-	stdRoot         string
-	lsp             bool
+	inputFile          string
+	debug              bool
+	timings            bool
+	version            bool
+	out                string
+	emit               string
+	backend            string
+	incremental        bool
+	cacheDir           string
+	incrementalExplain bool
+	opt                int
+	errorTraceSlots    uint64
+	safetyWarnings     bool
+	nullContext        bool
+	clangVersion       bool
+	target             string
+	targetOS           string
+	stdRoot            string
+	lsp                bool
+	compilerArgs       compilerArgFlags
+}
+
+type compilerArgFlags map[string]string
+
+func (values *compilerArgFlags) String() string { return "" }
+
+func (values *compilerArgFlags) Set(value string) error {
+	name, supplied, ok := strings.Cut(value, "=")
+	if !ok || name == "" {
+		return fmt.Errorf("compiler argument must use NAME=VALUE")
+	}
+	if *values == nil {
+		*values = map[string]string{}
+	}
+	(*values)[name] = supplied
+	return nil
 }
 
 func parseArgs(args []string) (options, error) {
 	var opts options
+	defaultBackendOptions(&opts)
 	args = normalizeArgs(args)
 	flags := flag.NewFlagSet("magma", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -73,6 +101,10 @@ func parseArgs(args []string) (options, error) {
 	flags.StringVar(&opts.out, "o", "", "output path")
 	flags.StringVar(&opts.emit, "emit", "exe", "output kind")
 	flags.StringVar(&opts.emit, "e", "exe", "output kind")
+	flags.StringVar(&opts.backend, "backend", opts.backend, "object or deprecated textual backend")
+	flags.BoolVar(&opts.incremental, "incremental", opts.incremental, "cached bitcode compilation")
+	flags.StringVar(&opts.cacheDir, "cache-dir", "", "incremental cache directory")
+	flags.BoolVar(&opts.incrementalExplain, "incremental-explain", false, "explain incremental cache hits and misses")
 	flags.IntVar(&opts.opt, "opt", 3, "optimization level")
 	flags.IntVar(&opts.opt, "O", 3, "optimization level")
 	flags.Uint64Var(&opts.errorTraceSlots, "error-trace-slots", 1024, "error trace slots per runtime shard")
@@ -83,8 +115,18 @@ func parseArgs(args []string) (options, error) {
 	flags.StringVar(&opts.target, "target", "", "target triple or architecture")
 	flags.StringVar(&opts.stdRoot, "std", "", "standard-library directory")
 	flags.BoolVar(&opts.lsp, "lsp", false, "run the language server over stdio")
+	flags.Var(&opts.compilerArgs, "compiler-arg", "compiler-known constant NAME=VALUE (repeatable)")
 	if err := flags.Parse(args); err != nil {
 		return options{}, err
+	}
+	incrementalExplicit := false
+	flags.Visit(func(visited *flag.Flag) {
+		if visited.Name == "incremental" {
+			incrementalExplicit = true
+		}
+	})
+	if opts.backend == "textual" && !incrementalExplicit {
+		opts.incremental = false
 	}
 
 	if opts.version || opts.clangVersion || opts.lsp {
@@ -107,8 +149,26 @@ func parseArgs(args []string) (options, error) {
 	default:
 		return options{}, fmt.Errorf("invalid --emit value %q (expected llvm, object, or exe)", opts.emit)
 	}
+	if opts.emit == "llvm" {
+		if incrementalExplicit && opts.incremental {
+			return options{}, fmt.Errorf("incremental compilation does not support textual LLVM output; use --emit object or --emit exe")
+		}
+		// LLVM text output is retained as a whole-program inspection path. It
+		// cannot represent the linked cached-bitcode pipeline's native result.
+		opts.incremental = false
+	}
 	if opts.opt < 0 || opts.opt > 3 {
 		return options{}, fmt.Errorf("invalid --opt value %d (expected 0 through 3)", opts.opt)
+	}
+	if opts.backend != "" && opts.backend != "textual" && opts.backend != "object" {
+		return options{}, fmt.Errorf("invalid --backend value %q (expected textual or object)", opts.backend)
+	}
+	if supplied, ok := opts.compilerArgs["ERROR_TRACE_SLOTS"]; ok {
+		value, err := strconv.ParseUint(supplied, 0, 64)
+		if err != nil {
+			return options{}, fmt.Errorf("invalid compiler argument ERROR_TRACE_SLOTS=%q: %w", supplied, err)
+		}
+		opts.errorTraceSlots = value
 	}
 	if opts.errorTraceSlots == 0 || opts.errorTraceSlots > 1024 || opts.errorTraceSlots&(opts.errorTraceSlots-1) != 0 {
 		return options{}, fmt.Errorf("invalid --error-trace-slots value %d (expected a power of two from 1 through 1024)", opts.errorTraceSlots)
@@ -132,6 +192,9 @@ func normalizeArgs(args []string) []string {
 func wrappedMain() error {
 	opts, err := parseArgs(os.Args[1:])
 	if err != nil {
+		return err
+	}
+	if err := validateIncrementalOptions(opts); err != nil {
 		return err
 	}
 	debug.SetEnabled(opts.debug)
@@ -160,6 +223,9 @@ func wrappedMain() error {
 		}
 		fmt.Printf("Clang %s (%s)\n", version, path)
 		return nil
+	}
+	if opts.backend == "textual" {
+		fmt.Fprintln(os.Stderr, "warning: the textual LLVM IR backend is deprecated and will be removed in a future release")
 	}
 	stop = timings.start("Preparation", "Clang and target resolution")
 	clangPath, _, err := clangresolver.Resolve("")
@@ -203,15 +269,32 @@ func wrappedMain() error {
 		return e
 	}
 	s.ErrorTraceSlots = opts.errorTraceSlots
+	s.CompilerArgs["ERROR_TRACE_SLOTS"] = strconv.FormatUint(opts.errorTraceSlots, 10)
+	for name, value := range opts.compilerArgs {
+		s.CompilerArgs[name] = value
+	}
 	s.NullContext = opts.nullContext
 	s.Target = target
 	stop()
 
 	stop = timings.start("Front end", "parsing and imports")
+	// Persistent object caching is safe independently of declaration-only
+	// interface reuse. Interface materialization does not yet preserve every
+	// semantic detail needed by generic bodies, prototype implementations, and
+	// aggregate layouts, so normal builds parse source until it reaches parity.
 	parsed, e := compilerpipeline.Parse(s, absPath)
 	stop()
 	if e != nil {
 		return e
+	}
+	if opts.incremental {
+		safetyMode := "strict"
+		if opts.safetyWarnings {
+			safetyMode = "warnings"
+		}
+		if e = compilerpipeline.UseCachedSpecializations(s, opts.cacheDir, compilerVersion(), safetyMode); e != nil {
+			return e
+		}
 	}
 	stop = timings.start("Front end", "main module validation")
 	if e = compilerpipeline.RequireMainModule(parsed, absPath); e != nil {
@@ -253,20 +336,55 @@ func wrappedMain() error {
 		comp_err.FprintDiagnostic(os.Stderr, &s.Warnings[i])
 	}
 
-	stop = timings.start("Back end", "LLVM IR lowering")
-	irStr, e := compilerpipeline.LowerReachable(ready)
+	stop = timings.start("Back end", backendLoweringLabel(opts))
+	output, isObject, e := lowerBackend(ready, opts)
 	stop()
 	if e != nil {
 		return e
 	}
 
 	//debug.Printf("LLVM IR:\n%s\n", irStr)
-	debug.Printf("Successful lowering to LLVM\n")
+	debug.Printf("Successful lowering through %s\n", backendLoweringLabel(opts))
 
 	stop = timings.start("Back end", "output and Clang")
-	e = emitOutput(opts, irStr, nativeLibraries(s), bundledFiles(s))
+	if isObject {
+		e = emitObjectOutput(opts, output, nativeLibraries(s), bundledFiles(s), embeddedAssets(s))
+	} else {
+		e = emitOutput(opts, output, nativeLibraries(s), bundledFiles(s), embeddedAssets(s))
+	}
 	stop()
 	return e
+}
+
+type embeddedAsset struct {
+	Path   string
+	Symbol string
+	Size   uint64
+}
+
+func embeddedAssets(s *types.SharedState) []embeddedAsset {
+	bySymbol := map[string]embeddedAsset{}
+	for _, file := range s.Files {
+		if file == nil || file.GlNode == nil {
+			continue
+		}
+		for _, declaration := range file.GlNode.Declarations {
+			constant, ok := declaration.(*types.NodeConstDef)
+			if !ok {
+				continue
+			}
+			embedded, ok := constant.Initializer.(*types.NodeExprEmbed)
+			if ok {
+				bySymbol[embedded.Symbol] = embeddedAsset{Path: embedded.Path, Symbol: embedded.Symbol, Size: embedded.Size}
+			}
+		}
+	}
+	assets := make([]embeddedAsset, 0, len(bySymbol))
+	for _, asset := range bySymbol {
+		assets = append(assets, asset)
+	}
+	sort.Slice(assets, func(i, j int) bool { return assets[i].Symbol < assets[j].Symbol })
+	return assets
 }
 
 func nativeLibraries(s *types.SharedState) []string {
@@ -316,7 +434,10 @@ func defaultOutput(emit, targetOS string) string {
 	}
 }
 
-func emitOutput(opts options, ir []byte, nativeLibraries, bundles []string) error {
+func emitOutput(opts options, ir []byte, nativeLibraries, bundles []string, assets []embeddedAsset) error {
+	if len(assets) != 0 {
+		return emitOutputWithAssets(opts, ir, nativeLibraries, bundles, assets)
+	}
 	if opts.emit == "llvm" && opts.opt == 0 {
 		return os.WriteFile(opts.out, []byte(ir), 0666)
 	}
@@ -374,6 +495,184 @@ func emitOutput(opts options, ir []byte, nativeLibraries, bundles []string) erro
 		if err := copyBundles(opts.out, bundles); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func emitObjectOutput(opts options, object []byte, nativeLibraries, bundles []string, assets []embeddedAsset) error {
+	if opts.emit == "llvm" {
+		return fmt.Errorf("internal error: LLVM output was lowered as an object")
+	}
+	if dir := filepath.Dir(opts.out); dir != "." {
+		if _, err := os.Stat(dir); err != nil {
+			return fmt.Errorf("output directory %q: %w", dir, err)
+		}
+	}
+	if opts.emit == "object" && len(assets) == 0 {
+		return os.WriteFile(opts.out, object, 0666)
+	}
+
+	clangPath, clangVersion, err := clangresolver.Resolve("")
+	if err != nil {
+		return err
+	}
+	debug.Printf("using Clang %s at %s\n", clangVersion, clangPath)
+	temporaryDir, err := os.MkdirTemp("", "magma-object-*")
+	if err != nil {
+		return fmt.Errorf("create object-link workspace: %w", err)
+	}
+	defer os.RemoveAll(temporaryDir)
+	programObject := filepath.Join(temporaryDir, "program.o")
+	if err := os.WriteFile(programObject, object, 0600); err != nil {
+		return fmt.Errorf("write program object: %w", err)
+	}
+
+	inputs := []string{programObject}
+	if len(assets) != 0 {
+		assetSource := filepath.Join(temporaryDir, "assets.c")
+		assetObject := filepath.Join(temporaryDir, "assets.o")
+		if err := writeEmbeddedAssetSource(assetSource, assets); err != nil {
+			return err
+		}
+		assetArgs := []string{"-std=c23", "-O0", "-c", assetSource, "-o", assetObject}
+		if opts.target != "" {
+			assetArgs = append([]string{"--target=" + opts.target}, assetArgs...)
+		}
+		debug.Printf("running: %s %s\n", clangPath, strings.Join(assetArgs, " "))
+		if output, runErr := exec.Command(clangPath, assetArgs...).CombinedOutput(); runErr != nil {
+			return fmt.Errorf("Clang failed compiling embedded assets: %w\n%s", runErr, output)
+		}
+		inputs = append(inputs, assetObject)
+	}
+
+	args := make([]string, 0, len(inputs)+len(nativeLibraries)+8)
+	if opts.target != "" {
+		args = append(args, "--target="+opts.target)
+	}
+	if opts.emit == "object" {
+		args = append(args, "-r")
+	}
+	args = append(args, inputs...)
+	if opts.emit == "exe" {
+		for _, library := range nativeLibraries {
+			args = append(args, nativeLibraryArgs(library)...)
+		}
+		args = append(args, runtimeLibraryArgs(opts.targetOS)...)
+	}
+	args = append(args, "-o", opts.out)
+	debug.Printf("running: %s %s\n", clangPath, strings.Join(args, " "))
+	command := exec.Command(clangPath, args...)
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	linkStart := time.Now()
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("Clang failed linking object output: %w", err)
+	}
+	if os.Getenv("MAGMA_LLVM_TIMINGS") != "" {
+		fmt.Fprintf(os.Stderr, "LLVM_TIMING clang_link_ns=%d\n", time.Since(linkStart).Nanoseconds())
+	}
+	if opts.emit == "exe" {
+		return copyBundles(opts.out, bundles)
+	}
+	return nil
+}
+
+func emitOutputWithAssets(opts options, ir []byte, nativeLibraries, bundles []string, assets []embeddedAsset) error {
+	if opts.emit == "llvm" {
+		return fmt.Errorf("--emit llvm cannot represent @embed payloads; use --emit object or --emit exe")
+	}
+	clangPath, clangVersion, err := clangresolver.Resolve("")
+	if err != nil {
+		return err
+	}
+	debug.Printf("using Clang %s at %s\n", clangVersion, clangPath)
+	if dir := filepath.Dir(opts.out); dir != "." {
+		if _, err := os.Stat(dir); err != nil {
+			return fmt.Errorf("output directory %q: %w", dir, err)
+		}
+	}
+
+	temporaryDir, err := os.MkdirTemp("", "magma-embed-*")
+	if err != nil {
+		return fmt.Errorf("create embedding workspace: %w", err)
+	}
+	defer os.RemoveAll(temporaryDir)
+	programIR := filepath.Join(temporaryDir, "program.ll")
+	assetSource := filepath.Join(temporaryDir, "assets.c")
+	programObject := filepath.Join(temporaryDir, "program.o")
+	assetObject := filepath.Join(temporaryDir, "assets.o")
+	if err := os.WriteFile(programIR, ir, 0600); err != nil {
+		return fmt.Errorf("write temporary LLVM file: %w", err)
+	}
+	if err := writeEmbeddedAssetSource(assetSource, assets); err != nil {
+		return err
+	}
+
+	targetArg := []string{}
+	if opts.target != "" {
+		targetArg = append(targetArg, "--target="+opts.target)
+	}
+	type compileResult struct {
+		name   string
+		output []byte
+		err    error
+	}
+	results := make(chan compileResult, 2)
+	programArgs := append(append([]string{}, targetArg...), "-Wno-override-module", "-O"+strconv.Itoa(opts.opt), "-c", programIR, "-o", programObject)
+	assetArgs := append(append([]string{}, targetArg...), "-std=c23", "-O0", "-c", assetSource, "-o", assetObject)
+	for name, args := range map[string][]string{"LLVM program": programArgs, "embedded assets": assetArgs} {
+		go func(name string, args []string) {
+			debug.Printf("running: %s %s\n", clangPath, strings.Join(args, " "))
+			output, runErr := exec.Command(clangPath, args...).CombinedOutput()
+			results <- compileResult{name: name, output: output, err: runErr}
+		}(name, args)
+	}
+	var compileErr error
+	for range 2 {
+		result := <-results
+		if result.err != nil && compileErr == nil {
+			compileErr = fmt.Errorf("Clang failed compiling %s: %w\n%s", result.name, result.err, result.output)
+		}
+	}
+	if compileErr != nil {
+		return compileErr
+	}
+
+	args := append([]string{}, targetArg...)
+	if opts.emit == "object" {
+		args = append(args, "-r", programObject, assetObject)
+	} else {
+		args = append(args, programObject, assetObject)
+		for _, library := range nativeLibraries {
+			args = append(args, nativeLibraryArgs(library)...)
+		}
+		args = append(args, runtimeLibraryArgs(opts.targetOS)...)
+	}
+	args = append(args, "-o", opts.out)
+	debug.Printf("running: %s %s\n", clangPath, strings.Join(args, " "))
+	command := exec.Command(clangPath, args...)
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("Clang failed linking embedded assets: %w", err)
+	}
+	if opts.emit == "exe" {
+		return copyBundles(opts.out, bundles)
+	}
+	return nil
+}
+
+func writeEmbeddedAssetSource(path string, assets []embeddedAsset) error {
+	var source strings.Builder
+	for _, asset := range assets {
+		if asset.Size == 0 {
+			fmt.Fprintf(&source, "const unsigned char %s[1] = {0};\n", asset.Symbol)
+			continue
+		}
+		fmt.Fprintf(&source, "const unsigned char %s[] = {\n#embed %s\n};\n", asset.Symbol, strconv.Quote(filepath.ToSlash(asset.Path)))
+	}
+	if err := os.WriteFile(path, []byte(source.String()), 0600); err != nil {
+		return fmt.Errorf("write embedded-asset source: %w", err)
 	}
 	return nil
 }

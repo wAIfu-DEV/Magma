@@ -19,6 +19,7 @@ const (
 	MdPublic     ModifierType = "pub"
 	MdDestructor ModifierType = "destr"
 	MdNoCtx      ModifierType = "noctx"
+	MdGlobal     ModifierType = "global"
 )
 
 type ParseCtx struct {
@@ -32,6 +33,7 @@ type ParseCtx struct {
 	NextExportName  string
 	NextExportABI   string
 	NextNoRetain    bool
+	LambdaCounter   uint64
 
 	PruneNext  bool
 	ModuleSeen bool
@@ -197,27 +199,31 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token, prune bool) error {
 			ctx.Fctx,
 			&tk,
 			"syntax error: expected file path after 'use'",
-			"expected: `use \"<filepath>\" <alias>`",
+			"expected: `use \"<filepath>\" as <alias>`",
 		)
 	}
 
-	alias, e := peekNth(ctx, 2)
+	aliasOffset := 2
+	if as, asErr := peekNth(ctx, 2); asErr == nil && as.KeywType == t.KwAs {
+		aliasOffset = 3
+	}
+	alias, e := peekNth(ctx, aliasOffset)
 	if e != nil || alias.Type != t.TokName {
 		return comp_err.CompilationErrorToken(
 			ctx.Fctx,
 			&tk,
 			"syntax error: expected alias after file path in 'use' statement",
-			"expected: `use \"<filepath>\" <alias>`",
+			"expected: `use \"<filepath>\" as <alias>`",
 		)
 	}
 
-	newln, e := peekNth(ctx, 3)
+	newln, e := peekNth(ctx, aliasOffset+1)
 	if e != nil && !errors.Is(e, errOutOfBounds) {
 		return comp_err.CompilationErrorToken(
 			ctx.Fctx,
 			&tk,
 			fmt.Sprintf("syntax error: expected end of line after file path but got '%s'", newln.Repr),
-			"expected: `use \"<filepath>\" <alias>(\\n)`",
+			"expected: `use \"<filepath>\" as <alias>(\\n)`",
 		)
 	}
 
@@ -232,6 +238,12 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token, prune bool) error {
 	}
 
 	absPath, err := makeabs.ResolveImport(path.Repr, ctx.Fctx.FilePath, ctx.Shared.StdRoot)
+	if err != nil {
+		absPath = interfaceImportPath(ctx.Shared, path.Repr, ctx.Fctx.FilePath)
+		if absPath != "" {
+			err = nil
+		}
+	}
 	if err != nil {
 		return comp_err.CompilationErrorToken(
 			ctx.Fctx,
@@ -252,6 +264,9 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token, prune bool) error {
 
 	consume(ctx) // use
 	consume(ctx) // path
+	if aliasOffset == 3 {
+		consume(ctx) // as
+	}
 	consume(ctx) // alias
 	consume(ctx) // newln
 
@@ -274,6 +289,30 @@ func parseUseDecl(ctx *ParseCtx, tk t.Token, prune bool) error {
 	ctx.Shared.PipeChans = append(ctx.Shared.PipeChans, c)
 	ctx.Shared.PipeChansM.Unlock()
 	return nil
+}
+
+func interfaceImportPath(shared *t.SharedState, specifier, importedFrom string) string {
+	if len(shared.InterfaceFiles) == 0 {
+		return ""
+	}
+	var candidate string
+	if strings.HasPrefix(specifier, "std:") {
+		candidate = filepath.Join(shared.StdRoot, filepath.FromSlash(strings.TrimPrefix(specifier, "std:")))
+	} else if filepath.IsAbs(specifier) {
+		candidate = specifier
+	} else {
+		candidate = filepath.Join(filepath.Dir(importedFrom), filepath.FromSlash(specifier))
+	}
+	candidates := []string{filepath.Clean(candidate)}
+	if filepath.Ext(candidate) == "" {
+		candidates = append(candidates, filepath.Clean(candidate+".mg"))
+	}
+	for _, path := range candidates {
+		if shared.InterfaceFiles[path] != nil {
+			return path
+		}
+	}
+	return ""
 }
 
 func parseLinkDecl(ctx *ParseCtx, tk t.Token, prune bool) error {

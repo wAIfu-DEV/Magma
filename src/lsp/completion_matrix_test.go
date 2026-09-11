@@ -98,9 +98,11 @@ func TestCompletionContextMatrix(t *testing.T) {
 			items := complete("file:///"+filepath.ToSlash(path), source, position{Line: line, Character: character}, testStdRoot())
 			labels := map[string]bool{}
 			kinds := map[string]int{}
+			byLabel := map[string]completionItem{}
 			for _, item := range items {
 				labels[item.Label] = true
 				kinds[item.Label] = item.Kind
+				byLabel[item.Label] = item
 			}
 			for _, want := range test.want {
 				if !labels[want] {
@@ -127,7 +129,50 @@ func TestCompletionContextMatrix(t *testing.T) {
 					}
 				}
 			}
+			if test.name == "intrinsic string" {
+				free := byLabel["~free"]
+				if free.InsertText != "free" || free.Detail != "destr str.free() void" {
+					t.Errorf("intrinsic string destructor completion is stale: %#v", free)
+				}
+				if free.Documentation == nil {
+					t.Errorf("intrinsic string destructor completion omitted documentation: %#v", free)
+				} else if documentation, _ := free.Documentation["value"].(string); !strings.Contains(documentation, "embedded") || !strings.Contains(documentation, "allocator") || strings.Contains(documentation, "@param a") {
+					t.Errorf("intrinsic string destructor documentation is stale: %q", documentation)
+				}
+			}
 		})
+	}
+}
+
+func TestMemberCompletionRetainsParsedPrefixAfterLaterSyntaxError(t *testing.T) {
+	directory := t.TempDir()
+	dependency := filepath.Join(directory, "dependency.mg")
+	if err := os.WriteFile(dependency, []byte(completionMatrixDependency), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := `mod completion
+use "./dependency.mg" dep
+main(item dep.Thing*) !void:
+    result := try item.
+..
+
+later() void:
+    callback := fn(value dep.Thing) void:
+    ..
+`
+	path := filepath.Join(directory, "completion.mg")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	items := complete("file:///"+filepath.ToSlash(path), source, position{Line: 3, Character: 23}, testStdRoot())
+	labels := map[string]bool{}
+	for _, item := range items {
+		labels[item.Label] = true
+	}
+	for _, want := range []string{"touch", "value"} {
+		if !labels[want] {
+			t.Fatalf("completion labels %v do not include %q", labels, want)
+		}
 	}
 }
 
@@ -179,11 +224,11 @@ func TestExpressionCompletionWithOtherIncompleteStatements(t *testing.T) {
 
 func TestCompletionInNestedFileDialogCondition(t *testing.T) {
 	source := `mod main
-use "std:allocator" allocator
-use "std:dialog" dialog
-use "std:errors" errors
-use "std:heap" heap
-use "std:io" io
+use "std:allocator" as allocator
+use "std:dialog" as dialog
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:io" as io
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()
@@ -196,7 +241,7 @@ pub main() !void:
         ..
         throw dialogError
     ..
-    defer selected.free(a)
+    defer selected.free()
     try io.printLn(selected)
 ..
 `

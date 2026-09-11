@@ -1,9 +1,9 @@
 mod args
 # Allocation-free helpers for the argument slice supplied to main.
 
-use "std:slices" slices
-use "std:errors" errors
-use "std:iterator" iterator
+use "std:slices" as slices
+use "std:errors" as errors
+use "std:iterator" as iterator
 
 pub Args(
     raw str[]

@@ -1,8 +1,8 @@
 mod main
 
-use "std:arena_alloc" arena_alloc
-use "std:errors" errors
-use "std:heap" heap
+use "std:arena_alloc" as arena_alloc
+use "std:errors" as errors
+use "std:heap" as heap
 
 pub main() !void:
     arena := try arena_alloc.new(1024)

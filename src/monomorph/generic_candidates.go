@@ -128,6 +128,10 @@ func (m *monoCtx) resolveCandidateExpr(module string, gl *t.NodeGlobal, expr t.N
 		node.Expr = m.resolveCandidateExpr(module, gl, node.Expr)
 	case *t.NodeExprMove:
 		node.Expr = m.resolveCandidateExpr(module, gl, node.Expr)
+	case *t.NodeExprLlvm:
+		for i := range node.Args {
+			node.Args[i] = m.resolveCandidateExpr(module, gl, node.Args[i])
+		}
 	case *t.NodeExprDestructureAssign:
 		if call, ok := m.resolveCandidateExpr(module, gl, node.Call).(*t.NodeExprCall); ok {
 			node.Call = call

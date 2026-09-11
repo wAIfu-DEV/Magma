@@ -12,6 +12,7 @@ import (
 	"Magma/src/join"
 	llvmir "Magma/src/llvm_ir"
 	loweringvalidate "Magma/src/lowering_validate"
+	moduleinterface "Magma/src/module_interface"
 	"Magma/src/monomorph"
 	"Magma/src/pipeline"
 	magmatarget "Magma/src/target"
@@ -64,6 +65,22 @@ func RequireMainModule(program ParsedProgram, rootPath string) error {
 }
 
 func Specialize(program ParsedProgram) (SpecializedProgram, error) {
+	// Capture public generic signatures before monomorphization prunes templates
+	// and appends concrete instances.
+	for _, file := range program.state.Files {
+		if file == nil || file.InterfaceOnly || file.GlNode == nil || len(file.InterfaceSnapshot) != 0 {
+			continue
+		}
+		value, err := moduleinterface.Generate(program.state, file, "semantic-snapshot")
+		if err != nil {
+			return SpecializedProgram{}, comp_err.AtStage("interface snapshot", err)
+		}
+		data, err := moduleinterface.Encode(value)
+		if err != nil {
+			return SpecializedProgram{}, comp_err.AtStage("interface snapshot", err)
+		}
+		file.InterfaceSnapshot = data
+	}
 	if err := monomorph.Run(program.state); err != nil {
 		return SpecializedProgram{}, comp_err.AtStage("specialization", err)
 	}
@@ -71,10 +88,32 @@ func Specialize(program ParsedProgram) (SpecializedProgram, error) {
 }
 
 func Link(program SpecializedProgram) (LinkedProgram, error) {
+	if err := validateProgramSymbols(program.state); err != nil {
+		return LinkedProgram{}, comp_err.AtStage("linking", err)
+	}
 	if err := checker.CheckLinks(program.state); err != nil {
 		return LinkedProgram{}, comp_err.AtStage("linking", err)
 	}
 	return LinkedProgram{state: program.state}, nil
+}
+
+func validateProgramSymbols(state *types.SharedState) error {
+	exports := map[string]string{}
+	for _, file := range state.Files {
+		if file == nil || file.GlNode == nil {
+			continue
+		}
+		for _, function := range file.GlNode.FuncDefs {
+			if function == nil || function.ExportName == "" {
+				continue
+			}
+			if previous := exports[function.ExportName]; previous != "" && previous != function.AbsName {
+				return fmt.Errorf("native export name %q is defined by both %q and %q", function.ExportName, previous, function.AbsName)
+			}
+			exports[function.ExportName] = function.AbsName
+		}
+	}
+	return nil
 }
 
 func CheckTypes(program LinkedProgram) (TypedProgram, error) {

@@ -2,13 +2,13 @@ mod main
 # Minimal callback-based echo server. The listener runs on a worker thread and
 # the main thread can perform unrelated work before stopping and awaiting it.
 
-use "std:context" context
-use "std:heap" heap
-use "std:thread_pool" thread_pool
-use "std:time" time
-use "std:net/address" address
-use "std:net/listener" listener
-use "std:net/tcp" tcp
+use "std:context" as context
+use "std:heap" as heap
+use "std:thread_pool" as thread_pool
+use "std:time" as time
+use "std:net/address" as address
+use "std:net/listener" as listener
+use "std:net/tcp" as tcp
 
 onClient(c ptr, stream $tcp.Stream) !void:
     defer stream.close()
@@ -16,7 +16,7 @@ onClient(c ptr, stream $tcp.Stream) !void:
     output := try stream.writer()
     a := heap.allocator()
     bytes := try input.read(4096)
-    defer bytes.free(a)
+    defer bytes.free()
     try output.writeAll(bytes)
 ..
 

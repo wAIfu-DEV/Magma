@@ -1,13 +1,13 @@
 mod net_poll_impl_linux
 # epoll backend with eventfd wakeup and a reusable native event slab.
 
-use "std:c" c
-use "std:allocator" allocator
-use "std:cast" cast
-use "std:errors" errors
-use "std:memory" memory
-use "std:slices" slices
-use "std:atomic" atomic
+use "std:c" as c
+use "std:allocator" as allocator
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:memory" as memory
+use "std:slices" as slices
+use "std:atomic" as atomic
 
 pub NativeEvent(token u64, flags u32)
 
@@ -55,7 +55,7 @@ writeEvent(storage u8*, flags u32, token u64) void:
 
 control(poller Poller*, operation i32, handle ptr, token u64, flags u32) !void:
     raw := array u8[12]
-    rawPointer u8* = slices.toPtr(raw)
+    rawPointer u8* = cast.reinterpret[u8](slices.toPtr(raw))
     writeEvent(rawPointer, nativeFlags(flags), token)
     if ext_epoll_ctl(poller.epollFd, operation, handleFd(handle), rawPointer) != 0:
         throw errors.failure("epoll registration failed")

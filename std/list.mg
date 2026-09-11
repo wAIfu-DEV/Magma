@@ -6,22 +6,22 @@ mod list
 # This means List will always have a larger memory footprint than array.
 # Prefer using Array instead of List if you make use of composition
 
-use "std:allocator" alc
-use "std:array"     arr
-use "std:iterator"  iter
+use "std:allocator" as alc
+use "std:array"     as arr
+use "std:iterator"  as iter
 
 # Growable owning sequence that retains its allocator for convenient mutation.
 pub List[T](
     allocator alc.Allocator
     array     arr.Array[T]
-    cleanup   (alc.Allocator, $T) void
+    cleanup   ($T) void
 )
 
 # Creates an empty list with an optional element cleanup callback.
 # @complexity O(1), excluding allocation
 # @example
 #   values := try list.new[Value](a, freeValue)
-pub new[T](a alc.Allocator, cleanup (alc.Allocator, $T) void) !$List[T]:
+pub new[T](a alc.Allocator, cleanup ($T) void) !$List[T]:
 	ret List[T](
         allocator=a,
 		array=try arr.new[T](a),
@@ -34,7 +34,7 @@ pub new[T](a alc.Allocator, cleanup (alc.Allocator, $T) void) !$List[T]:
 # @complexity O(1)
 # @example
 #   values := list.fromArray[Value](a, backing, freeValue)
-pub fromArray[T](a alc.Allocator, array $arr.Array[T], cleanup (alc.Allocator, $T) void) $List[T]:
+pub fromArray[T](a alc.Allocator, array $arr.Array[T], cleanup ($T) void) $List[T]:
 	ret List[T](allocator=a, array=move array, cleanup=cleanup)
 ..
 

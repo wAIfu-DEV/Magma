@@ -1,7 +1,7 @@
 mod sort
 # In-place generic sorting and reversal operations for slices.
 
-use "std:slices" slices
+use "std:slices" as slices
 
 # Sorts a slice in ascending comparator order using stable insertion sort.
 # @complexity O(N²) comparisons and swaps; O(N) for an already sorted slice

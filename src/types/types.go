@@ -6,8 +6,11 @@ import (
 )
 
 type StructDef struct {
-	Module     string
-	Name       string
+	Module string
+	Name   string
+	// CoreRole identifies a language-level core type whose canonical storage
+	// layout is supplied by this source declaration.
+	CoreRole   CoreTypeRole
 	IsPublic   bool
 	TypeParams []string
 
@@ -23,6 +26,21 @@ type StructDef struct {
 
 	Destructor  *NodeFuncDef
 	Destructors []*NodeFuncDef
+}
+
+type UnionDef struct {
+	Module   string
+	Name     string
+	IsPublic bool
+	Variants []*UnionVariant
+}
+
+type UnionVariant struct {
+	Name   string
+	Tk     Token
+	Tag    int
+	Fields []NodeArg
+	Owner  *UnionDef
 }
 
 type ProtoDef struct {
@@ -79,6 +97,7 @@ type MemberAccess struct {
 
 type FileCtx struct {
 	FilePath        string
+	ModuleID        ModuleID
 	ModuleName      string
 	PackageName     string
 	MainPckgName    string
@@ -91,6 +110,12 @@ type FileCtx struct {
 	Tokens          []Token
 	GlNode          *NodeGlobal
 	ScopeTree       Scope
+	// InterfaceOnly marks a declaration-only module materialized from .mgi.
+	// It has no implementation source or bodies to check or lower.
+	InterfaceOnly bool
+	// InterfaceSnapshot is canonical pre-specialization semantic interface data.
+	// It is not an AST cache and remains stable as concrete generic requests vary.
+	InterfaceSnapshot []byte
 }
 
 type SharedState struct {
@@ -102,12 +127,30 @@ type SharedState struct {
 	ErrorTraceSlots uint64
 	NullContext     bool
 	Target          target.Target
+	CoreTypes       map[CoreTypeRole]*StructDef
+	CoreMethods     map[string]*NodeFuncDef
+	CompilerArgs    map[string]string
 
 	ImportedFiles  map[string]<-chan error
 	ImportedFilesM sync.Mutex
 
 	Files  map[string]*FileCtx
 	FilesM sync.Mutex
+	// ModuleNames detects the unlikely case where two full module identities
+	// produce the same shortened package name used by LLVM symbols.
+	ModuleNames  map[string]ModuleID
+	ModuleNamesM sync.Mutex
+	// InterfaceFiles contains declaration-only modules keyed by the source path
+	// used in local import statements during interface-backed compilation.
+	InterfaceFiles map[string]*FileCtx
+	// GenericProviderLoader reparses a declaration-only provider on demand when
+	// specialization needs its template body. Ordinary interface-backed calls
+	// never invoke it.
+	GenericProviderLoader func(packageName string) (*FileCtx, error)
+	// GenericSpecializationHit reports whether provider-owned specialization
+	// bitcode is already available, allowing monomorphization to materialize a
+	// signature-only local stub without reparsing the provider body.
+	GenericSpecializationHit func(packageName, symbol string) bool
 
 	// SourceOverrides lets editor tooling analyze unsaved buffers while imports
 	// continue to be loaded from disk.

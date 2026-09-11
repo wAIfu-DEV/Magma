@@ -1,8 +1,8 @@
 mod net_udp
 # UDP datagram sockets.
 
-use "std:net/address" address
-use "std:net/socket" socket
+use "std:net/address" as address
+use "std:net/socket" as socket
 
 pub Datagram(
     socket socket.Socket

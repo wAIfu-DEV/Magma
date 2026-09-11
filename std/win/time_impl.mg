@@ -2,9 +2,10 @@ mod time_impl_win
 # Windows clock backend used by the portable time module.
 
 
-use "std:win/types" win
-use "std:errors" err
-use "std:cast" cast
+use "std:win/types" as win
+use "std:errors" as err
+use "std:cast" as cast
+use "std:llvm" as ll
 
 ext ext_win32_QueryPerformanceCounter        QueryPerformanceCounter(value win.LONGLONG*) win.BOOL
 ext ext_win32_QueryPerformanceFrequency      QueryPerformanceFrequency(value win.LONGLONG*) win.BOOL
@@ -18,20 +19,14 @@ FileTime(
     highDateTime u32,
 )
 
-llvm "@magma.time.tick.frequency = internal global i64 0, align 8\n"
+global tickFrequency u64
 
 loadTickFrequency() u64:
-    unsafe:
-        llvm "  %value = load atomic i64, ptr @magma.time.tick.frequency acquire, align 8\n"
-        llvm "  ret i64 %value\n"
-    ..
+    ret ll.atomicLoadAcquireU64(addrof tickFrequency)
 ..
 
 publishTickFrequency(value u64) void:
-    unsafe:
-        llvm "  store atomic i64 %value, ptr @magma.time.tick.frequency release, align 8\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreReleaseU64(addrof tickFrequency, value)
 ..
 
 fileTimeValue(value FileTime*) u64:

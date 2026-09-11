@@ -1,6 +1,6 @@
 mod main
-use "std:errors" errors
-use "std:dialog" dialog
+use "std:errors" as errors
+use "std:dialog" as dialog
 
 pub main() !void:
     configuration := dialog.defaultOptions()

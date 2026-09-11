@@ -106,7 +106,11 @@ func parseCompilerDirective(ctx *ParseCtx, tk t.Token) error {
 		found := false
 
 		for _, tok := range dirArgs {
-			if string(ctx.Shared.Target.OS) == tok.Repr {
+			// A platform selector may name either an operating system or a
+			// target architecture.  OS-only selectors retain their historical
+			// behavior while architecture selectors make low-level code such as
+			// inline assembly safely conditional.
+			if string(ctx.Shared.Target.OS) == tok.Repr || string(ctx.Shared.Target.Arch) == tok.Repr {
 				found = true
 
 				if found {

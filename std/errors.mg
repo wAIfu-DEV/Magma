@@ -1,6 +1,10 @@
 mod errors
 # Error construction, classification, and bounded propagation-trace inspection.
 
+use "std:cast" as cast
+
+ext ext_error_printf printf(format u8*, a u64, b u64, c u64, d u64) i32
+
 pub const ERR_OK u32 = 0
 pub const ERR_FAIL u32 = 1
 pub const ERR_INVALID_ARG u32 = 2
@@ -25,115 +29,87 @@ pub Trace(
 )
 
 # Internal bridge from the built-in error representation.
-traceHandle(e error) u64:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %t = call i64 @magma.error.trace(%type.error %e)\n"
-        llvm "  ret i64 %t\n"
-    ..
+noctx traceHandle(e error) u64:
+    ret e.traceHandle()
 ..
 
 # Returns an allocation-free cursor over the propagation trace.
 # @complexity O(1)
 # @example
 #   cursor := errors.trace(failure)
-pub trace(e error) Trace:
+pub noctx trace(e error) Trace:
     ret Trace(handle=traceHandle(e))
 ..
 
-traceStatus(handle u64) u32:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %status = call i32 @magma.error.trace.status(i64 %handle)\n"
-        llvm "  ret i32 %status\n"
-    ..
+noctx traceStatus(handle u64) u32:
+    ret handle.errorTraceStatus()
 ..
 
 # Reports whether the cursor has no current propagation site.
 # @complexity O(1)
-pub Trace.isEmpty() bool:
+pub noctx Trace.isEmpty() bool:
     ret traceStatus(this.handle) != 0
 ..
 
 # Returns true when traversal reached its safety bound or observed a node being
 # replaced concurrently. Check the terminal cursor after iteration.
 # @complexity O(1)
-pub Trace.isTruncated() bool:
+pub noctx Trace.isTruncated() bool:
     ret traceStatus(this.handle) == 2
 ..
 
-traceNext(handle u64) u64:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %next = call i64 @magma.error.trace.next(i64 %handle)\n"
-        llvm "  ret i64 %next\n"
-    ..
+noctx traceNext(handle u64) u64:
+    ret handle.errorTraceNext()
 ..
 
 # Advances toward the error's origin. Calling this on an empty cursor is invalid.
 # @complexity O(1)
-pub Trace.next() Trace:
+pub noctx Trace.next() Trace:
     ret Trace(handle=traceNext(this.handle))
 ..
 
 # The following accessors are valid only for a non-empty cursor.
-traceFunction(handle u64) str:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %value = call %type.str @magma.error.trace.function(i64 %handle)\n"
-        llvm "  ret %type.str %value\n"
-    ..
+noctx traceFunction(handle u64) str:
+    ret handle.errorTraceFunction()
 ..
 
 # Returns the function name at the current trace site.
 # @complexity O(1)
 # @warning The cursor must not be empty.
-pub Trace.function() str:
+pub noctx Trace.function() str:
     ret traceFunction(this.handle)
 ..
 
-traceFile(handle u64) str:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %value = call %type.str @magma.error.trace.file(i64 %handle)\n"
-        llvm "  ret %type.str %value\n"
-    ..
+noctx traceFile(handle u64) str:
+    ret handle.errorTraceFile()
 ..
 
 # Returns the source file at the current trace site.
 # @complexity O(1)
 # @warning The cursor must not be empty.
-pub Trace.file() str:
+pub noctx Trace.file() str:
     ret traceFile(this.handle)
 ..
 
-traceLine(handle u64) u32:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %value = call i32 @magma.error.trace.line(i64 %handle)\n"
-        llvm "  ret i32 %value\n"
-    ..
+noctx traceLine(handle u64) u32:
+    ret handle.errorTraceLine()
 ..
 
 # Returns the one-based source line at the current trace site.
 # @complexity O(1)
 # @warning The cursor must not be empty.
-pub Trace.line() u32:
+pub noctx Trace.line() u32:
     ret traceLine(this.handle)
 ..
 
-traceColumn(handle u64) u32:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %value = call i32 @magma.error.trace.column(i64 %handle)\n"
-        llvm "  ret i32 %value\n"
-    ..
+noctx traceColumn(handle u64) u32:
+    ret handle.errorTraceColumn()
 ..
 
 # Returns the one-based source column at the current trace site.
 # @complexity O(1)
 # @warning The cursor must not be empty.
-pub Trace.column() u32:
+pub noctx Trace.column() u32:
     ret traceColumn(this.handle)
 ..
 
@@ -141,12 +117,27 @@ pub Trace.column() u32:
 # @complexity O(N), where N is the retained trace length
 # @example
 #   errors.printTrace(failure)
-pub printTrace(e error) void:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  call void @magma.error.printTrace(%type.error %e)\n"
-        llvm "  ret void\n"
+pub noctx printTrace(e error) void:
+    cursor := trace(e)
+    loop cursor.isEmpty() == false:
+        function := cursor.function()
+        file := cursor.file()
+        format := "  at %s (%s:%u:%u)\n"
+        ext_error_printf(format.__data, cast.ptou(function.__data), cast.ptou(file.__data), cast.u32to64(cursor.line()), cast.u32to64(cursor.column()))
+        cursor = cursor.next()
     ..
+    if cursor.isTruncated():
+        warning := "  ... trace truncated: diagnostic storage was reused or traversal reached its bound\n"
+        ext_error_printf(warning.__data, 0, 0, 0, 0)
+    ..
+..
+
+# Prints an uncaught error and its propagation trace without requiring an
+# initialized Magma context.
+pub noctx printUncaught(e error) void:
+    format := "Uncaught Error: %u '%.*s'\n"
+    ext_error_printf(format.__data, cast.u32to64(e.code()), cast.u16to64(e.__messageLength), cast.ptou(e.__message), 0)
+    printTrace(e)
 ..
 
 # Reports whether two errors belong to the same numeric category.
@@ -213,18 +204,9 @@ pub toStr(e error) str:
 # bytes retain their first 65,535 bytes.
 # @complexity O(1).
 makeErr(errorCode u32, msg str) error:
-	# SAFETY: this audited implementation injects the required low-level IR.
-	unsafe:
-        llvm "  %mp = extractvalue %type.str %msg, 0\n"
-        llvm "  %ml64 = extractvalue %type.str %msg, 1\n"
-        llvm "  %too.long = icmp ugt i64 %ml64, 65535\n"
-        llvm "  %bounded = select i1 %too.long, i64 65535, i64 %ml64\n"
-        llvm "  %ml = trunc i64 %bounded to i16\n"
-        llvm "  %e0 = insertvalue %type.error zeroinitializer, ptr %mp, 0\n"
-        llvm "  %e1 = insertvalue %type.error %e0, i32 %errorCode, 1\n"
-        llvm "  %e2 = insertvalue %type.error %e1, i16 %ml, 3\n"
-        llvm "  ret %type.error %e2\n"
-	..
+    length := msg.__byteCount
+    if length > 65535: length = 65535 ..
+    ret error(__message=msg.__data, __code=errorCode, __traceSlot=0, __messageLength=cast.u64to16(length))
 ..
 
 # Wraps a platform error code without allocating a formatted message. The high
@@ -256,10 +238,7 @@ pub nativeCode(e error) u32:
 # @example
 #   ret errors.ok()
 pub ok() error:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  ret %type.error zeroinitializer\n"
-    ..
+    ret error(__message=none, __code=0, __traceSlot=0, __messageLength=0)
 ..
 
 # Returns an error with code 1 indicating an opaque error.

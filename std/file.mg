@@ -1,22 +1,22 @@
 mod file
 # Portable file handles with reader, writer, seeking, and explicit cleanup.
 
-use "std:allocator" alc
-use "std:errors"    errors
-use "std:writer"    w
-use "std:reader"    r
-use "std:file_op_mode" fopm
-use "std:cast"      cast
-use "std:future"    future
-use "std:abort"     abort
-use "std:strings"   strings
-use "std:slices"    slices
+use "std:allocator" as alc
+use "std:errors"    as errors
+use "std:writer"    as w
+use "std:reader"    as r
+use "std:file_op_mode" as fopm
+use "std:cast"      as cast
+use "std:future"    as future
+use "std:abort"     as abort
+use "std:strings"   as strings
+use "std:slices"    as slices
 
 @platform("windows")
-use "std:win/file_impl" impl_file
+use "std:win/file_impl" as impl_file
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/file_impl" impl_file
+use "std:unix/file_impl" as impl_file
 
 # File handle wrapper and state.
 # @complexity O(1).
@@ -137,7 +137,7 @@ runReadAt(task ReadTask*, signal abort.Signal) !$str:
     try signal.check()
     if task.hasExternal: try task.external.check() ..
     result $str = try strings.alloc(task.count)
-    onerror result.free(task.allocator)
+    onerror result.free()
     base := strings.toPtr(result)
     total u64 = 0
     loop total < task.count:

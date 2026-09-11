@@ -6,12 +6,12 @@
 a := heap.allocator()
 try fs.writeFile("message.txt", "hello")
 contents := try fs.readFile("message.txt")
-defer contents.free(a)
+defer contents.free()
 ```
 
 Whole-file, directory, metadata, traversal, and path-resolution operations.
 
-- `pub readFile(a alc.Allocator, path str) !$str` opens and reads the complete file into an owned string, then closes the file. The caller frees the result with the same allocator.
+- `readFile(path str) !$str` opens and reads the complete file into an owned string, then closes the file. The caller releases the result with `str.free()`.
 - `pub readRange(path str, offset u64, count u64) !$str` performs a path-based positional read without exposing a persistent positional handle. Windows keeps its overlapped handle private to this operation.
 - `pub writeFile(a alc.Allocator, path str, contents str) !void` creates or truncates a file, writes all `contents`, and closes it.
 - `pub removeFile(a alc.Allocator, path str) !void` removes a file.
@@ -61,5 +61,5 @@ alive and open throughout iteration.
 try fs.makeDirs("cache/objects")
 try fs.copyFile("input.bin", "cache/objects/input.bin")
 resolved := try fs.canonicalize("cache/objects")
-defer resolved.free(a)
+defer resolved.free()
 ```

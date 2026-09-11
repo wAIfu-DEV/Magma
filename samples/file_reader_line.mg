@@ -1,11 +1,11 @@
 mod main
 
-use "../std/heap.mg"      heap
-use "../std/io.mg"        io
-use "../std/file.mg"      file
-use "../std/buffered.mg"  buff
-use "../std/errors.mg"    err
-use "../std/strings.mg"   strs
+use "../std/heap.mg"      as heap
+use "../std/io.mg"        as io
+use "../std/file.mg"      as file
+use "../std/buffered.mg"  as buff
+use "../std/errors.mg"    as err
+use "../std/strings.mg"   as strs
 
 main(args str[]) !void:
     a := heap.allocator()
@@ -25,7 +25,7 @@ main(args str[]) !void:
         try stdout.flush()
 
         input := try stdin.readLn(a)
-        defer input.free(a)
+        defer input.free()
 
         f := try file.open(input, file.mode().read())
         defer f.close()
@@ -46,7 +46,7 @@ main(args str[]) !void:
             ..
             
             try out.writeLn(line)
-            line.free(a)
+            line.free()
         ..
     ..
 .. 

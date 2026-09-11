@@ -10,14 +10,16 @@ the desired Clang is not first on `PATH`.
 From the repository root:
 
 ```sh
-go build -o Magma .
+go build -tags "llvm_object llvm22" -o Magma .
 ```
 
-On Windows, use `go build -o Magma.exe .`. A quick compiler-only verification
-is:
+This is the supported Linux compiler build and includes the default go-llvm
+incremental backend. An untagged build contains only the deprecated textual
+backend. On Windows, which is not yet part of the go-llvm rollout, use
+`go build -o Magma.exe .`. A quick compiler-only verification is:
 
 ```sh
-go test ./...
+go test -tags "llvm_object llvm22" ./...
 ```
 
 The Go tests cover individual compiler packages and orchestration behavior.

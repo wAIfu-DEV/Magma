@@ -1,9 +1,9 @@
 mod main
-use "std:base64" base64
-use "std:errors" errors
-use "std:heap" heap
-use "std:slices" slices
-use "std:strings" strings
+use "std:base64" as base64
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:slices" as slices
+use "std:strings" as strings
 
 pub main() !void:
     a := heap.allocator()
@@ -16,7 +16,7 @@ pub main() !void:
     data[5] = 114
     view u8[] = slices.fromPtr(slices.toPtr(data), 6)
     encoded := try base64.encode(view)
-    defer encoded.free(a)
+    defer encoded.free()
     if strings.compare(encoded, "Zm9vYmFy") == false:
         throw errors.failure("Base64 encoding changed")
     ..

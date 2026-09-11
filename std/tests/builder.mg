@@ -1,11 +1,11 @@
 mod main
 
-use "std:allocator" allocator
-use "std:builder" builder
-use "std:errors" errors
-use "std:heap" heap
-use "std:strings" strings
-use "std:writer" writer
+use "std:allocator" as allocator
+use "std:builder" as builder
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:strings" as strings
+use "std:writer" as writer
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()
@@ -23,7 +23,7 @@ pub main() !void:
         throw errors.failure("builder byte count changed")
     ..
     result := try value.build()
-    defer result.free(a)
+    defer result.free()
     if strings.compare(result, "checked builder!") == false:
         throw errors.failure("builder behavior changed")
     ..
@@ -41,12 +41,12 @@ pub main() !void:
     output := value.proto[writer.Writer]()
     temporary := try strings.copy("writer copy")
     writeCount := try output.write(temporary)
-    temporary.free(a)
+    temporary.free()
     if writeCount != 11:
         throw errors.failure("builder writer count changed")
     ..
     written := try value.build()
-    defer written.free(a)
+    defer written.free()
     if strings.compare(written, "writer copy") == false:
         throw errors.failure("builder writer did not copy input")
     ..

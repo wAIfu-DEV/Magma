@@ -8,7 +8,7 @@ pub proto Executor(
     releaseRaw() void
 )
 
-use "std:errors" errors
+use "std:errors" as errors
 
 NullExecutor impl Executor(value u8)
 

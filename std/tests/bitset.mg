@@ -1,7 +1,7 @@
 mod main
 
-use "std:bitset" bitset
-use "std:errors" errors
+use "std:bitset" as bitset
+use "std:errors" as errors
 
 pub main() !void:
     value := bitset.BitSet8(bits=0)

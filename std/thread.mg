@@ -1,15 +1,15 @@
 mod thread
 # Portable native threads with explicit joining and resource ownership.
 
-use "std:errors" errors
-use "std:slices" slices
-use "std:cast" cast
+use "std:errors" as errors
+use "std:slices" as slices
+use "std:cast" as cast
 
 @platform("windows")
-use "std:win/thread_impl" impl_thread
+use "std:win/thread_impl" as impl_thread
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/thread_impl" impl_thread
+use "std:unix/thread_impl" as impl_thread
 
 # A joinable native thread. The context is borrowed and must remain valid until
 # the entry function has returned and the thread has been joined. The entry's
@@ -58,11 +58,11 @@ Thread.isFinished() !bool:
 #   try thread.joinAll(workers)
 pub joinAll(threads Thread[]) !void:
     firstError error = errors.ok()
-    base Thread* = slices.toPtr(threads)
+    base Thread* = cast.reinterpret[Thread](slices.toPtr(threads))
     for i u64 = 0 to slices.count(threads):
     
         implPtr ptr = cast.utop(cast.ptou(base) + (i * sizeof Thread))
-        joined bool, joinError error = impl_thread.join(implPtr)
+        joined bool, joinError error = impl_thread.join(cast.reinterpret[impl_thread.Thread](implPtr))
 
         if joinError.nok() && firstError.ok():
             firstError = joinError

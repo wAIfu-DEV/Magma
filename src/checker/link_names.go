@@ -47,16 +47,18 @@ func clVarNameChainValidAtOffset(c *ctx, scope *t.Scope, source *t.NodeExprName,
 				return true, []*t.MemberAccess{}, nil
 			}
 		}
-		return false, nil, comp_err.CompilationErrorToken(
-			c.FileCtx,
-			memberNameTokenAtOffset(source, 0, memberTokenOffset),
-			fmt.Sprintf("type '%s' has no member function '%s'", primitive, name.Parts[0]),
-			"",
-		)
+		if c.CoreGlobal == nil || c.CoreGlobal.StructDefs[primitive] == nil || c.CoreGlobal.StructDefs[primitive].CoreRole != t.CoreTypeRoleForName(primitive) {
+			return false, nil, comp_err.CompilationErrorToken(
+				c.FileCtx,
+				memberNameTokenAtOffset(source, 0, memberTokenOffset),
+				fmt.Sprintf("type '%s' has no member function '%s'", primitive, name.Parts[0]),
+				"",
+			)
+		}
 	}
 
 	// get struct def for type
-	structDef, e := clGetStructDefFromType(c, lastDerefType)
+	structDef, e := clGetFieldStructDefFromType(c, lastDerefType)
 	if e != nil {
 		return false, nil, comp_err.CompilationErrorToken(
 			c.FileCtx,
@@ -126,7 +128,7 @@ func clVarNameChainValidAtOffset(c *ctx, scope *t.Scope, source *t.NodeExprName,
 				)
 			}
 
-			structDef, e = clGetStructDefFromType(c, derefFieldType)
+			structDef, e = clGetFieldStructDefFromType(c, derefFieldType)
 			if e != nil {
 				return false, nil, comp_err.CompilationErrorToken(
 					c.FileCtx,
@@ -360,7 +362,12 @@ func clName(c *ctx, name *t.NodeExprName, expected entryType, lvalue bool) error
 		if lvalue {
 			description = fmt.Sprintf("unknown variable '%s'", flattenName(name.Name))
 		}
-		return comp_err.CompilationErrorToken(c.FileCtx, lastNameToken(name.Name), description, "")
+		hint := ""
+		if function := enclosingFunction(c); function != nil && function.IsLambda {
+			description = fmt.Sprintf("captureless lambda cannot reference unknown name '%s'", flattenName(name.Name))
+			hint = "lambdas cannot capture enclosing locals; pass the value as a lambda parameter"
+		}
+		return comp_err.CompilationErrorToken(c.FileCtx, lastNameToken(name.Name), description, hint)
 	}
 
 	if lastIsFunc && !lvalue {

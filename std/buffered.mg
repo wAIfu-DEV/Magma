@@ -1,14 +1,15 @@
 mod buffered
 # Buffered reader and writer adapters that reduce underlying I/O operations.
 
-use "std:allocator" alc
-use "std:writer"    writer
-use "std:reader"    reader
-use "std:errors"    errors
-use "std:slices"    slices
-use "std:strings"   strings
-use "std:cast"      cast
-use "std:memory"    mem
+use "std:allocator" as alc
+use "std:writer"    as writer
+use "std:reader"    as reader
+use "std:errors"    as errors
+use "std:slices"    as slices
+use "std:strings"   as strings
+use "std:cast"      as cast
+use "std:memory"    as mem
+use "std:checked"   as checked
 
 const DEFAULT_BUFFER_SIZE u64 = 8192
 const EOF_MASK u64 = 0x8000000000000000
@@ -383,23 +384,17 @@ Reader.reader() reader.Reader:
 ..
 
 updateAfterRealloc(value str*, data ptr, capacity u64) void:
-    # SAFETY: this audited implementation updates the owned line descriptor
-    # after resizeLineBuffer successfully reallocates its backing storage.
     unsafe:
-        llvm "  %dataPtr = getelementptr %type.str, ptr %value, i32 0, i32 0\n"
-        llvm "  store ptr %data, ptr %dataPtr\n"
-        llvm "  %capacityPtr = getelementptr %type.str, ptr %value, i32 0, i32 1\n"
-        llvm "  store i64 %capacity, ptr %capacityPtr\n"
-        llvm "  ret void\n"
+        typed u8* = data
+        value.__data = typed
+        value.__byteCount = capacity
     ..
 ..
 
 resizeLineBuffer(old u8*, newCapacity u64) !$u8*:
     a := ctx.alloc
-    if newCapacity == 0 - 1:
-        throw errors.wouldOverflow("line buffer capacity overflow")
-    ..
-    resized u8* = try a.realloc(old, newCapacity + 1)
+    allocationSize := try checked.uAdd(newCapacity, 1)
+    resized u8* = try a.realloc(old, allocationSize)
     ret resized
 ..
 
@@ -417,7 +412,7 @@ Reader.readLn() !$str:
     # Initial capacity for line buffer
     capacity u64 = 128
     line $str = try strings.alloc(capacity)
-    onerror line.free(a)
+    onerror line.free()
 
     lineBuffer u8* = strings.toPtr(line)
     lineLen u64 = 0
@@ -427,10 +422,7 @@ Reader.readLn() !$str:
     loop true:
         # Check if we need more buffer space
         if lineLen >= capacity:
-            if capacity > (0 - 1) / 2:
-                throw errors.wouldOverflow("line buffer capacity overflow")
-            ..
-            newCapacity = capacity * 2
+            newCapacity = try checked.uMul(capacity, 2)
             lineBuffer = try resizeLineBuffer(lineBuffer, newCapacity)
             capacity = newCapacity
             updateAfterRealloc(addrof line, lineBuffer, capacity)
@@ -441,7 +433,7 @@ Reader.readLn() !$str:
         
         if available > 0:
             searchStart ptr = cast.utop(cast.ptou(this.buffer) + this.position)
-            searchPtr u8* = searchStart
+            searchPtr u8* = cast.reinterpret[u8](searchStart)
             
             i u64 = 0
             found bool = false

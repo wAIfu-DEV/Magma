@@ -2,15 +2,15 @@ mod fs_impl_win
 # Windows filesystem backend used by the portable fs module.
 
 
-use "std:win/types" win
-use "std:allocator" allocator
-use "std:builder" builder
-use "std:cast" cast
-use "std:errors" errors
-use "std:slices" slices
-use "std:strings" strings
-use "std:utf8" utf8
-use "std:memory" memory
+use "std:win/types" as win
+use "std:allocator" as allocator
+use "std:builder" as builder
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:slices" as slices
+use "std:strings" as strings
+use "std:utf8" as utf8
+use "std:memory" as memory
 
 ext ext_FindFirstFileW FindFirstFileW(pattern win.LPCWSTR, data win.LPVOID) win.HANDLE
 ext ext_FindNextFileW FindNextFileW(handle win.HANDLE, data win.LPVOID) win.BOOL
@@ -60,7 +60,7 @@ Dir.clearCurrent() void:
     # SAFETY: Dir exclusively owns currentName while hasCurrent is set.
     unsafe:
     if this.hasCurrent:
-        this.currentName.free(this.allocator)
+        this.currentName.free()
         this.hasCurrent = false
     ..
     ..
@@ -128,7 +128,7 @@ destr Dir.close() !void:
 pub openDir(path str) !$Dir:
     a := ctx.alloc
     pattern := try join(path, "*")
-    defer pattern.free(a)
+    defer pattern.free()
     wide := try utf8.utf8To16NT(pattern)
     defer slices.free(wide)
     data := try a.alloc(592)
@@ -176,7 +176,7 @@ pub metadata(path str, followLinks bool) !NativeMetadata:
     a := ctx.alloc
     if followLinks:
         resolved := try canonicalize(path)
-        defer resolved.free(a)
+        defer resolved.free()
         ret try metadata(resolved, false)
     ..
     wide := try utf8.utf8To16NT(path)
@@ -395,7 +395,7 @@ join(left str, right str) !$str:
 walkInner(root str, visit (str, bool) !void) !void:
     a := ctx.alloc
     pattern := try join(root, "*")
-    defer pattern.free(a)
+    defer pattern.free()
     widePattern := try utf8.utf8To16NT(pattern)
     defer slices.free(widePattern)
 
@@ -428,9 +428,9 @@ walkInner(root str, visit (str, bool) !void) !void:
             if isDirectory:
                 try walkInner(child, visit)
             ..
-            child.free(a)
+            child.free()
         ..
-        name.free(a)
+        name.free()
         more = ext_FindNextFileW(handle, dataPtr) != 0
     ..
     ..

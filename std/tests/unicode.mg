@@ -1,7 +1,7 @@
 mod main
 
-use "std:errors" errors
-use "std:unicode" unicode
+use "std:errors" as errors
+use "std:unicode" as unicode
 
 pub main() !void:
     if unicode.isScalar(0) == false || unicode.isScalar(0x10FFFF) == false:

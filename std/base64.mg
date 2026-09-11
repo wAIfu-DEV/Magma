@@ -1,11 +1,11 @@
 mod base64
 # Strict padded Base64 encoding and decoding.
 
-use "std:allocator" alc
-use "std:checked" checked
-use "std:errors" errors
-use "std:slices" slices
-use "std:strings" strings
+use "std:allocator" as alc
+use "std:checked" as checked
+use "std:errors" as errors
+use "std:slices" as slices
+use "std:strings" as strings
 
 pub encodedSize(inputSize u64) !u64:
     groups := try checked.uDiv(try checked.uAdd(inputSize, 2), 3)
@@ -214,7 +214,7 @@ encodeAllocated(input u8[], urlSafe bool) !$str:
     a := ctx.alloc
     size := try encodedSize(slices.count(input))
     result $str = try strings.alloc(size)
-    onerror result.free(a)
+    onerror result.free()
     output u8[] = slices.fromPtr(strings.toPtr(result), size)
     try encodeToKind(input, output, urlSafe)
     ret move result

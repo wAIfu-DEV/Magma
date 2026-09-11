@@ -6,9 +6,118 @@ import (
 	t "Magma/src/types"
 	"errors"
 	"fmt"
+	"math/big"
+	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 )
+
+func parseCompilerKnownConst(ctx *ParseCtx, at t.Token, declaredType *t.NodeType) (t.NodeExpr, error) {
+	if declaredType == nil {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &at, "@compiler_known requires an explicitly typed constant", "expected: `const NAME Type = @compiler_known(\"NAME\")`")
+	}
+	consume(ctx)
+	name, err := peek(ctx)
+	if err != nil || name.Type != t.TokName || name.Repr != "compiler_known" {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &at, "unknown compiler-known constant expression", "expected: `@compiler_known(\"NAME\")`")
+	}
+	consume(ctx)
+	open, err := peek(ctx)
+	if err != nil || open.KeywType != t.KwParenOp {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &name, "compiler_known requires parentheses", "expected: `@compiler_known(\"NAME\")`")
+	}
+	consume(ctx)
+	key, err := peek(ctx)
+	if err != nil || key.Type != t.TokLitStr {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &name, "compiler_known requires a string key", "expected: `@compiler_known(\"NAME\")`")
+	}
+	consume(ctx)
+	close, err := peek(ctx)
+	if err != nil || close.KeywType != t.KwParenCl {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &key, "compiler_known is missing ')'", "expected: `@compiler_known(\"NAME\")`")
+	}
+	consume(ctx)
+	value, ok := ctx.Shared.CompilerArgs[key.Repr]
+	if !ok {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &key, fmt.Sprintf("compiler argument %q was not provided", key.Repr), fmt.Sprintf("pass `--compiler-arg %s=VALUE`", key.Repr))
+	}
+	named, ok := declaredType.KindNode.(*t.NodeTypeNamed)
+	if !ok {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &at, "@compiler_known requires a primitive declared type", "supported types are numeric primitives, bool, and str")
+	}
+	single, ok := named.NameNode.(*t.NodeNameSingle)
+	if !ok {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &at, "@compiler_known requires a primitive declared type", "supported types are numeric primitives, bool, and str")
+	}
+	literalType := t.TokLitNum
+	switch single.Name {
+	case "str":
+		literalType = t.TokLitStr
+	case "bool":
+		if value != "true" && value != "false" {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &key, fmt.Sprintf("compiler argument %q is not a bool", value), "expected true or false")
+		}
+		literalType = t.TokLitBool
+	default:
+		descriptor, numeric := magmatypes.NumberTypes[single.Name]
+		if !numeric {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &at, "@compiler_known requires a primitive declared type", "supported types are numeric primitives, bool, and str")
+		}
+		if descriptor.IsFloat {
+			if _, err := strconv.ParseFloat(value, 64); err != nil {
+				return nil, comp_err.CompilationErrorToken(ctx.Fctx, &key, fmt.Sprintf("compiler argument %q is not numeric", value), err.Error())
+			}
+		} else if parsed, valid := new(big.Int).SetString(strings.ReplaceAll(value, "_", ""), 0); !valid || parsed.BitLen() > descriptor.ByteSize {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &key, fmt.Sprintf("compiler argument %q does not fit %s", value, single.Name), "provide a value representable by the declared type")
+		}
+	}
+	return &t.NodeExprLit{Tk: key, Value: value, LitType: literalType}, nil
+}
+
+func parseEmbedConst(ctx *ParseCtx, at, declarationName t.Token) (t.NodeExpr, error) {
+	consume(ctx)
+	name, err := peek(ctx)
+	if err != nil || name.Type != t.TokName || name.Repr != "embed" {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &at, "unknown compiler constant expression", "expected `@compiler_known(...)` or `@embed(\"path\")`")
+	}
+	consume(ctx)
+	open, err := peek(ctx)
+	if err != nil || open.KeywType != t.KwParenOp {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &name, "embed requires parentheses", "expected `@embed(\"path\")`")
+	}
+	consume(ctx)
+	pathToken, err := peek(ctx)
+	if err != nil || pathToken.Type != t.TokLitStr || pathToken.Repr == "" {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &name, "embed requires one non-empty file path", "expected `@embed(\"path\")`")
+	}
+	consume(ctx)
+	close, err := peek(ctx)
+	if err != nil || close.KeywType != t.KwParenCl {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &pathToken, "embed is missing ')'", "expected `@embed(\"path\")`")
+	}
+	consume(ctx)
+	path := pathToken.Repr
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(filepath.Dir(ctx.Fctx.FilePath), path)
+	}
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &pathToken, "cannot resolve embedded file", err.Error())
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &pathToken, "cannot inspect embedded file", err.Error())
+	}
+	if !info.Mode().IsRegular() {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &pathToken, "embedded path is not a regular file", path)
+	}
+	// Hex encoding keeps the native symbol portable even though Magma module
+	// and declaration names may contain non-ASCII letters.
+	symbol := fmt.Sprintf("magma_embed_%x_%x", []byte(ctx.Fctx.PackageName), []byte(declarationName.Repr))
+	return &t.NodeExprEmbed{Tk: pathToken, Path: filepath.Clean(path), Symbol: symbol, Size: uint64(info.Size())}, nil
+}
 
 func ensureSimpleName(ctx *ParseCtx, tk t.Token, name t.NodeName) error {
 	switch n := name.(type) {
@@ -50,7 +159,6 @@ func parseStructDef(ctx *ParseCtx, tk t.Token, gncls t.NodeGenericClass) (*t.Nod
 		FieldNb:    map[string]int{},
 		FieldOrder: []string{},
 	}
-
 	for i, arg := range gncls.ArgsNode.Args {
 		if _, exists := structMap.Fields[arg.Name]; exists {
 			return nil, comp_err.CompilationErrorToken(
@@ -86,10 +194,22 @@ func rejectNoCtxModifier(ctx *ParseCtx, modifiers []ModifierType, tk *t.Token, d
 		"noctx may only modify a function declaration")
 }
 
+func rejectGlobalModifier(ctx *ParseCtx, modifiers []ModifierType, tk *t.Token, declaration string) error {
+	if !slices.Contains(modifiers, MdGlobal) {
+		return nil
+	}
+	return comp_err.CompilationErrorToken(ctx.Fctx, tk,
+		fmt.Sprintf("syntax error: global modifier cannot be applied to %s", declaration),
+		"global may only modify a top-level variable declaration")
+}
+
 func parseProtoDef(ctx *ParseCtx, protoTk t.Token) (t.NodeGlobalDecl, error) {
 	modifiers := slices.Clone(ctx.NextModifiers)
 	ctx.NextModifiers = []ModifierType{}
 	if err := rejectNoCtxModifier(ctx, modifiers, &protoTk, "a prototype declaration"); err != nil {
+		return nil, err
+	}
+	if err := rejectGlobalModifier(ctx, modifiers, &protoTk, "a prototype declaration"); err != nil {
 		return nil, err
 	}
 	consume(ctx) // proto
@@ -229,6 +349,120 @@ func parseProtoDef(ctx *ParseCtx, protoTk t.Token) (t.NodeGlobalDecl, error) {
 	return protoNode, nil
 }
 
+func parseUnionDef(ctx *ParseCtx, unionTk t.Token) (t.NodeGlobalDecl, error) {
+	modifiers := slices.Clone(ctx.NextModifiers)
+	ctx.NextModifiers = nil
+	if err := rejectGlobalModifier(ctx, modifiers, &unionTk, "a union declaration"); err != nil {
+		return nil, err
+	}
+	if err := rejectNoCtxModifier(ctx, modifiers, &unionTk, "a union declaration"); err != nil {
+		return nil, err
+	}
+	consume(ctx)
+	nameTk, err := peek(ctx)
+	if err != nil || nameTk.Type != t.TokName {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &unionTk, "union declaration requires a name", "expected: `union Name(...)`")
+	}
+	consume(ctx)
+	open, err := peek(ctx)
+	impls := []*t.ProtoImpl{}
+	if err == nil && open.Type == t.TokName && open.Repr == "impl" {
+		consume(ctx)
+		for {
+			current, currentErr := peek(ctx)
+			if currentErr != nil {
+				return nil, currentErr
+			}
+			if current.KeywType == t.KwParenOp {
+				open = current
+				break
+			}
+			implementedType, typeErr := parseType(ctx, current, false)
+			if typeErr != nil {
+				return nil, typeErr
+			}
+			impls = append(impls, &t.ProtoImpl{Type: implementedType, Tk: current})
+		}
+	}
+	if err != nil || open.KeywType != t.KwParenOp {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &nameTk, "union declaration requires a variant list", "expected: `union Name(...)`")
+	}
+	consume(ctx)
+	if ctx.GlobalNode.UnionDefs == nil {
+		ctx.GlobalNode.UnionDefs = map[string]*t.UnionDef{}
+	}
+	if ctx.GlobalNode.UnionDefs[nameTk.Repr] != nil || ctx.GlobalNode.StructDefs[nameTk.Repr] != nil || ctx.GlobalNode.TypeAliases[nameTk.Repr] != nil {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &nameTk, fmt.Sprintf("type '%s' is already declared", nameTk.Repr), "")
+	}
+	def := &t.UnionDef{Module: ctx.Fctx.PackageName, Name: nameTk.Repr, IsPublic: slices.Contains(modifiers, MdPublic)}
+	seen := map[string]bool{}
+	for {
+		variantTk, nextErr := peek(ctx)
+		if nextErr != nil {
+			return nil, nextErr
+		}
+		if variantTk.KeywType == t.KwNewline || variantTk.KeywType == t.KwComma {
+			consume(ctx)
+			continue
+		}
+		if variantTk.KeywType == t.KwParenCl {
+			consume(ctx)
+			break
+		}
+		if variantTk.Type != t.TokName {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &variantTk, "expected a union variant name", "variants use `Name` or `Name(field Type)`")
+		}
+		if seen[variantTk.Repr] {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &variantTk, fmt.Sprintf("duplicate variant '%s'", variantTk.Repr), "variant names must be unique within a union")
+		}
+		seen[variantTk.Repr] = true
+		consume(ctx)
+		variant := &t.UnionVariant{Name: variantTk.Repr, Tk: variantTk, Tag: len(def.Variants), Owner: def}
+		if maybeOpen, _ := peek(ctx); maybeOpen.KeywType == t.KwParenOp {
+			args, argsErr := parseArgsList(ctx)
+			if argsErr != nil {
+				return nil, argsErr
+			}
+			variant.Fields = args.Args
+		}
+		def.Variants = append(def.Variants, variant)
+	}
+	if len(def.Variants) == 0 {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &nameTk, "union must declare at least one variant", "")
+	}
+	ctx.GlobalNode.UnionDefs[def.Name] = def
+	baseArgs := []t.NodeArg{{Name: "__tag", TypeNode: syntheticNamed("u64")}}
+	for _, variant := range def.Variants {
+		internalName := "__union_" + def.Name + "_" + variant.Name
+		variantName := &t.NodeNameSingle{Name: internalName, Tk: nameTk}
+		variantClass := t.NodeGenericClass{NameNode: variantName, ArgsNode: t.NodeArgList{Args: variant.Fields}}
+		variantNode, variantErr := parseStructDef(ctx, variantTkFor(nameTk, internalName), variantClass)
+		if variantErr != nil {
+			return nil, variantErr
+		}
+		ctx.GlobalNode.Declarations = append(ctx.GlobalNode.Declarations, variantNode)
+		baseArgs = append(baseArgs, t.NodeArg{Name: "__" + variant.Name, TypeNode: &t.NodeType{KindNode: &t.NodeTypeAbsolute{
+			AbsoluteName: ctx.Fctx.PackageName + "." + internalName,
+			DisplayName:  def.Name + "." + variant.Name,
+		}}})
+	}
+	baseClass := t.NodeGenericClass{NameNode: &t.NodeNameSingle{Name: def.Name, Tk: nameTk}, ArgsNode: t.NodeArgList{Args: baseArgs}}
+	baseNode, baseErr := parseStructDef(ctx, nameTk, baseClass)
+	if baseErr != nil {
+		return nil, baseErr
+	}
+	baseNode.IsPublic = def.IsPublic
+	ctx.GlobalNode.StructDefs[def.Name].IsPublic = def.IsPublic
+	ctx.GlobalNode.StructDefs[def.Name].Implements = impls
+	ctx.GlobalNode.Declarations = append(ctx.GlobalNode.Declarations, baseNode)
+	return &t.NodeUnionDef{Tk: unionTk, Def: def}, nil
+}
+
+func variantTkFor(base t.Token, name string) t.Token {
+	base.Repr = name
+	return base
+}
+
 func parseAliasDecl(ctx *ParseCtx, aliasTk t.Token) (t.NodeGlobalDecl, error) {
 	pruned := ctx.PruneNext
 	ctx.PruneNext = false
@@ -236,6 +470,9 @@ func parseAliasDecl(ctx *ParseCtx, aliasTk t.Token) (t.NodeGlobalDecl, error) {
 	ctx.NextModifiers = []ModifierType{}
 	if slices.Contains(modifiers, MdDestructor) {
 		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &aliasTk, "destructor modifier cannot be applied to a type alias", "")
+	}
+	if err := rejectGlobalModifier(ctx, modifiers, &aliasTk, "an alias declaration"); err != nil {
+		return nil, err
 	}
 	if err := rejectNoCtxModifier(ctx, modifiers, &aliasTk, "a type alias"); err != nil {
 		return nil, err
@@ -350,9 +587,10 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 		fnNameSimple = aliasedNameNode.Name
 	}
 
+	previousFunction := ctx.CurrentFunction
 	ctx.CurrentFunction = fnDef
 	defer func() {
-		ctx.CurrentFunction = nil
+		ctx.CurrentFunction = previousFunction
 	}()
 
 	typeNode, e := parseType(ctx, after, true)
@@ -413,7 +651,18 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 
 	if isMemberFunc && alias == "" { // alias == "" since aliased functions cannot be also member funcs
 		complexName := gncls.NameNode.(*t.NodeNameComposite)
-		if len(complexName.Parts) > 2 {
+		variantOwner := false
+		if len(complexName.Parts) == 3 {
+			if union := ctx.GlobalNode.UnionDefs[complexName.Parts[0]]; union != nil {
+				for _, variant := range union.Variants {
+					if variant.Name == complexName.Parts[1] {
+						variantOwner = true
+						break
+					}
+				}
+			}
+		}
+		if len(complexName.Parts) > 2 && !variantOwner {
 			return nil, comp_err.CompilationErrorToken(
 				ctx.Fctx,
 				&nameTk,
@@ -424,9 +673,17 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 
 		ownerName := complexName.Parts[0]
 		memberName := complexName.Parts[1]
+		if variantOwner {
+			ownerName = "__union_" + complexName.Parts[0] + "_" + complexName.Parts[1]
+			memberName = complexName.Parts[2]
+		}
 
 		ownerStruct, isStruct := ctx.GlobalNode.StructDefs[ownerName]
 		_, isPrimitive := magmatypes.BasicTypes[ownerName]
+		if isPrimitive {
+			isStruct = false
+			ownerStruct = nil
+		}
 		if !isStruct && !isPrimitive {
 			return nil, comp_err.CompilationErrorToken(
 				ctx.Fctx,
@@ -500,7 +757,7 @@ func parseFuncDef(ctx *ParseCtx, nameTk t.Token, after t.Token, gncls t.NodeGene
 		if isStruct {
 			ownerStruct.Funcs[memberName] = fnDef
 		} else {
-			if ctx.Fctx.ModuleName == "core" && ownerName == "error" {
+			if ctx.Fctx.ModuleName == "core" && t.CoreTypeRoleForName(ownerName) == t.CoreTypeError {
 				switch memberName {
 				case "ok":
 					fnDef.ErrorPredicate = t.ErrorPredicateOk
@@ -543,6 +800,9 @@ func parseExternalFunc(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
 	if slices.Contains(modifiers, MdDestructor) {
 		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, "syntax error: destructor modifier cannot be applied to an external declaration", "")
 	}
+	if err := rejectGlobalModifier(ctx, modifiers, &tk, "an external function declaration"); err != nil {
+		return nil, err
+	}
 	consume(ctx) // consume "extern"
 
 	nAlias, e := parseName(ctx, tk, false)
@@ -574,13 +834,24 @@ func parseExternalFunc(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error) {
 		return nil, e
 	}
 
-	if next.Type != t.TokKeyword {
-		return nil, comp_err.CompilationErrorToken(
-			ctx.Fctx,
-			&next,
-			fmt.Sprintf("syntax error: unexpected '%s' after name in extern function declaration", next.Repr),
-			"expected: `extern <name> (`",
-		)
+	if next.KeywType != t.KwParenOp {
+		typeNode, typeErr := parseType(ctx, next, false)
+		if typeErr != nil {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &next,
+				fmt.Sprintf("invalid type for external global '%s'", flattenName(nAlias)),
+				"expected: `ext <alias> <symbol> <type>`")
+		}
+		return &t.NodeExprVarDef{
+			Name:            nAlias,
+			Type:            typeNode,
+			AbsName:         ctx.Fctx.PackageName + "." + flattenName(nAlias),
+			Storage:         t.VariableStorageGlobal,
+			IsGlobal:        true,
+			IsProcessGlobal: true,
+			IsExternal:      true,
+			ExternalName:    flattenName(n),
+			IsPublic:        slices.Contains(modifiers, MdPublic),
+		}, nil
 	}
 
 	gncls, e := parseGenericClass(ctx, n, nil, nil)
@@ -625,6 +896,9 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 	}
 
 	if next.Type == t.TokName && next.Repr == "impl" {
+		if err := rejectGlobalModifier(ctx, modifiers, &tk, "a structure declaration"); err != nil {
+			return nil, err
+		}
 		if err := rejectNoCtxModifier(ctx, modifiers, &tk, "a structure declaration"); err != nil {
 			return nil, err
 		}
@@ -682,7 +956,7 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 				}
 				variable := &t.NodeExprVarDef{
 					Name: declName.NameNode, AbsName: ctx.Fctx.PackageName + "." + flattenName(declName.NameNode),
-					Type: typeNode, IsGlobal: true, IsPublic: slices.Contains(modifiers, MdPublic), Storage: t.VariableStorageGlobal,
+					Type: typeNode, IsGlobal: true, IsProcessGlobal: slices.Contains(modifiers, MdGlobal), IsPublic: slices.Contains(modifiers, MdPublic), Storage: t.VariableStorageGlobal,
 				}
 				if afterType.KeywType == t.KwEqual {
 					consume(ctx)
@@ -711,6 +985,9 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 		}
 
 		if errors.Is(e, errOutOfBounds) || after.KeywType == t.KwNewline {
+			if err := rejectGlobalModifier(ctx, modifiers, &tk, "a structure declaration"); err != nil {
+				return nil, err
+			}
 			if err := rejectNoCtxModifier(ctx, modifiers, &tk, "a structure declaration"); err != nil {
 				return nil, err
 			}
@@ -726,6 +1003,9 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 			return st, e
 		}
 
+		if err := rejectGlobalModifier(ctx, modifiers, &tk, "a function declaration"); err != nil {
+			return nil, err
+		}
 		fn, e := parseFuncDef(ctx, tk, after, gncls, "")
 		if e != nil {
 			return nil, e
@@ -737,13 +1017,13 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 			}
 			fn.IsDestructor = true
 			ownerName := name.Parts[0]
-			if owner := ctx.GlobalNode.StructDefs[ownerName]; owner != nil {
+			if _, intrinsic := magmatypes.BasicTypes[ownerName]; intrinsic {
+				ctx.GlobalNode.PrimitiveDestructors[ownerName] = append(ctx.GlobalNode.PrimitiveDestructors[ownerName], fn)
+			} else if owner := ctx.GlobalNode.StructDefs[ownerName]; owner != nil {
 				owner.Destructors = append(owner.Destructors, fn)
 				if owner.Destructor == nil {
 					owner.Destructor = fn
 				}
-			} else if _, ok := magmatypes.BasicTypes[ownerName]; ok {
-				ctx.GlobalNode.PrimitiveDestructors[ownerName] = append(ctx.GlobalNode.PrimitiveDestructors[ownerName], fn)
 			} else {
 				return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, fmt.Sprintf("unknown destructor owner type '%s'", ownerName), "")
 			}
@@ -773,7 +1053,7 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 		}
 		return &t.NodeExprVarDef{
 			Name: declName.NameNode, AbsName: ctx.Fctx.PackageName + "." + flattenName(declName.NameNode),
-			Initializer: initializer, IsGlobal: true, IsPublic: slices.Contains(modifiers, MdPublic), Storage: t.VariableStorageGlobal,
+			Initializer: initializer, IsGlobal: true, IsProcessGlobal: slices.Contains(modifiers, MdGlobal), IsPublic: slices.Contains(modifiers, MdPublic), Storage: t.VariableStorageGlobal,
 		}, nil
 	default:
 		if len(declName.TypeParams) > 0 || len(declName.OwnerTypeParams) > 0 {
@@ -791,13 +1071,14 @@ func parseGlobalDeclFromName(ctx *ParseCtx, tk t.Token) (t.NodeGlobalDecl, error
 				return nil, err
 			}
 			variable := &t.NodeExprVarDef{
-				Name:       declName.NameNode,
-				AbsName:    ctx.Fctx.PackageName + "." + flattenName(declName.NameNode),
-				Type:       tNode,
-				IsGlobal:   true,
-				IsPublic:   slices.Contains(modifiers, MdPublic),
-				Storage:    t.VariableStorageGlobal,
-				IsReturned: false,
+				Name:            declName.NameNode,
+				AbsName:         ctx.Fctx.PackageName + "." + flattenName(declName.NameNode),
+				Type:            tNode,
+				IsGlobal:        true,
+				IsProcessGlobal: slices.Contains(modifiers, MdGlobal),
+				IsPublic:        slices.Contains(modifiers, MdPublic),
+				Storage:         t.VariableStorageGlobal,
+				IsReturned:      false,
 			}
 			afterType, afterErr := peek(ctx)
 			if afterErr == nil && afterType.KeywType == t.KwEqual {
@@ -832,6 +1113,9 @@ func parseConstDecl(ctx *ParseCtx, constTk t.Token) (t.NodeGlobalDecl, error) {
 	if err := rejectNoCtxModifier(ctx, modifiers, &constTk, "a constant declaration"); err != nil {
 		return nil, err
 	}
+	if err := rejectGlobalModifier(ctx, modifiers, &constTk, "a constant declaration"); err != nil {
+		return nil, err
+	}
 	consume(ctx)
 	nameTk, e := peek(ctx)
 	if e != nil || nameTk.Type != t.TokName {
@@ -862,7 +1146,16 @@ func parseConstDecl(ctx *ParseCtx, constTk t.Token) (t.NodeGlobalDecl, error) {
 	if e != nil {
 		return nil, e
 	}
-	initializer, e := parseExpression(ctx, first, 0)
+	var initializer t.NodeExpr
+	if first.KeywType == t.KwAt {
+		if name, err := peekNth(ctx, 1); err == nil && name.Repr == "embed" {
+			initializer, e = parseEmbedConst(ctx, first, nameTk)
+		} else {
+			initializer, e = parseCompilerKnownConst(ctx, first, typeNode)
+		}
+	} else {
+		initializer, e = parseExpression(ctx, first, 0)
+	}
 	if e != nil {
 		return nil, e
 	}
@@ -914,6 +1207,8 @@ outer:
 
 	case t.TokKeyword:
 		switch tk.KeywType {
+		case t.KwUnion:
+			return parseUnionDef(ctx, tk)
 		case t.KwNewline:
 			consume(ctx)
 			return nil, nil
@@ -923,6 +1218,8 @@ outer:
 			e = parseApplyModifier(ctx, tk, MdDestructor)
 		case t.KwNoCtx:
 			e = parseApplyModifier(ctx, tk, MdNoCtx)
+		case t.KwGlobal:
+			e = parseApplyModifier(ctx, tk, MdGlobal)
 		case t.KwConst:
 			n, e = parseConstDecl(ctx, tk)
 			return n, e

@@ -2,7 +2,7 @@ mod address_wait_unix
 # Unix wait backend used by the portable wake module.
 # @note Import `std:wake` instead of this implementation module.
 
-use "std:wake" wake_mod
+use "std:wake" as wake_mod
 
 # Unix fallback. Wake's counted condition variable closes the race between the
 # atomic status check and entering the native wait.

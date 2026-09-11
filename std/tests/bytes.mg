@@ -1,6 +1,6 @@
 mod main
-use "std:bytes" bytes
-use "std:errors" errors
+use "std:bytes" as bytes
+use "std:errors" as errors
 pub main() !void:
     value := array u8[3]
     value[0] = 1

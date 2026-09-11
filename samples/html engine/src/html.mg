@@ -1,15 +1,15 @@
 mod html
 
-use "std:allocator" alc
-use "std:list" list
-use "std:linear_map" linear_map
-use "std:buffered" buffered
-use "std:reader" reader
-use "std:strings" strings
-use "std:slices" slices
-use "std:errors" errors
-use "std:builder" builder
-use "std:footgun" footgun
+use "std:allocator" as alc
+use "std:list" as list
+use "std:linear_map" as linear_map
+use "std:buffered" as buffered
+use "std:reader" as reader
+use "std:strings" as strings
+use "std:slices" as slices
+use "std:errors" as errors
+use "std:builder" as builder
+use "std:footgun" as footgun
 
 pub Html(
     tag str
@@ -23,8 +23,8 @@ destr Html.free() void:
     # SAFETY: Html uniquely owns all four destructible fields; its destructor
     # consumes each field exactly once before the aggregate becomes inactive.
     unsafe:
-        this.tag.free(this.allocator)
-        this.text.free(this.allocator)
+        this.tag.free()
+        this.text.free()
         this.attributes.free()
         this.children.free()
     ..
@@ -41,13 +41,13 @@ isWhiteSpace(char u8) bool:
     ret e.ok()
 ..
 
-htmlCleanup(a alc.Allocator, val $Html) void:
+htmlCleanup(val $Html) void:
     view := val.attributes.valuesView()
     for i u64 = 0 to view.count():
         # SAFETY: valuesView exposes the map-owned values, and cleanup uniquely
         # destroys each bounded entry before destroying the map storage.
         unsafe:
-            view[i].free(val.allocator)
+            view[i].free()
         ..
     ..
     val.free()
@@ -187,9 +187,9 @@ pub parseWithScanner(a alc.Allocator, sc Scanner*, parent Html*) !$Html:
                 ..
 
                 rawCloseTag $str = try bld.build()
-                defer rawCloseTag.free(a)
+                defer rawCloseTag.free()
                 closeTag $str = try strings.toLower(rawCloseTag)
-                defer closeTag.free(a)
+                defer closeTag.free()
 
                 if parent != none && strings.compare(closeTag, parent.tag) == false:
                     throw errors.failure("mismatched closing tag")
@@ -223,10 +223,10 @@ pub parseWithScanner(a alc.Allocator, sc Scanner*, parent Html*) !$Html:
                 try bld.addByte(try sc.consume())
             ..
             rawTag $str = try bld.build()
-            defer rawTag.free(a)
+            defer rawTag.free()
 
             tmp := try strings.toLower(rawTag)
-            element.tag.free(a)
+            element.tag.free()
             element.tag = move tmp
         ..
 
@@ -262,15 +262,15 @@ pub parseWithScanner(a alc.Allocator, sc Scanner*, parent Html*) !$Html:
             ..
             # attribute name
             bld $builder.Builder = try builder.new()
+            defer bld.free()
 
             # TODO: check for alphabetic
             loop isWhiteSpace(sc.peek()) == false && sc.peek() != strings.byteAt("=", 0) && sc.peek() != strings.byteAt(">", 0):
                 try bld.addByte(try sc.consume())
             ..
             attrName := try bld.build()
-            bld.free()
 
-            defer attrName.free(a)
+            defer attrName.free()
 
             # whitespace and equal
             loop isWhiteSpace(sc.peek()):
@@ -298,11 +298,13 @@ pub parseWithScanner(a alc.Allocator, sc Scanner*, parent Html*) !$Html:
             else:
                 # HTML permits unquoted values up to whitespace or '>'.
                 bld2 $builder.Builder = try builder.new()
+                defer bld2.free()
+
                 loop isWhiteSpace(sc.peek()) == false && sc.peek() != strings.byteAt(">", 0):
                     try bld2.addByte(try sc.consume())
                 ..
                 attrVal := try bld2.build()
-                bld2.free()
+                
                 try element.attributes.set(attrName, move attrVal)
                 loop isWhiteSpace(sc.peek()):
                     try sc.consume()
@@ -311,18 +313,19 @@ pub parseWithScanner(a alc.Allocator, sc Scanner*, parent Html*) !$Html:
             ..
             
             bld2 $builder.Builder = try builder.new()
+            defer bld2.free()
+
             loop sc.peek() != quoteChar:
                 try bld2.addByte(try sc.consume())
             ..
             attrVal := try bld2.build()
-            bld2.free()
 
             # end of value
             if sc.peek() == quoteChar:
                 try sc.consume()
                 try element.attributes.set(attrName, move attrVal)
             else:
-                attrVal.free(a)
+                attrVal.free()
                 throw errors.failure("expected end of quoted string")
             ..
 
@@ -371,7 +374,7 @@ pub parseWithScanner(a alc.Allocator, sc Scanner*, parent Html*) !$Html:
 
 
         tmp := try bld.build()
-        element.text.free(a)
+        element.text.free()
         element.text = move tmp
     ..
 

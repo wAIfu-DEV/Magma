@@ -20,8 +20,8 @@ Imports use `use`, a string path, and a mandatory local alias. Standard-library
 modules should use the canonical `std:` prefix:
 
 ```magma
-use "std:io" io
-use "std:allocator" alc
+use "std:io" as io
+use "std:allocator" as alc
 ```
 
 `std:x` resolves `x` from the standard-library directory associated with the
@@ -29,15 +29,15 @@ compiler. The `.mg` extension is optional. Paths without `std:` resolve relative
 to the importing file and are intended for project-local modules:
 
 ```magma
-use "models/user" user
-use "../shared/config.mg" config
+use "models/user" as user
+use "../shared/config.mg" as config
 ```
 
 An imported module can be exposed as part of the current module's public
 namespace with `pub use`:
 
 ```magma
-pub use "std:heap" heap
+pub use "std:heap" as heap
 ```
 
 If this module is imported as `lib`, clients can access public declarations in
@@ -50,6 +50,12 @@ The alias is the name used from the importing file:
 ```magma
 stdout := io.stdout(a)
 ```
+
+Imports may form cycles. Modules in a cycle can use each other's public types,
+functions, constants, and globals; visibility rules are unchanged. Cyclic type
+aliases, infinitely recursive value layouts, recursive constant initializers,
+and module-level declarations whose types cannot be inferred without circular
+reasoning remain errors. Add an explicit type to break an inference cycle.
 
 Comments start with `#` and continue to the end of the line:
 
@@ -145,13 +151,34 @@ pub alias c_size_t = u64
 Public aliases can be imported and qualified like other exported declarations:
 
 ```magma
-use "std:c" c
+use "std:c" as c
 
 ext malloc(size c.c_size_t) ptr
 ```
 
 Internal library code may use `@compiler_known_type("name")` as an alias target
 when the compiler supplies a concrete type for the selected target.
+
+Compiler-provided constants use an explicit source type. Values are supplied
+with repeatable `--compiler-arg NAME=VALUE` options:
+
+```magma
+const TRACE_CAPACITY u64 = @compiler_known("ERROR_TRACE_SLOTS")
+```
+
+Files can be embedded as static byte slices. Paths are resolved relative to the
+source file containing the declaration:
+
+```magma
+const icon := @embed("assets/icon.png")
+const font u8[] = @embed("assets/font.bin")
+```
+
+`@embed` accepts exactly one string literal and produces a borrowed `u8[]`
+whose storage lasts for the process lifetime. The compiler uses C23 `#embed` to
+build a native asset object concurrently with LLVM compilation, then links the
+two objects. Consequently, programs using `@embed` support `--emit object` and
+`--emit exe`, but not the standalone `--emit llvm` mode.
 
 The standard-library root normally comes from the `std` directory beside the
 compiler executable and can be overridden by the compiler's `--std` option.
@@ -489,6 +516,17 @@ alias. Public globals retain their mutability and thread-local storage behavior:
 pub requestCount u64
 ```
 
+Prefix a mutable top-level variable with `global` to give it one process-wide
+instance instead of one instance per thread. `pub` and `global` may be combined:
+
+```magma
+global sharedCount u64
+pub global sharedState ptr
+```
+
+`global` changes storage duration only. Concurrent access still requires
+synchronization or atomic operations.
+
 Mutable globals remain zero-initialized. Immutable globals support explicit or
 inferred types:
 
@@ -543,6 +581,20 @@ open(a alc.Allocator, path str, openMode fopm.OpenMode) !$File:
     ...
 ..
 ```
+
+Captureless anonymous functions use `fn` followed by the same parameter and
+return syntax:
+
+```magma
+apply(fn(value u64) u64:
+    ret value + 1
+.., 41)
+```
+
+Lambdas may use their parameters, their own locals, module globals, constants,
+functions, imports, and the implicit `ctx`. They cannot capture locals from an
+enclosing function; pass such state as an explicit parameter. Lambda parameter
+and return types are required.
 
 Trailing commas are accepted in argument lists, especially in multi-line struct
 definitions.
@@ -1031,16 +1083,17 @@ Compiler directives begin with `@`. The implemented directives are `platform`,
 
 ```magma
 @platform("windows")
-use "std:win/file_impl" impl_file
+use "std:win/file_impl" as impl_file
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/file_impl" impl_file
+use "std:unix/file_impl" as impl_file
 ```
 
 `@platform(...)` applies to exactly the next top-level item, including a normal
 declaration, import, external declaration, `link`, `bundle`, or inline LLVM
-item. If the selected target OS does not match one of the string arguments,
-that item is pruned.
+item. Each string may name a target operating system (`"linux"`, `"windows"`)
+or architecture (`"x86_64"`, `"aarch64"`). If neither the selected OS nor
+architecture matches an argument, that item is pruned.
 
 Directive arguments must be literal constants: strings, numbers, or booleans.
 
@@ -1105,7 +1158,7 @@ functions require an explicit non-throwing wrapper that translates failures to
 a C-compatible representation. Exported symbol names must be unique across all
 modules in a compilation.
 
-## External Functions
+## External Functions and Globals
 
 External functions are declared with `ext`. They bind a Magma-visible alias to an
 external symbol name:
@@ -1126,6 +1179,15 @@ The syntax is:
 ```magma
 ext <alias> <external_symbol>(args...) ReturnType
 ```
+
+External process globals use the same alias-first form and require a type:
+
+```magma
+ext environment environ ptr
+```
+
+External globals are process-global by definition; `global` is neither needed
+nor accepted on their declarations.
 
 The alias is the name used in code:
 
@@ -1406,14 +1468,23 @@ The checker validates initializer, assignment, call-argument, and return-value
 compatibility as well as operator families. Numeric types are mutually
 compatible, and pointer types use permissive pointer compatibility; narrowing
 or representation-changing conversions may produce warnings. Explicit casts
-are available through `use "std:cast" cast`.
+are available through `use "std:cast" as cast`.
 
 Numeric literals initially infer as `i64`; string literals infer as `str`; bool
 literals infer as `bool`. Contextual lowering may still produce the declared
 destination type in generated IR.
 
-`sizeof` returns `u64`. In current samples and tests, primitive sizes use byte
-counts, `ptr` is pointer-sized, and `str`/`slice` are two-word runtime structs.
+`sizeof` returns `u64`. Primitive sizes use byte counts and `ptr` is
+pointer-sized. The canonical runtime layouts of `str`, `error`, and the
+type-erased `slice` are declared in `std/core.mg`; the compiler does not carry a
+second hard-coded LLVM declaration for them.
+
+Public types and aliases declared by `std/core.mg` are available globally
+without a `core.` prefix. Fields whose names begin with `__` are reserved
+implementation details: tooling omits them from normal completion suggestions,
+while standard-library code can name them explicitly when implementing core
+operations. Typed slice syntax (`T[]`) retains its intrinsic element type while
+using the core `slice` declaration as its type-erased backing layout.
 
 ### Returns, Errors, and Defer
 
@@ -1440,19 +1511,20 @@ loop.
 
 ### Globals and Initialization
 
-Mutable global variables are emitted as thread-local storage. An omitted
-initializer produces zero initialization; an initializer may use the same
+Mutable top-level variables are emitted as thread-local storage by default. An
+omitted initializer produces zero initialization; an initializer may use the same
 restricted LLVM-compatible forms as a constant:
 
 ```magma
 counter u64        # valid global, zero-initialized
 limit u64 = 10     # valid restricted initializer
 const counter_value u64 = 1
+global process_counter u64 # one process-wide instance
 ```
 
 Updates are visible across calls on the same thread. Each thread has its own
-instance, so use explicitly shared storage plus synchronization for cross-thread
-state.
+instance. A `global` variable is process-wide and must use appropriate
+synchronization for cross-thread state.
 
 ### Compiler Directives
 
@@ -1511,7 +1583,7 @@ The standard library generally follows these conventions:
 ```magma
 mod module_name
 
-use "std:allocator" alc
+use "std:allocator" as alc
 
 StructName(
     field Type

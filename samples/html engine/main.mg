@@ -2,21 +2,21 @@ mod main
 
 # This project is a HTML engine implemented in Magma using Raylib
 
-use "std:fmt" fmt
-use "std:allocator" alc
-use "std:cast" cast
-use "std:file" file
-use "std:footgun" footgun
-use "std:fs" fs
-use "std:heap" heap
-use "std:list" list
-use "std:raylib" rl
-use "std:slices" slices
-use "std:strings" strings
-use "std:errors" errors
+use "std:fmt" as fmt
+use "std:allocator" as alc
+use "std:cast" as cast
+use "std:file" as file
+use "std:footgun" as footgun
+use "std:fs" as fs
+use "std:heap" as heap
+use "std:list" as list
+use "std:raylib" as rl
+use "std:slices" as slices
+use "std:strings" as strings
+use "std:errors" as errors
 
-use "src/html.mg" html
-use "src/element_defaults.mg" elem_defaults
+use "src/html.mg" as html
+use "src/element_defaults.mg" as elem_defaults
 
 const MAX_TASKS u64 = 128
 const INPUT_CAPACITY u64 = 96
@@ -114,7 +114,7 @@ destr Layout.free() void:
     this.children.free()
 ..
 
-layoutCleanup(a alc.Allocator, val $Layout) void:
+layoutCleanup(val $Layout) void:
     val.free()
 ..
 
@@ -173,7 +173,7 @@ nextLineEnd(a alc.Allocator, fonts FontSet*, text str, start u64, width i32, fon
         ..
         candidate := try strings.substring(text, start, cursor)
         metrics := rl.measureTextEx(font, candidate, i32ToF32(fontSize), DEFAULT_FONT_SPACING)
-        candidate.free(a)
+        candidate.free()
         if metrics.x > i32ToF32(width):
             if lastBreak > start:
                 ret lastBreak
@@ -219,7 +219,7 @@ drawWrappedText(a alc.Allocator, fonts FontSet*, text str, x i32, y i32, width i
         # the browser fonts sit slightly above our CSS-like line box.
         position := rl.Vector2(x=i32ToF32(x), y=i32ToF32(lineY + TEXT_TOP_OFFSET))
         rl.drawTextEx(font, line, position, i32ToF32(fontSize), DEFAULT_FONT_SPACING, color)
-        line.free(a)
+        line.free()
         cursor = lineEnd
         lineY = lineY + fontSize + 3
     ..

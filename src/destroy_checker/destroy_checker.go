@@ -121,6 +121,10 @@ type analyzer struct {
 	destructorReceivers map[*types.NodeExprVarDef]bool
 	staticExtents       map[*types.NodeExprVarDef]uint64
 	currentFunction     *types.NodeFuncDef
+	// destroyReplaceProof is present only while checking one of two adjacent
+	// statements which destroy and then reinitialize the same dereferenced
+	// ownership place. It does not escape the statement pair.
+	destroyReplaceProof *placeKey
 }
 
 const (
@@ -261,6 +265,38 @@ func (a *analyzer) unsupportedMoveProjection(resolved place.Place) bool {
 	return hasUnsupportedMoveProjection(resolved)
 }
 
+func dereferenceOnlyUnsupportedProjection(resolved place.Place) bool {
+	found := false
+	for _, projection := range resolved.Projections {
+		switch projection.Kind {
+		case place.Dereference:
+			found = true
+		case place.DynamicIndex, place.ConstantIndex:
+			return false
+		}
+	}
+	return found
+}
+
+func (a *analyzer) provesAdjacentDestroyReplace(resolved place.Place) bool {
+	if a.destroyReplaceProof == nil || !dereferenceOnlyUnsupportedProjection(resolved) {
+		return false
+	}
+	return *a.destroyReplaceProof == keyFor(resolved)
+}
+
+func unsupportedOwnershipAccess(resolved place.Place) (string, string) {
+	for _, projection := range resolved.Projections {
+		if projection.Kind == place.DynamicIndex || projection.Kind == place.ConstantIndex {
+			return "an index", "use a checked container operation"
+		}
+		if projection.Kind == place.Dereference {
+			return "a pointer dereference", "use an audited unsafe block"
+		}
+	}
+	return "an unsupported projection", "use an audited ownership operation"
+}
+
 func pathContains(parent, child string) bool {
 	return parent == child || (len(child) > len(parent) && strings.HasPrefix(child, parent+"/"))
 }
@@ -284,14 +320,36 @@ func expressionToken(expr types.NodeExpr) types.Token {
 	switch node := expr.(type) {
 	case *types.NodeExprLit:
 		return node.Tk
+	case *types.NodeExprEmbed:
+		return node.Tk
 	case *types.NodeExprName:
+		if node.Tk.Pos.Line != 0 {
+			return node.Tk
+		}
+		// Method-call rewriting can synthesize a receiver expression without
+		// copying Tk. The parsed name still owns the source token, so retain it
+		// as the location for diagnostics on that receiver.
+		switch name := node.Name.(type) {
+		case *types.NodeNameSingle:
+			return name.Tk
+		case *types.NodeNameComposite:
+			if len(name.Tokens) != 0 {
+				return name.Tokens[0]
+			}
+		}
 		return node.Tk
 	case *types.NodeExprMove:
 		return node.Tk
 	case *types.NodeExprCall:
-		return node.Tk
+		if node.Tk.Pos.Line != 0 {
+			return node.Tk
+		}
+		return expressionToken(node.Callee)
 	case *types.NodeExprMemberAccess:
-		return node.Tk
+		if node.Tk.Pos.Line != 0 {
+			return node.Tk
+		}
+		return expressionToken(node.Target)
 	case *types.NodeExprSubscript:
 		return node.Tk
 	case *types.NodeExprTry:
@@ -339,6 +397,15 @@ func isSliceType(node *types.NodeType) bool {
 	}
 	_, ok := node.KindNode.(*types.NodeTypeSlice)
 	return ok
+}
+
+func isStringType(node *types.NodeType) bool {
+	return types.CoreTypeRoleOf(node) == types.CoreTypeString
+}
+
+func borrowedPlace(out *flow, expr types.NodeExpr) bool {
+	resolved, ok := resolvedPlace(expr)
+	return ok && out.states[resolved.Root] == stateBorrowed
 }
 
 func mergeProvenance(left, right pointerProvenance) pointerProvenance {
@@ -807,16 +874,8 @@ func (a *analyzer) setProvenance(out *flow, destination place.Place, value types
 	if literal, ok := value.(*types.NodeExprLit); ok {
 		nullLiteral = literal.LitType == types.TokLitNone
 	}
-	if len(destination.Projections) == 0 && isOpaquePointerType(destination.Root.Type) {
-		valueType := value.GetInferredType()
-		var typedPointer bool
-		if valueType != nil {
-			_, typedPointer = valueType.KindNode.(*types.NodeTypePointer)
-		}
-		if typedPointer && a.unsafeDepth == 0 {
-			a.safetyError(expressionToken(value), "conversion from a typed pointer to ptr requires an unsafe block")
-		}
-	}
+	// Erasing a typed pointer to ptr preserves its provenance and is safe. Only
+	// recovering or changing a pointee type requires an explicit unsafe boundary.
 	// Converting the representation-free `ptr` value into a typed pointer
 	// fabricates provenance which the compiler cannot validate.
 	destinationKind := destinationType(destination)
@@ -1430,20 +1489,7 @@ func signedInteger(node *types.NodeType) bool {
 }
 
 func errorValueType(node *types.NodeType) bool {
-	if node == nil {
-		return false
-	}
-	switch kind := node.KindNode.(type) {
-	case *types.NodeTypeNamed:
-		if single, ok := kind.NameNode.(*types.NodeNameSingle); ok {
-			return single.Name == "error"
-		}
-	case *types.NodeTypeAbsolute:
-		return kind.AbsoluteName == "error" || kind.DisplayName == "error" || strings.HasSuffix(kind.AbsoluteName, ".error")
-	case *types.NodeTypeCompilerKnown:
-		return kind.Name == "error"
-	}
-	return false
+	return types.CoreTypeRoleOf(node) == types.CoreTypeError
 }
 
 func knownFailingError(expr types.NodeExpr) bool {
@@ -1762,7 +1808,15 @@ func (a *analyzer) movePlace(out *flow, resolved place.Place, token types.Token)
 		return true
 	}
 	if a.unsupportedMoveProjection(resolved) && a.unsafeDepth == 0 {
-		a.safetyError(token, "direct ownership moves through indices or dereferences are not supported; use a checked container operation")
+		if a.provesAdjacentDestroyReplace(resolved) {
+			if out.absent == nil {
+				out.absent = map[placeKey]types.Token{}
+			}
+			out.absent[keyFor(resolved)] = token
+			return true
+		}
+		access, remedy := unsupportedOwnershipAccess(resolved)
+		a.safetyError(token, fmt.Sprintf("cannot move or destroy ownership place '%s' through %s: the ownership checker cannot prove exclusive access; %s", placeName(resolved), access, remedy))
 		return false
 	}
 	if a.unsupportedMoveProjection(resolved) && a.unsafeDepth > 0 {
@@ -1859,7 +1913,7 @@ func (a *analyzer) borrowExpr(out *flow, expr types.NodeExpr) {
 			return
 		}
 		if resolved, ok := resolvedPlace(node); ok {
-			a.usePlace(out, resolved, node.Tk)
+			a.usePlace(out, resolved, expressionToken(node))
 		}
 	case *types.NodeExprBinary:
 		a.borrowExpr(out, node.Left)
@@ -1893,7 +1947,7 @@ func (a *analyzer) borrowExpr(out *flow, expr types.NodeExpr) {
 		// member as a place must not bypass the target's bounds proof.
 		a.borrowExpr(out, node.Target)
 		if resolved, ok := resolvedPlace(node); ok {
-			a.usePlace(out, resolved, node.Tk)
+			a.usePlace(out, resolved, expressionToken(node))
 		}
 	case *types.NodeExprSubscript:
 		a.authorizeSubscript(out, node)
@@ -1913,6 +1967,10 @@ func (a *analyzer) borrowExpr(out *flow, expr types.NodeExpr) {
 		// A move is meaningful only in an ownership-transfer position.
 		a.safetyError(node.Tk, "move expression is only valid where ownership is transferred")
 		a.borrowExpr(out, node.Expr)
+	case *types.NodeExprLlvm:
+		for _, arg := range node.Args {
+			a.borrowExpr(out, arg)
+		}
 	case *types.NodeExprCall:
 		a.call(out, node)
 	case *types.NodeExprTry:
@@ -2045,18 +2103,28 @@ func (a *analyzer) call(out *flow, call *types.NodeExprCall) {
 
 	if call.IsMemberFunc && call.MemberOwnerExpr != nil {
 		if definition.IsDestructor && !definition.IsExternal {
-			a.consumeExpression(out, call.MemberOwnerExpr, "destructor call", call.Tk)
-			if owner, ok := resolvedPlace(call.MemberOwnerExpr); ok {
-				clearRetention(out, owner)
+			// str.free is explicitly a no-op for borrowed/static strings. Keep
+			// those values live instead of treating the destructor as a consume.
+			if isStringType(call.MemberOwnerExpr.GetInferredType()) && borrowedPlace(out, call.MemberOwnerExpr) {
+				a.borrowExpr(out, call.MemberOwnerExpr)
+			} else {
+				a.consumeExpression(out, call.MemberOwnerExpr, "destructor call", call.Tk)
+				if owner, ok := resolvedPlace(call.MemberOwnerExpr); ok {
+					clearRetention(out, owner)
+				}
 			}
 		} else {
 			a.borrowExpr(out, call.MemberOwnerExpr)
 		}
 	} else if call.IsMemberFunc && call.MemberOwnerName != nil {
 		if definition.IsDestructor && !definition.IsExternal {
-			a.consumeExpression(out, call.MemberOwnerName, "destructor call", call.Tk)
-			if owner, ok := resolvedPlace(call.MemberOwnerName); ok {
-				clearRetention(out, owner)
+			if isStringType(call.MemberOwnerName.GetInferredType()) && borrowedPlace(out, call.MemberOwnerName) {
+				a.borrowExpr(out, call.MemberOwnerName)
+			} else {
+				a.consumeExpression(out, call.MemberOwnerName, "destructor call", call.Tk)
+				if owner, ok := resolvedPlace(call.MemberOwnerName); ok {
+					clearRetention(out, owner)
+				}
 			}
 		} else {
 			a.borrowExpr(out, call.MemberOwnerName)
@@ -2410,7 +2478,13 @@ func (a *analyzer) assignment(out *flow, assignment *types.NodeExprAssign) {
 		ownershipStorage := fieldType != nil && fieldType.Owned && a.destructible(fieldType)
 		if a.unsupportedMoveProjection(destination) && a.unsafeDepth == 0 {
 			if ownershipStorage {
-				a.safetyError(expressionToken(assignment.Left), "direct assignment to indexed ownership storage is not supported; use a checked replace operation")
+				if _, absent := a.absentOrigin(out, destination); absent && a.provesAdjacentDestroyReplace(destination) && owned {
+					a.reinitializePlace(out, destination)
+					setRetention(out, destination, retention, retained)
+					return
+				}
+				access, remedy := unsupportedOwnershipAccess(destination)
+				a.safetyError(expressionToken(assignment.Left), fmt.Sprintf("cannot replace ownership place '%s' through %s: the ownership checker cannot prove that the previous value is absent; %s", placeName(destination), access, remedy))
 			}
 			return
 		}
@@ -3015,6 +3089,103 @@ func (a *analyzer) statement(out *flow, statement types.NodeStatement) {
 	}
 }
 
+func directDestructorReceiver(statement types.NodeStatement) (place.Place, bool) {
+	expression, ok := statement.(*types.NodeStmtExpr)
+	if !ok {
+		return place.Place{}, false
+	}
+	call, ok := expression.Expression.(*types.NodeExprCall)
+	if !ok || call.AssociatedFnDef == nil || !call.AssociatedFnDef.IsDestructor {
+		return place.Place{}, false
+	}
+	receiver := call.MemberOwnerExpr
+	if receiver == nil {
+		receiver = call.MemberOwnerName
+	}
+	return resolvedPlace(receiver)
+}
+
+func throwingTry(expr types.NodeExpr) *types.NodeExprTry {
+	if expr == nil || (reflect.ValueOf(expr).Kind() == reflect.Ptr && reflect.ValueOf(expr).IsNil()) {
+		return nil
+	}
+	if attempted, ok := expr.(*types.NodeExprTry); ok {
+		return attempted
+	}
+	children := []types.NodeExpr{}
+	switch node := expr.(type) {
+	case *types.NodeExprVarDefAssign:
+		children = append(children, node.AssignExpr)
+	case *types.NodeExprAssign:
+		children = append(children, node.Left, node.Right)
+	case *types.NodeExprBinary:
+		children = append(children, node.Left, node.Right)
+	case *types.NodeExprUnary:
+		children = append(children, node.Operand)
+	case *types.NodeExprAddrof:
+		children = append(children, node.Expr)
+	case *types.NodeExprMove:
+		children = append(children, node.Expr)
+	case *types.NodeExprMemberAccess:
+		children = append(children, node.Target)
+	case *types.NodeExprSubscript:
+		children = append(children, node.Target, node.Expr)
+	case *types.NodeExprCall:
+		children = append(children, node.Callee)
+		children = append(children, node.Args...)
+		children = append(children, node.MemberOwnerExpr, node.MemberOwnerName)
+	case *types.NodeExprStructInit:
+		for _, field := range node.Fields {
+			children = append(children, field.Expression)
+		}
+	case *types.NodeExprProtoView:
+		children = append(children, node.Target)
+	case *types.NodeExprArray:
+		children = append(children, node.Length)
+		for _, entry := range node.Entries {
+			children = append(children, entry.Index, entry.Value)
+		}
+	}
+	for _, child := range children {
+		if attempted := throwingTry(child); attempted != nil {
+			return attempted
+		}
+	}
+	return nil
+}
+
+func directAssignmentDestination(statement types.NodeStatement) (place.Place, *types.NodeExprTry, bool) {
+	expression, ok := statement.(*types.NodeStmtExpr)
+	if !ok {
+		return place.Place{}, nil, false
+	}
+	assignment, ok := expression.Expression.(*types.NodeExprAssign)
+	if !ok {
+		return place.Place{}, nil, false
+	}
+	destination, resolved := resolvedPlace(assignment.Left)
+	return destination, throwingTry(assignment.Right), resolved
+}
+
+func adjacentDestroyReplaceProof(statements []types.NodeStatement, index int) (*placeKey, *types.NodeExprTry) {
+	first := index
+	if index > 0 {
+		first = index - 1
+	}
+	for ; first <= index && first+1 < len(statements); first++ {
+		destroyed, destroyOK := directDestructorReceiver(statements[first])
+		replaced, throwing, replaceOK := directAssignmentDestination(statements[first+1])
+		if !destroyOK || !replaceOK || !dereferenceOnlyUnsupportedProjection(destroyed) {
+			continue
+		}
+		destroyedKey, replacedKey := keyFor(destroyed), keyFor(replaced)
+		if destroyedKey == replacedKey {
+			return &destroyedKey, throwing
+		}
+	}
+	return nil, nil
+}
+
 func (a *analyzer) body(out *flow, body *types.NodeBody) {
 	depth := len(out.scopes)
 	out.scopes = append(out.scopes, deferScope{locals: map[*types.NodeExprVarDef]bool{}})
@@ -3024,7 +3195,14 @@ func (a *analyzer) body(out *flow, body *types.NodeBody) {
 		for _, later := range body.Statements[index+1:] {
 			collectStatementUses(later, a.futureUses)
 		}
+		outerProof := a.destroyReplaceProof
+		proof, throwing := adjacentDestroyReplaceProof(body.Statements, index)
+		a.destroyReplaceProof = proof
+		if throwing != nil {
+			a.safetyError(throwing.Tk, "owned field replacement may throw after the previous value has been destroyed; construct the replacement before destroying the field")
+		}
 		a.statement(out, statement)
+		a.destroyReplaceProof = outerProof
 	}
 	a.futureUses = outerFuture
 	if len(out.scopes) > depth {
@@ -3067,6 +3245,10 @@ func collectExprUses(expr types.NodeExpr, out map[*types.NodeExprVarDef]bool) {
 		collectExprUses(node.Expr, out)
 	case *types.NodeExprMove:
 		collectExprUses(node.Expr, out)
+	case *types.NodeExprLlvm:
+		for _, arg := range node.Args {
+			collectExprUses(arg, out)
+		}
 	case *types.NodeExprMemberAccess:
 		collectExprUses(node.Target, out)
 	case *types.NodeExprSubscript:
@@ -3670,6 +3852,9 @@ func Check(shared *types.SharedState) []Diagnostic {
 	allocatorReturns := inferAllocatorReturns(shared, allocatorProto)
 	allocationReturns := inferAllocationReturns(shared, allocatorProto, allocatorReturns)
 	for _, file := range shared.Files {
+		if file.InterfaceOnly {
+			continue
+		}
 		a := &analyzer{shared: shared, file: file, seen: map[string]bool{}, returnOrigins: returnOrigins, allocatorReturns: allocatorReturns, allocationReturns: allocationReturns, allocatorProto: allocatorProto, consumePtrOrigins: consumePtrOrigins, futureUses: map[*types.NodeExprVarDef]bool{}, destructorReceivers: map[*types.NodeExprVarDef]bool{}, staticExtents: map[*types.NodeExprVarDef]uint64{}}
 		validateDestructors(a, file.GlNode)
 		for _, declaration := range file.GlNode.Declarations {

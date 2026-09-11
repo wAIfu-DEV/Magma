@@ -1,12 +1,12 @@
 mod scratch_alloc
 # Reusable free-list allocation within a fixed-size memory region.
 
-use "std:allocator" allocator
-use "std:cast" cast
-use "std:errors" errors
-use "std:memory" memory
-use "std:slices" slices
-use "std:checked" checked
+use "std:allocator" as allocator
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:memory" as memory
+use "std:slices" as slices
+use "std:checked" as checked
 
 const DEFAULT_CAPACITY u64 = 65536
 const ALIGNMENT u64 = 16
@@ -43,7 +43,7 @@ scratchAlloc(raw ptr, byteCount u64) !u8*:
         throw errors.invalidArgument("scratch allocation size must be greater than zero")
     ..
     required := try checked.alignUp(byteCount, ALIGNMENT)
-    block Block* = scratch.bytes
+    block Block* = cast.reinterpret[Block](scratch.bytes)
     loop block != none:
         if block.free && block.size >= required:
             remaining := block.size - required
@@ -54,7 +54,7 @@ scratchAlloc(raw ptr, byteCount u64) !u8*:
                 block.size = required
             ..
             block.free = false
-            ret cast.utop(cast.ptou(block) + sizeof Block)
+            ret cast.reinterpret[u8](cast.utop(cast.ptou(block) + sizeof Block))
         ..
         block = nextBlock(scratch, block)
     ..
@@ -62,7 +62,7 @@ scratchAlloc(raw ptr, byteCount u64) !u8*:
 ..
 
 findBlock(scratch Scratch*, pointer u8*) Block*:
-    block Block* = scratch.bytes
+    block Block* = cast.reinterpret[Block](scratch.bytes)
     loop block != none:
         if cast.ptou(block) + sizeof Block == cast.ptou(pointer):
             ret block
@@ -73,7 +73,7 @@ findBlock(scratch Scratch*, pointer u8*) Block*:
 ..
 
 coalesce(scratch Scratch*) void:
-    block Block* = scratch.bytes
+    block Block* = cast.reinterpret[Block](scratch.bytes)
     loop block != none:
         next := nextBlock(scratch, block)
         if next != none && block.free && next.free:
@@ -143,12 +143,12 @@ Scratch.alloc(byteCount u64) !$u8*:
     ret try scratchAlloc(this, byteCount)
 ..
 
-Scratch.realloc(pointer u8*, byteCount u64) !$u8*:
-    ret try scratchRealloc(this, pointer, byteCount)
+Scratch.realloc(pointer ptr, byteCount u64) !$u8*:
+    ret try scratchRealloc(this, cast.reinterpret[u8](pointer), byteCount)
 ..
 
-Scratch.free(pointer u8*) void:
-    scratchFree(this, pointer)
+Scratch.free(pointer ptr) void:
+    scratchFree(this, cast.reinterpret[u8](pointer))
 ..
 
 initialize(bytes u8*, capacity u64, ownsBytes bool) !Scratch:
@@ -156,7 +156,7 @@ initialize(bytes u8*, capacity u64, ownsBytes bool) !Scratch:
     if capacity < sizeof Block + ALIGNMENT:
         throw errors.invalidArgument("scratch capacity is too small")
     ..
-    initial Block* = bytes
+    initial Block* = cast.reinterpret[Block](bytes)
     initial.size = capacity - sizeof Block
     initial.free = true
     ret Scratch(backing=a, bytes=bytes, capacityValue=capacity, ownsBytes=ownsBytes)
@@ -186,7 +186,7 @@ pub fromBuffer(buffer u8[]) !Scratch:
     if padding > buffer.count():
         throw errors.invalidArgument("scratch buffer is too small after alignment")
     ..
-    ret try initialize(cast.utop(address + padding), buffer.count() - padding, false)
+    ret try initialize(cast.reinterpret[u8](cast.utop(address + padding)), buffer.count() - padding, false)
 ..
 
 # Returns a non-owning allocator view. Scratch must remain at a stable address.
@@ -196,7 +196,7 @@ Scratch.allocator() allocator.Allocator:
 
 # Releases every scratch allocation and restores one free block.
 Scratch.reset() void:
-    initial Block* = this.bytes
+    initial Block* = cast.reinterpret[Block](this.bytes)
     initial.size = this.capacityValue - sizeof Block
     initial.free = true
 ..

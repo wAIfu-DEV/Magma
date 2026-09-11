@@ -1,12 +1,12 @@
 mod main
 
-use "std:allocator" allocator
-use "std:errors" errors
-use "std:fake_alloc" fake_alloc
-use "std:fmt" fmt
-use "std:heap" heap
-use "std:strings" strings
-use "std:writer" writer
+use "std:allocator" as allocator
+use "std:errors" as errors
+use "std:fake_alloc" as fake_alloc
+use "std:fmt" as fmt
+use "std:heap" as heap
+use "std:strings" as strings
+use "std:writer" as writer
 
 Capture impl writer.Writer(
     buffer u8*
@@ -35,13 +35,13 @@ pub main() !void:
     if renderErr.nok():
         throw renderErr
     ..
-    defer rendered.free(a)
+    defer rendered.free()
     if strings.compare(rendered, "Value: 5, signed: -2, active: true, ratio: 1.5") == false:
         throw errors.failure("formatted string changed")
     ..
 
     captureBytes := try strings.alloc(128)
-    defer captureBytes.free(a)
+    defer captureBytes.free()
     capture := Capture(buffer=strings.toPtr(captureBytes), count=0)
     output := capture.proto[writer.Writer]()
     written := try fmt.str(a, "one").str(" two").str(" three").str(" four").str(" five").str(" six").str(" seven").str(" eight").str(" nine").writeTo(output)

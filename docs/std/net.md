@@ -5,8 +5,8 @@ TCP, UDP, cached DNS, readiness polling, event loops, callback listeners, and
 client-side TLS.
 
 ```magma
-use "std:net/address" address
-use "std:net/tcp" tcp
+use "std:net/address" as address
+use "std:net/tcp" as tcp
 
 endpoint := address.loopbackIpv4(8080)
 stream := try tcp.connect(endpoint)

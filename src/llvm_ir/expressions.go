@@ -21,11 +21,8 @@ func irExprLitStr(ctx *IrCtx, litStr *t.NodeExprLit) (SsaName, error) {
 	constSsa := irCStringGlobal(ctx, litStr.Value)
 	constLen := len(litStr.Value) + 1
 
-	//irWritef(ctx, "  %%%s = insertvalue %%type.str undef, ptr @%s, 0\n", strFieldSsa.Repr, constSsa.Repr)
-	//irWritef(ctx, "  %%%s = insertvalue %%type.str %%%s, i64 %d, 1\n", sizeFieldSsa.Repr, strFieldSsa.Repr, constLen-1)
-
 	litSsa := SsaName{
-		Repr:      fmt.Sprintf("{ ptr %s, i64 %d }", constSsa.Repr, constLen-1),
+		Repr:      fmt.Sprintf("{ ptr %s, i64 %d, ptr null, ptr null }", constSsa.Repr, constLen-1),
 		IsLiteral: true,
 	}
 
@@ -240,10 +237,14 @@ func irNameVariableStorage(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, *t.No
 	}
 	switch variable.Storage {
 	case t.VariableStorageGlobal:
-		if variable.AbsName == "" {
+		symbol := variable.AbsName
+		if variable.IsExternal {
+			symbol = variable.ExternalName
+		}
+		if symbol == "" {
 			return SsaName{}, nil, fmt.Errorf("cannot lower global variable without a resolved symbol")
 		}
-		return SsaName{Repr: "@" + variable.AbsName}, variable.Type, nil
+		return SsaName{Repr: "@" + symbol}, variable.Type, nil
 	case t.VariableStorageArgument:
 		name, ok := variable.Name.(*t.NodeNameSingle)
 		if !ok || name.Name == "" {
@@ -535,7 +536,11 @@ func irExprSubscript(ctx *IrCtx, subs *t.NodeExprSubscript) (SsaName, error) {
 		}
 		// extract ptr from struct first
 		extracted := irSsaLocal(ctx)
-		irWritef(ctx, "  %s = extractvalue %%type.slice %s, 0\n", extracted.Repr, loadedTarget.Repr)
+		dataField, err := coreFieldIndex(ctx, t.CoreTypeSlice, "__data")
+		if err != nil {
+			return SsaName{}, err
+		}
+		irWritef(ctx, "  %s = extractvalue %s %s, %d\n", extracted.Repr, t.CoreTypeSlice.LLVMName(), loadedTarget.Repr, dataField)
 		return irExprSubscriptPtr(ctx, subs, extracted, subsExpr)
 	case *t.NodeTypePointer:
 		var loadedTarget SsaName
@@ -658,7 +663,11 @@ func irExprSubscriptLvalue(ctx *IrCtx, subs *t.NodeExprSubscript) (SsaName, erro
 
 		// extract ptr from struct first
 		extracted := irSsaLocal(ctx)
-		irWritef(ctx, "  %s = extractvalue %%type.slice %s, 0\n", extracted.Repr, loadedTarget.Repr)
+		dataField, err := coreFieldIndex(ctx, t.CoreTypeSlice, "__data")
+		if err != nil {
+			return SsaName{}, err
+		}
+		irWritef(ctx, "  %s = extractvalue %s %s, %d\n", extracted.Repr, t.CoreTypeSlice.LLVMName(), loadedTarget.Repr, dataField)
 		targetPtrSsa = extracted
 	case *t.NodeTypePointer, *t.NodeTypeRfc:
 		if subs.IsTargetSsa {
@@ -789,6 +798,10 @@ func irTryCall(ctx *IrCtx, callRetSsa SsaName, fnCall *t.NodeExprCall, pos t.Fil
 }
 
 func irCaptureCall(ctx *IrCtx, callRetSsa SsaName, fnCall *t.NodeExprCall) (SsaName, error) {
+	codeField, err := coreFieldIndex(ctx, t.CoreTypeError, "__code")
+	if err != nil {
+		return SsaName{}, err
+	}
 	returnType := callReturnType(fnCall)
 	errSsa := irSsaLocal(ctx)
 	irWritef(ctx, "  %s = extractvalue ", errSsa.Repr)
@@ -798,12 +811,12 @@ func irCaptureCall(ctx *IrCtx, callRetSsa SsaName, fnCall *t.NodeExprCall) (SsaN
 	irWritef(ctx, " %s, 0\n", callRetSsa.Repr)
 	codeSsa, failedSsa := irSsaLocal(ctx), irSsaLocal(ctx)
 	successLabel := irSsaName(ctx)
-	irWritef(ctx, "  %s = extractvalue %%type.error %s, 1\n", codeSsa.Repr, errSsa.Repr)
+	irWritef(ctx, "  %s = extractvalue %s %s, %d\n", codeSsa.Repr, t.CoreTypeError.LLVMName(), errSsa.Repr, codeField)
 	irWritef(ctx, "  %s = icmp ne i32 %s, 0\n", failedSsa.Repr, codeSsa.Repr)
 	failureStore := irSsaName(ctx)
 	irWritef(ctx, "  br i1 %s, label %%%s, label %%%s, !prof !9000\n", failedSsa.Repr, failureStore.Repr, successLabel.Repr)
 	irWritef(ctx, "%s:\n", failureStore.Repr)
-	irWritef(ctx, "  store %%type.error %s, ptr %s\n", errSsa.Repr, ctx.CapturedErrorSlot.Repr)
+	irWritef(ctx, "  store %s %s, ptr %s\n", t.CoreTypeError.LLVMName(), errSsa.Repr, ctx.CapturedErrorSlot.Repr)
 	irWritef(ctx, "  br label %%%s\n", ctx.ErrorFailureLabel.Repr)
 	irWritef(ctx, "%s:\n", successLabel.Repr)
 	if isVoidType(returnType) {
@@ -820,6 +833,8 @@ func irCaptureCall(ctx *IrCtx, callRetSsa SsaName, fnCall *t.NodeExprCall) (SsaN
 
 func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr, topLevel bool) (SsaName, error) {
 	switch ne := expr.(type) {
+	case *t.NodeExprLlvm:
+		return irExprLlvm(ctx, ne)
 	case *t.NodeExprArray:
 		return irExprArray(ctx, ne)
 	case *t.NodeExprVarDefAssign:
@@ -829,6 +844,9 @@ func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr, topLeve
 	case *t.NodeExprAssign:
 		return irExprAssign(ctx, ne, ne.Left, ne.Right)
 	case *t.NodeExprCall:
+		if ne.UnionVariant != nil {
+			return irExprUnionInit(ctx, &t.NodeExprStructInit{Tk: ne.Tk, Type: ne.InfType, UnionVariant: ne.UnionVariant})
+		}
 		return irExprFuncCall(ctx, ne, false, topLevel)
 	case *t.NodeExprStructInit:
 		return irExprStructInit(ctx, ne)
@@ -867,6 +885,376 @@ func irExpression(ctx *IrCtx, expectedType *t.NodeType, expr t.NodeExpr, topLeve
 	return ssaName(""), fmt.Errorf("unsupported expression")
 }
 
+// irExprLlvm lowers the same typed operation node consumed by the object
+// backend. No user-provided LLVM text is copied into the module.
+func irExprLlvm(ctx *IrCtx, expr *t.NodeExprLlvm) (SsaName, error) {
+	if expr.ResultType == nil {
+		return SsaName{}, fmt.Errorf("incomplete @llvm operation %q", expr.Operation)
+	}
+	lower := func(index int) (SsaName, error) {
+		if index < 0 || index >= len(expr.Args) {
+			return SsaName{}, fmt.Errorf("@llvm %s operand %d is missing", expr.Operation, index)
+		}
+		return irExpression(ctx, expr.Args[index].GetInferredType(), expr.Args[index], false)
+	}
+	literal := func(index int) (string, error) {
+		if index < 0 || index >= len(expr.Args) {
+			return "", fmt.Errorf("@llvm %s configuration %d is missing", expr.Operation, index)
+		}
+		value, ok := expr.Args[index].(*t.NodeExprLit)
+		if !ok {
+			return "", fmt.Errorf("@llvm %s configuration %d must be a literal", expr.Operation, index)
+		}
+		return value.Value, nil
+	}
+	writeValue := func(value SsaName) { irPossibleLitSsa(ctx, value) }
+	void := ssaName("<void ret>")
+
+	switch expr.Operation {
+	case "reinterpret":
+		return lower(0)
+	case "offset":
+		pointer, err := lower(0)
+		if err != nil {
+			return SsaName{}, err
+		}
+		offset, err := lower(1)
+		if err != nil {
+			return SsaName{}, err
+		}
+		result := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = getelementptr i8, ptr ", result.Repr)
+		writeValue(pointer)
+		irWrite(ctx, ", i64 ")
+		writeValue(offset)
+		irWrite(ctx, "\n")
+		return result, nil
+	case "ptrtoint", "inttoptr", "bitcast", "sext", "zext", "trunc", "sitofp", "uitofp", "fptosi", "fptoui":
+		operand, err := lower(0)
+		if err != nil {
+			return SsaName{}, err
+		}
+		result := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = %s ", result.Repr, expr.Operation)
+		if err := irType(ctx, expr.Args[0].GetInferredType()); err != nil {
+			return SsaName{}, err
+		}
+		irWrite(ctx, " ")
+		writeValue(operand)
+		irWrite(ctx, " to ")
+		if err := irType(ctx, expr.ResultType); err != nil {
+			return SsaName{}, err
+		}
+		irWrite(ctx, "\n")
+		return result, nil
+	case "load_volatile", "atomic_load":
+		pointer, err := lower(0)
+		if err != nil {
+			return SsaName{}, err
+		}
+		ordering := ""
+		alignIndex := 1
+		if expr.Operation == "atomic_load" {
+			ordering, err = literal(1)
+			if err == nil {
+				err = validateLLVMOrdering(ordering, false)
+			}
+			alignIndex = 2
+			if err != nil {
+				return SsaName{}, err
+			}
+		}
+		alignment, err := literal(alignIndex)
+		if err != nil {
+			return SsaName{}, err
+		}
+		if err := validateLLVMAlignment(alignment); err != nil {
+			return SsaName{}, err
+		}
+		result := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = load ", result.Repr)
+		if expr.Operation == "load_volatile" {
+			irWrite(ctx, "volatile ")
+		} else {
+			irWrite(ctx, "atomic ")
+		}
+		if err := irType(ctx, expr.ResultType); err != nil {
+			return SsaName{}, err
+		}
+		irWrite(ctx, ", ptr ")
+		writeValue(pointer)
+		if ordering != "" {
+			irWritef(ctx, " %s", ordering)
+		}
+		irWritef(ctx, ", align %s\n", alignment)
+		return result, nil
+	case "store_volatile", "atomic_store":
+		pointer, err := lower(0)
+		if err != nil {
+			return SsaName{}, err
+		}
+		value, err := lower(1)
+		if err != nil {
+			return SsaName{}, err
+		}
+		ordering := ""
+		alignIndex := 2
+		if expr.Operation == "atomic_store" {
+			ordering, err = literal(2)
+			if err == nil {
+				err = validateLLVMOrdering(ordering, true)
+			}
+			alignIndex = 3
+			if err != nil {
+				return SsaName{}, err
+			}
+		}
+		alignment, err := literal(alignIndex)
+		if err != nil {
+			return SsaName{}, err
+		}
+		if err := validateLLVMAlignment(alignment); err != nil {
+			return SsaName{}, err
+		}
+		irWrite(ctx, "  store ")
+		if expr.Operation == "store_volatile" {
+			irWrite(ctx, "volatile ")
+		} else {
+			irWrite(ctx, "atomic ")
+		}
+		if err := irType(ctx, expr.Args[1].GetInferredType()); err != nil {
+			return SsaName{}, err
+		}
+		irWrite(ctx, " ")
+		writeValue(value)
+		irWrite(ctx, ", ptr ")
+		writeValue(pointer)
+		if ordering != "" {
+			irWritef(ctx, " %s", ordering)
+		}
+		irWritef(ctx, ", align %s\n", alignment)
+		return void, nil
+	case "atomic_rmw":
+		pointer, err := lower(0)
+		if err != nil {
+			return SsaName{}, err
+		}
+		value, err := lower(1)
+		if err != nil {
+			return SsaName{}, err
+		}
+		op, err := literal(2)
+		if err != nil {
+			return SsaName{}, err
+		}
+		ordering, err := literal(3)
+		if err != nil {
+			return SsaName{}, err
+		}
+		alignment, err := literal(4)
+		if err != nil {
+			return SsaName{}, err
+		}
+		if op != "xchg" && op != "add" && op != "sub" {
+			return SsaName{}, fmt.Errorf("unsupported atomicrmw operation %q", op)
+		}
+		if err := validateLLVMOrdering(ordering, true); err != nil {
+			return SsaName{}, err
+		}
+		if err := validateLLVMAlignment(alignment); err != nil {
+			return SsaName{}, err
+		}
+		result := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = atomicrmw %s ptr ", result.Repr, op)
+		writeValue(pointer)
+		irWrite(ctx, ", ")
+		if err := irType(ctx, expr.Args[1].GetInferredType()); err != nil {
+			return SsaName{}, err
+		}
+		irWrite(ctx, " ")
+		writeValue(value)
+		irWritef(ctx, " %s, align %s\n", ordering, alignment)
+		return result, nil
+	case "cmpxchg_old":
+		pointer, err := lower(0)
+		if err != nil {
+			return SsaName{}, err
+		}
+		expected, err := lower(1)
+		if err != nil {
+			return SsaName{}, err
+		}
+		desired, err := lower(2)
+		if err != nil {
+			return SsaName{}, err
+		}
+		success, err := literal(3)
+		if err != nil {
+			return SsaName{}, err
+		}
+		failure, err := literal(4)
+		if err != nil {
+			return SsaName{}, err
+		}
+		alignment, err := literal(5)
+		if err != nil {
+			return SsaName{}, err
+		}
+		if err := validateLLVMOrdering(success, false); err != nil {
+			return SsaName{}, err
+		}
+		if err := validateLLVMOrdering(failure, false); err != nil {
+			return SsaName{}, err
+		}
+		if err := validateLLVMAlignment(alignment); err != nil {
+			return SsaName{}, err
+		}
+		pair, result := irSsaLocal(ctx), irSsaLocal(ctx)
+		irWritef(ctx, "  %s = cmpxchg ptr ", pair.Repr)
+		writeValue(pointer)
+		irWrite(ctx, ", ")
+		if err := irType(ctx, expr.ResultType); err != nil {
+			return SsaName{}, err
+		}
+		irWrite(ctx, " ")
+		writeValue(expected)
+		irWrite(ctx, ", ")
+		if err := irType(ctx, expr.ResultType); err != nil {
+			return SsaName{}, err
+		}
+		irWrite(ctx, " ")
+		writeValue(desired)
+		irWritef(ctx, " %s %s, align %s\n", success, failure, alignment)
+		irWritef(ctx, "  %s = extractvalue { ", result.Repr)
+		if err := irType(ctx, expr.ResultType); err != nil {
+			return SsaName{}, err
+		}
+		irWritef(ctx, ", i1 } %s, 0\n", pair.Repr)
+		return result, nil
+	case "bswap", "bitreverse", "ctpop", "ctlz", "cttz":
+		operand, err := lower(0)
+		if err != nil {
+			return SsaName{}, err
+		}
+		typeName, err := llvmIntrinsicTypeName(expr.ResultType)
+		if err != nil {
+			return SsaName{}, err
+		}
+		name := "llvm." + expr.Operation + "." + typeName
+		if expr.Operation == "ctlz" || expr.Operation == "cttz" {
+			irWriteGlf(ctx, "declare %s @%s(%s, i1)\n", typeName, name, typeName)
+		} else {
+			irWriteGlf(ctx, "declare %s @%s(%s)\n", typeName, name, typeName)
+		}
+		result := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = call %s @%s(%s ", result.Repr, typeName, name, typeName)
+		writeValue(operand)
+		if expr.Operation == "ctlz" || expr.Operation == "cttz" {
+			irWrite(ctx, ", i1 false")
+		}
+		irWrite(ctx, ")\n")
+		return result, nil
+	case "expect":
+		value, err := lower(0)
+		if err != nil {
+			return SsaName{}, err
+		}
+		expected, err := lower(1)
+		if err != nil {
+			return SsaName{}, err
+		}
+		irWriteGl(ctx, "declare i1 @llvm.expect.i1(i1, i1)\n")
+		result := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = call i1 @llvm.expect.i1(i1 ", result.Repr)
+		writeValue(value)
+		irWrite(ctx, ", i1 ")
+		writeValue(expected)
+		irWrite(ctx, ")\n")
+		return result, nil
+	case "assume":
+		condition, err := lower(0)
+		if err != nil {
+			return SsaName{}, err
+		}
+		irWriteGl(ctx, "declare void @llvm.assume(i1)\n")
+		irWrite(ctx, "  call void @llvm.assume(i1 ")
+		writeValue(condition)
+		irWrite(ctx, ")\n")
+		return void, nil
+	case "fence":
+		ordering, err := literal(0)
+		if err != nil {
+			return SsaName{}, err
+		}
+		if err := validateLLVMOrdering(ordering, false); err != nil {
+			return SsaName{}, err
+		}
+		irWritef(ctx, "  fence %s\n", ordering)
+		return void, nil
+	case "asm_sideeffect":
+		instruction, err := literal(0)
+		if err != nil {
+			return SsaName{}, err
+		}
+		if instruction != "pause" && instruction != "yield" {
+			return SsaName{}, fmt.Errorf("unsupported inline assembly %q", instruction)
+		}
+		irWritef(ctx, "  call void asm sideeffect %q, \"~{memory}\"()\n", instruction)
+		return void, nil
+	case "sideeffect":
+		irWriteGl(ctx, "declare void @llvm.sideeffect()\n")
+		irWrite(ctx, "  call void @llvm.sideeffect()\n")
+		return void, nil
+	case "trap":
+		irWriteGl(ctx, "declare void @llvm.trap()\n")
+		irWrite(ctx, "  call void @llvm.trap()\n")
+		return void, nil
+	}
+	return SsaName{}, fmt.Errorf("unsupported @llvm operation %q", expr.Operation)
+}
+
+func validateLLVMOrdering(ordering string, store bool) error {
+	allowed := map[string]bool{"monotonic": true, "acquire": true, "release": true, "acq_rel": true, "seq_cst": true}
+	if !allowed[ordering] || (store && ordering == "acquire") {
+		return fmt.Errorf("invalid LLVM atomic ordering %q", ordering)
+	}
+	return nil
+}
+
+func validateLLVMAlignment(alignment string) error {
+	allowed := map[string]bool{"1": true, "2": true, "4": true, "8": true, "16": true}
+	if !allowed[alignment] {
+		return fmt.Errorf("invalid LLVM alignment %q", alignment)
+	}
+	return nil
+}
+
+func llvmIntrinsicTypeName(node *t.NodeType) (string, error) {
+	if node == nil {
+		return "", fmt.Errorf("missing LLVM intrinsic type")
+	}
+	named, ok := node.KindNode.(*t.NodeTypeNamed)
+	if !ok {
+		return "", fmt.Errorf("LLVM intrinsic requires a named integer type")
+	}
+	single, ok := named.NameNode.(*t.NodeNameSingle)
+	if !ok {
+		return "", fmt.Errorf("LLVM intrinsic requires a simple integer type")
+	}
+	switch single.Name {
+	case "u8", "i8":
+		return "i8", nil
+	case "u16", "i16":
+		return "i16", nil
+	case "u32", "i32":
+		return "i32", nil
+	case "u64", "i64":
+		return "i64", nil
+	default:
+		return "", fmt.Errorf("unsupported LLVM intrinsic type %q", single.Name)
+	}
+}
+
 func irExprArray(ctx *IrCtx, expr *t.NodeExprArray) (SsaName, error) {
 	length, e := irExpression(ctx, expr.LengthType, expr.Length, false)
 	if e != nil {
@@ -895,7 +1283,7 @@ func irExprArray(ctx *IrCtx, expr *t.NodeExprArray) (SsaName, error) {
 	irWrite(ctx, ", ")
 	irPossibleLitSsa(ctx, length)
 	irWrite(ctx, "\n")
-	irWritef(ctx, "  call void @llvm.memset.p0i8.i64(ptr %s, i8 0, i64 %s, i32 1, i1 0)\n", data.Repr, totalSize.Repr)
+	irWritef(ctx, "  call void @llvm.memset.p0.i64(ptr %s, i8 0, i64 %s, i1 0)\n", data.Repr, totalSize.Repr)
 	for _, entry := range expr.Entries {
 		value, err := irExpression(ctx, expr.ElemType, entry.Value, false)
 		if err != nil {
@@ -922,10 +1310,18 @@ func irExprArray(ctx *IrCtx, expr *t.NodeExprArray) (SsaName, error) {
 
 	withPtr := irSsaLocal(ctx)
 	result := irSsaLocal(ctx)
-	irWritef(ctx, "  %s = insertvalue %%type.slice zeroinitializer, ptr %s, 0\n", withPtr.Repr, data.Repr)
-	irWritef(ctx, "  %s = insertvalue %%type.slice %s, i64 ", result.Repr, withPtr.Repr)
+	dataField, err := coreFieldIndex(ctx, t.CoreTypeSlice, "__data")
+	if err != nil {
+		return SsaName{}, err
+	}
+	countField, err := coreFieldIndex(ctx, t.CoreTypeSlice, "__count")
+	if err != nil {
+		return SsaName{}, err
+	}
+	irWritef(ctx, "  %s = insertvalue %s zeroinitializer, ptr %s, %d\n", withPtr.Repr, t.CoreTypeSlice.LLVMName(), data.Repr, dataField)
+	irWritef(ctx, "  %s = insertvalue %s %s, i64 ", result.Repr, t.CoreTypeSlice.LLVMName(), withPtr.Repr)
 	irPossibleLitSsa(ctx, length)
-	irWrite(ctx, ", 1\n")
+	irWritef(ctx, ", %d\n", countField)
 	return result, nil
 }
 

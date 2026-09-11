@@ -1,10 +1,10 @@
 mod main
 
-use "std:allocator" allocator
-use "std:errors" errors
-use "std:hash_map" hash_map
-use "std:heap" heap
-use "std:cast" cast
+use "std:allocator" as allocator
+use "std:errors" as errors
+use "std:hash_map" as hash_map
+use "std:heap" as heap
+use "std:cast" as cast
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()

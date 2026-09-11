@@ -2,16 +2,17 @@ mod file_impl_win
 # Windows file backend used by the portable file and I/O modules.
 
 
-use "std:win/types" win
-use "std:utf8"      utf8
-use "std:allocator" alc
-use "std:slices"    slices
-use "std:strings"   strings
-use "std:cast"      cast
-use "std:errors"    errors
-use "std:writer"    writer
-use "std:reader"    reader
-use "std:file_op_mode" fopm
+use "std:win/types" as win
+use "std:utf8"      as utf8
+use "std:allocator" as alc
+use "std:slices"    as slices
+use "std:strings"   as strings
+use "std:cast"      as cast
+use "std:errors"    as errors
+use "std:writer"    as writer
+use "std:reader"    as reader
+use "std:file_op_mode" as fopm
+use "std:llvm" as ll
 
 ext ext_win32_CreateFileW      CreateFileW(pathUtf16 win.LPCWSTR, accessMode win.DWORD, shareMode win.DWORD, securityAttributes win.LPVOID, createMode win.DWORD, flagsAndAttributes win.DWORD, templateFile win.HANDLE) win.HANDLE
 ext ext_win32_CloseHandle      CloseHandle(handle win.HANDLE) win.BOOL
@@ -21,28 +22,22 @@ ext ext_win32_GetStdHandle     GetStdHandle(handleNum win.DWORD) win.HANDLE
 ext ext_win32_SetFilePointerEx SetFilePointerEx(handle win.HANDLE, distance win.LONGLONG, newPosition win.LONGLONG*, moveMethod win.DWORD) win.BOOL
 ext ext_win32_GetLastError     GetLastError() win.DWORD
 
-llvm "@magma.file.stdin = internal global ptr null, align 8\n@magma.file.stdout = internal global ptr null, align 8\n@magma.file.stderr = internal global ptr null, align 8\n"
+global cachedStdin ptr
+global cachedStdout ptr
+global cachedStderr ptr
+
+standardHandleSlot(kind u32) ptr:
+   if kind == 0 - 10: ret addrof cachedStdin ..
+   if kind == 0 - 11: ret addrof cachedStdout ..
+   ret addrof cachedStderr
+..
 
 loadCachedStandardHandle(kind u32) ptr:
-   unsafe:
-      llvm "  %is.stdin = icmp eq i32 %kind, -10\n"
-      llvm "  %is.stdout = icmp eq i32 %kind, -11\n"
-      llvm "  %not.stdin = select i1 %is.stdout, ptr @magma.file.stdout, ptr @magma.file.stderr\n"
-      llvm "  %slot = select i1 %is.stdin, ptr @magma.file.stdin, ptr %not.stdin\n"
-      llvm "  %value = load atomic ptr, ptr %slot acquire, align 8\n"
-      llvm "  ret ptr %value\n"
-   ..
+   ret ll.atomicLoadAcquirePtr(standardHandleSlot(kind))
 ..
 
 publishStandardHandle(kind u32, value ptr) void:
-   unsafe:
-      llvm "  %is.stdin = icmp eq i32 %kind, -10\n"
-      llvm "  %is.stdout = icmp eq i32 %kind, -11\n"
-      llvm "  %not.stdin = select i1 %is.stdout, ptr @magma.file.stdout, ptr @magma.file.stderr\n"
-      llvm "  %slot = select i1 %is.stdin, ptr @magma.file.stdin, ptr %not.stdin\n"
-      llvm "  store atomic ptr %value, ptr %slot release, align 8\n"
-      llvm "  ret void\n"
-   ..
+   ll.atomicStoreReleasePtr(standardHandleSlot(kind), value)
 ..
 
 standardHandle(kind u32) ptr:

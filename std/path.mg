@@ -1,17 +1,17 @@
 mod path
 # Platform-aware lexical path inspection and component extraction.
 
-use "std:strings" strings
-use "std:cast" cast
-use "std:allocator" allocator
-use "std:array" array
-use "std:builder" builder
+use "std:strings" as strings
+use "std:cast" as cast
+use "std:allocator" as allocator
+use "std:array" as array
+use "std:builder" as builder
 
 @platform("windows")
-use "std:win/path_impl" impl_path
+use "std:win/path_impl" as impl_path
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/path_impl" impl_path
+use "std:unix/path_impl" as impl_path
 
 # Returns the preferred path-separator byte for the current platform.
 # @complexity O(1)
@@ -78,7 +78,7 @@ pub extension(path str) !$str:
     a := ctx.alloc
     temporary := ctx.alloc
     b := try base(path)
-    defer b.free(temporary)
+    defer b.free()
     n := b.countBytes()
     i := n
     loop i > 0:
@@ -119,7 +119,7 @@ pub join(parts str[]) !$str:
         ..
     ..
     combined := try out.build()
-    defer combined.free(temporary)
+    defer combined.free()
     ret try normalize(combined)
 ..
 
@@ -193,7 +193,7 @@ pub parent(value str) !$str:
     a := ctx.alloc
     temporary := ctx.alloc
     normalized := try normalize(value)
-    defer normalized.free(temporary)
+    defer normalized.free()
     n := normalized.countBytes()
     if isAbsolute(normalized) && (n == 1 || (n == 3 && strings.byteAt(normalized, 1) == 58)):
         ret try strings.copy(normalized)
@@ -219,7 +219,7 @@ pub stem(value str) !$str:
     a := ctx.alloc
     temporary := ctx.alloc
     b := try base(value)
-    defer b.free(temporary)
+    defer b.free()
     n := b.countBytes()
     i := n
     loop i > 0:
@@ -236,7 +236,7 @@ pub changeExtension(value str, newExtension str) !$str:
     a := ctx.alloc
     temporary := ctx.alloc
     oldExtension := try extension(value)
-    defer oldExtension.free(temporary)
+    defer oldExtension.free()
     keep := value.countBytes() - oldExtension.countBytes()
     out := try builder.new()
     defer out.free()

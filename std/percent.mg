@@ -1,11 +1,11 @@
 mod percent
 # Percent encoding with explicit URI-component, path-segment, and form policies.
 
-use "std:allocator" alc
-use "std:checked" checked
-use "std:errors" errors
-use "std:slices" slices
-use "std:strings" strings
+use "std:allocator" as alc
+use "std:checked" as checked
+use "std:errors" as errors
+use "std:slices" as slices
+use "std:strings" as strings
 
 pub const URI_COMPONENT u8 = 1
 pub const PATH_SEGMENT u8 = 2
@@ -105,7 +105,7 @@ pub encode(text str, policy u8) !$str:
     a := ctx.alloc
     size := try encodedSize(text, policy)
     result $str = try strings.alloc(size)
-    onerror result.free(a)
+    onerror result.free()
     output u8[] = slices.fromPtr(strings.toPtr(result), size)
     try encodeTo(text, output, policy)
     ret move result

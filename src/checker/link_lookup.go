@@ -86,6 +86,12 @@ func clGetStructDefFromThisModule(c *ctx, structName parsedName) (*t.StructDef, 
 	}
 
 	structDef, ok := c.GlobalNode.StructDefs[structName.First]
+	if !ok && c.CoreGlobal != nil && c.CoreGlobal != c.GlobalNode {
+		structDef, ok = c.CoreGlobal.StructDefs[structName.First]
+		if ok && !structDef.IsPublic {
+			return nil, fmt.Errorf("struct %q is private in the implicit core module", structName.First)
+		}
+	}
 
 	if !ok {
 		return nil, fmt.Errorf("struct %q is not defined in module %q", structName.First, c.FileCtx.ModuleName)
@@ -108,7 +114,15 @@ func clFindTypeAlias(c *ctx, nameNode t.NodeName) (*t.TypeAlias, *t.NodeGlobal, 
 	switch n := nameNode.(type) {
 	case *t.NodeNameSingle:
 		alias := c.GlobalNode.TypeAliases[n.Name]
-		return alias, c.GlobalNode, nil
+		owner := c.GlobalNode
+		if alias == nil && c.CoreGlobal != nil && c.CoreGlobal != c.GlobalNode {
+			alias = c.CoreGlobal.TypeAliases[n.Name]
+			owner = c.CoreGlobal
+			if alias != nil && !alias.IsPublic {
+				return nil, nil, comp_err.CompilationErrorToken(c.FileCtx, lastNameToken(nameNode), fmt.Sprintf("type alias '%s' is private in the implicit core module", n.Name), "add 'pub' to the core alias declaration")
+			}
+		}
+		return alias, owner, nil
 	case *t.NodeNameComposite:
 		if len(n.Parts) < 2 {
 			return nil, nil, nil
@@ -147,7 +161,7 @@ func cloneAliasType(in *t.NodeType) *t.NodeType {
 		}
 		out.KindNode = &t.NodeTypeNamed{NameNode: n.NameNode, GenericArgs: args}
 	case *t.NodeTypeAbsolute:
-		out.KindNode = &t.NodeTypeAbsolute{AbsoluteName: n.AbsoluteName, DisplayName: n.DisplayName}
+		out.KindNode = &t.NodeTypeAbsolute{AbsoluteName: n.AbsoluteName, DisplayName: n.DisplayName, CoreRole: n.CoreRole}
 	case *t.NodeTypeCompilerKnown:
 		out.KindNode = &t.NodeTypeCompilerKnown{Tk: n.Tk, Name: n.Name}
 	case *t.NodeTypePointer:
@@ -167,6 +181,9 @@ func cloneAliasType(in *t.NodeType) *t.NodeType {
 }
 
 func clGetStructDefFromType(c *ctx, typeNode *t.NodeType) (*t.StructDef, error) {
+	if primitive, ok := primitiveTypeName(typeNode); ok {
+		return nil, fmt.Errorf("intrinsic type %s is not an ordinary struct", primitive)
+	}
 	switch n := typeNode.KindNode.(type) {
 	case *t.NodeTypeNamed:
 		return clGetStructDefFromName(c, n.NameNode)
@@ -174,6 +191,15 @@ func clGetStructDefFromType(c *ctx, typeNode *t.NodeType) (*t.StructDef, error) 
 		return clGetStructDefFromAbsolute(c, n.AbsoluteName)
 	}
 	return nil, fmt.Errorf("failed to get struct def from type")
+}
+
+func clGetFieldStructDefFromType(c *ctx, typeNode *t.NodeType) (*t.StructDef, error) {
+	if primitive, ok := primitiveTypeName(typeNode); ok && c.CoreGlobal != nil {
+		if backing := c.CoreGlobal.StructDefs[primitive]; backing != nil && backing.CoreRole == t.CoreTypeRoleForName(primitive) {
+			return backing, nil
+		}
+	}
+	return clGetStructDefFromType(c, typeNode)
 }
 
 func clDerefOne(typeNode *t.NodeType) (*t.NodeType, bool) {
@@ -189,7 +215,7 @@ func clDerefOne(typeNode *t.NodeType) (*t.NodeType, bool) {
 
 func clResolveFieldAccess(c *ctx, ownerType *t.NodeType, member string, lvalue bool) (*t.MemberAccess, error) {
 	lookupType, ptrDeref := clDerefOne(ownerType)
-	structDef, e := clGetStructDefFromType(c, lookupType)
+	structDef, e := clGetFieldStructDefFromType(c, lookupType)
 	if e != nil {
 		return nil, e
 	}
@@ -221,7 +247,7 @@ func primitiveTypeName(nodeType *t.NodeType) (string, bool) {
 	// Typed slices have the same runtime representation as the type-erased
 	// `slice` primitive and inherit methods declared on it.
 	if _, ok := nodeType.KindNode.(*t.NodeTypeSlice); ok {
-		return "slice", true
+		return t.CoreTypeSlice.Name(), true
 	}
 	named, ok := nodeType.KindNode.(*t.NodeTypeNamed)
 	if !ok {

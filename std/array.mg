@@ -5,14 +5,14 @@ mod array
 # Array does not keep an allocator while List does.
 # Prefer using Array instead of List if you make use of composition
 
-use "std:allocator" alc
-use "std:slices"    slc
-use "std:cast"      cast
-use "std:errors"    err
-use "std:memory"    mem
-use "std:iterator"  iter
-use "std:footgun"   fg
-use "std:checked"   checked
+use "std:allocator" as alc
+use "std:slices"    as slc
+use "std:cast"      as cast
+use "std:errors"    as err
+use "std:memory"    as mem
+use "std:iterator"  as iter
+use "std:footgun"   as fg
+use "std:checked"   as checked
 
 # Padding is biased for append-first workloads
 const DEFAULT_PAD_LEFT u64 = 2
@@ -126,7 +126,7 @@ Array[T].count() u64:
     ret this.state.size
 ..
 
-runCleanupFromIdx[T](arr Array[T]*, a alc.Allocator, idx u64, cleanup (alc.Allocator, $T) void) void:
+runCleanupFromIdx[T](arr Array[T]*, idx u64, cleanup ($T) void) void:
     if cleanup != none:
         items := arr.view()
         i u64 = idx
@@ -138,7 +138,7 @@ runCleanupFromIdx[T](arr Array[T]*, a alc.Allocator, idx u64, cleanup (alc.Alloc
                 if mem.compare(addrof items[i], addrof zeroVal, valSize) == false:
                     value $T = items[i]
                     items[i] = mem.zeroValue[T]()
-                    cleanup(a, move value)
+                    cleanup(move value)
                 ..
             ..
             i = i + 1
@@ -146,8 +146,8 @@ runCleanupFromIdx[T](arr Array[T]*, a alc.Allocator, idx u64, cleanup (alc.Alloc
     ..
 ..
 
-runCleanup[T](arr Array[T]*, a alc.Allocator, cleanup (alc.Allocator, $T) void) void:
-    runCleanupFromIdx[T](arr, a, 0, cleanup)
+runCleanup[T](arr Array[T]*, cleanup ($T) void) void:
+    runCleanupFromIdx[T](arr, 0, cleanup)
 ..
 
 # Removes every value and shrinks storage back to the default padding.
@@ -156,13 +156,13 @@ runCleanup[T](arr Array[T]*, a alc.Allocator, cleanup (alc.Allocator, $T) void) 
 # @param cleanup callback for removed values, or none
 # @example
 #   try values.clearShrink(a, none)
-Array[T].clearShrink(a alc.Allocator, cleanup (alc.Allocator, $T) void) !void:
+Array[T].clearShrink(a alc.Allocator, cleanup ($T) void) !void:
     oldState := this.state
 
     tmp := try new[T](a)
 
     # Allocate first so failure leaves both the Array and its elements owned.
-    runCleanup[T](this, a, cleanup)
+    runCleanup[T](this, cleanup)
 
     a.free(oldState)
     # SAFETY: this is the checked whole-container replacement path.
@@ -177,14 +177,14 @@ Array[T].clearShrink(a alc.Allocator, cleanup (alc.Allocator, $T) void) !void:
 # @param cleanup callback for removed values, or none
 # @example
 #   try values.clearKeep(a, none)
-Array[T].clearKeep(a alc.Allocator, cleanup (alc.Allocator, $T) void) !void:
+Array[T].clearKeep(a alc.Allocator, cleanup ($T) void) !void:
     if this.state.capacity < DEFAULT_CAPACITY:
         # This will reset to default size
         try this.clearShrink(a, cleanup)
         ret
     ..
 
-    runCleanup[T](this, a, cleanup)
+    runCleanup[T](this, cleanup)
 
     # This will bias storage keeping to the end of the array and not the front,
     # this is good for append workloads but not so much prepend.
@@ -193,7 +193,7 @@ Array[T].clearKeep(a alc.Allocator, cleanup (alc.Allocator, $T) void) !void:
     this.state.leftOffset = DEFAULT_PAD_LEFT
 ..
 
-resizeStorage[T](array Array[T]*, a alc.Allocator, usable u64, padLeft u64, padRight u64, cleanup (alc.Allocator, $T) void) !void:
+resizeStorage[T](array Array[T]*, a alc.Allocator, usable u64, padLeft u64, padRight u64, cleanup ($T) void) !void:
     newCont u64 = try addSize(usable, padLeft)
     newCont = try addSize(newCont, padRight)
 
@@ -212,7 +212,7 @@ resizeStorage[T](array Array[T]*, a alc.Allocator, usable u64, padLeft u64, padR
     count u64 = array.count()
     if usable < count:
         count = usable
-        runCleanupFromIdx[T](array, a, usable, cleanup)
+        runCleanupFromIdx[T](array, usable, cleanup)
     ..
     nBytes u64 = count * tSize
 
@@ -245,7 +245,7 @@ resizeStorage[T](array Array[T]*, a alc.Allocator, usable u64, padLeft u64, padR
 # @param padRight requested reserved capacity after the accessible range
 # @param cleanup callback for values removed by shrinking, or none
 # @complexity O(N), where N is the number of values copied or cleaned up
-Array[T].resize(a alc.Allocator, usable u64, padLeft u64, padRight u64, cleanup (alc.Allocator, $T) void) !void:
+Array[T].resize(a alc.Allocator, usable u64, padLeft u64, padRight u64, cleanup ($T) void) !void:
     oldCount u64 = this.count()
     try resizeStorage[T](this, a, usable, padLeft, padRight, cleanup)
 
@@ -335,10 +335,10 @@ Array[T].replace(index u64, value $T) !$T:
 # @param cleanup callback for the overwritten value, or none
 # @throws outOfBounds when index is outside the accessible range
 # @complexity O(1), plus cleanup cost
-Array[T].set(a alc.Allocator, index u64, value $T, cleanup (alc.Allocator, $T) void) !void:
+Array[T].set(a alc.Allocator, index u64, value $T, cleanup ($T) void) !void:
     onerror:
         if cleanup != none:
-            cleanup(a, move value)
+            cleanup(move value)
         else:
             fg.drop[T](move value)
         ..
@@ -354,7 +354,7 @@ Array[T].set(a alc.Allocator, index u64, value $T, cleanup (alc.Allocator, $T) v
         if cleanup != none:
             previous $T = typedPtr[idx]
             typedPtr[idx] = mem.zeroValue[T]()
-            cleanup(a, move previous)
+            cleanup(move previous)
         ..
         typedPtr[idx] = move value
         ret
@@ -526,12 +526,12 @@ Array[T].pushLeft(a alc.Allocator, item $T) !void:
 # @complexity O(N), plus cleanup cost
 # @example
 #   values.free(a, none)
-destr Array[T].free(a alc.Allocator, cleanup (alc.Allocator, $T) void) void:
+destr Array[T].free(a alc.Allocator, cleanup ($T) void) void:
     if this.state == none:
         ret
     ..
 
-    runCleanup[T](this, a, cleanup)
+    runCleanup[T](this, cleanup)
 
     a.free(this.state)
     this.state = none

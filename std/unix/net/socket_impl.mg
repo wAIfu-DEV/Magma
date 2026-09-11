@@ -1,13 +1,13 @@
 mod net_socket_impl_unix
 # POSIX socket backend. Native address layouts remain private to this module.
 
-use "std:c" c
-use "std:cast" cast
-use "std:errors" errors
-use "std:slices" slices
-use "std:strings" strings
-use "std:net/address" address
-use "std:net/byte_order" byte_order
+use "std:c" as c
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:slices" as slices
+use "std:strings" as strings
+use "std:net/address" as address
+use "std:net/byte_order" as byte_order
 
 SockAddrIn(
     family u16
@@ -137,14 +137,16 @@ nativeFamily(family u8) !i32:
 fillAddress(endpoint address.Endpoint, storage SockAddrStorage*) !NativeAddress:
     family i32 = try nativeFamily(endpoint.address.family)
     if endpoint.address.family == address.FAMILY_IPV4:
-        native SockAddrIn* = storage
+        native SockAddrIn*
+        unsafe: native = storage ..
         native.family = cast.u64to16(cast.itou(family))
         byte_order.store16(addrof native.port, endpoint.port)
         byte_order.store32(addrof native.addr, endpoint.address.word0)
         native.zero = 0
         ret NativeAddress(pointer=native, length=cast.u64to32(sizeof SockAddrIn))
     ..
-    native6 SockAddrIn6* = storage
+    native6 SockAddrIn6*
+    unsafe: native6 = storage ..
     native6.family = cast.u64to16(cast.itou(family))
     byte_order.store16(addrof native6.port, endpoint.port)
     native6.flowInfo = 0
@@ -157,13 +159,15 @@ fillAddress(endpoint address.Endpoint, storage SockAddrStorage*) !NativeAddress:
 ..
 
 readAddress(storage SockAddrStorage*) !address.Endpoint:
-    native SockAddrIn* = storage
+    native SockAddrIn*
+    unsafe: native = storage ..
     if native.family == 2:
         word u32 = byte_order.load32(addrof native.addr)
         ip := address.ipv4(cast.u64to8((word >> 24) & 255), cast.u64to8((word >> 16) & 255), cast.u64to8((word >> 8) & 255), cast.u64to8(word & 255))
         ret address.Endpoint(address=ip, port=byte_order.load16(addrof native.port))
     ..
-    native6 SockAddrIn6* = storage
+    native6 SockAddrIn6*
+    unsafe: native6 = storage ..
     ip6 := address.ipv6(byte_order.load32(addrof native6.addr0), byte_order.load32(addrof native6.addr1), byte_order.load32(addrof native6.addr2), byte_order.load32(addrof native6.addr3))
     ret address.Endpoint(address=ip6, port=byte_order.load16(addrof native6.port))
 ..

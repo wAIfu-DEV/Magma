@@ -1,9 +1,9 @@
 mod main
 
-use "std:adaptive_spinlock" adaptive_spinlock
-use "std:atomic" atomic
-use "std:errors" errors
-use "std:thread" thread
+use "std:adaptive_spinlock" as adaptive_spinlock
+use "std:atomic" as atomic
+use "std:errors" as errors
+use "std:thread" as thread
 
 const WORKERS u64 = 4
 const ITERATIONS u64 = 10000

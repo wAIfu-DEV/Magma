@@ -1,6 +1,6 @@
 mod main
 
-use "std:footgun" footgun
+use "std:footgun" as footgun
 
 Owned(value u64)
 destr Owned.free() void: this.value = 0 ..

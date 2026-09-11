@@ -1,9 +1,9 @@
 mod net_address
 # Allocation-free Internet address and endpoint values.
 
-use "std:errors" errors
-use "std:strings" strings
-use "std:cast" cast
+use "std:errors" as errors
+use "std:strings" as strings
+use "std:cast" as cast
 
 pub const FAMILY_UNSPECIFIED u8 = 0
 pub const FAMILY_IPV4 u8 = 4

@@ -69,6 +69,32 @@ func TestFieldMoveLeavesSiblingUsableButRejectsWholeAggregateUse(t *testing.T) {
 	}
 }
 
+func TestUseAfterTransferRetainsParsedNameToken(t *testing.T) {
+	a, resourceType := fixture()
+	useToken := types.Token{Repr: "value", Pos: types.FilePos{Line: 19, Col: 21}}
+	value := &types.NodeExprVarDef{
+		Name: &types.NodeNameSingle{Tk: types.Token{Repr: "value", Pos: types.FilePos{Line: 10, Col: 5}}, Name: "value"},
+		Type: resourceType,
+	}
+	out := flow{
+		states:     map[*types.NodeExprVarDef]State{value: stateConsumed},
+		consumedAt: map[*types.NodeExprVarDef]types.Token{value: {Repr: "free", Pos: types.FilePos{Line: 16, Col: 11}}},
+		deferred:   map[*types.NodeExprVarDef]bool{},
+	}
+	// Semantic method-call rewriting may leave the expression's Tk empty while
+	// preserving the parser token on its name node.
+	use := &types.NodeExprName{Name: &types.NodeNameSingle{Tk: useToken, Name: "value"}, AssociatedNode: value, InfType: resourceType}
+
+	a.borrowExpr(&out, use)
+
+	if len(a.diagnostics) != 1 {
+		t.Fatalf("diagnostics = %+v, want one use-after-transfer error", a.diagnostics)
+	}
+	if got := a.diagnostics[0].Token; got.Pos != useToken.Pos || got.Repr != useToken.Repr {
+		t.Fatalf("diagnostic token = %+v, want parsed use token %+v", got, useToken)
+	}
+}
+
 func TestMovedFieldCanBeReinitialized(t *testing.T) {
 	a, containerType, resourceType, container := aggregateFixture()
 	value := &types.NodeExprVarDef{Name: &types.NodeNameSingle{Name: "value"}, Type: containerType}

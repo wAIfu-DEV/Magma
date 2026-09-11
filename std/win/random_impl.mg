@@ -1,8 +1,8 @@
 mod random_impl_win
 
-use "std:c" c
-use "std:errors" errors
-use "std:slices" slices
+use "std:c" as c
+use "std:errors" as errors
+use "std:slices" as slices
 
 link "bcrypt"
 

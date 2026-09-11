@@ -1,12 +1,12 @@
 mod main
 # Linux benchmark: socket+fcntl versus atomic nonblocking socket creation.
 
-use "std:c" c
-use "std:errors" errors
-use "std:io" io
-use "std:net/address" address
-use "std:net/socket" socket
-use "std:time" time
+use "std:c" as c
+use "std:errors" as errors
+use "std:io" as io
+use "std:net/address" as address
+use "std:net/socket" as socket
+use "std:time" as time
 
 ext ext_socket socket(domain c.int, kind c.int, protocol c.int) c.int
 ext ext_fcntl fcntl(fd c.int, command c.int, value c.int) c.int

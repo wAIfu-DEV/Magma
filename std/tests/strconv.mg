@@ -1,9 +1,9 @@
 mod main
-use "std:allocator" allocator
-use "std:errors" errors
-use "std:heap" heap
-use "std:strconv" strconv
-use "std:strings" strings
+use "std:allocator" as allocator
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:strconv" as strconv
+use "std:strings" as strings
 pub main() !void:
     a allocator.Allocator = heap.allocator()
     number := try strconv.parseUint("42")
@@ -12,7 +12,7 @@ pub main() !void:
         throw errors.failure("strconv parse changed")
     ..
     formatted := try strconv.formatUint(42)
-    defer formatted.free(a)
+    defer formatted.free()
     if strings.compare(formatted, "42") == false:
         throw errors.failure("strconv format changed")
     ..

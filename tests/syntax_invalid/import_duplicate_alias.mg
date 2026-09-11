@@ -1,5 +1,5 @@
 mod main
-use "../../std/io.mg" same
-use "../../std/heap.mg" same
+use "../../std/io.mg" as same
+use "../../std/heap.mg" as same
 main() void:
 ..

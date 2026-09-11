@@ -14,6 +14,13 @@ func (m *monoCtx) inferGenericExpr(module string, gl *t.NodeGlobal, expr t.NodeE
 		return nil
 	}
 	switch n := expr.(type) {
+	case *t.NodeExprLlvm:
+		for _, arg := range n.Args {
+			if err := m.inferGenericExpr(module, gl, arg, nil, env); err != nil {
+				return err
+			}
+		}
+		return nil
 	case *t.NodeExprProtoView:
 		if n.ProtoType == nil {
 			if expected == nil {

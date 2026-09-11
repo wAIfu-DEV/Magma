@@ -5,7 +5,7 @@ caller passes its context by hidden pointer and the callee copies the value at
 entry, so rebinding `ctx` affects only descendants of that invocation:
 
 ```magma
-use "std:context" context
+use "std:context" as context
 
 ctx = context.new(arena.allocator(), pool.executor())
 result := try operation() # receives addrof this function's local ctx

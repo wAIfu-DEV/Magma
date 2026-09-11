@@ -1,10 +1,10 @@
 mod slices
 # Low-level slice construction, allocation, reinterpretation, and release.
 
-use "std:allocator" alc
-use "std:cast"      cast
-use "std:checked"   checked
-use "std:errors"    err
+use "std:allocator" as alc
+use "std:cast"      as cast
+use "std:checked"   as checked
+use "std:errors"    as err
 
 # Returns element count of slice.
 # @complexity O(1).
@@ -13,11 +13,7 @@ use "std:errors"    err
 # @example
 #   length := slices.count(values)
 pub count(s slice) u64:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %l0 = extractvalue %type.slice %s, 1\n"
-        llvm "  ret i64 %l0\n"
-    ..
+    ret s.__count
 ..
 
 # Creates a slice from a pointer and element count.
@@ -29,12 +25,7 @@ pub count(s slice) u64:
 # @example
 #   view := slices.fromPtr(pointer, 16)
 pub fromPtr(p ptr, elemCount u64) slice:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %s0 = insertvalue %type.slice zeroinitializer, ptr %p, 0\n"
-        llvm "  %s1 = insertvalue %type.slice %s0, i64 %elemCount, 1\n"
-        llvm "  ret %type.slice %s1\n"
-    ..
+    ret slice(__data=p, __count=elemCount)
 ..
 
 # Reinterprets a slice's backing memory as elements of another type.
@@ -42,11 +33,12 @@ pub fromPtr(p ptr, elemCount u64) slice:
 # @complexity O(1)
 # @param in source slice
 # @returns non-owning view over the same backing memory
+# @throws wouldOverflow if the source byte size cannot be represented
 # @safety The backing memory must satisfy R's alignment and representation requirements.
 # @example
 #   words := slices.reinterpret[u8, u32](bytes)
-pub reinterpret[T, R](in T[]) R[]:
-    byteSize u64 = count(in) * sizeof T
+pub reinterpret[T, R](in T[]) !R[]:
+    byteSize u64 = try checked.byteCount[T](count(in))
     newSize u64 = byteSize / sizeof R
     ret fromPtr(toPtr(in), newSize)
 ..
@@ -58,11 +50,7 @@ pub reinterpret[T, R](in T[]) R[]:
 # @example
 #   pointer := slices.toPtr(values)
 pub toPtr(s slice) ptr:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %l0 = extractvalue %type.slice %s, 0\n"
-        llvm "  ret ptr %l0\n"
-    ..
+    ret s.__data
 ..
 
 # Returns a borrowed half-open subrange while preserving the source lifetime.

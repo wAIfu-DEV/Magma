@@ -2,6 +2,7 @@ package monomorph
 
 import (
 	t "Magma/src/types"
+	"fmt"
 	"strings"
 )
 
@@ -9,33 +10,42 @@ func CanonicalTypeSignature(tp *t.NodeType) string {
 	if tp == nil {
 		return "nil"
 	}
+	prefix := ""
+	if tp.Owned {
+		prefix += "OWN__"
+	}
+	if tp.Throws {
+		prefix += "THROW__"
+	}
 	switch n := tp.KindNode.(type) {
 	case *t.NodeTypeAbsolute:
-		return "A_" + strings.ReplaceAll(n.AbsoluteName, ".", "__")
+		return prefix + "A_" + strings.ReplaceAll(n.AbsoluteName, ".", "__")
+	case *t.NodeTypeCompilerKnown:
+		return prefix + "C_" + n.Name
 	case *t.NodeTypeNamed:
 		base := "N_" + strings.ReplaceAll(flattenName(n.NameNode), ".", "__")
 		if len(n.GenericArgs) == 0 {
-			return base
+			return prefix + base
 		}
 		parts := make([]string, len(n.GenericArgs))
 		for i, g := range n.GenericArgs {
 			parts[i] = CanonicalTypeSignature(g)
 		}
-		return base + "__G__" + strings.Join(parts, "__")
+		return prefix + base + "__G__" + strings.Join(parts, "__")
 	case *t.NodeTypePointer:
-		return "P__" + CanonicalTypeSignature(&t.NodeType{KindNode: n.Kind})
+		return prefix + "P__" + CanonicalTypeSignature(&t.NodeType{KindNode: n.Kind})
 	case *t.NodeTypeRfc:
-		return "R__" + CanonicalTypeSignature(&t.NodeType{KindNode: n.Kind})
+		return prefix + "R__" + CanonicalTypeSignature(&t.NodeType{KindNode: n.Kind})
 	case *t.NodeTypeSlice:
-		return "S__" + CanonicalTypeSignature(&t.NodeType{KindNode: n.ElemKind})
+		return prefix + "S__" + CanonicalTypeSignature(&t.NodeType{KindNode: n.ElemKind})
 	case *t.NodeTypeFunc:
 		argParts := make([]string, len(n.Args))
 		for i, a := range n.Args {
 			argParts[i] = CanonicalTypeSignature(a)
 		}
-		return "F__" + strings.Join(argParts, "__") + "__RET__" + CanonicalTypeSignature(n.RetType)
+		return prefix + fmt.Sprintf("F%d__", n.ContextABI) + strings.Join(argParts, "__") + "__RET__" + CanonicalTypeSignature(n.RetType)
 	default:
-		return "Undef"
+		return prefix + "Undef"
 	}
 }
 

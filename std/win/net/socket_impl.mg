@@ -3,14 +3,14 @@ mod net_socket_impl_win
 
 link "ws2_32"
 
-use "std:c" c
-use "std:cast" cast
-use "std:errors" errors
-use "std:slices" slices
-use "std:strings" strings
-use "std:net/address" address
-use "std:net/byte_order" byte_order
-use "std:win/net/runtime" runtime
+use "std:c" as c
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:slices" as slices
+use "std:strings" as strings
+use "std:net/address" as address
+use "std:net/byte_order" as byte_order
+use "std:win/net/runtime" as runtime
 
 SockAddrIn(family u16, port u16, addr u32, zero u64)
 SockAddrIn6(family u16, port u16, flowInfo u32, addr0 u32, addr1 u32, addr2 u32, addr3 u32, scopeId u32)

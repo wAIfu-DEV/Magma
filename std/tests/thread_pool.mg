@@ -1,13 +1,14 @@
 mod main
 
-use "std:allocator" allocator
-use "std:cast" cast
-use "std:errors" errors
-use "std:heap" heap
-use "std:thread_pool" thread_pool
-use "std:thread" thread
-use "std:time" time
-use "std:footgun" footgun
+use "std:allocator" as allocator
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:thread_pool" as thread_pool
+use "std:thread" as thread
+use "std:time" as time
+use "std:footgun" as footgun
+use "std:llvm" as ll
 
 ScaleContext(
     ready u64*
@@ -15,27 +16,15 @@ ScaleContext(
 )
 
 atomicAdd(target u64*, value u64) void:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %ignored = atomicrmw add ptr %target, i64 %value acq_rel, align 8\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicFetchAddAcqRelU64(target, value)
 ..
 
 atomicLoad(target u64*) u64:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %value = load atomic i64, ptr %target acquire, align 8\n"
-        llvm "  ret i64 %value\n"
-    ..
+    ret ll.atomicLoadAcquireU64(target)
 ..
 
 atomicStore(target u64*, value u64) void:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  store atomic i64 %value, ptr %target release, align 8\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreReleaseU64(target, value)
 ..
 
 occupy(raw ptr) u64:

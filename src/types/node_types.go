@@ -116,6 +116,7 @@ func (n *NodeTypeNamed) Print(indent int) {
 
 type NodeTypeAbsolute struct {
 	AbsoluteName string
+	CoreRole     CoreTypeRole
 	// DisplayName preserves source spelling, including generic arguments, after
 	// monomorphization replaces a named type with its backend identity.
 	DisplayName string
@@ -241,6 +242,22 @@ type NodeExprLit struct {
 	InfType *NodeType
 }
 
+// NodeExprEmbed names a regular file whose bytes are compiled into a native
+// asset object. Embedded data has static lifetime and is exposed as a u8 slice.
+type NodeExprEmbed struct {
+	Tk      Token
+	Path    string
+	Symbol  string
+	Size    uint64
+	InfType *NodeType
+}
+
+func (n *NodeExprEmbed) GetInferredType() *NodeType { return n.InfType }
+func (n *NodeExprEmbed) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprEmbed(path=%s)\n", n.Path)
+}
+
 // NodeExprArray allocates local backing storage and returns it as a typed
 // slice. Length is a value expression and is not part of the resulting type.
 type NodeExprArray struct {
@@ -289,6 +306,26 @@ func (n *NodeExprLit) Print(indent int) {
 type NodeLlvm struct {
 	Tk   Token
 	Text string
+}
+
+// NodeExprLlvm is a compiler-recognized LLVM operation. Unlike NodeLlvm it
+// contains no LLVM text: operands and the result type remain ordinary semantic
+// objects and can therefore be lowered by either backend.
+type NodeExprLlvm struct {
+	Tk         Token
+	Operation  string
+	Args       []NodeExpr
+	ResultType *NodeType
+	InfType    *NodeType
+}
+
+func (n *NodeExprLlvm) GetInferredType() *NodeType { return n.InfType }
+func (n *NodeExprLlvm) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("ExprLlvm(%s)\n", n.Operation)
+	for _, arg := range n.Args {
+		arg.Print(indent + 1)
+	}
 }
 
 func (n *NodeLlvm) Print(indent int) {
@@ -359,6 +396,7 @@ type NodeExprCall struct {
 	IsFuncPointer bool
 	FuncPtrType   *NodeType
 	FuncPtrOwner  *NodeExprName
+	UnionVariant  *UnionVariant
 }
 
 type NodeStructFieldInit struct {
@@ -372,9 +410,10 @@ type NodeStructFieldInit struct {
 // NodeExprStructInit is syntactically distinguished from a call by its
 // name=value argument list.
 type NodeExprStructInit struct {
-	Type   *NodeType
-	Fields []NodeStructFieldInit
-	Tk     Token
+	Type         *NodeType
+	Fields       []NodeStructFieldInit
+	Tk           Token
+	UnionVariant *UnionVariant
 }
 
 // NodeExprProtoView creates the two-word borrowed view of an implementation.
@@ -570,6 +609,9 @@ type NodeExprVarDef struct {
 	Storage           VariableStorage
 	IsReturned        bool
 	IsGlobal          bool
+	IsProcessGlobal   bool
+	IsExternal        bool
+	ExternalName      string
 	IsPublic          bool
 	IsImplicitContext bool
 }
@@ -792,6 +834,31 @@ func (n *NodeStmtIf) Print(indent int) {
 
 type NodeStmtElse struct {
 	Body NodeBody
+}
+
+type NodeMatchCase struct {
+	Tk          Token
+	VariantName NodeName
+	Variant     *UnionVariant
+	Binding     *NodeExprVarDef
+	Body        NodeBody
+}
+
+type NodeStmtMatch struct {
+	Tk         Token
+	Expression NodeExpr
+	BindingTk  Token
+	Cases      []*NodeMatchCase
+	ElseBody   *NodeBody
+}
+
+func (n *NodeStmtMatch) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("StmtMatch\n")
+	n.Expression.Print(indent + 1)
+	for _, c := range n.Cases {
+		c.Body.Print(indent + 1)
+	}
 }
 
 func (n *NodeStmtElse) Print(indent int) {
@@ -1035,6 +1102,8 @@ type NodeFuncDef struct {
 	IsEntryPoint bool
 	IsExternal   bool
 	IsPublic     bool
+	// IsLambda marks a compiler-lifted, captureless anonymous function.
+	IsLambda bool
 	// NoRetain declares that pointer/slice arguments are used only for the
 	// duration of the call and are not retained by its owned result.
 	NoRetain       bool
@@ -1045,6 +1114,8 @@ type NodeFuncDef struct {
 	// prototype methods. Their bodies are lowered directly through the vtable.
 	ProtoDispatch           *ProtoMethod
 	NeedsNativeContextThunk bool
+	NeedsContextAdapter     bool
+	CachedSpecialization    bool
 }
 
 type ErrorPredicateKind uint8
@@ -1069,6 +1140,16 @@ type NodeStructDef struct {
 	// this identity rather than reconstructing it from source names and context.
 	AbsName  string
 	IsPublic bool
+}
+
+type NodeUnionDef struct {
+	Tk  Token
+	Def *UnionDef
+}
+
+func (n *NodeUnionDef) Print(indent int) {
+	PrintIndent(indent)
+	fmt.Printf("UnionDef(name=%s)\n", n.Def.Name)
 }
 
 type TypeAlias struct {
@@ -1102,6 +1183,7 @@ type NodeGlobal struct {
 	PublicImportAlias map[string]bool
 
 	StructDefs           map[string]*StructDef
+	UnionDefs            map[string]*UnionDef
 	ProtoDefs            map[string]*ProtoDef
 	TypeAliases          map[string]*TypeAlias
 	FuncDefs             map[string]*NodeFuncDef
@@ -1130,6 +1212,7 @@ type ModuleBundle struct {
 func (*NodeExprVoid) IsExpr()              {}
 func (*NodeExprUnary) IsExpr()             {}
 func (*NodeExprLit) IsExpr()               {}
+func (*NodeExprEmbed) IsExpr()             {}
 func (*NodeExprArray) IsExpr()             {}
 func (*NodeExprName) IsExpr()              {}
 func (*NodeExprCall) IsExpr()              {}
@@ -1147,6 +1230,7 @@ func (*NodeExprDestructor) IsExpr()        {}
 func (*NodeExprSizeof) IsExpr()            {}
 func (*NodeExprAddrof) IsExpr()            {}
 func (*NodeExprMove) IsExpr()              {}
+func (*NodeExprLlvm) IsExpr()              {}
 func (*NodeTypeNamed) IsType()             {}
 func (*NodeTypePointer) IsType()           {}
 func (*NodeTypeRfc) IsType()               {}
@@ -1162,6 +1246,7 @@ func (*NodeStmtBreak) IsStatement()        {}
 func (*NodeStmtExpr) IsStatement()         {}
 func (*NodeStmtThrow) IsStatement()        {}
 func (*NodeStmtIf) IsStatement()           {}
+func (*NodeStmtMatch) IsStatement()        {}
 func (*NodeStmtElse) IsStatement()         {}
 func (*NodeStmtWhile) IsStatement()        {}
 func (*NodeStmtFor) IsStatement()          {}
@@ -1172,6 +1257,7 @@ func (*NodeStmtDefer) IsStatement()        {}
 func (*NodeExprVarDef) IsGlobalDecl()      {}
 func (*NodeFuncDef) IsGlobalDecl()         {}
 func (*NodeStructDef) IsGlobalDecl()       {}
+func (*NodeUnionDef) IsGlobalDecl()        {}
 func (*NodeTypeAlias) IsGlobalDecl()       {}
 func (*NodeLlvm) IsGlobalDecl()            {}
 func (*NodeConstDef) IsGlobalDecl()        {}

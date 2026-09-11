@@ -1,7 +1,7 @@
 mod destr_register
 
-use "std:cast" cast
-use "std:list" list
+use "std:cast" as cast
+use "std:list" as list
 
 # internal
 DestrCall(

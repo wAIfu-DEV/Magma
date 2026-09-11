@@ -2,8 +2,8 @@ mod time_impl_unix
 # Unix clock backend used by the portable time module.
 
 
-use "std:c" c
-use "std:cast" cast
+use "std:c" as c
+use "std:cast" as cast
 
 Timespec(
     sec i64,

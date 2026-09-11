@@ -1,8 +1,8 @@
 mod search
 # Generic linear and binary search over slices.
 
-use "std:slices" slices
-use "std:errors" errors
+use "std:slices" as slices
+use "std:errors" as errors
 
 # Finds the first comparator-equal value by scanning from the beginning.
 # @complexity O(N)

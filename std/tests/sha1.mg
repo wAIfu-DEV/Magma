@@ -1,9 +1,9 @@
 mod main
 
-use "std:sha1" sha1
-use "std:errors" errors
-use "std:slices" slices
-use "std:strings" strings
+use "std:sha1" as sha1
+use "std:errors" as errors
+use "std:slices" as slices
+use "std:strings" as strings
 
 hexDigit(value u8) u8:
     if value < 10:

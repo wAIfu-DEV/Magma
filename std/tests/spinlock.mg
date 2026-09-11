@@ -1,9 +1,9 @@
 mod main
 
-use "std:atomic" atomic
-use "std:errors" errors
-use "std:spinlock" spinlock
-use "std:thread" thread
+use "std:atomic" as atomic
+use "std:errors" as errors
+use "std:spinlock" as spinlock
+use "std:thread" as thread
 
 const workerCount u64 = 4
 const incrementsPerWorker u64 = 10000

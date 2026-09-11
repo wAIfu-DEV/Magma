@@ -1,11 +1,11 @@
 mod main
 
-use "std:allocator" allocator
-use "std:errors" errors
-use "std:heap" heap
-use "std:io" io
-use "std:list" list
-use "std:time" time
+use "std:allocator" as allocator
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:io" as io
+use "std:list" as list
+use "std:time" as time
 
 const ITEMS u64 = 1000000
 const ROUNDS u64 = 20

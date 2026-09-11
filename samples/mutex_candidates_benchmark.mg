@@ -2,15 +2,15 @@ mod main
 # Linux/x86-64 mutex candidate benchmark. All hot paths are Magma code; the
 # only native boundary added by candidates is the futex syscall when parking.
 
-use "std:atomic" atomic
-use "std:c" c
-use "std:errors" errors
-use "std:io" io
-use "std:mutex" mutex
-use "std:slices" slices
-use "std:thread" thread
-use "std:time" time
-use "std:writer" writer
+use "std:atomic" as atomic
+use "std:c" as c
+use "std:errors" as errors
+use "std:io" as io
+use "std:mutex" as mutex
+use "std:slices" as slices
+use "std:thread" as thread
+use "std:time" as time
+use "std:writer" as writer
 
 ext ext_syscall syscall(number c.long, address ptr, operation c.int, expected u32, timeout ptr, secondAddress ptr, value u32) c.long
 

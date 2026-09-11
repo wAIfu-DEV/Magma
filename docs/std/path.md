@@ -5,9 +5,9 @@
 ```magma
 a := heap.allocator()
 name := try path.base("one/two.txt")
-defer name.free(a)
+defer name.free()
 extension := try path.extension(name)
-defer extension.free(a)
+defer extension.free()
 absolute := path.isAbsolute("/tmp")
 ```
 
@@ -31,5 +31,5 @@ parts[0] = "build"
 parts[1] = "objects"
 parts[2] = "main.o"
 objectPath := try path.join(parts)
-defer objectPath.free(a)
+defer objectPath.free()
 ```

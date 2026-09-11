@@ -1,14 +1,14 @@
 mod main
 # Linux benchmark: the legacy read/write copy loop versus std:fs.copyFile.
 
-use "std:c" c
-use "std:cast" cast
-use "std:errors" errors
-use "std:fs" fs
-use "std:io" io
-use "std:slices" slices
-use "std:strings" strings
-use "std:time" time
+use "std:c" as c
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:fs" as fs
+use "std:io" as io
+use "std:slices" as slices
+use "std:strings" as strings
+use "std:time" as time
 
 ext ext_open open(path u8*, flags c.int, mode c.int) c.int
 ext ext_read read(fd c.int, data ptr, count u64) i64

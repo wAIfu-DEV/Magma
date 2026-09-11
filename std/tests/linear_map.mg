@@ -1,11 +1,11 @@
 mod main
 
-use "std:allocator" allocator
-use "std:errors" errors
-use "std:heap" heap
-use "std:linear_map" linear_map
-use "std:cast" cast
-use "std:strings" strings
+use "std:allocator" as allocator
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:linear_map" as linear_map
+use "std:cast" as cast
+use "std:strings" as strings
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()

@@ -1,69 +1,40 @@
 mod fmt
 # Deferred, typed string formatting for output streams and owned strings.
 
-use "std:allocator" alc
-use "std:cast" cast
-use "std:errors" errors
-use "std:io" io
-use "std:memory" memory
-use "std:strings" strings
-use "std:writer" writer
+use "std:allocator" as alc
+use "std:errors" as errors
+use "std:io" as io
+use "std:memory" as memory
+use "std:strings" as strings
+use "std:writer" as writer
 
 const INITIAL_CAPACITY u64 = 8
-const KIND_STRING u8 = 1
-const KIND_UINT u8 = 2
-const KIND_INT u8 = 3
-const KIND_BOOL u8 = 4
-const KIND_FLOAT u8 = 5
-
-Part(
-    value u128
-    kind u8
-)
-
-FloatPart(
-    value f64
-    precision u64
+union Part(
+    String(value str)
+    Uint(value u64)
+    Int(value i64)
+    Bool(value bool)
+    Float(value f64, precision u64)
 )
 
 stringPart(value str) Part:
-    out Part
-    out.kind = KIND_STRING
-    payload str* = cast.reinterpret[str](addrof out.value)
-    *payload = value
-    ret out
+    ret Part.String(value=value)
 ..
 
 uintPart(value u64) Part:
-    out Part
-    out.kind = KIND_UINT
-    payload u64* = cast.reinterpret[u64](addrof out.value)
-    *payload = value
-    ret out
+    ret Part.Uint(value=value)
 ..
 
 intPart(value i64) Part:
-    out Part
-    out.kind = KIND_INT
-    payload i64* = cast.reinterpret[i64](addrof out.value)
-    *payload = value
-    ret out
+    ret Part.Int(value=value)
 ..
 
 boolPart(value bool) Part:
-    out Part
-    out.kind = KIND_BOOL
-    payload bool* = cast.reinterpret[bool](addrof out.value)
-    *payload = value
-    ret out
+    ret Part.Bool(value=value)
 ..
 
 floatPart(value f64, precision u64) Part:
-    out Part
-    out.kind = KIND_FLOAT
-    payload FloatPart* = cast.reinterpret[FloatPart](addrof out.value)
-    *payload = FloatPart(value=value, precision=precision)
-    ret out
+    ret Part.Float(value=value, precision=precision)
 ..
 
 # A short-lived, deferred sequence of typed formatting operations. Strings are
@@ -203,21 +174,17 @@ writeParts(f Format*, out writer.Writer) !u64:
             part = f.parts[i]
         ..
         next u64 = 0
-        if part.kind == KIND_STRING:
-            payload str* = cast.reinterpret[str](addrof part.value)
-            next = try out.writeAll(*payload)
-        elif part.kind == KIND_UINT:
-            payload u64* = cast.reinterpret[u64](addrof part.value)
-            next = try out.writeUint64(*payload)
-        elif part.kind == KIND_INT:
-            payload i64* = cast.reinterpret[i64](addrof part.value)
-            next = try out.writeInt64(*payload)
-        elif part.kind == KIND_BOOL:
-            payload bool* = cast.reinterpret[bool](addrof part.value)
-            next = try out.writeBool(*payload)
-        elif part.kind == KIND_FLOAT:
-            payload FloatPart* = cast.reinterpret[FloatPart](addrof part.value)
-            next = try out.writeFloat64(payload.value, payload.precision)
+        match part as value:
+        case Part.String:
+            next = try out.writeAll(value.value)
+        case Part.Uint:
+            next = try out.writeUint64(value.value)
+        case Part.Int:
+            next = try out.writeInt64(value.value)
+        case Part.Bool:
+            next = try out.writeBool(value.value)
+        case Part.Float:
+            next = try out.writeFloat64(value.value, value.precision)
         else:
             throw errors.invalidType("unknown format part type")
         ..
@@ -324,7 +291,7 @@ destr Format.toStr(a alc.Allocator) !$str:
         release(this)
         throw allocErr
     ..
-    onerror result.free(a)
+    onerror result.free()
 
     sink := BufferSink(out=strings.toPtr(result), offset=0)
     out := sink.proto[writer.Writer]()

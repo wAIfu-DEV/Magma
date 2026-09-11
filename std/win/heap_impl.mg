@@ -2,33 +2,27 @@ mod heap_impl_win
 # Windows process-heap backend used by the portable heap module.
 
 
-use "std:win/types" win
-use "std:allocator" a
-use "std:errors"    e
-use "std:cast"      cast
-use "std:memory"    mem
+use "std:win/types" as win
+use "std:allocator" as a
+use "std:errors"    as e
+use "std:cast"      as cast
+use "std:memory"    as mem
+use "std:llvm"      as ll
 # Windows heap API
 ext ext_win32_GetProcessHeap GetProcessHeap() win.HANDLE
 ext ext_win32_HeapAlloc      HeapAlloc(hHeap win.HANDLE, dwFlags win.DWORD, dwBytes win.SIZE_T) win.LPVOID
 ext ext_win32_HeapReAlloc    HeapReAlloc(hHeap win.HANDLE, dwFlags win.DWORD, lpMem win.LPVOID, dwBytes win.SIZE_T) win.LPVOID
 ext ext_win32_HeapFree       HeapFree(hHeap win.HANDLE, dwFlags win.DWORD, lpMem win.LPVOID) win.BOOL
 
-# The process heap is immutable. Keep the cache process-global rather than in a
-# Magma global, which would create one cache per thread.
-llvm "@magma.heap.process = internal global ptr null, align 8\n"
+# The process heap is immutable and cached process-wide.
+global processHeap ptr
 
 loadHeap() ptr:
-    unsafe:
-        llvm "  %value = load atomic ptr, ptr @magma.heap.process acquire, align 8\n"
-        llvm "  ret ptr %value\n"
-    ..
+    ret ll.atomicLoadAcquirePtr(addrof processHeap)
 ..
 
 publishHeap(value ptr) void:
-    unsafe:
-        llvm "  store atomic ptr %value, ptr @magma.heap.process release, align 8\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreReleasePtr(addrof processHeap, value)
 ..
 
 # Gets the process heap handle, cached for performance
@@ -55,12 +49,12 @@ heapAlloc(impl ptr, nBytes u64) !$u8*:
     if p == none:
         throw e.outOfMemory("OOM")
     ..
-    ret p
+    ret cast.reinterpret[u8](p)
 ..
 
 # Internals for realloc, used by both realloc() and HeapAllocator.realloc()
 # O(1) for reallocation itself.
-heapRealloc(impl ptr, in u8*, nBytes u64) !$u8*:
+heapRealloc(impl ptr, in ptr, nBytes u64) !$u8*:
     if in == none:
         throw e.invalidArgument("input pointer is null")
     ..
@@ -75,12 +69,12 @@ heapRealloc(impl ptr, in u8*, nBytes u64) !$u8*:
     if p == none:
         throw e.outOfMemory("OOM")
     ..
-    ret p
+    ret cast.reinterpret[u8](p)
 ..
 
 # Internals for free, used by both free() and HeapAllocator.free()
 # O(1).
-heapFree(impl ptr, in u8*) void:
+heapFree(impl ptr, in ptr) void:
     if in == none:
         ret
     ..
@@ -98,11 +92,11 @@ HeapAllocator.alloc(nBytes u64) !$u8*:
     ret try heapAlloc(none, nBytes)
 ..
 
-HeapAllocator.realloc(in u8*, nBytes u64) !$u8*:
+HeapAllocator.realloc(in ptr, nBytes u64) !$u8*:
     ret try heapRealloc(none, in, nBytes)
 ..
 
-HeapAllocator.free(in u8*) void:
+HeapAllocator.free(in ptr) void:
     heapFree(none, in)
 ..
 
@@ -159,7 +153,7 @@ pub allocZero(nBytes u64) !$u8*:
 # @param in pointer to already allocated memory region
 # @param nBytes how many bytes to allocate
 # @returns owned region of memory
-pub realloc(in u8*, nBytes u64) !$u8*:
+pub realloc(in ptr, nBytes u64) !$u8*:
     ret try heapRealloc(none, in, nBytes)
 ..
 
@@ -175,7 +169,7 @@ pub realloc(in u8*, nBytes u64) !$u8*:
 # @param nBytes how many bytes to allocate
 # @param prevNbytes previous size of the allocation
 # @returns owned region of memory
-pub reallocZero(in u8*, nBytes u64, prevNbytes u64) !$u8*:
+pub reallocZero(in ptr, nBytes u64, prevNbytes u64) !$u8*:
     if nBytes <= prevNbytes:
         ret try heapRealloc(none, in, nBytes)
     ..
@@ -200,6 +194,6 @@ pub reallocZero(in u8*, nBytes u64, prevNbytes u64) !$u8*:
 # in should be non-null, and should be the result of an allocation from this
 # module's allocator or methods, do not mismatch allocators.
 # @param in pointer to already allocated memory region
-pub free(in u8*) void:
+pub free(in ptr) void:
     heapFree(none, in)
 ..

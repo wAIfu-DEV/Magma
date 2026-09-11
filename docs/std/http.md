@@ -41,3 +41,5 @@ request before transmission. Responses are buffered up to `maxResponseBytes`.
 
 Close every `Response`, `Exchange`, and `Client` that is successfully created.
 HTTPS verifies the peer chain and hostname and uses the platform TLS backend.
+Connection-pool occupancy is protected by an adaptive spin lock; connection,
+TLS, DNS, and allocation work is performed outside that lock.

@@ -1,6 +1,6 @@
 mod main
-use "std:errors" errors
-use "std:file_op_mode" mode
+use "std:errors" as errors
+use "std:file_op_mode" as mode
 pub main() !void:
     value := mode.OpenMode(bits=0)
     if value.bits != 0:

@@ -9,6 +9,7 @@ import (
 func parseGlobal(ctx *ParseCtx) (*t.NodeGlobal, error) {
 	n := &t.NodeGlobal{
 		StructDefs:           map[string]*t.StructDef{},
+		UnionDefs:            map[string]*t.UnionDef{},
 		ProtoDefs:            map[string]*t.ProtoDef{},
 		TypeAliases:          map[string]*t.TypeAlias{},
 		FuncDefs:             map[string]*t.NodeFuncDef{},
@@ -37,7 +38,10 @@ func parseGlobal(ctx *ParseCtx) (*t.NodeGlobal, error) {
 
 		glDecl, e := parseGlobalDecl(ctx, tk)
 		if e != nil {
-			return nil, e
+			// Keep declarations parsed before the error available to editor
+			// tooling. Callers still receive the diagnostic, while the LSP can
+			// use the valid prefix for hover, navigation, and completion.
+			return n, e
 		}
 
 		// this is sketch af

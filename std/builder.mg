@@ -1,14 +1,14 @@
 mod builder
 # Efficiently constructs owned strings from incrementally appended values.
 
-use "std:allocator" alc
-use "std:strings" strings
-use "std:slices" slices
-use "std:memory" mem
-use "std:cast" cast
-use "std:errors" errors
-use "std:checked" checked
-use "std:writer" writer
+use "std:allocator" as alc
+use "std:strings" as strings
+use "std:slices" as slices
+use "std:memory" as mem
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:checked" as checked
+use "std:writer" as writer
 
 const FLAG_OWNED u8 = 1
 const FLAG_BYTE u8 = 2
@@ -48,6 +48,9 @@ pub new() !$Builder:
 #   output := try builder.newWithCapacity(8)
 pub newWithCapacity(chunkCapacity u64) !$Builder:
     a := ctx.alloc
+    if chunkCapacity == 0:
+        throw errors.invalidArgument("builder capacity must be positive")
+    ..
     ret Builder(
         allocator=a,
         segments=try a.allocT[Segment](chunkCapacity),
@@ -83,7 +86,7 @@ Builder.addBorrowed(s str) !void:
 ..
 
 Builder.addOwned(s $str) !void:
-    onerror s.free(this.allocator)
+    onerror s.free()
     byteCount u64 = s.countBytes()
     newTotal := try checked.uAdd(this.totalBytes, byteCount)
     try this.ensureCapacity()
@@ -99,6 +102,7 @@ Builder.addOwned(s $str) !void:
 ..
 
 Builder.addByte(b u8) !void:
+    newTotal := try checked.uAdd(this.totalBytes, 1)
     try this.ensureCapacity()
     # SAFETY: ensureCapacity reserves the slot, and FLAG_BYTE makes the ptr-sized
     # inline payload a byte value rather than an address to dereference.
@@ -111,7 +115,7 @@ Builder.addByte(b u8) !void:
         segments[this.count] = segment
     ..
     this.count = this.count + 1
-    this.totalBytes = this.totalBytes + 1
+    this.totalBytes = newTotal
 ..
 
 # Appends a borrowed segment without copying it.
@@ -188,7 +192,7 @@ Builder.buildToBuff(buff u8[]) !void:
         throw errors.wouldOverflow("buildToBuff would overflow buffer")
     ..
 
-    out u8* = slices.toPtr(buff)
+    out u8* = cast.reinterpret[u8](slices.toPtr(buff))
     offset u64 = 0
     i u64 = 0
 
@@ -236,7 +240,7 @@ Builder.releaseCopies() void:
         segments Segment* = this.segments
         for i u64 = 0 to this.count:
             if (segments[i].flags & FLAG_OWNED) != 0:
-                segments[i].value.free(this.allocator)
+                segments[i].value.free()
             ..
         ..
     ..
@@ -262,6 +266,11 @@ destr Builder.free() void:
     this.count = 0
     this.capacity = 0
     this.totalBytes = 0
+..
+
+destr Builder.buildFinal() !$str:
+    defer this.free()
+    ret try this.build()
 ..
 
 Builder.writer() writer.Writer:

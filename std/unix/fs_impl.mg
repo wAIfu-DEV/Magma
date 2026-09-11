@@ -2,13 +2,13 @@ mod fs_impl_unix
 # Unix filesystem backend used by the portable fs module.
 
 
-use "std:c" c
-use "std:allocator" allocator
-use "std:builder" builder
-use "std:cast" cast
-use "std:errors" errors
-use "std:strings" strings
-use "std:slices" slices
+use "std:c" as c
+use "std:allocator" as allocator
+use "std:builder" as builder
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:strings" as strings
+use "std:slices" as slices
 
 ext ext_unlink unlink(path u8*) c.int
 ext ext_opendir opendir(path u8*) ptr
@@ -80,7 +80,7 @@ Dir.clearCurrent() void:
     # SAFETY: hasCurrent is the occupancy bit for the uniquely owned currentName.
     unsafe:
     if this.hasCurrent:
-        this.currentName.free(this.allocator)
+        this.currentName.free()
         this.hasCurrent = false
       ..
     ..
@@ -377,7 +377,7 @@ walkInner(root str, visit (str, bool) !void) !void:
             if isDirectory:
                 try walkInner(child, visit)
             ..
-            child.free(a)
+            child.free()
         ..
         entry = ext_readdir(directory)
       ..

@@ -1,18 +1,18 @@
 mod fs
 # Portable whole-file operations and recursive directory traversal.
 
-use "std:allocator" alc
-use "std:file" file
-use "std:strings" strings
-use "std:errors" errors
-use "std:path" path_util
-use "std:iterator" iterator
+use "std:allocator" as alc
+use "std:file" as file
+use "std:strings" as strings
+use "std:errors" as errors
+use "std:path" as path_util
+use "std:iterator" as iterator
 
 @platform("windows")
-use "std:win/fs_impl" impl_fs
+use "std:win/fs_impl" as impl_fs
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/fs_impl" impl_fs
+use "std:unix/fs_impl" as impl_fs
 
 # Reads an entire file into an owned string.
 # @complexity O(N), where N is the file size
@@ -38,7 +38,7 @@ pub readFile(path str) !$str:
 pub readRange(path str, offset u64, count u64) !$str:
     a := ctx.alloc
     output := try strings.alloc(count)
-    onerror output.free(a)
+    onerror output.free()
     written := try impl_fs.readRange(path, strings.toPtr(output), count, offset)
     if written > count:
         throw errors.failure("platform range read exceeded its destination")
@@ -257,7 +257,7 @@ walkEntriesInner(root str, options WalkOptions, visit (str, Metadata) !void) !vo
         parts[0] = root
         parts[1] = entry.name()
         child := try path_util.join(parts)
-        defer child.free(a)
+        defer child.free()
         info := try linkMetadata(child)
         try visit(child, info)
         if info.kind().isDir():
@@ -299,7 +299,7 @@ pub makeDirs(path str) !void:
         throw errors.invalidArgument("path exists and is not a directory")
     ..
     parent := try path_util.parent(path)
-    defer parent.free(a)
+    defer parent.free()
     if strings.compare(parent, path) == false && strings.compare(parent, ".") == false:
         try makeDirs(parent)
     ..
@@ -332,7 +332,7 @@ removeTreeContents(root str) !void:
         parts[0] = root
         parts[1] = entry.name()
         child := try path_util.join(parts)
-        defer child.free(a)
+        defer child.free()
         try removeTree(child)
     ..
 ..

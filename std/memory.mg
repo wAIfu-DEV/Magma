@@ -2,7 +2,7 @@ mod memory
 # Low-level byte copying, movement, comparison, initialization, and swapping.
 # @safety Callers must provide valid pointers spanning the requested byte count.
 
-use "std:cast" cast
+use "std:cast" as cast
 
 # Copies n bytes from 'from' to 'to'.
 # @warning prefer move() for possibly overlapping regions

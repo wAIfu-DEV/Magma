@@ -6,7 +6,6 @@ import (
 	lineidx "Magma/src/line_idx"
 	"Magma/src/makeabs"
 	pipelineasync "Magma/src/pipeline_async"
-	randid "Magma/src/rand_id"
 	magmatarget "Magma/src/target"
 	"Magma/src/types"
 	"bufio"
@@ -136,14 +135,27 @@ func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath strin
 		registerImportResult(shared, absPath, c)
 		return nil, err
 	}
-	moduleId := randid.RandId(10)
-	moduleNameId := moduleName + "_" + moduleId
+	moduleID, err := types.ResolveModuleID(absPath, shared.Cwd, shared.StdRoot)
+	if err != nil {
+		registerImportResult(shared, absPath, c)
+		return nil, err
+	}
+	moduleNameID := types.StablePackageName(moduleName, moduleID)
+	shared.ModuleNamesM.Lock()
+	if existing, found := shared.ModuleNames[moduleNameID]; found && existing != moduleID {
+		shared.ModuleNamesM.Unlock()
+		registerImportResult(shared, absPath, c)
+		return nil, fmt.Errorf("stable module-name collision %q between %q and %q", moduleNameID, existing, moduleID)
+	}
+	shared.ModuleNames[moduleNameID] = moduleID
+	shared.ModuleNamesM.Unlock()
 
+	fCtx.ModuleID = moduleID
 	fCtx.ModuleName = moduleName
-	fCtx.PackageName = moduleNameId
+	fCtx.PackageName = moduleNameID
 
 	if fromGl == nil {
-		shared.MainPckgName = moduleNameId
+		shared.MainPckgName = moduleNameID
 	}
 	fCtx.MainPckgName = shared.MainPckgName
 
@@ -158,7 +170,10 @@ func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath strin
 	shared.FilesM.Unlock()
 
 	if found {
-		if fromGl != nil {
+		if fromGl == nil {
+			shared.MainPckgName = foundFctx.PackageName
+			foundFctx.MainPckgName = foundFctx.PackageName
+		} else {
 			fromGl.ImportAlias[alias] = foundFctx.PackageName
 		}
 		return foundFctx, errAlreadyScheduled
@@ -177,6 +192,32 @@ func pipelineSyncPrelude(shared *types.SharedState, c chan error, filePath strin
 
 func DoMain(shared *types.SharedState, filePath string) error {
 	shared.Target = magmatarget.WithCompilerKnownDefaults(shared.Target)
+	corePath, err := findCorePath(shared)
+	if err != nil {
+		return err
+	}
+	// Core is the language bootstrap unit. Parse it before user code so its
+	// source declarations are the authoritative definitions of core layouts.
+	bootstrapOwner := &types.NodeGlobal{ImportAlias: map[string]string{}}
+	if err := Do(shared, corePath, "__core", corePath, bootstrapOwner); err != nil {
+		return err
+	}
+	// Parsing core may schedule its ordinary imports asynchronously. Finish that
+	// bootstrap graph before a dependency is potentially selected as the root.
+	shared.WaitGroup.Wait()
+	coreFile := shared.Files[corePath]
+	if coreFile == nil || coreFile.GlNode == nil {
+		return fmt.Errorf("core compilation unit was not registered")
+	}
+	shared.CoreTypes = make(map[types.CoreTypeRole]*types.StructDef, 3)
+	for _, definition := range coreFile.GlNode.StructDefs {
+		role := types.CoreTypeRoleForName(definition.Name)
+		if role != types.CoreTypeNone {
+			definition.CoreRole = role
+			shared.CoreTypes[role] = definition
+		}
+	}
+
 	if err := Do(shared, filePath, "", filePath, nil); err != nil {
 		return err
 	}
@@ -189,10 +230,6 @@ func DoMain(shared *types.SharedState, filePath string) error {
 	}
 	if mainFile == nil || mainFile.GlNode == nil {
 		return fmt.Errorf("main compilation unit was not registered")
-	}
-	corePath, err := findCorePath(shared)
-	if err != nil {
-		return err
 	}
 	// Compiler support modules are compilation units, but they are not implicit
 	// source imports of the root. Their own source imports remain ordinary graph

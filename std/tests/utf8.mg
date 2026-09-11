@@ -1,10 +1,10 @@
 mod main
-use "std:allocator" allocator
-use "std:errors" errors
-use "std:heap" heap
-use "std:slices" slices
-use "std:strings" strings
-use "std:utf8" utf8
+use "std:allocator" as allocator
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:slices" as slices
+use "std:strings" as strings
+use "std:utf8" as utf8
 pub main() !void:
     a allocator.Allocator = heap.allocator()
     iterator := utf8.iterator("A")
@@ -27,10 +27,11 @@ pub main() !void:
     ..
     wideNt := try utf8.utf8To16NT("A")
     defer slices.free(wideNt)
-    wideNtPtr u16* = slices.toPtr(wideNt)
+    wideNtPtr u16*
     # SAFETY: utf8To16NT allocates one trailing code unit beyond the returned
     # logical count for the null terminator.
     unsafe:
+        wideNtPtr = slices.toPtr(wideNt)
         if slices.count(wideNt) != 1 || wideNtPtr[0] != 65 || wideNtPtr[1] != 0:
             throw errors.failure("null-terminated UTF-16 conversion changed")
         ..
@@ -39,7 +40,7 @@ pub main() !void:
         throw errors.failure("UTF-16 size calculation changed")
     ..
     roundTrip := try utf8.utf16to8(wide)
-    defer roundTrip.free(a)
+    defer roundTrip.free()
     roundTripPtr u8* = strings.toPtr(roundTrip)
     # SAFETY: owned strings reserve a terminator immediately after countBytes.
     unsafe:

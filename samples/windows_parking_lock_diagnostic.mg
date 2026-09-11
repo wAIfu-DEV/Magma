@@ -1,26 +1,26 @@
 mod main
 # Adaptive-lock benchmark against the platform mutex and spinlock.
 
-use "std:atomic" atomic
-use "std:errors" errors
-use "std:io" io
-use "std:mutex" mutex
-use "std:slices" slices
-use "std:spinlock" spinlock
-use "std:thread" thread
-use "std:time" time
-use "std:writer" writer
-use "std:adaptive_spinlock" adaptive_spinlock
+use "std:atomic" as atomic
+use "std:errors" as errors
+use "std:io" as io
+use "std:mutex" as mutex
+use "std:slices" as slices
+use "std:spinlock" as spinlock
+use "std:thread" as thread
+use "std:time" as time
+use "std:writer" as writer
+use "std:adaptive_spinlock" as adaptive_spinlock
 
 const CREATION_ITERATIONS u64 = 1000000
 const UNCONTENDED_ITERATIONS u64 = 5000000
 const ITERATIONS u64 = 100000
 
 @platform("windows")
-use "std:win/thread_impl" benchmark_thread_impl
+use "std:win/thread_impl" as benchmark_thread_impl
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/thread_impl" benchmark_thread_impl
+use "std:unix/thread_impl" as benchmark_thread_impl
 
 Candidate(state atomic.U32)
 Context(lock adaptive_spinlock.AdaptiveSpinLock*, counter u64*, ready atomic.U64*, start atomic.U64*)
@@ -239,6 +239,57 @@ runCandidate(workerCount u64) !u64:
     ret counter
 ..
 
+runTas(workerCount u64) !u64:
+    guard := adaptive_spinlock.new()
+    counter u64 = 0
+    ready := atomic.newU64(0)
+    start := atomic.newU64(0)
+    contexts := array Context[24]
+    workers := array thread.Thread[24]
+    for i u64 = 0 to workerCount:
+        contexts[i] = Context(lock=addrof guard, counter=addrof counter, ready=addrof ready, start=addrof start)
+        workers[i] = try thread.new[Context](tasWorker, addrof contexts[i])
+    ..
+    loop ready.loadAcquire() != workerCount: thread.yield() ..
+    start.storeRelease(1)
+    try thread.joinAll(slices.fromPtr(slices.toPtr(workers), workerCount))
+    ret counter
+..
+
+runTtas(workerCount u64) !u64:
+    guard := adaptive_spinlock.new()
+    counter u64 = 0
+    ready := atomic.newU64(0)
+    start := atomic.newU64(0)
+    contexts := array Context[24]
+    workers := array thread.Thread[24]
+    for i u64 = 0 to workerCount:
+        contexts[i] = Context(lock=addrof guard, counter=addrof counter, ready=addrof ready, start=addrof start)
+        workers[i] = try thread.new[Context](ttasWorker, addrof contexts[i])
+    ..
+    loop ready.loadAcquire() != workerCount: thread.yield() ..
+    start.storeRelease(1)
+    try thread.joinAll(slices.fromPtr(slices.toPtr(workers), workerCount))
+    ret counter
+..
+
+runBackoff(workerCount u64) !u64:
+    guard := adaptive_spinlock.new()
+    counter u64 = 0
+    ready := atomic.newU64(0)
+    start := atomic.newU64(0)
+    contexts := array Context[24]
+    workers := array thread.Thread[24]
+    for i u64 = 0 to workerCount:
+        contexts[i] = Context(lock=addrof guard, counter=addrof counter, ready=addrof ready, start=addrof start)
+        workers[i] = try thread.new[Context](backoffWorker, addrof contexts[i])
+    ..
+    loop ready.loadAcquire() != workerCount: thread.yield() ..
+    start.storeRelease(1)
+    try thread.joinAll(slices.fromPtr(slices.toPtr(workers), workerCount))
+    ret counter
+..
+
 runSpin(workerCount u64) !u64:
     guard := spinlock.new()
     counter u64 = 0
@@ -290,15 +341,27 @@ runContention(out writer.Writer*, workerCount u64) !void:
     adaptiveCount := try runCandidate(workerCount)
     adaptiveNs := time.ticksToNs(time.elapsedTicks(start))
     start = time.ticks()
+    tasCount := try runTas(workerCount)
+    tasNs := time.ticksToNs(time.elapsedTicks(start))
+    start = time.ticks()
+    ttasCount := try runTtas(workerCount)
+    ttasNs := time.ticksToNs(time.elapsedTicks(start))
+    start = time.ticks()
+    backoffCount := try runBackoff(workerCount)
+    backoffNs := time.ticksToNs(time.elapsedTicks(start))
+    start = time.ticks()
     spinCount := try runSpin(workerCount)
     spinNs := time.ticksToNs(time.elapsedTicks(start))
-    if srwCount != expected || adaptiveCount != expected || spinCount != expected:
+    if srwCount != expected || adaptiveCount != expected || tasCount != expected || ttasCount != expected || backoffCount != expected || spinCount != expected:
         throw errors.failure("lock candidate lost protected increments")
     ..
     try out.writeAll("workers=")
     try out.writeUint64(workerCount)
-    try writeValue(out, "srw", srwNs)
+    try writeValue(out, "mutex", srwNs)
     try writeValue(out, "adaptive", adaptiveNs)
+    try writeValue(out, "tas", tasNs)
+    try writeValue(out, "ttas", ttasNs)
+    try writeValue(out, "backoff", backoffNs)
     try writeValue(out, "spinlock", spinNs)
     try out.writeAll("\n")
 ..
@@ -324,7 +387,7 @@ creation(out writer.Writer*) !void:
     ..
     spinNs := time.ticksToNs(time.elapsedTicks(start))
     try out.writeAll("creation")
-    try writeValue(out, "srw", srwNs)
+    try writeValue(out, "mutex", srwNs)
     try writeValue(out, "candidate", candidateNs)
     try writeValue(out, "spinlock", spinNs)
     try out.writeAll("\n")
@@ -344,13 +407,26 @@ uncontended(out writer.Writer*) !void:
     start = time.ticks()
     for i u64 = 0 to UNCONTENDED_ITERATIONS: guard.lock() guard.unlock() ..
     adaptiveNs := time.ticksToNs(time.elapsedTicks(start))
+    raw := Candidate(state=atomic.newU32(0))
+    start = time.ticks()
+    for i u64 = 0 to UNCONTENDED_ITERATIONS: tasLock(addrof raw) tasUnlock(addrof raw) ..
+    tasNs := time.ticksToNs(time.elapsedTicks(start))
+    start = time.ticks()
+    for i u64 = 0 to UNCONTENDED_ITERATIONS: ttasLock(addrof raw) ttasUnlock(addrof raw) ..
+    ttasNs := time.ticksToNs(time.elapsedTicks(start))
+    start = time.ticks()
+    for i u64 = 0 to UNCONTENDED_ITERATIONS: backoffLock(addrof raw) backoffUnlock(addrof raw) ..
+    backoffNs := time.ticksToNs(time.elapsedTicks(start))
     spin := spinlock.new()
     start = time.ticks()
     for i u64 = 0 to UNCONTENDED_ITERATIONS: spin.lock() spin.unlock() ..
     spinNs := time.ticksToNs(time.elapsedTicks(start))
     try out.writeAll("uncontended")
-    try writeValue(out, "srw", srwNs)
+    try writeValue(out, "mutex", srwNs)
     try writeValue(out, "adaptive", adaptiveNs)
+    try writeValue(out, "tas", tasNs)
+    try writeValue(out, "ttas", ttasNs)
+    try writeValue(out, "backoff", backoffNs)
     try writeValue(out, "spinlock", spinNs)
     try out.writeAll("\n")
 ..

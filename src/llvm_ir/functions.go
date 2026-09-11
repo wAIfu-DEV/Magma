@@ -4,6 +4,8 @@ import (
 	t "Magma/src/types"
 	"bytes"
 	"fmt"
+	"strconv"
+	"strings"
 )
 
 func rootContextInitializer(ctx *IrCtx) (*t.NodeFuncDef, error) {
@@ -22,6 +24,10 @@ func rootContextInitializer(ctx *IrCtx) (*t.NodeFuncDef, error) {
 }
 
 func irInitializeRootContext(ctx *IrCtx, abortOnFailure bool) error {
+	errorCodeField, err := coreFieldIndex(ctx, t.CoreTypeError, "__code")
+	if err != nil {
+		return err
+	}
 	initializer, err := rootContextInitializer(ctx)
 	if err != nil {
 		return err
@@ -40,10 +46,14 @@ func irInitializeRootContext(ctx *IrCtx, abortOnFailure bool) error {
 			return err
 		}
 		irWrite(ctx, " %ctx.init, 0\n")
-		irWrite(ctx, "  %ctx.error.code = extractvalue %type.error %ctx.error, 1\n")
+		irWritef(ctx, "  %%ctx.error.code = extractvalue %s %%ctx.error, %d\n", t.CoreTypeError.LLVMName(), errorCodeField)
 		irWrite(ctx, "  %ctx.failed = icmp ne i32 %ctx.error.code, 0\n")
 		irWrite(ctx, "  br i1 %ctx.failed, label %ctx.init.failed, label %ctx.init.ready, !prof !9000\n")
-		irWrite(ctx, "ctx.init.failed:\n  call void @magma.error.print(%type.error %ctx.error)\n")
+		printUncaught, err := moduleFunctionSymbol(ctx, "errors", "printUncaught")
+		if err != nil {
+			return err
+		}
+		irWritef(ctx, "ctx.init.failed:\n  call void @%s(%s %%ctx.error)\n", printUncaught, t.CoreTypeError.LLVMName())
 		if abortOnFailure {
 			irWrite(ctx, "  call void @abort()\n  unreachable\n")
 		} else {
@@ -260,14 +270,14 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 
 		if fnDef.ReturnType.Throws {
 			if !isVoidType(fnDef.ReturnType) {
-				irWrite(ctx, " { %type.error zeroinitializer, ")
+				irWritef(ctx, " { %s zeroinitializer, ", t.CoreTypeError.LLVMName())
 				e := irType(ctx, fnDef.ReturnType)
 				if e != nil {
 					return e
 				}
 				irWrite(ctx, " zeroinitializer }\n")
 			} else {
-				irWrite(ctx, " { %type.error zeroinitializer }\n")
+				irWritef(ctx, " { %s zeroinitializer }\n", t.CoreTypeError.LLVMName())
 			}
 		} else {
 			if !isVoidType(fnDef.ReturnType) {
@@ -285,12 +295,20 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 func irMainWrapper(ctx *IrCtx, mainFnDef *t.NodeFuncDef) error {
 	irWrite(ctx, "; Entry point\n")
 	if ctx.Shared.Target.OS == "windows" {
+		stringDataField, err := coreFieldIndex(ctx, t.CoreTypeString, "__data")
+		if err != nil {
+			return err
+		}
+		stringCountField, err := coreFieldIndex(ctx, t.CoreTypeString, "__byteCount")
+		if err != nil {
+			return err
+		}
 		irWrite(ctx, "declare dllimport ptr @GetProcessHeap()\n")
 		irWrite(ctx, "declare dllimport ptr @HeapAlloc(ptr, i32, i64)\n")
 		irWrite(ctx, "declare dllimport i32 @HeapFree(ptr, i32, ptr)\n")
 		irWrite(ctx, "declare dllimport i32 @SetConsoleOutputCP(i32)\n")
 		irWrite(ctx, "declare dllimport i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)\n\n")
-		irWrite(ctx, `define internal i1 @magma.argsFromUtf16(i32 %argc, ptr %argv, ptr %buf) {
+		windowsArgsIR := `define internal i1 @magma.argsFromUtf16(i32 %argc, ptr %argv, ptr %buf) {
 entry:
   %heap = call ptr @GetProcessHeap()
   %argc64 = sext i32 %argc to i64
@@ -326,10 +344,10 @@ free.current:
 store:
   %length32 = sub i32 %size, 1
   %length = zext i32 %length32 to i64
-  %elem = getelementptr %type.str, ptr %buf, i64 %i
-  %str0 = insertvalue %type.str zeroinitializer, ptr %bytes, 0
-  %str1 = insertvalue %type.str %str0, i64 %length, 1
-  store %type.str %str1, ptr %elem
+  %elem = getelementptr {{STRING_TYPE}}, ptr %buf, i64 %i
+  %str0 = insertvalue {{STRING_TYPE}} zeroinitializer, ptr %bytes, {{STRING_DATA_FIELD}}
+  %str1 = insertvalue {{STRING_TYPE}} %str0, i64 %length, {{STRING_COUNT_FIELD}}
+  store {{STRING_TYPE}} %str1, ptr %elem
   %next = add i64 %i, 1
   br label %loop
 
@@ -342,9 +360,9 @@ cleanup:
   br i1 %cleaned, label %failure, label %cleanup.body
 
 cleanup.body:
-  %old.elem = getelementptr %type.str, ptr %buf, i64 %j
-  %old = load %type.str, ptr %old.elem
-  %old.bytes = extractvalue %type.str %old, 0
+  %old.elem = getelementptr {{STRING_TYPE}}, ptr %buf, i64 %j
+  %old = load {{STRING_TYPE}}, ptr %old.elem
+  %old.bytes = extractvalue {{STRING_TYPE}} %old, {{STRING_DATA_FIELD}}
   call i32 @HeapFree(ptr %heap, i32 0, ptr %old.bytes)
   %j.next = add i64 %j, 1
   br label %cleanup
@@ -368,9 +386,9 @@ loop:
   br i1 %done, label %finish, label %body
 
 body:
-  %elem = getelementptr %type.str, ptr %buf, i64 %i
-  %arg = load %type.str, ptr %elem
-  %bytes = extractvalue %type.str %arg, 0
+  %elem = getelementptr {{STRING_TYPE}}, ptr %buf, i64 %i
+  %arg = load {{STRING_TYPE}}, ptr %elem
+  %bytes = extractvalue {{STRING_TYPE}} %arg, {{STRING_DATA_FIELD}}
   call i32 @HeapFree(ptr %heap, i32 0, ptr %bytes)
   %next = add i64 %i, 1
   br label %loop
@@ -379,7 +397,13 @@ finish:
   ret void
 }
 
-`)
+`
+		windowsArgsIR = strings.NewReplacer(
+			"{{STRING_TYPE}}", t.CoreTypeString.LLVMName(),
+			"{{STRING_DATA_FIELD}}", strconv.Itoa(stringDataField),
+			"{{STRING_COUNT_FIELD}}", strconv.Itoa(stringCountField),
+		).Replace(windowsArgsIR)
+		irWrite(ctx, windowsArgsIR)
 		irWrite(ctx, "define i32 @wmain(i32 %argc, ptr %argv) {\n")
 	} else {
 		irWrite(ctx, "define i32 @main(i32 %argc, ptr %argv) {\n")
@@ -397,11 +421,18 @@ finish:
 	if len(mainFnDef.Class.ArgsNode.Args) > 0 {
 		first := mainFnDef.Class.ArgsNode.Args[0]
 
-		// TODO check for slice type
-		if first.Name == "args" {
+		if isStringSliceType(first.TypeNode) {
 			hasArgs = true
+			dataField, err := coreFieldIndex(ctx, t.CoreTypeSlice, "__data")
+			if err != nil {
+				return err
+			}
+			countField, err := coreFieldIndex(ctx, t.CoreTypeSlice, "__count")
+			if err != nil {
+				return err
+			}
 
-			irWrite(ctx, "  %arr = alloca %type.str, i32 %argc\n")
+			irWritef(ctx, "  %%arr = alloca %s, i32 %%argc\n", t.CoreTypeString.LLVMName())
 			if ctx.Shared.Target.OS == "windows" {
 				irWrite(ctx, "  %args.ok = call i1 @magma.argsFromUtf16(i32 %argc, ptr %argv, ptr %arr)\n")
 				irWrite(ctx, "  br i1 %args.ok, label %args.ready, label %args.failed\n")
@@ -409,15 +440,19 @@ finish:
 				irWrite(ctx, "  ret i32 1\n")
 				irWrite(ctx, "args.ready:\n")
 				irWrite(ctx, "  %argc64 = sext i32 %argc to i64\n")
-				irWrite(ctx, "  %a0 = insertvalue %type.slice zeroinitializer, ptr %arr, 0\n")
-				irWrite(ctx, "  %a = insertvalue %type.slice %a0, i64 %argc64, 1\n")
+				irWritef(ctx, "  %%a0 = insertvalue %s zeroinitializer, ptr %%arr, %d\n", t.CoreTypeSlice.LLVMName(), dataField)
+				irWritef(ctx, "  %%a = insertvalue %s %%a0, i64 %%argc64, %d\n", t.CoreTypeSlice.LLVMName(), countField)
 			} else {
-				irWrite(ctx, "  %a = call %type.slice @magma.argsToSlice(i32 %argc, ptr %argv, ptr %arr)\n")
+				irWritef(ctx, "  %%a = call %s @magma.argsToSlice(i32 %%argc, ptr %%argv, ptr %%arr)\n", t.CoreTypeSlice.LLVMName())
 			}
 		}
 	}
 
 	if mainFnDef.ReturnType.Throws {
+		errorCodeField, err := coreFieldIndex(ctx, t.CoreTypeError, "__code")
+		if err != nil {
+			return err
+		}
 		ctxArg := ""
 		if mainFnDef.ContextABI == t.ContextABIContextful {
 			ctxArg = "ptr @magma.context.root"
@@ -426,16 +461,20 @@ finish:
 			if ctxArg != "" {
 				ctxArg += ", "
 			}
-			irWritef(ctx, "  %%r = call { %%type.error } @%s.main(%s%%type.slice %%a)\n", ctx.fCtx.MainPckgName, ctxArg)
+			irWritef(ctx, "  %%r = call { %s } @%s.main(%s%s %%a)\n", t.CoreTypeError.LLVMName(), ctx.fCtx.MainPckgName, ctxArg, t.CoreTypeSlice.LLVMName())
 		} else {
-			irWritef(ctx, "  %%r = call { %%type.error } @%s.main(%s)\n", ctx.fCtx.MainPckgName, ctxArg)
+			irWritef(ctx, "  %%r = call { %s } @%s.main(%s)\n", t.CoreTypeError.LLVMName(), ctx.fCtx.MainPckgName, ctxArg)
 		}
-		irWrite(ctx, "  %e = extractvalue { %type.error } %r, 0\n")
-		irWrite(ctx, "  %ecd = extractvalue %type.error %e, 1\n")
+		irWritef(ctx, "  %%e = extractvalue { %s } %%r, 0\n", t.CoreTypeError.LLVMName())
+		irWritef(ctx, "  %%ecd = extractvalue %s %%e, %d\n", t.CoreTypeError.LLVMName(), errorCodeField)
 		irWrite(ctx, "  %isnz = icmp ne i32 %ecd, 0\n")
 		irWrite(ctx, "  br i1 %isnz, label %enz, label %ez, !prof !9000\n")
 		irWrite(ctx, "enz:\n")
-		irWrite(ctx, "  call void @magma.error.print(%type.error %e)\n")
+		printUncaught, err := moduleFunctionSymbol(ctx, "errors", "printUncaught")
+		if err != nil {
+			return err
+		}
+		irWritef(ctx, "  call void @%s(%s %%e)\n", printUncaught, t.CoreTypeError.LLVMName())
 		if hasArgs && ctx.Shared.Target.OS == "windows" {
 			irWrite(ctx, "  call void @magma.freeUtf8Args(i32 %argc, ptr %arr)\n")
 		}
@@ -450,7 +489,7 @@ finish:
 			if ctxArg != "" {
 				ctxArg += ", "
 			}
-			irWritef(ctx, "  call void @%s.main(%s%%type.slice %%a)\n", ctx.fCtx.MainPckgName, ctxArg)
+			irWritef(ctx, "  call void @%s.main(%s%s %%a)\n", ctx.fCtx.MainPckgName, ctxArg, t.CoreTypeSlice.LLVMName())
 		} else {
 			irWritef(ctx, "  call void @%s.main(%s)\n", ctx.fCtx.MainPckgName, ctxArg)
 		}
@@ -521,8 +560,13 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 	assignLocalIrNames(ctx, &fnDefNode.Body)
 
 	irWrite(ctx, " ")
+	if ctx.fCtx.ModuleName == "core" {
+		if name, ok := fnDefNode.Class.NameNode.(*t.NodeNameSingle); ok && name.Name == "errorTracePush" {
+			irWrite(ctx, "noinline cold ")
+		}
+	}
 	//if len(fnDefNode.Body.Statements) > 5 {
-		//irWrite(ctx, "inlinehint ")
+	//irWrite(ctx, "inlinehint ")
 	//} else {
 	//	irWrite(ctx, "alwaysinline ")
 	//}

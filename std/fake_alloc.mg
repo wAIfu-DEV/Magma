@@ -2,8 +2,9 @@ mod heap
 # Deterministic allocator used to exercise allocation-failure handling.
 # @warning Intended for testing rather than production allocation.
 
-use "std:allocator" a
-use "std:errors"    e
+use "std:allocator" as a
+use "std:errors"    as e
+use "std:cast"      as cast
 
 # Internals for alloc, used by both alloc() and HeapAllocator.alloc()
 # @complexity O(1) for allocation itself, O(N) for zeroing if requested.
@@ -31,12 +32,12 @@ FakeAllocator.alloc(nBytes u64) !$u8*:
     ret try fakeAlloc(none, nBytes)
 ..
 
-FakeAllocator.realloc(in u8*, nBytes u64) !$u8*:
-    ret try fakeRealloc(none, in, nBytes)
+FakeAllocator.realloc(in ptr, nBytes u64) !$u8*:
+    ret try fakeRealloc(none, cast.reinterpret[u8](in), nBytes)
 ..
 
-FakeAllocator.free(in u8*) void:
-    fakeFree(none, in)
+FakeAllocator.free(in ptr) void:
+    fakeFree(none, cast.reinterpret[u8](in))
 ..
 
 gl_fakeAllocator := FakeAllocator(value=0)

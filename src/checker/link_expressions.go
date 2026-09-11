@@ -7,6 +7,15 @@ import (
 )
 
 func clExprCall(c *ctx, call *t.NodeExprCall) error {
+	if name, ok := call.Callee.(*t.NodeExprName); ok && len(call.Args) == 0 {
+		if variant, ownerType := clResolveUnionConstructor(c, &t.NodeType{KindNode: &t.NodeTypeNamed{NameNode: name.Name}}); variant != nil {
+			if len(variant.Fields) != 0 {
+				return comp_err.CompilationErrorToken(c.FileCtx, &call.Tk, fmt.Sprintf("variant '%s.%s' requires fields", variant.Owner.Name, variant.Name), "use named field construction")
+			}
+			call.UnionVariant, call.InfType = variant, ownerType
+			return nil
+		}
+	}
 	var ownerExpr t.Node = nil
 	var nameExpr *t.NodeExprName = nil
 
@@ -23,11 +32,17 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 		}
 
 		if !found {
+			hint := ""
+			description := fmt.Sprintf("unknown function '%s'", flattenName(n.Name))
+			if function := enclosingFunction(c); function != nil && function.IsLambda {
+				description = fmt.Sprintf("captureless lambda cannot reference unknown function '%s'", flattenName(n.Name))
+				hint = "lambdas cannot capture enclosing locals; pass the callable as a lambda parameter"
+			}
 			return comp_err.CompilationErrorToken(
 				c.FileCtx,
 				lastNameToken(n.Name),
-				fmt.Sprintf("unknown function '%s'", flattenName(n.Name)),
-				"",
+				description,
+				hint,
 			)
 		}
 
@@ -114,15 +129,22 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 				AssociatedNode: n,
 				Storage:        n.Storage,
 			}
+			if len(calleeName.Tokens) != 0 {
+				ownerName.Tk = calleeName.Tokens[0]
+			}
 
 			if len(ownerNameParts) == 1 {
-				ownerName.Name = &t.NodeNameSingle{
-					Name: ownerNameParts[0],
+				owner := &t.NodeNameSingle{Name: ownerNameParts[0]}
+				if len(calleeName.Tokens) != 0 {
+					owner.Tk = calleeName.Tokens[0]
 				}
+				ownerName.Name = owner
 			} else {
-				ownerName.Name = &t.NodeNameComposite{
-					Parts: ownerNameParts,
+				ownerTokens := calleeName.Tokens
+				if len(ownerTokens) > len(ownerNameParts) {
+					ownerTokens = ownerTokens[:len(ownerNameParts)]
 				}
+				ownerName.Name = &t.NodeNameComposite{Parts: ownerNameParts, Tokens: ownerTokens}
 			}
 
 			ownerType := n.Type
@@ -289,13 +311,53 @@ func clExpr(c *ctx, expr t.NodeExpr, lvalue bool) error {
 		return clExpr(c, n.Expr, lvalue)
 	case *t.NodeExprMove:
 		return clExpr(c, n.Expr, false)
+	case *t.NodeExprLlvm:
+		for _, arg := range n.Args {
+			if err := clExpr(c, arg, false); err != nil {
+				return err
+			}
+		}
+		// Statement operations explicitly use void as their result marker; the
+		// operation registry later rejects void for value-producing operations.
+		return clType(c, n.ResultType)
 	case *t.NodeExprCall:
 		return clExprCall(c, n)
 	case *t.NodeExprStructInit:
+		if variant, ownerType := clResolveUnionConstructor(c, n.Type); variant != nil {
+			n.UnionVariant = variant
+			n.Type = ownerType
+			seen := map[string]bool{}
+			for i := range n.Fields {
+				field := &n.Fields[i]
+				if seen[field.Name] {
+					return comp_err.CompilationErrorToken(c.FileCtx, &field.Tk, fmt.Sprintf("duplicate field '%s' in '%s.%s' constructor", field.Name, variant.Owner.Name, variant.Name), "")
+				}
+				seen[field.Name] = true
+				found := false
+				for index, arg := range variant.Fields {
+					if arg.Name == field.Name {
+						field.FieldIndex, field.FieldType, found = index, arg.TypeNode, true
+						break
+					}
+				}
+				if !found {
+					return comp_err.CompilationErrorToken(c.FileCtx, &field.Tk, fmt.Sprintf("variant '%s.%s' has no field named '%s'", variant.Owner.Name, variant.Name, field.Name), "")
+				}
+				if e := clExpr(c, field.Expression, false); e != nil {
+					return e
+				}
+			}
+			for _, arg := range variant.Fields {
+				if !seen[arg.Name] {
+					return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("missing field '%s' in '%s.%s' constructor", arg.Name, variant.Owner.Name, variant.Name), "")
+				}
+			}
+			return nil
+		}
 		if e := clType(c, n.Type); e != nil {
 			return e
 		}
-		def, e := clGetStructDefFromType(c, n.Type)
+		def, e := clGetFieldStructDefFromType(c, n.Type)
 		if e != nil {
 			return comp_err.CompilationErrorToken(
 				c.FileCtx,
@@ -448,4 +510,39 @@ func clExpr(c *ctx, expr t.NodeExpr, lvalue bool) error {
 		return clExpr(c, n.Operand, false)
 	}
 	return nil
+}
+
+func clResolveUnionConstructor(c *ctx, typ *t.NodeType) (*t.UnionVariant, *t.NodeType) {
+	named, ok := typ.KindNode.(*t.NodeTypeNamed)
+	if !ok {
+		return nil, nil
+	}
+	name, ok := named.NameNode.(*t.NodeNameComposite)
+	if !ok || len(name.Parts) < 2 {
+		return nil, nil
+	}
+	parts := name.Parts
+	global := c.GlobalNode
+	unionIndex := 0
+	if len(parts) > 2 {
+		moduleName, consumed, err := t.ResolveModulePrefix(c.ModuleBundle.Modules, c.GlobalNode, parts)
+		if err != nil || consumed+1 >= len(parts) {
+			return nil, nil
+		}
+		global = c.ModuleBundle.Modules[moduleName]
+		unionIndex = consumed
+	}
+	union := global.UnionDefs[parts[unionIndex]]
+	if union == nil || unionIndex+1 != len(parts)-1 {
+		return nil, nil
+	}
+	for _, variant := range union.Variants {
+		if variant.Name == parts[unionIndex+1] {
+			if global != c.GlobalNode && !union.IsPublic {
+				return nil, nil
+			}
+			return variant, &t.NodeType{KindNode: &t.NodeTypeAbsolute{AbsoluteName: union.Module + "." + union.Name, DisplayName: union.Name}}
+		}
+	}
+	return nil, nil
 }

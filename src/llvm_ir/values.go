@@ -2,6 +2,7 @@ package llvmir
 
 import (
 	t "Magma/src/types"
+	"bytes"
 	"fmt"
 	"slices"
 	"strconv"
@@ -9,6 +10,23 @@ import (
 )
 
 func irGlVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) error {
+	if vd.IsExternal {
+		if vd.ExternalName == "" {
+			return fmt.Errorf("external global %s has no external symbol", flattenName(vd.Name))
+		}
+		irWritef(ctx, "@%s = external global ", vd.ExternalName)
+		if err := irType(ctx, vd.Type); err != nil {
+			return err
+		}
+		irWrite(ctx, "\n")
+		return nil
+	}
+	if array, ok := vd.Initializer.(*t.NodeExprArray); ok {
+		if !vd.IsProcessGlobal {
+			return fmt.Errorf("array-backed top-level variable %s must use global storage", flattenName(vd.Name))
+		}
+		return irArrayGlobal(ctx, vd, array, "global")
+	}
 	cpy := *ctx
 	cpy.bld.Body = ctx.bld.Head
 	if vd.Initializer != nil {
@@ -16,7 +34,11 @@ func irGlVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) error {
 	}
 
 	//irWritef(&cpy, "@%s = internal global ", vd.AbsName)
-	irWritef(&cpy, "@%s = private thread_local global ", vd.AbsName)
+	if vd.IsProcessGlobal {
+		irWritef(&cpy, "@%s = private global ", vd.AbsName)
+	} else {
+		irWritef(&cpy, "@%s = private thread_local global ", vd.AbsName)
+	}
 	//irWritef(&cpy, "@%s = private static thread_local global ", vd.AbsName)
 
 	e := irType(&cpy, vd.Type)
@@ -36,6 +58,33 @@ func irGlVarDef(ctx *IrCtx, vd *t.NodeExprVarDef) error {
 
 func irConstValue(ctx *IrCtx, expected *t.NodeType, expr t.NodeExpr) error {
 	switch n := expr.(type) {
+	case *t.NodeExprEmbed:
+		definition, err := coreTypeDefinition(ctx, t.CoreTypeSlice)
+		if err != nil {
+			return err
+		}
+		dataField, err := coreFieldIndex(ctx, t.CoreTypeSlice, "__data")
+		if err != nil {
+			return err
+		}
+		countField, err := coreFieldIndex(ctx, t.CoreTypeSlice, "__count")
+		if err != nil {
+			return err
+		}
+		fields := make([]string, len(definition.FieldOrder))
+		for i, fieldName := range definition.FieldOrder {
+			typeBuffer := &bytes.Buffer{}
+			fieldContext := *ctx
+			fieldContext.bld = ScopeBuilder{Global: typeBuffer, Head: typeBuffer, Tail: typeBuffer, Body: typeBuffer}
+			if err := irType(&fieldContext, definition.Fields[fieldName]); err != nil {
+				return err
+			}
+			fields[i] = typeBuffer.String() + " zeroinitializer"
+		}
+		fields[dataField] = "ptr @" + n.Symbol
+		fields[countField] = fmt.Sprintf("i64 %d", n.Size)
+		irWritef(ctx, "{ %s }", strings.Join(fields, ", "))
+		return nil
 	case *t.NodeExprLit:
 		switch n.LitType {
 		case t.TokLitNum, t.TokLitBool:
@@ -46,7 +95,7 @@ func irConstValue(ctx *IrCtx, expected *t.NodeType, expr t.NodeExpr) error {
 			if !ok {
 				return fmt.Errorf("global string constant was not prepared")
 			}
-			irWritef(ctx, "{ ptr %s, i64 %d }", stringGlobal.Repr, len(n.Value))
+			irWritef(ctx, "{ ptr %s, i64 %d, ptr null, ptr null }", stringGlobal.Repr, len(n.Value))
 			return nil
 		case t.TokLitNone:
 			irWrite(ctx, "null")
@@ -159,7 +208,7 @@ func irConstUint(expr t.NodeExpr) (uint64, bool) {
 	}
 }
 
-func irConstArrayDef(ctx *IrCtx, def *t.NodeConstDef, array *t.NodeExprArray) error {
+func irArrayGlobal(ctx *IrCtx, variable *t.NodeExprVarDef, array *t.NodeExprArray, descriptorKind string) error {
 	length, ok := irConstUint(array.Length)
 	if !ok {
 		return fmt.Errorf("constant array length is not an integer constant")
@@ -170,7 +219,7 @@ func irConstArrayDef(ctx *IrCtx, def *t.NodeConstDef, array *t.NodeExprArray) er
 	}
 	c := *ctx
 	c.bld.Body, c.bld.Head, c.bld.Tail = ctx.bld.Global, ctx.bld.Global, ctx.bld.Global
-	irWriteGlf(ctx, "@%s.data = private global [%d x ", def.VarDef.AbsName, length)
+	irWriteGlf(ctx, "@%s.data = private global [%d x ", variable.AbsName, length)
 	if err := irType(&c, array.ElemType); err != nil {
 		return err
 	}
@@ -192,8 +241,36 @@ func irConstArrayDef(ctx *IrCtx, def *t.NodeConstDef, array *t.NodeExprArray) er
 		}
 	}
 	irWriteGl(ctx, "]\n")
-	irWriteGlf(ctx, "@%s = private constant %%type.slice { ptr @%s.data, i64 %d }\n", def.VarDef.AbsName, def.VarDef.AbsName, length)
+	dataField, err := coreFieldIndex(ctx, t.CoreTypeSlice, "__data")
+	if err != nil {
+		return err
+	}
+	countField, err := coreFieldIndex(ctx, t.CoreTypeSlice, "__count")
+	if err != nil {
+		return err
+	}
+	definition, err := coreTypeDefinition(ctx, t.CoreTypeSlice)
+	if err != nil {
+		return err
+	}
+	fields := make([]string, len(definition.FieldOrder))
+	for i, fieldName := range definition.FieldOrder {
+		typeBuffer := &bytes.Buffer{}
+		fieldContext := *ctx
+		fieldContext.bld = ScopeBuilder{Global: typeBuffer, Head: typeBuffer, Tail: typeBuffer, Body: typeBuffer}
+		if err := irType(&fieldContext, definition.Fields[fieldName]); err != nil {
+			return err
+		}
+		fields[i] = typeBuffer.String() + " zeroinitializer"
+	}
+	fields[dataField] = fmt.Sprintf("ptr @%s.data", variable.AbsName)
+	fields[countField] = fmt.Sprintf("i64 %d", length)
+	irWriteGlf(ctx, "@%s = private %s %s { %s }\n", variable.AbsName, descriptorKind, t.CoreTypeSlice.LLVMName(), strings.Join(fields, ", "))
 	return nil
+}
+
+func irConstArrayDef(ctx *IrCtx, def *t.NodeConstDef, array *t.NodeExprArray) error {
+	return irArrayGlobal(ctx, def.VarDef, array, "constant")
 }
 
 func irConstArrayInitializer(expr t.NodeExpr) (*t.NodeExprArray, bool) {
@@ -211,6 +288,13 @@ func irConstArrayInitializer(expr t.NodeExpr) (*t.NodeExprArray, bool) {
 
 func irConstDef(ctx *IrCtx, def *t.NodeConstDef) error {
 	irPrepareConstStrings(ctx, def.Initializer, map[t.NodeExpr]bool{})
+	if embedded, ok := def.Initializer.(*t.NodeExprEmbed); ok {
+		storageSize := embedded.Size
+		if storageSize == 0 {
+			storageSize = 1
+		}
+		irWriteGlf(ctx, "@%s = external constant [%d x i8]\n", embedded.Symbol, storageSize)
+	}
 	if array, ok := irConstArrayInitializer(def.Initializer); ok {
 		return irConstArrayDef(ctx, def, array)
 	}
@@ -320,6 +404,9 @@ func irVarDefAssign(ctx *IrCtx, vda *t.NodeExprVarDefAssign) (SsaName, error) {
 }
 
 func irExprStructInit(ctx *IrCtx, init *t.NodeExprStructInit) (SsaName, error) {
+	if init.UnionVariant != nil {
+		return irExprUnionInit(ctx, init)
+	}
 	current := SsaName{Repr: "zeroinitializer", IsLiteral: true}
 	for _, field := range init.Fields {
 		value, e := irExpression(ctx, field.FieldType, field.Expression, false)
@@ -347,6 +434,56 @@ func irExprStructInit(ctx *IrCtx, init *t.NodeExprStructInit) (SsaName, error) {
 		current = next
 	}
 	return current, nil
+}
+
+func irExprUnionInit(ctx *IrCtx, init *t.NodeExprStructInit) (SsaName, error) {
+	variant := init.UnionVariant
+	variantType := &t.NodeType{KindNode: &t.NodeTypeAbsolute{AbsoluteName: variant.Owner.Module + ".__union_" + variant.Owner.Name + "_" + variant.Name, DisplayName: variant.Owner.Name + "." + variant.Name}}
+	payload := SsaName{Repr: "zeroinitializer", IsLiteral: true}
+	for _, field := range init.Fields {
+		value, err := irExpression(ctx, field.FieldType, field.Expression, false)
+		if err != nil {
+			return SsaName{}, err
+		}
+		value, err = irCoerceNumeric(ctx, field.FieldType, field.Expression, value)
+		if err != nil {
+			return SsaName{}, err
+		}
+		next := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = insertvalue ", next.Repr)
+		if err := irType(ctx, variantType); err != nil {
+			return SsaName{}, err
+		}
+		irWrite(ctx, " ")
+		irPossibleLitSsa(ctx, payload)
+		irWrite(ctx, ", ")
+		if err := irType(ctx, field.FieldType); err != nil {
+			return SsaName{}, err
+		}
+		irWrite(ctx, " ")
+		irPossibleLitSsa(ctx, value)
+		irWritef(ctx, ", %d\n", field.FieldIndex)
+		payload = next
+	}
+	withTag := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = insertvalue ", withTag.Repr)
+	if err := irType(ctx, init.Type); err != nil {
+		return SsaName{}, err
+	}
+	irWritef(ctx, " zeroinitializer, i64 %d, 0\n", variant.Tag)
+	result := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = insertvalue ", result.Repr)
+	if err := irType(ctx, init.Type); err != nil {
+		return SsaName{}, err
+	}
+	irWritef(ctx, " %s, ", withTag.Repr)
+	if err := irType(ctx, variantType); err != nil {
+		return SsaName{}, err
+	}
+	irWrite(ctx, " ")
+	irPossibleLitSsa(ctx, payload)
+	irWritef(ctx, ", %d\n", variant.Tag+1)
+	return result, nil
 }
 
 func irExprProtoView(ctx *IrCtx, view *t.NodeExprProtoView) (SsaName, error) {

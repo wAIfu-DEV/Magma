@@ -1,9 +1,10 @@
 mod debug_alloc
 # Allocation tracking wrapper with leak inspection and invalid-free rejection.
 
-use "std:allocator" allocator
-use "std:errors" errors
-use "std:memory" memory
+use "std:allocator" as allocator
+use "std:errors" as errors
+use "std:memory" as memory
+use "std:cast" as cast
 
 const DEFAULT_CAPACITY u64 = 256
 
@@ -218,12 +219,12 @@ DebugAllocator.alloc(byteCount u64) !$u8*:
     ret try debugAlloc(this, byteCount)
 ..
 
-DebugAllocator.realloc(pointer u8*, byteCount u64) !$u8*:
-    ret try debugRealloc(this, pointer, byteCount)
+DebugAllocator.realloc(pointer ptr, byteCount u64) !$u8*:
+    ret try debugRealloc(this, cast.reinterpret[u8](pointer), byteCount)
 ..
 
-DebugAllocator.free(pointer u8*) void:
-    debugFree(this, pointer)
+DebugAllocator.free(pointer ptr) void:
+    debugFree(this, cast.reinterpret[u8](pointer))
 ..
 
 # Creates a debug allocator with explicit tracking behavior.

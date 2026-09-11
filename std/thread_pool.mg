@@ -1,23 +1,25 @@
 mod thread_pool
 # Dynamically sized worker pools for asynchronous tasks.
 
-use "std:allocator" alc
-use "std:cast" cast
-use "std:errors" errors
-use "std:executor" executor
-use "std:memory" mem
-use "std:mutex" mutex
-use "std:spinlock" spinlock
-use "std:thread" thread
-use "std:wake" wake
-use "std:cpu" cpu
-use "std:context" context_module
+use "std:allocator" as alc
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:executor" as executor
+use "std:memory" as mem
+use "std:mutex" as mutex
+use "std:spinlock" as spinlock
+use "std:thread" as thread
+use "std:wake" as wake
+use "std:cpu" as cpu
+use "std:context" as context_module
+use "std:checked" as checked
+use "std:llvm" as ll
 
 @platform("windows")
-use "std:win/generation_wait" generation_wait
+use "std:win/generation_wait" as generation_wait
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/generation_wait" generation_wait
+use "std:unix/generation_wait" as generation_wait
 
 Task(
     entry (ptr) u64
@@ -58,13 +60,8 @@ State(
     idle wake.Wake
 )
 
-# TODO: remove this, apparently doesn't work on some systems
 cpuPause() void:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  call void asm sideeffect \"pause\", \"~{memory}\"()\n"
-        llvm "  ret void\n"
-    ..
+    ll.pause()
 ..
 
 # Dynamically growing worker pool for independent pointer-context tasks.
@@ -110,7 +107,7 @@ spawnWorkerInto(state State*, index u64) !bool:
 ..
 
 taskAt(state State*, index u64) Task*:
-    ret cast.utop(cast.ptou(state.tasks) + (index * sizeof Task))
+    ret cast.reinterpret[Task](cast.utop(cast.ptou(state.tasks) + (index * sizeof Task)))
 ..
 
 # Doubles and linearizes a full queue. The caller holds state.lock. Allocation
@@ -123,11 +120,11 @@ growQueue(state State*) !bool:
         if state.capacity > maxU64 / 2:
             throw errors.wouldOverflow("thread pool queue capacity overflow")
         ..
-        newCapacity u64 = state.capacity * 2
+        newCapacity := try checked.uMul(state.capacity, 2)
         newTasks Task* = try state.allocator.allocT[Task](newCapacity)
         for i u64 = 0 to state.count:
             source u64 = (state.head + i) % state.capacity
-            destination Task* = cast.utop(cast.ptou(newTasks) + (i * sizeof Task))
+            destination Task* = cast.reinterpret[Task](cast.utop(cast.ptou(newTasks) + (i * sizeof Task)))
             *destination = *taskAt(state, source)
         ..
         state.allocator.free(state.tasks)
@@ -140,11 +137,11 @@ growQueue(state State*) !bool:
 ..
 
 workerAt(state State*, index u64) thread.Thread*:
-    ret cast.utop(cast.ptou(state.workers) + (index * sizeof thread.Thread))
+    ret cast.reinterpret[thread.Thread](cast.utop(cast.ptou(state.workers) + (index * sizeof thread.Thread)))
 ..
 
 workerContextAt(state State*, index u64) WorkerContext**:
-    ret cast.utop(cast.ptou(state.workerContexts) + (index * sizeof WorkerContext*))
+    ret cast.reinterpret[WorkerContext*](cast.utop(cast.ptou(state.workerContexts) + (index * sizeof WorkerContext*)))
 ..
 
 # Expands worker bookkeeping geometrically. Worker contexts are individually
@@ -176,13 +173,13 @@ growWorkerStorage(state State*) !bool:
     newStates u8* = try state.allocator.allocT[u8](newCapacity)
     onerror state.allocator.free(newStates)
 
-    mem.zero(newWorkers, newCapacity * sizeof thread.Thread)
-    mem.zero(newContexts, newCapacity * sizeof WorkerContext*)
+    mem.zero(newWorkers, try checked.byteCount[thread.Thread](newCapacity))
+    mem.zero(newContexts, try checked.byteCount[WorkerContext*](newCapacity))
     mem.zero(newStates, newCapacity)
 
     for i u64 = 0 to state.workerCapacity:
-        newWorker thread.Thread* = cast.utop(cast.ptou(newWorkers) + (i * sizeof thread.Thread))
-        newContext WorkerContext** = cast.utop(cast.ptou(newContexts) + (i * sizeof WorkerContext*))
+        newWorker thread.Thread* = cast.reinterpret[thread.Thread](cast.utop(cast.ptou(newWorkers) + (i * sizeof thread.Thread)))
+        newContext WorkerContext** = cast.reinterpret[WorkerContext*](cast.utop(cast.ptou(newContexts) + (i * sizeof WorkerContext*)))
         *newWorker = *workerAt(state, i)
         *newContext = *workerContextAt(state, i)
         newStates[i] = state.workerStates[i]
@@ -414,8 +411,8 @@ newConfigured(a alc.Allocator, minWorkers u64, maxWorkers u64, queueCapacity u64
     workerStates u8* = try a.allocT[u8](minWorkers)
     onerror a.free(workerStates)
 
-    mem.zero(workers, minWorkers * sizeof thread.Thread)
-    mem.zero(workerContexts, minWorkers * sizeof WorkerContext*)
+    mem.zero(workers, try checked.byteCount[thread.Thread](minWorkers))
+    mem.zero(workerContexts, try checked.byteCount[WorkerContext*](minWorkers))
     mem.zero(workerStates, minWorkers)
 
     lock := spinlock.new()
@@ -511,6 +508,7 @@ ThreadPool.submit(entry (ptr) u64, context ptr) !void:
         grown bool, growErr error = growQueue(state)
         throw growErr
     ..
+    nextPending := try checked.uAdd(state.pending, 1)
     # Queueing this task would consume more workers than are currently idle.
     # Grow by one, up to the configured maximum. Repeated submissions during a
     # burst therefore ramp the pool up without creating surplus threads.
@@ -522,7 +520,7 @@ ThreadPool.submit(entry (ptr) u64, context ptr) !void:
     *destination = Task(entry=entry, context=context, magmaContext=ctx)
     state.tail = (state.tail + 1) % state.capacity
     state.count = state.count + 1
-    state.pending = state.pending + 1
+    state.pending = nextPending
     shouldWake bool = state.sleepingWorkers > state.wakeReservations
     if shouldWake:
         state.wakeReservations = state.wakeReservations + 1

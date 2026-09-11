@@ -2,12 +2,13 @@ mod process_impl_unix
 # Unix child-process backend used by the portable process module.
 
 
-use "std:c" c
-use "std:heap" heap
-use "std:strings" strings
-use "std:slices" slices
-use "std:errors" errors
-use "std:cast" cast
+use "std:c" as c
+use "std:heap" as heap
+use "std:strings" as strings
+use "std:slices" as slices
+use "std:errors" as errors
+use "std:cast" as cast
+use "std:checked" as checked
 
 ext ext_unix_fork fork() c.int
 ext ext_unix_execvp execvp(file u8*, arguments ptr) c.int
@@ -67,7 +68,8 @@ pub spawn(executable str, arguments str[]) !$Process:
     ..
 
     a := heap.allocator()
-    argv u8** = try a.allocT[u8*](count + 2)
+    argvCount := try checked.uAdd(count, 2)
+    argv u8** = try a.allocT[u8*](argvCount)
     initialized u64 = 0
     onerror freeArguments(argv, initialized)
     executableCopy u8* = try strings.toCstr(executable)
@@ -105,7 +107,8 @@ pub spawnWithEnv(executable str, arguments str[], environment str[]) !$Process:
     ..
     a := heap.allocator()
     count := slices.count(arguments)
-    argv := try a.allocT[u8*](count + 2)
+    argvCount := try checked.uAdd(count, 2)
+    argv := try a.allocT[u8*](argvCount)
     initialized u64 = 0
     onerror freeArguments(argv, initialized)
     executableCopy := try strings.toCstr(executable)
@@ -117,7 +120,8 @@ pub spawnWithEnv(executable str, arguments str[], environment str[]) !$Process:
     ..
     argv[count + 1] = none
     environmentCount := slices.count(environment)
-    envp := try a.allocT[u8*](environmentCount + 1)
+    envpCount := try checked.uAdd(environmentCount, 1)
+    envp := try a.allocT[u8*](envpCount)
     envInitialized u64 = 0
     onerror freeArguments(envp, envInitialized)
     for i u64 = 0 to environmentCount:

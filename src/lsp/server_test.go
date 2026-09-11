@@ -243,7 +243,7 @@ func TestMemberFunctionDefinitionNavigation(t *testing.T) {
 func TestPrimitiveMethodDefinitionNavigation(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "main.mg")
-	source := "mod main\nuse \"std:allocator\" alc\nmain(a alc.Allocator) void:\n    text str = \"value\"\n    text.free(a)\n..\n"
+	source := "mod main\nuse \"std:allocator\" alc\nmain(a alc.Allocator) void:\n    text str = \"value\"\n    text.free()\n..\n"
 	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -251,6 +251,10 @@ func TestPrimitiveMethodDefinitionNavigation(t *testing.T) {
 	definition, ok := result.definition(position{Line: 4, Character: 9})
 	if !ok || !strings.HasSuffix(definition.URI, "/core.mg") {
 		t.Fatalf("primitive method definition = %#v, %v", definition, ok)
+	}
+	hover := result.hover(position{Line: 4, Character: 9})
+	if !strings.Contains(hover, "destr str.free() void") || !strings.Contains(hover, "embedded") || !strings.Contains(hover, "allocator") || strings.Contains(hover, "free(a") {
+		t.Fatalf("primitive string destructor hover is stale: %q", hover)
 	}
 }
 
@@ -989,7 +993,7 @@ func TestParseDocumentation(t *testing.T) {
 # @returns nothing
 pub free(a Allocator, s $str) void:
     # This body comment must not become documentation.
-    s.free(a)
+    s.free()
 ..
 `
 	byLine, module := parseDocumentation(source)
@@ -1091,4 +1095,28 @@ func TestTagConsumesLinesUntilNextTag(t *testing.T) {
 
 func name(value string) *types.NodeNameSingle {
 	return &types.NodeNameSingle{Name: value}
+}
+
+func TestUnionDocumentationAndCompletions(t *testing.T) {
+	unionTk := types.Token{Type: types.TokName, Repr: "Value", Pos: types.FilePos{Line: 2, Col: 7}}
+	variantTk := types.Token{Type: types.TokName, Repr: "String", Pos: types.FilePos{Line: 3, Col: 5}}
+	def := &types.UnionDef{Module: "main", Name: "Value", IsPublic: true}
+	def.Variants = []*types.UnionVariant{{Name: "String", Tk: variantTk, Owner: def, Fields: []types.NodeArg{{Name: "value", TypeNode: &types.NodeType{KindNode: &types.NodeTypeNamed{NameNode: name("str")}}}}}}
+	global := &types.NodeGlobal{Declarations: []types.NodeGlobalDecl{&types.NodeUnionDef{Tk: unionTk, Def: def}}, UnionDefs: map[string]*types.UnionDef{"Value": def}}
+	file := &types.FileCtx{FilePath: "/tmp/union.mg", PackageName: "main", ModuleName: "main", Content: []byte("mod main\n# JSON value.\npub union Value(\n    String(value str)\n)\n"), GlNode: global}
+	index := buildDocIndex(&types.SharedState{Files: map[string]*types.FileCtx{"union.mg": file}})
+	if items := index.typeCompletions("main", "Val", false, false); len(items) != 1 || items[0].Label != "Value" {
+		t.Fatalf("type completions = %#v", items)
+	}
+	variants := index.memberCompletions("main", "Value", "")
+	if len(variants) != 1 || variants[0].Label != "String" {
+		t.Fatalf("variant completions = %#v", variants)
+	}
+	fields := index.memberCompletions("main", "Value.String", "")
+	if len(fields) != 1 || fields[0].Label != "value" {
+		t.Fatalf("narrowed fields = %#v", fields)
+	}
+	if !strings.Contains(index.hoverSymbols["main\x00Value.String"], "value str") {
+		t.Fatalf("variant hover = %q", index.hoverSymbols["main\x00Value.String"])
+	}
 }

@@ -25,8 +25,17 @@ func Run(shared *t.SharedState) error {
 		queuedVar:          map[*t.NodeExprVarDef]bool{},
 	}
 
+	moduleFiles := make(map[string]*t.FileCtx, len(shared.Files))
 	for _, f := range shared.Files {
-		ctx.modules[f.PackageName] = f.GlNode
+		if f == nil || f.GlNode == nil {
+			continue
+		}
+		previous := moduleFiles[f.PackageName]
+		if previous == nil || (previous.InterfaceOnly && !f.InterfaceOnly) ||
+			(previous.InterfaceOnly == f.InterfaceOnly && f.FilePath < previous.FilePath) {
+			moduleFiles[f.PackageName] = f
+			ctx.modules[f.PackageName] = f.GlNode
+		}
 	}
 
 	for module, gl := range ctx.modules {

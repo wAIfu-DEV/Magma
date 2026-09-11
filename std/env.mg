@@ -1,14 +1,14 @@
 mod env
 # Portable access to the process environment.
 
-use "std:allocator" allocator
-use "std:list" list
+use "std:allocator" as allocator
+use "std:list" as list
 
 @platform("windows")
-use "std:win/env_impl" impl
+use "std:win/env_impl" as impl
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/env_impl" impl
+use "std:unix/env_impl" as impl
 
 pub get(name str) !$str:
     a := ctx.alloc

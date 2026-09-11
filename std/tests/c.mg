@@ -1,6 +1,6 @@
 mod main
 
-use "std:c" c
+use "std:c" as c
 
 main() void:
     value c.int = 42

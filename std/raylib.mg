@@ -4,7 +4,7 @@ mod raylib
 # libraries remain runtime dependencies of the generated executable.
 
 
-use "std:c" c
+use "std:c" as c
 @platform("windows")
 link "vendor/raylib/win/raylib.lib"
 @platform("windows")
@@ -40,9 +40,9 @@ link "framework:IOKit"
 @platform("darwin")
 link "framework:OpenGL"
 
-use "std:allocator" alc
-use "std:strings"   strings
-use "std:cast"      cast
+use "std:allocator" as alc
+use "std:strings"   as strings
+use "std:cast"      as cast
 
 # ABI-safe public value types. Color is packed to a u32 before crossing the C
 # boundary because Win64 passes this four-byte C struct as an integer value.

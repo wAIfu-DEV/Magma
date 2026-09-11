@@ -1,20 +1,20 @@
 mod net_dns
 # Parameterized, thread-safe DNS resolver with bounded positive and negative caching.
 
-use "std:allocator" allocator
-use "std:errors" errors
-use "std:memory" memory
-use "std:mutex" mutex
-use "std:slices" slices
-use "std:strings" strings
-use "std:time" time
-use "std:net/address" address
+use "std:allocator" as allocator
+use "std:errors" as errors
+use "std:memory" as memory
+use "std:mutex" as mutex
+use "std:slices" as slices
+use "std:strings" as strings
+use "std:time" as time
+use "std:net/address" as address
 
 @platform("windows")
-use "std:win/net/dns_impl" impl
+use "std:win/net/dns_impl" as impl
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/net/dns_impl" impl
+use "std:unix/net/dns_impl" as impl
 
 pub Options(
     capacity u64
@@ -103,8 +103,8 @@ clearEntry(resolver Resolver*, entry Entry*) void:
     # zeroing prevents any second cleanup.
     unsafe:
     if entry.occupied:
-        entry.host.free(resolver.allocator)
-        entry.service.free(resolver.allocator)
+        entry.host.free()
+        entry.service.free()
         if entry.endpoints != none:
             resolver.allocator.free(entry.endpoints)
         ..
@@ -184,7 +184,7 @@ Resolver.resolveTo(host str, service str, family u8, output address.Endpoint[]) 
     ..
     ownedService str, serviceError error = strings.copy(service)
     if serviceError.nok():
-        ownedHost.free(this.allocator)
+        ownedHost.free()
         try this.lock.unlock()
         if resolved != none:
             this.allocator.free(resolved)

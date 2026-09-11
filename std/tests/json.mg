@@ -1,17 +1,17 @@
 mod main
 
-use "std:allocator" allocator
-use "std:builder" builder
-use "std:cast" cast
-use "std:context" context
-use "std:debug_alloc" debug_alloc
-use "std:errors" errors
-use "std:heap" heap
-use "std:json" json
-use "std:memory" memory
-use "std:slices" slices
-use "std:strings" strings
-use "std:writer" writer
+use "std:allocator" as allocator
+use "std:builder" as builder
+use "std:cast" as cast
+use "std:context" as context
+use "std:debug_alloc" as debug_alloc
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:json" as json
+use "std:memory" as memory
+use "std:slices" as slices
+use "std:strings" as strings
+use "std:writer" as writer
 
 Capture impl writer.Writer(
     data u8*
@@ -174,7 +174,7 @@ pub main() !void:
     ..
 
     escaped := try render(arrayValue, 2)
-    defer escaped.free(a)
+    defer escaped.free()
     escapedLength := escaped.countBytes()
     if escapedLength != 21:
         throw errors.failure("JSON escaped output has the wrong length")
@@ -215,7 +215,7 @@ pub main() !void:
     try object.set("items", move arrayValue)
     try object.set("nested", move nestedValue)
     encoded := try render(objectValue, 2)
-    defer encoded.free(a)
+    defer encoded.free()
     encodedLength := encoded.countBytes()
     if encodedLength < 2 || strings.byteAt(encoded, 0) != 123 || strings.byteAt(encoded, encodedLength - 1) != 125:
         throw errors.failure("JSON nested object serialization changed")
@@ -238,7 +238,7 @@ pub main() !void:
     ..
     try cleanup.append(move copiedBorrowed)
     transferredText := try strings.copy("transferred")
-    transferredText.free(a)
+    transferredText.free()
     try cleanup.append(try json.string("transferred"))
 
     childValue := try json.array()
@@ -280,11 +280,11 @@ pub main() !void:
     ..
     parsedEncoding := try render(parsed, 2)
     if strings.byteAt(parsedEncoding, 0) != 123 || strings.byteAt(parsedEncoding, parsedEncoding.countBytes() - 1) != 125:
-        parsedEncoding.free(a)
+        parsedEncoding.free()
         parsed.free()
         throw errors.failure("parsed JSON serialization changed")
     ..
-    parsedEncoding.free(a)
+    parsedEncoding.free()
     parsed.free()
 
     scalar := try json.parse("\"root\\nstring\"")
@@ -393,11 +393,11 @@ break\""
     deepest := try nestedJson(128)
     deepestValue := try json.parse(deepest)
     deepestValue.free()
-    deepest.free(a)
+    deepest.free()
 
     tooDeep := try nestedJson(129)
     try expectInvalid(tooDeep)
-    tooDeep.free(a)
+    tooDeep.free()
 
     try testParserCleanup()
 

@@ -160,7 +160,7 @@ func irTypeKind(ctx *IrCtx, typeKind t.NodeTypeKind) error {
 	}
 	switch tn := typeKind.(type) {
 	case *t.NodeTypeSlice:
-		irWrite(ctx, "%type.slice")
+		irWrite(ctx, t.CoreTypeSlice.LLVMName())
 		return nil
 	case *t.NodeTypePointer:
 		irWrite(ctx, "ptr")
@@ -187,6 +187,21 @@ func irTypeKind(ctx *IrCtx, typeKind t.NodeTypeKind) error {
 
 		return fmt.Errorf("LLVM type emission: unresolved named type")
 	case *t.NodeTypeAbsolute:
+		if tn.CoreRole != t.CoreTypeNone {
+			irWrite(ctx, tn.CoreRole.LLVMName())
+			return nil
+		}
+		for _, file := range ctx.Shared.Files {
+			if file.GlNode == nil {
+				continue
+			}
+			for _, definition := range file.GlNode.StructDefs {
+				if definition.CoreRole != t.CoreTypeNone && definition.Module+"."+definition.Name == tn.AbsoluteName {
+					irWrite(ctx, definition.CoreRole.LLVMName())
+					return nil
+				}
+			}
+		}
 		irWritef(ctx, "%%struct.%s", tn.AbsoluteName)
 		return nil
 	}
@@ -199,12 +214,12 @@ func irThrowingType(ctx *IrCtx, typeNode *t.NodeType) error {
 	}
 
 	if isVoidType(typeNode) && typeNode.Throws {
-		irWrite(ctx, "{ %type.error }")
+		irWritef(ctx, "{ %s }", t.CoreTypeError.LLVMName())
 		return nil
 	}
 
 	if typeNode.Throws {
-		irWrite(ctx, "{ %type.error, ")
+		irWritef(ctx, "{ %s, ", t.CoreTypeError.LLVMName())
 	}
 
 	e := irTypeKind(ctx, typeNode.KindNode)

@@ -1,12 +1,12 @@
 mod main
 # Linux benchmark: one eventfd write per interrupt versus wake coalescing.
 
-use "std:c" c
-use "std:errors" errors
-use "std:heap" heap
-use "std:io" io
-use "std:net/poll" poll
-use "std:time" time
+use "std:c" as c
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:io" as io
+use "std:net/poll" as poll
+use "std:time" as time
 
 ext ext_eventfd eventfd(initialValue c.unsigned_int, flags c.int) c.int
 ext ext_write write(fd c.int, buffer ptr, count u64) i64

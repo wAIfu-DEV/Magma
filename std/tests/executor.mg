@@ -1,10 +1,10 @@
 mod main
 
-use "std:allocator" allocator
-use "std:errors" errors
-use "std:executor" executor
-use "std:heap" heap
-use "std:thread_pool" thread_pool
+use "std:allocator" as allocator
+use "std:errors" as errors
+use "std:executor" as executor
+use "std:heap" as heap
+use "std:thread_pool" as thread_pool
 
 increment(value u64*) u64:
     *value = *value + 1

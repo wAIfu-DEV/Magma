@@ -8,7 +8,7 @@ The unsuffixed `u` and `i` families operate on Magma's default `u64` and `i64`
 integers. Wide operations carry an explicit `u128` or `i128` prefix:
 
 ```magma
-use "std:checked" checked
+use "std:checked" as checked
 
 bytes := try checked.uMul(count, sizeof Item)
 next := try checked.iAdd(current, delta)

@@ -1,8 +1,8 @@
 mod main
 
-use "std:errors" errors
-use "std:wake" wake
-use "std:footgun" footgun
+use "std:errors" as errors
+use "std:wake" as wake
+use "std:footgun" as footgun
 
 check(strategy u8) !void:
     signal := try wake.new(strategy)

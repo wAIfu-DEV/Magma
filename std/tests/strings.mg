@@ -1,12 +1,25 @@
 mod main
-use "std:allocator" allocator
-use "std:errors" errors
-use "std:heap" heap
-use "std:strings" strings
+use "std:allocator" as allocator
+use "std:debug_alloc" as debug_alloc
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:strings" as strings
 pub main() !void:
     a allocator.Allocator = heap.allocator()
+
+    debug := try debug_alloc.newDefault(a)
+    ctx.alloc = debug.allocator()
+    provenance := try strings.copy("allocator provenance")
+    ctx.alloc = a
+    provenance.free()
+    if debug.leakCount() != 0 || debug.stats().freeCalls != 1:
+        debug.destroy()
+        throw errors.failure("string did not retain its originating allocator")
+    ..
+    debug.destroy()
+
     copy := try strings.copy("magma")
-    defer copy.free(a)
+    defer copy.free()
     if copy.countBytes() != 5 || strings.compare(copy, "magma") == false:
         throw errors.failure("strings behavior changed")
     ..
@@ -21,7 +34,7 @@ pub main() !void:
         ..
     ..
     empty := try strings.alloc(0)
-    defer empty.free(a)
+    defer empty.free()
     emptyPtr u8* = strings.toPtr(empty)
     # SAFETY: strings.alloc always returns a terminated allocation.
     unsafe:
@@ -30,7 +43,7 @@ pub main() !void:
         ..
     ..
     filled := try strings.allocFill(3, 65)
-    defer filled.free(a)
+    defer filled.free()
     filledPtr u8* = strings.toPtr(filled)
     # SAFETY: allocFill appends a terminator after the requested payload.
     unsafe:
@@ -68,13 +81,13 @@ pub main() !void:
         throw errors.failure("toCstrNoCopy did not return the borrowed pointer")
     ..
     copiedFromPtr := try strings.fromPtr(unterminated, 5)
-    defer copiedFromPtr.free(a)
+    defer copiedFromPtr.free()
     if copiedFromPtr.countBytes() != 5 || strings.toPtr(copiedFromPtr) == unterminated:
         throw errors.failure("fromPtr did not copy its input")
     ..
     borrowedCstr := strings.fromCstrNoCopy(cstr)
     ownedCstr := try strings.fromCstr(cstr)
-    defer ownedCstr.free(a)
+    defer ownedCstr.free()
     if strings.compare(borrowedCstr, "magma") == false || strings.compare(ownedCstr, "magma") == false:
         throw errors.failure("C string conversion changed")
     ..
@@ -83,16 +96,16 @@ pub main() !void:
         throw errors.failure("string find changed")
     ..
     sub := try strings.substring("magma", 1, 4)
-    defer sub.free(a)
+    defer sub.free()
     if strings.compare(sub, "agm") == false:
         throw errors.failure("substring changed")
     ..
     trimmed := try strings.trim(" \t magma \r\n")
-    defer trimmed.free(a)
+    defer trimmed.free()
     withoutPrefix := try strings.trimPrefix("std:strings", "std:")
-    defer withoutPrefix.free(a)
+    defer withoutPrefix.free()
     withoutSuffix := try strings.trimSuffix("file.mg", ".mg")
-    defer withoutSuffix.free(a)
+    defer withoutSuffix.free()
     if strings.compare(trimmed, "magma") == false || strings.compare(withoutPrefix, "strings") == false || strings.compare(withoutSuffix, "file") == false:
         throw errors.failure("string trimming changed")
     ..
@@ -107,8 +120,8 @@ pub main() !void:
     defer:
         # SAFETY: splitOnce returns two uniquely owned string fields.
         unsafe:
-            splitPair.first.free(a)
-            splitPair.second.free(a)
+            splitPair.first.free()
+            splitPair.second.free()
         ..
     ..
     if strings.compare(splitPair.first, "left") == false || strings.compare(splitPair.second, "right") == false:
@@ -118,11 +131,11 @@ pub main() !void:
     splitIterator := try strings.splitIter("a,b,c", ",")
     defer splitIterator.free()
     iterFirst := try splitIterator.next()
-    defer iterFirst.free(a)
+    defer iterFirst.free()
     iterSecond := try splitIterator.next()
-    defer iterSecond.free(a)
+    defer iterSecond.free()
     iterThird := try splitIterator.next()
-    defer iterThird.free(a)
+    defer iterThird.free()
     if splitIterator.hasData() || strings.compare(iterFirst, "a") == false || strings.compare(iterSecond, "b") == false || strings.compare(iterThird, "c") == false:
         throw errors.failure("split iterator changed")
     ..

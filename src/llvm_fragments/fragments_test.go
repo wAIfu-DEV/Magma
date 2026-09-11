@@ -5,24 +5,14 @@ import (
 	"testing"
 )
 
-func TestRenderUtilsConfiguresTraceRing(t *testing.T) {
+func TestRenderUtilsLeavesTraceToMagmaCore(t *testing.T) {
 	ir, err := RenderUtils(1024)
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(ir)
-	for _, want := range []string{
-		"%type.error.trace.arena = type { [1024 x %type.error.trace.node], [0 x i8] }",
-		"and i64 %ticket, 1023",
-		"%handle = trunc i64 %encoded to i16",
-		"%reserved = icmp eq i16 %handle, 0",
-		"%at.limit = icmp uge i64 %next.count, 1024",
-		"select i1 %invalid, i64 4294967296",
-		"--error-trace-slots=1024",
-	} {
-		if !strings.Contains(text, want) {
-			t.Errorf("rendered runtime does not contain %q", want)
-		}
+	if strings.Contains(text, "magma.error.trace") || strings.Contains(text, "magma.error.push") {
+		t.Fatal("legacy LLVM trace implementation remains in utils fragment")
 	}
 	if strings.Contains(text, "{{TRACE_") {
 		t.Fatal("rendered runtime still contains a template token")
@@ -36,12 +26,6 @@ func TestRuntimeDefinitionsHaveInternalLinkage(t *testing.T) {
 	}
 	text := string(ir)
 	for _, name := range []string{
-		"magma.string.equal",
-		"magma.error.trace.capacity",
-		"magma.error.push",
-		"magma.error.trace",
-		"magma.error.printTrace",
-		"magma.error.print",
 		"magma.argsToSlice",
 	} {
 		internal := false

@@ -1,7 +1,7 @@
 mod main
-use "std:allocator" allocator
-use "std:heap" heap
-use "std:io" io
+use "std:allocator" as allocator
+use "std:heap" as heap
+use "std:io" as io
 pub main() !void:
     a allocator.Allocator = heap.allocator()
     rawOutput := io.stdoutUnbuffered()

@@ -3,9 +3,9 @@ mod sha1
 # WebSocket opening handshake. Do not use SHA-1 for signatures or new
 # cryptographic designs.
 
-use "std:cast" cast
-use "std:errors" errors
-use "std:slices" slices
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:slices" as slices
 
 pub const DIGEST_BYTES u64 = 20
 
@@ -85,7 +85,7 @@ pub sum(input u8[]) !$u8[]:
     offset u64 = 0
     loop offset + 64 <= count:
         block u8[] = slices.fromPtr(cast.reinterpret[u8](cast.utop(cast.ptou(slices.toPtr(input)) + offset)), 64)
-        processBlock(block, slices.toPtr(state))
+        processBlock(block, cast.reinterpret[u32](slices.toPtr(state)))
         offset = offset + 64
     ..
 
@@ -110,10 +110,10 @@ pub sum(input u8[]) !$u8[]:
         ..
     ..
     first u8[] = slices.fromPtr(slices.toPtr(tail), 64)
-    processBlock(first, slices.toPtr(state))
+    processBlock(first, cast.reinterpret[u32](slices.toPtr(state)))
     if padded == 128:
         second u8[] = slices.fromPtr(cast.reinterpret[u8](cast.utop(cast.ptou(slices.toPtr(tail)) + 64)), 64)
-        processBlock(second, slices.toPtr(state))
+        processBlock(second, cast.reinterpret[u32](slices.toPtr(state)))
     ..
 
     for i u64 = 0 to 5:

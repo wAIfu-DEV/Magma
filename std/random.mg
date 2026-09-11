@@ -1,16 +1,16 @@
 mod random
 # Deterministic pseudo-random values and operating-system randomness.
 
-use "std:slices" slices
+use "std:slices" as slices
 
 @platform("linux", "android")
-use "std:linux/random_impl" impl
+use "std:linux/random_impl" as impl
 
 @platform("windows")
-use "std:win/random_impl" impl
+use "std:win/random_impl" as impl
 
 @platform("ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/random_impl" impl
+use "std:unix/random_impl" as impl
 
 # Stateful deterministic pseudo-random number generator.
 pub Random(

@@ -53,6 +53,8 @@ func expressionToken(expr t.NodeExpr) *t.Token {
 		return &n.Tk
 	case *t.NodeExprLit:
 		return &n.Tk
+	case *t.NodeExprEmbed:
+		return &n.Tk
 	case *t.NodeExprArray:
 		return &n.Tk
 	case *t.NodeExprName:
@@ -82,6 +84,8 @@ func expressionToken(expr t.NodeExpr) *t.Token {
 	case *t.NodeExprAddrof:
 		return &n.Tk
 	case *t.NodeExprMove:
+		return &n.Tk
+	case *t.NodeExprLlvm:
 		return &n.Tk
 	case *t.NodeExprDestructureAssign:
 		return expressionToken(n.Call)
@@ -119,9 +123,52 @@ type monoCtx struct {
 	queuedFunc   map[*t.NodeFuncDef]bool
 	queuedVar    map[*t.NodeExprVarDef]bool
 
-	structQueue []structWorkItem
-	funcQueue   []*t.NodeFuncDef
-	varQueue    []*t.NodeExprVarDef
+	structQueue   []structWorkItem
+	funcQueue     []*t.NodeFuncDef
+	varQueue      []*t.NodeExprVarDef
+	instanceCount int
+}
+
+const maxGenericInstances = 10000
+
+func (m *monoCtx) reserveInstance() error {
+	if m.instanceCount >= maxGenericInstances {
+		return fmt.Errorf("generic specialization did not reach a fixed point after %d concrete instances", maxGenericInstances)
+	}
+	m.instanceCount++
+	return nil
+}
+
+func (m *monoCtx) ensureProvider(module string) error {
+	if !m.interfaceOnlyModule(module) {
+		return nil
+	}
+	if m.shared.GenericProviderLoader == nil {
+		return fmt.Errorf("incremental generic specialization of %s requires provider source", module)
+	}
+	file, err := m.shared.GenericProviderLoader(module)
+	if err != nil {
+		return err
+	}
+	if file == nil || file.GlNode == nil {
+		return fmt.Errorf("generic provider %s returned no declarations", module)
+	}
+	m.modules[module] = file.GlNode
+	for name, definition := range file.GlNode.StructDefs {
+		if len(definition.TypeParams) == 0 {
+			continue
+		}
+		for _, declaration := range file.GlNode.Declarations {
+			if node, ok := declaration.(*t.NodeStructDef); ok && flattenName(node.Class.NameNode) == name {
+				m.structTemplates[makeTemplateKey(module, name)] = node
+				break
+			}
+		}
+	}
+	for name, function := range file.GlNode.FuncDefs {
+		m.registerFuncTemplate(module, name, function)
+	}
+	return nil
 }
 
 type structWorkItem struct {

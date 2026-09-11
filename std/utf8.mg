@@ -3,13 +3,13 @@ mod utf8
 
 # TODO: rewrite magic numbers using 0x notation
 
-use "std:errors"    errors
-use "std:strings"   strings
-use "std:slices"    slices
-use "std:cast"      cast
-use "std:allocator" alc
-use "std:unicode"   unicode
-use "std:checked"   checked
+use "std:errors"    as errors
+use "std:strings"   as strings
+use "std:slices"    as slices
+use "std:cast"      as cast
+use "std:allocator" as alc
+use "std:unicode"   as unicode
+use "std:checked"   as checked
 
 # Iterator over a UTF-8 byte range.
 # @complexity O(1) for iterator operations.
@@ -153,7 +153,7 @@ decodeOnce(it Utf8Iterator*) !Codepoint:
     if it.start == none || it.end == none:
         throw errors.invalidArgument("Utf8Iterator was not correctly initialized, use utf8.iterator")
     ..
-    cp Codepoint = decodeFirst(it.start, it.end)
+    cp Codepoint = decodeFirst(cast.reinterpret[u8](it.start), cast.reinterpret[u8](it.end))
     if cp.width == 0:
         throw errors.failure("failed to decode utf8 codepoint")
     ..
@@ -297,8 +297,8 @@ pub decode(bytes u8[]) !Codepoint:
     if count == 0:
         throw errors.failure("cannot decode empty UTF-8 input")
     ..
-    start u8* = slices.toPtr(bytes)
-    end u8* = cast.utop(cast.ptou(start) + count)
+    start u8* = cast.reinterpret[u8](slices.toPtr(bytes))
+    end u8* = cast.reinterpret[u8](cast.utop(cast.ptou(start) + count))
     cp := decodeFirst(start, end)
     if cp.width == 0:
         throw errors.failure("invalid UTF-8 sequence")
@@ -489,7 +489,7 @@ pub encode(cp u32, output u8[]) !u64:
     if slices.count(output) < needed:
         throw errors.invalidArgument("UTF-8 output buffer is too small")
     ..
-    ret try encodeUtf8(cp, slices.toPtr(output))
+    ret try encodeUtf8(cp, cast.reinterpret[u8](slices.toPtr(output)))
 ..
 
 # Returns the number of UTF-8 bytes needed to encode a UTF-16 slice.
@@ -629,7 +629,7 @@ pub utf16to8(in u16[]) !$str:
     ..
 
     result str = try strings.alloc(outSize)
-    onerror result.free(a)
+    onerror result.free()
     
     outPtr u8* = strings.toPtr(result)
     writePtr u8* = outPtr
@@ -637,7 +637,7 @@ pub utf16to8(in u16[]) !$str:
 
     loop i < n:
         writeSize u64 = try utf16to8iter(in, writePtr, addrof i, n)
-        writePtr = cast.utop(cast.ptou(writePtr) + writeSize)
+        writePtr = cast.reinterpret[u8](cast.utop(cast.ptou(writePtr) + writeSize))
     ..
 
     ret move result

@@ -1,7 +1,7 @@
 mod main
-use "std:errors" errors
-use "std:random" random
-use "std:slices" slices
+use "std:errors" as errors
+use "std:random" as random
+use "std:slices" as slices
 pub main() !void:
     first := random.new(123)
     second := random.new(123)

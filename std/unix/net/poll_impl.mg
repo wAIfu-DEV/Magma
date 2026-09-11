@@ -1,11 +1,12 @@
 mod net_poll_impl_posix
 # POSIX poll fallback for systems without the Linux epoll backend.
 
-use "std:c" c
-use "std:allocator" allocator
-use "std:cast" cast
-use "std:errors" errors
-use "std:atomic" atomic
+use "std:c" as c
+use "std:allocator" as allocator
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:atomic" as atomic
+use "std:checked" as checked
 
 PollFd(fd i32, events i16, returned i16)
 Entry(token u64)
@@ -20,9 +21,10 @@ ext ext_close close(fd i32) i32
 
 pub new(capacity u64) !$Poller:
     a := ctx.alloc
-    descriptors PollFd* = try a.allocT[PollFd](capacity + 1)
+    storageCapacity := try checked.uAdd(capacity, 1)
+    descriptors PollFd* = try a.allocT[PollFd](storageCapacity)
     onerror a.free(descriptors)
-    entries Entry* = try a.allocT[Entry](capacity + 1)
+    entries Entry* = try a.allocT[Entry](storageCapacity)
     onerror a.free(entries)
     decoded NativeEvent* = try a.allocT[NativeEvent](capacity)
     onerror a.free(decoded)

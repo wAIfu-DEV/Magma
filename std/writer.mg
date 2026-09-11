@@ -1,10 +1,10 @@
 mod writer
 # Type-erased byte output with complete-write and primitive formatting helpers.
 
-use "std:strings" strings
-use "std:slices"  slices
-use "std:cast"    cast
-use "std:errors"  errors
+use "std:strings" as strings
+use "std:slices"  as slices
+use "std:cast"    as cast
+use "std:errors"  as errors
 
 # Writer interface for emitting bytes and formatted values.
 # @complexity O(1) wrapper calls; underlying writer decides cost.
@@ -252,9 +252,11 @@ Writer.writeUint64(num u64) !u64:
 Writer.writeFloat64(flt f64, precision u64) !u64:
     # bitcast and read bits as u64
 
-    fltAddr ptr = addrof flt
-    addrAsU64 u64* = fltAddr
-    bits u64 = *addrAsU64
+    bits u64
+    unsafe:
+        addrAsU64 u64* = addrof flt
+        bits = *addrAsU64
+    ..
 
     EXP_MASK  u64 = 0x7FF0000000000000
     FRAC_MASK u64 = 0x000FFFFFFFFFFFFF

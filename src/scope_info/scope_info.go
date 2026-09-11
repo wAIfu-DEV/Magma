@@ -231,6 +231,28 @@ func bldBody(ctx *lcx, bdy *t.NodeBody, makeScope bool) error {
 				}
 			}
 
+		case *t.NodeStmtMatch:
+			for _, arm := range n.Cases {
+				scope := &t.Scope{Parent: ctx.CurrScope, DeclVars: map[string]*t.NodeExprVarDef{}, DeclFuncs: map[string]t.FnScope{}, DeclStructs: map[string]*t.NodeStructDef{}}
+				arm.Body.Scope = scope
+				previous := ctx.CurrScope
+				ctx.CurrScope = scope
+				arm.Binding.Storage = t.VariableStorageLocal
+				if e := declVarInStack(ctx, arm.Binding); e != nil {
+					ctx.CurrScope = previous
+					return e
+				}
+				e := bldBody(ctx, &arm.Body, false)
+				ctx.CurrScope = previous
+				if e != nil {
+					return e
+				}
+			}
+			if n.ElseBody != nil {
+				if e := bldBody(ctx, n.ElseBody, true); e != nil {
+					return e
+				}
+			}
 		case *t.NodeStmtWhile:
 			e := bldBody(ctx, &n.Body, true)
 			if e != nil {

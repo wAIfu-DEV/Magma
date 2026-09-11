@@ -1,24 +1,25 @@
 mod websocket
 # Blocking RFC 6455 client over TCP or TLS.
 
-use "std:allocator" allocator
-use "std:base64" base64
-use "std:builder" builder
-use "std:cast" cast
-use "std:errors" errors
-use "std:memory" memory
-use "std:random" random
-use "std:reader" reader
-use "std:sha1" sha1
-use "std:slices" slices
-use "std:strconv" strconv
-use "std:strings" strings
-use "std:utf8" utf8
-use "std:writer" writer
-use "std:net/address" address
-use "std:net/dns" dns
-use "std:net/socket" socket
-use "std:footgun" fg
+use "std:allocator" as allocator
+use "std:base64" as base64
+use "std:builder" as builder
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:memory" as memory
+use "std:random" as random
+use "std:reader" as reader
+use "std:sha1" as sha1
+use "std:slices" as slices
+use "std:strconv" as strconv
+use "std:strings" as strings
+use "std:utf8" as utf8
+use "std:writer" as writer
+use "std:net/address" as address
+use "std:net/dns" as dns
+use "std:net/socket" as socket
+use "std:footgun" as fg
+use "std:checked" as checked
 
 pub const MESSAGE_TEXT u8 = 1
 pub const MESSAGE_BINARY u8 = 2
@@ -115,11 +116,11 @@ parseUrl(url str) !$ParsedUrl:
         hostEnd = colon
     ..
     host := try strings.substring(url, authorityStart, hostEnd)
-    onerror host.free(a)
+    onerror host.free()
     service str
     if colon < authorityEnd:
         service = try strings.substring(url, colon + 1, authorityEnd)
-        onerror service.free(a)
+        onerror service.free()
         port := try strconv.parseUint(service)
         if port == 0 || port > 65535:
             throw errors.invalidArgument("WebSocket port is out of range")
@@ -129,12 +130,13 @@ parseUrl(url str) !$ParsedUrl:
     else:
         service = try strings.copy("80")
     ..
-    onerror service.free(a)
+    onerror service.free()
     target str
     if authorityEnd == n:
         target = try strings.copy("/")
     elif strings.byteAt(url, authorityEnd) == 63:
-        prefix := try builder.newWithCapacity(n - authorityEnd + 1)
+        prefixCapacity := try checked.uAdd(n - authorityEnd, 1)
+        prefix := try builder.newWithCapacity(prefixCapacity)
         defer prefix.free()
         try prefix.appendBorrowed("/")
         suffix := try strings.substring(url, authorityEnd, n)
@@ -147,9 +149,9 @@ parseUrl(url str) !$ParsedUrl:
 ..
 
 destr ParsedUrl.free() void:
-    this.host.free(ctx.alloc)
-    this.service.free(ctx.alloc)
-    this.target.free(ctx.alloc)
+    this.host.free()
+    this.service.free()
+    this.target.free()
 ..
 
 Client.sendRaw(bytes str) !u64:
@@ -190,7 +192,7 @@ Client.readExact(buffer u8[], count u64) !void:
 makeKey() !$str:
     a := ctx.alloc
     nonce := try strings.alloc(16)
-    defer nonce.free(a)
+    defer nonce.free()
     view u8[] = slices.fromPtr(strings.toPtr(nonce), 16)
     try random.bytesTo(view)
     encoded := try base64.encode(view)
@@ -199,12 +201,13 @@ makeKey() !$str:
 
 acceptFor(key str) !$str:
     a := ctx.alloc
-    joined := try builder.newWithCapacity(key.countBytes() + ACCEPT_GUID.countBytes())
+    joinedCapacity := try checked.uAdd(key.countBytes(), ACCEPT_GUID.countBytes())
+    joined := try builder.newWithCapacity(joinedCapacity)
     defer joined.free()
     try joined.appendBorrowed(key)
     try joined.appendBorrowed(ACCEPT_GUID)
     source := try joined.build()
-    defer source.free(a)
+    defer source.free()
     input u8[] = slices.fromPtr(strings.toPtr(source), source.countBytes())
     output u8[] = try sha1.sum(input)
     defer slices.free(output)
@@ -284,7 +287,7 @@ containsToken(value str, wanted str) bool:
 
 Client.readHeaders(maxBytes u64) !$str:
     output := try strings.alloc(maxBytes)
-    onerror output.free(this.allocator)
+    onerror output.free()
     destination := strings.toPtr(output)
     one := array u8[1]
     matched u8 = 0
@@ -317,7 +320,7 @@ Client.readHeaders(maxBytes u64) !$str:
 Client.openingHandshake(parsed ParsedUrl*, headers Header[], maxHeaderBytes u64) !void:
     a := ctx.alloc
     key := try makeKey()
-    defer key.free(a)
+    defer key.free()
     request := try builder.newWithCapacity(256)
     defer request.free()
     try request.appendBorrowed("GET ")
@@ -343,10 +346,10 @@ Client.openingHandshake(parsed ParsedUrl*, headers Header[], maxHeaderBytes u64)
     ..
     try request.appendBorrowed("\r\n")
     serialized := try request.build()
-    defer serialized.free(a)
+    defer serialized.free()
     try writeTransportAll(this, serialized)
     response := try this.readHeaders(maxHeaderBytes)
-    defer response.free(a)
+    defer response.free()
     if response.countBytes() < 12 || strings.byteAt(response, 9) != 49 || strings.byteAt(response, 10) != 48 || strings.byteAt(response, 11) != 49:
         throw errors.failure("WebSocket server rejected the opening handshake")
     ..
@@ -357,7 +360,7 @@ Client.openingHandshake(parsed ParsedUrl*, headers Header[], maxHeaderBytes u64)
         throw errors.failure("WebSocket response has invalid Connection header")
     ..
     expected := try acceptFor(key)
-    defer expected.free(a)
+    defer expected.free()
     if strings.compare(headerValue(response, "Sec-WebSocket-Accept"), expected) == false:
         throw errors.failure("WebSocket response has invalid accept key")
     ..
@@ -436,7 +439,7 @@ Client.sendFrame(opcode u8, payload str) !void:
     headerCount = headerCount + 4
     try writeTransportAll(this, strings.fromPtrNoCopy(slices.toPtr(header), headerCount))
     masked := try strings.alloc(length)
-    defer masked.free(this.allocator)
+    defer masked.free()
     output := strings.toPtr(masked)
     input := strings.toPtr(payload)
     unsafe:
@@ -484,7 +487,7 @@ Client.writer() writer.Writer:
 
 Client.readPayload(length u64) !$str:
     payload := try strings.alloc(length)
-    onerror payload.free(this.allocator)
+    onerror payload.free()
     view u8[] = slices.fromPtr(strings.toPtr(payload), length)
     try this.readExact(view, length)
     ret move payload
@@ -531,27 +534,27 @@ Client.readFrame() !$Message:
     payload := try this.readPayload(length)
     if opcode == OPCODE_PING:
         try this.sendFrame(OPCODE_PONG, payload)
-        payload.free(this.allocator)
+        payload.free()
         ret try this.readFrame()
     elif opcode == OPCODE_PONG:
-        payload.free(this.allocator)
+        payload.free()
         ret try this.readFrame()
     elif opcode == OPCODE_CLOSE:
         if this.closing == false:
             this.closing = true
             try this.sendFrame(OPCODE_CLOSE, payload)
         ..
-        payload.free(this.allocator)
+        payload.free()
         throw errors.endOfFile("WebSocket peer closed the connection")
     elif final == false || opcode == OPCODE_CONTINUATION:
-        payload.free(this.allocator)
+        payload.free()
         throw errors.failure("fragmented WebSocket messages are not yet supported")
     elif opcode != OPCODE_TEXT && opcode != OPCODE_BINARY:
-        payload.free(this.allocator)
+        payload.free()
         throw errors.failure("unknown WebSocket frame opcode")
     ..
     if opcode == OPCODE_TEXT && utf8.validate(payload) == false:
-        payload.free(this.allocator)
+        payload.free()
         throw errors.failure("WebSocket text message is not valid UTF-8")
     ..
     kind := MESSAGE_BINARY
@@ -601,7 +604,7 @@ Client.readRaw(buff u8[], nBytes u64) !u64:
     memory.copy(source, slices.toPtr(buff), count)
     this.readOffset = this.readOffset + count
     if this.readOffset == this.readCount:
-        strings.fromPtrNoCopy(this.readBuffer, this.readCount).free(this.allocator)
+        strings.fromPtrNoCopy(this.readBuffer, this.readCount).free()
         this.readBufferActive = false
         this.readBuffer = none
         this.readCount = 0
@@ -618,14 +621,14 @@ Client.reader() reader.Reader:
 
 destr Message.close() void:
     if this.active:
-        this.data.free(this.allocator)
+        this.data.free()
         this.active = false
     ..
 ..
 
 destr Client.close() !void:
     if this.readBufferActive:
-        strings.fromPtrNoCopy(this.readBuffer, this.readCount).free(this.allocator)
+        strings.fromPtrNoCopy(this.readBuffer, this.readCount).free()
         this.readBufferActive = false
         this.readBuffer = none
         this.readCount = 0

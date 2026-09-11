@@ -2,25 +2,20 @@ mod cpu_impl_posix
 # POSIX processor-count backend used by the portable cpu module.
 
 
-use "std:c" c
-use "std:cast" cast
+use "std:c" as c
+use "std:cast" as cast
+use "std:llvm" as ll
 
 ext ext_sysconf sysconf(name c.int) c.long
 
-llvm "@magma.cpu.count = internal global i64 0, align 8\n"
+global cpuCount u64
 
 cachedCount() u64:
-    unsafe:
-        llvm "  %value = load atomic i64, ptr @magma.cpu.count acquire, align 8\n"
-        llvm "  ret i64 %value\n"
-    ..
+    ret ll.atomicLoadAcquireU64(addrof cpuCount)
 ..
 
 publishCount(value u64) void:
-    unsafe:
-        llvm "  store atomic i64 %value, ptr @magma.cpu.count release, align 8\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreReleaseU64(addrof cpuCount, value)
 ..
 
 pub coreCount() u64:

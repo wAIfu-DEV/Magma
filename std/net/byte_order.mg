@@ -1,7 +1,7 @@
 mod net_byte_order
 # Pure helpers for reading and writing integer fields in network byte order.
 
-use "std:cast" cast
+use "std:cast" as cast
 
 # Writes a u16 to native storage in big-endian (network) byte order.
 pub store16(target u16*, value u16) void:

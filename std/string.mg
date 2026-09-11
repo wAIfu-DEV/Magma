@@ -1,10 +1,9 @@
 mod string
 
-use "std:allocator" alc
+use "std:allocator" as alc
 
 pub String(
     s $str
-    allocator alc.Allocator
 )
 
 String.view() str:
@@ -12,7 +11,7 @@ String.view() str:
 ..
 
 destr String.free() void:
-    this.s.free(this.allocator)
+    this.s.free()
 ..
 
 destr String.toStr() $str:
@@ -20,7 +19,7 @@ destr String.toStr() $str:
 ..
 
 pub newA(a alc.Allocator, s $str) $String:
-    ret String(s=move s,allocator=a)
+    ret String(s=move s)
 ..
 
 pub new(s $str) $String:

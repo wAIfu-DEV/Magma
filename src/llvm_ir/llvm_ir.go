@@ -47,7 +47,12 @@ func irProtoVtables(ctx *IrCtx, gl *t.NodeGlobal, reachable map[string]bool) err
 }
 
 func irDefineStruct(ctx *IrCtx, structNode *t.NodeStructDef) error {
-	irWriteGlf(ctx, "%%struct.%s = type { ", structNode.AbsName)
+	definition := ctx.fCtx.GlNode.StructDefs[structNode.Class.NameNode.(*t.NodeNameSingle).Name]
+	if definition != nil && definition.CoreRole != t.CoreTypeNone {
+		irWriteGlf(ctx, "%s = type { ", definition.CoreRole.LLVMName())
+	} else {
+		irWriteGlf(ctx, "%%struct.%s = type { ", structNode.AbsName)
+	}
 
 	// making dud ctx to redirect type IR to global writer
 	cpy := *ctx
@@ -105,6 +110,9 @@ func irGlobal(ctx *IrCtx, glNode *t.NodeGlobal, reachable map[*t.NodeFuncDef]boo
 		}
 		e := irGlobalDecl(ctx, d)
 		if e != nil {
+			if fn, ok := d.(*t.NodeFuncDef); ok {
+				return fmt.Errorf("lower %s: %w", fn.AbsName, e)
+			}
 			return e
 		}
 	}
@@ -274,7 +282,23 @@ func irWriteProgram(shared *t.SharedState, pruneFunctions bool) ([]byte, error) 
 	reachable := allFunctions(filesMap)
 	reachableVtables := allProtoVtables(filesMap)
 	if pruneFunctions {
-		reachable, reachableVtables = reachableFunctions(filesMap, shared.NullContext)
+		extraRoots := make([]*t.NodeFuncDef, 0, len(shared.CoreMethods))
+		for _, function := range shared.CoreMethods {
+			if function != nil {
+				extraRoots = append(extraRoots, function)
+			}
+		}
+		for _, file := range filesMap {
+			if file == nil || file.GlNode == nil {
+				continue
+			}
+			for _, declaration := range file.GlNode.Declarations {
+				if function, ok := declaration.(*t.NodeFuncDef); ok && function.NeedsContextAdapter {
+					extraRoots = append(extraRoots, function)
+				}
+			}
+		}
+		reachable, reachableVtables = reachableFunctions(filesMap, shared.NullContext, true, extraRoots...)
 	}
 	traceStrings := newTraceStringPool(collectTraceStrings(filesMap, reachable))
 

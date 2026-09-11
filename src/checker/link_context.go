@@ -11,11 +11,13 @@ type ctx struct {
 	Shared           sh
 	ScopeTree        *t.Scope
 	GlobalNode       *t.NodeGlobal
+	CoreGlobal       *t.NodeGlobal
 	ModuleBundle     *t.ModuleBundle
 	LastFuncDef      *t.NodeFuncDef
 	CurrentTypeFunc  *t.NodeFuncDef
 	FileCtx          *t.FileCtx
 	LoopDepth        int
+	UnsafeDepth      int
 	ErrorBoundary    int
 	PrimitiveMethods map[string]primitiveMethod
 
@@ -75,6 +77,15 @@ func leaveScope(c *ctx) {
 	if c.CurrScope.Parent != nil {
 		c.CurrScope = c.CurrScope.Parent
 	}
+}
+
+func enclosingFunction(c *ctx) *t.NodeFuncDef {
+	for scope := c.CurrScope; scope != nil; scope = scope.Parent {
+		if function, ok := scope.Associated.(*t.NodeFuncDef); ok {
+			return function
+		}
+	}
+	return nil
 }
 
 func flattenName(name t.NodeName) string {
@@ -148,6 +159,7 @@ func typeFromStructDef(c *ctx, strct *t.StructDef) *t.NodeType {
 		Throws: false,
 		KindNode: &t.NodeTypeAbsolute{
 			AbsoluteName: strct.Module + "." + strct.Name,
+			CoreRole:     strct.CoreRole,
 		},
 	}
 }

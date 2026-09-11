@@ -2,8 +2,8 @@ mod address_wait_win
 # Windows address-wait backend used by the portable wake module.
 
 
-use "std:win/types" win
-use "std:errors" errors
+use "std:win/types" as win
+use "std:errors" as errors
 
 link "synchronization"
 

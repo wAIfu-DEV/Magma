@@ -2,11 +2,11 @@ mod heap_impl_unix
 # Unix process-heap backend used by the portable heap module.
 
 
-use "std:c" c
-use "std:allocator" a
-use "std:errors"    e
-use "std:cast"      cast
-use "std:memory"    mem
+use "std:c" as c
+use "std:allocator" as a
+use "std:errors"    as e
+use "std:cast"      as cast
+use "std:memory"    as mem
 
 ext ext_stdlib_malloc  malloc(size c.size_t) ptr
 ext ext_stdlib_realloc realloc(block ptr, newSize c.size_t) ptr
@@ -24,12 +24,12 @@ heapAlloc(impl ptr, nBytes u64) !$u8*:
     ..
     # SAFETY: malloc returned a validated non-null allocation of nBytes bytes.
     unsafe:
-        ret p
+        ret cast.reinterpret[u8](p)
     ..
 ..
 
 # Internals for realloc, used by both realloc() and HeapAllocator.realloc()
-heapRealloc(impl ptr, in u8*, nBytes u64) !$u8*:
+heapRealloc(impl ptr, in ptr, nBytes u64) !$u8*:
     if in == none:
         throw e.invalidArgument("input pointer is null")
     ..
@@ -43,12 +43,12 @@ heapRealloc(impl ptr, in u8*, nBytes u64) !$u8*:
     ..
     # SAFETY: realloc returned a validated non-null replacement allocation.
     unsafe:
-        ret p
+        ret cast.reinterpret[u8](p)
     ..
 ..
 
 # Internals for free, used by both free() and HeapAllocator.free()
-heapFree(impl ptr, in u8*) void:
+heapFree(impl ptr, in ptr) void:
     if in == none:
         ret
     ..
@@ -61,11 +61,11 @@ HeapAllocator.alloc(nBytes u64) !$u8*:
     ret try heapAlloc(none, nBytes)
 ..
 
-HeapAllocator.realloc(in u8*, nBytes u64) !$u8*:
+HeapAllocator.realloc(in ptr, nBytes u64) !$u8*:
     ret try heapRealloc(none, in, nBytes)
 ..
 
-HeapAllocator.free(in u8*) void:
+HeapAllocator.free(in ptr) void:
     heapFree(none, in)
 ..
 
@@ -119,7 +119,7 @@ pub allocZero(nBytes u64) !$u8*:
 # @param in pointer to already allocated memory region
 # @param nBytes how many bytes to allocate
 # @returns owned region of memory
-pub realloc(in u8*, nBytes u64) !$u8*:
+pub realloc(in ptr, nBytes u64) !$u8*:
     ret try heapRealloc(none, in, nBytes)
 ..
 
@@ -134,7 +134,7 @@ pub realloc(in u8*, nBytes u64) !$u8*:
 # @param in pointer to already allocated memory region
 # @param nBytes how many bytes to allocate
 # @returns owned region of memory
-pub reallocZero(in u8*, nBytes u64, prevNbytes u64) !$u8*:
+pub reallocZero(in ptr, nBytes u64, prevNbytes u64) !$u8*:
     if nBytes <= prevNbytes:
         ret try heapRealloc(none, in, nBytes)
     ..
@@ -154,6 +154,6 @@ pub reallocZero(in u8*, nBytes u64, prevNbytes u64) !$u8*:
 # in should be non-null, and should be the result of an allocation from this
 # module's allocator or methods, do not mismatch allocators.
 # @param in pointer to already allocated memory region
-pub free(in u8*) void:
+pub free(in ptr) void:
     heapFree(none, in)
 ..

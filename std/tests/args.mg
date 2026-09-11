@@ -1,7 +1,7 @@
 mod main
-use "std:args" args
-use "std:errors" errors
-use "std:strings" strings
+use "std:args" as args
+use "std:errors" as errors
+use "std:strings" as strings
 
 pub main() !void:
     raw := array str[3]

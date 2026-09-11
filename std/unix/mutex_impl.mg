@@ -2,12 +2,12 @@ mod mutex_impl_unix
 # Unix mutex backend used by the portable mutex module.
 
 
-use "std:c" c
+use "std:c" as c
 @platform("linux", "freebsd", "netbsd", "openbsd")
 link "pthread"
 
-use "std:cast" cast
-use "std:errors" errors
+use "std:cast" as cast
+use "std:errors" as errors
 
 # Opaque, naturally aligned storage. 128 bytes covers the supported pthread ABIs.
 Opaque128(

@@ -1,6 +1,6 @@
 mod main
-use "std:allocator" allocator
-use "std:heap" heap
+use "std:allocator" as allocator
+use "std:heap" as heap
 pub main() !void:
     a allocator.Allocator = heap.allocator()
     block := try a.alloc(16)

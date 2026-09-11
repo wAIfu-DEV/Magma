@@ -1,4 +1,5 @@
 mod atomic
+use "std:llvm" as ll
 # Sequentially consistent atomic numeric values for cross-thread coordination.
 # @warning Do not copy an atomic value after publishing it to other threads.
 
@@ -79,10 +80,7 @@ pub newF64(value f64) F64:
 #   flag.store(1)
 U8.store(value u8) void:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  store atomic i8 %value, ptr %this seq_cst, align 1\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreSequentialU8(this, value)
 ..
 
 # Reads the value with sequential consistency.
@@ -91,10 +89,7 @@ U8.store(value u8) void:
 #   ready := flag.load() != 0
 U8.load() u8:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %value = load atomic i8, ptr %this seq_cst, align 1\n"
-        llvm "  ret i8 %value\n"
-    ..
+    ret ll.atomicLoadSequentialU8(this)
 ..
 
 # Atomically replaces the value and returns its previous value.
@@ -103,10 +98,7 @@ U8.load() u8:
 #   wasSet := flag.exchange(1) != 0
 U8.exchange(value u8) u8:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw xchg ptr %this, i8 %value seq_cst, align 1\n"
-        llvm "  ret i8 %previous\n"
-    ..
+    ret ll.atomicExchangeSequentialU8(this, value)
 ..
 
 # Reads with acquire ordering, observing writes published before a matching release.
@@ -115,10 +107,7 @@ U8.exchange(value u8) u8:
 #   ready := flag.loadAcquire() != 0
 U8.loadAcquire() u8:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %value = load atomic i8, ptr %this acquire, align 1\n"
-        llvm "  ret i8 %value\n"
-    ..
+    ret ll.atomicLoadAcquireU8(this)
 ..
 
 # Stores with release ordering, publishing prior writes to acquiring threads.
@@ -127,10 +116,7 @@ U8.loadAcquire() u8:
 #   flag.storeRelease(1)
 U8.storeRelease(value u8) void:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  store atomic i8 %value, ptr %this release, align 1\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreReleaseU8(this, value)
 ..
 
 # Atomically adds value and returns the value from before the addition.
@@ -140,10 +126,7 @@ U8.storeRelease(value u8) void:
 #   previous := counter.fetchAdd(1)
 U8.fetchAdd(value u8) u8:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw add ptr %this, i8 %value seq_cst, align 1\n"
-        llvm "  ret i8 %previous\n"
-    ..
+    ret ll.atomicFetchAddSequentialU8(this, value)
 ..
 
 # Atomically subtracts value and returns the value from before subtraction.
@@ -153,10 +136,7 @@ U8.fetchAdd(value u8) u8:
 #   previous := counter.fetchSub(1)
 U8.fetchSub(value u8) u8:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw sub ptr %this, i8 %value seq_cst, align 1\n"
-        llvm "  ret i8 %previous\n"
-    ..
+    ret ll.atomicFetchSubSequentialU8(this, value)
 ..
 
 # Replaces the value with sequential consistency.
@@ -165,10 +145,7 @@ U8.fetchSub(value u8) u8:
 #   state.store(2)
 U32.store(value u32) void:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  store atomic i32 %value, ptr %this seq_cst, align 4\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreSequentialU32(this, value)
 ..
 
 # Reads the value with sequential consistency.
@@ -177,10 +154,7 @@ U32.store(value u32) void:
 #   current := state.load()
 U32.load() u32:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %value = load atomic i32, ptr %this seq_cst, align 4\n"
-        llvm "  ret i32 %value\n"
-    ..
+    ret ll.atomicLoadSequentialU32(this)
 ..
 
 # Atomically replaces the value and returns its previous value.
@@ -189,10 +163,7 @@ U32.load() u32:
 #   previous := state.exchange(2)
 U32.exchange(value u32) u32:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw xchg ptr %this, i32 %value seq_cst, align 4\n"
-        llvm "  ret i32 %previous\n"
-    ..
+    ret ll.atomicExchangeSequentialU32(this, value)
 ..
 
 # Reads with acquire ordering, observing writes published before a matching release.
@@ -201,10 +172,7 @@ U32.exchange(value u32) u32:
 #   current := state.loadAcquire()
 U32.loadAcquire() u32:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %value = load atomic i32, ptr %this acquire, align 4\n"
-        llvm "  ret i32 %value\n"
-    ..
+    ret ll.atomicLoadAcquireU32(this)
 ..
 
 # Stores with release ordering, publishing prior writes to acquiring threads.
@@ -213,10 +181,7 @@ U32.loadAcquire() u32:
 #   state.storeRelease(1)
 U32.storeRelease(value u32) void:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  store atomic i32 %value, ptr %this release, align 4\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreReleaseU32(this, value)
 ..
 
 # Atomically adds value with sequential consistency and returns the previous value.
@@ -226,10 +191,7 @@ U32.storeRelease(value u32) void:
 #   ticket := counter.fetchAdd(1)
 U32.fetchAdd(value u32) u32:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw add ptr %this, i32 %value seq_cst, align 4\n"
-        llvm "  ret i32 %previous\n"
-    ..
+    ret ll.atomicFetchAddSequentialU32(this, value)
 ..
 
 # Adds with release ordering and returns the previous value, publishing prior writes.
@@ -239,10 +201,7 @@ U32.fetchAdd(value u32) u32:
 #   previous := counter.fetchAddRelease(1)
 U32.fetchAddRelease(value u32) u32:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw add ptr %this, i32 %value release, align 4\n"
-        llvm "  ret i32 %previous\n"
-    ..
+    ret ll.atomicFetchAddReleaseU32(this, value)
 ..
 
 # Atomically subtracts value with sequential consistency and returns the previous value.
@@ -252,10 +211,7 @@ U32.fetchAddRelease(value u32) u32:
 #   previous := counter.fetchSub(1)
 U32.fetchSub(value u32) u32:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw sub ptr %this, i32 %value seq_cst, align 4\n"
-        llvm "  ret i32 %previous\n"
-    ..
+    ret ll.atomicFetchSubSequentialU32(this, value)
 ..
 
 # Subtracts with acquire-release ordering and returns the previous value.
@@ -265,10 +221,7 @@ U32.fetchSub(value u32) u32:
 #   wasLast := references.fetchSubAcqRel(1) == 1
 U32.fetchSubAcqRel(value u32) u32:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw sub ptr %this, i32 %value acq_rel, align 4\n"
-        llvm "  ret i32 %previous\n"
-    ..
+    ret ll.atomicFetchSubAcqRelU32(this, value)
 ..
 
 # Replaces the value with sequential consistency.
@@ -277,10 +230,7 @@ U32.fetchSubAcqRel(value u32) u32:
 #   counter.store(0)
 U64.store(value u64) void:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  store atomic i64 %value, ptr %this seq_cst, align 8\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreSequentialU64(this, value)
 ..
 
 # Reads the value with sequential consistency.
@@ -289,10 +239,7 @@ U64.store(value u64) void:
 #   total := counter.load()
 U64.load() u64:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %value = load atomic i64, ptr %this seq_cst, align 8\n"
-        llvm "  ret i64 %value\n"
-    ..
+    ret ll.atomicLoadSequentialU64(this)
 ..
 
 # Atomically replaces the value and returns its previous value.
@@ -301,21 +248,14 @@ U64.load() u64:
 #   batch := counter.exchange(0)
 U64.exchange(value u64) u64:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw xchg ptr %this, i64 %value seq_cst, align 8\n"
-        llvm "  ret i64 %previous\n"
-    ..
+    ret ll.atomicExchangeSequentialU64(this, value)
 ..
 
 # Replaces expected with desired when the current value equals expected and
 # returns the value observed before the operation.
 U64.compareExchange(expected u64, desired u64) u64:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %result = cmpxchg ptr %this, i64 %expected, i64 %desired seq_cst seq_cst, align 8\n"
-        llvm "  %previous = extractvalue { i64, i1 } %result, 0\n"
-        llvm "  ret i64 %previous\n"
-    ..
+    ret ll.atomicCompareExchangeSequentialU64(this, expected, desired)
 ..
 
 # Reads atomically without synchronizing other memory accesses.
@@ -325,10 +265,7 @@ U64.compareExchange(expected u64, desired u64) u64:
 #   approximate := counter.loadRelaxed()
 U64.loadRelaxed() u64:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %value = load atomic i64, ptr %this monotonic, align 8\n"
-        llvm "  ret i64 %value\n"
-    ..
+    ret ll.atomicLoadRelaxedU64(this)
 ..
 
 # Reads with acquire ordering, observing writes published before a matching release.
@@ -337,10 +274,7 @@ U64.loadRelaxed() u64:
 #   published := state.loadAcquire()
 U64.loadAcquire() u64:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %value = load atomic i64, ptr %this acquire, align 8\n"
-        llvm "  ret i64 %value\n"
-    ..
+    ret ll.atomicLoadAcquireU64(this)
 ..
 
 # Stores atomically without publishing preceding memory accesses.
@@ -350,10 +284,7 @@ U64.loadAcquire() u64:
 #   counter.storeRelaxed(0)
 U64.storeRelaxed(value u64) void:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  store atomic i64 %value, ptr %this monotonic, align 8\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreRelaxedU64(this, value)
 ..
 
 # Stores with release ordering, publishing prior writes to acquiring threads.
@@ -362,10 +293,7 @@ U64.storeRelaxed(value u64) void:
 #   state.storeRelease(1)
 U64.storeRelease(value u64) void:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  store atomic i64 %value, ptr %this release, align 8\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreReleaseU64(this, value)
 ..
 
 # Atomically adds value with sequential consistency and returns the previous value.
@@ -375,10 +303,7 @@ U64.storeRelease(value u64) void:
 #   id := counter.fetchAdd(1)
 U64.fetchAdd(value u64) u64:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw add ptr %this, i64 %value seq_cst, align 8\n"
-        llvm "  ret i64 %previous\n"
-    ..
+    ret ll.atomicFetchAddSequentialU64(this, value)
 ..
 
 # Atomically adds without synchronizing other memory and returns the previous value.
@@ -388,10 +313,7 @@ U64.fetchAdd(value u64) u64:
 #   previous := metrics.fetchAddRelaxed(1)
 U64.fetchAddRelaxed(value u64) u64:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw add ptr %this, i64 %value monotonic, align 8\n"
-        llvm "  ret i64 %previous\n"
-    ..
+    ret ll.atomicFetchAddRelaxedU64(this, value)
 ..
 
 # Atomically subtracts value with sequential consistency and returns the previous value.
@@ -401,10 +323,7 @@ U64.fetchAddRelaxed(value u64) u64:
 #   previous := counter.fetchSub(1)
 U64.fetchSub(value u64) u64:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw sub ptr %this, i64 %value seq_cst, align 8\n"
-        llvm "  ret i64 %previous\n"
-    ..
+    ret ll.atomicFetchSubSequentialU64(this, value)
 ..
 
 # Replaces the signed value with sequential consistency.
@@ -413,10 +332,7 @@ U64.fetchSub(value u64) u64:
 #   balance.store(0)
 I64.store(value i64) void:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  store atomic i64 %value, ptr %this seq_cst, align 8\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreSequentialI64(this, value)
 ..
 
 # Reads the signed value with sequential consistency.
@@ -425,10 +341,7 @@ I64.store(value i64) void:
 #   current := balance.load()
 I64.load() i64:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %value = load atomic i64, ptr %this seq_cst, align 8\n"
-        llvm "  ret i64 %value\n"
-    ..
+    ret ll.atomicLoadSequentialI64(this)
 ..
 
 # Atomically replaces the signed value and returns its previous value.
@@ -437,10 +350,7 @@ I64.load() i64:
 #   previous := balance.exchange(0)
 I64.exchange(value i64) i64:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw xchg ptr %this, i64 %value seq_cst, align 8\n"
-        llvm "  ret i64 %previous\n"
-    ..
+    ret ll.atomicExchangeSequentialI64(this, value)
 ..
 
 # Atomically adds value and returns the value from before the addition.
@@ -450,10 +360,7 @@ I64.exchange(value i64) i64:
 #   previous := balance.fetchAdd(delta)
 I64.fetchAdd(value i64) i64:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw add ptr %this, i64 %value seq_cst, align 8\n"
-        llvm "  ret i64 %previous\n"
-    ..
+    ret ll.atomicFetchAddSequentialI64(this, value)
 ..
 
 # Atomically subtracts value and returns the value from before subtraction.
@@ -463,10 +370,7 @@ I64.fetchAdd(value i64) i64:
 #   previous := balance.fetchSub(cost)
 I64.fetchSub(value i64) i64:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw sub ptr %this, i64 %value seq_cst, align 8\n"
-        llvm "  ret i64 %previous\n"
-    ..
+    ret ll.atomicFetchSubSequentialI64(this, value)
 ..
 
 # Atomically replaces the floating-point value with sequential consistency.
@@ -475,11 +379,7 @@ I64.fetchSub(value i64) i64:
 #   latest.store(measurement)
 F64.store(value f64) void:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %bits = bitcast double %value to i64\n"
-        llvm "  store atomic i64 %bits, ptr %this seq_cst, align 8\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreSequentialU64(this, ll.f64ToBits(value))
 ..
 
 # Reads the floating-point value with sequential consistency.
@@ -488,11 +388,7 @@ F64.store(value f64) void:
 #   measurement := latest.load()
 F64.load() f64:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %bits = load atomic i64, ptr %this seq_cst, align 8\n"
-        llvm "  %value = bitcast i64 %bits to double\n"
-        llvm "  ret double %value\n"
-    ..
+    ret ll.f64FromBits(ll.atomicLoadSequentialU64(this))
 ..
 
 # Atomically replaces the floating-point value and returns its previous value.
@@ -502,10 +398,5 @@ F64.load() f64:
 #   previous := latest.exchange(measurement)
 F64.exchange(value f64) f64:
     # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %bits = bitcast double %value to i64\n"
-        llvm "  %previous.bits = atomicrmw xchg ptr %this, i64 %bits seq_cst, align 8\n"
-        llvm "  %previous = bitcast i64 %previous.bits to double\n"
-        llvm "  ret double %previous\n"
-    ..
+    ret ll.f64FromBits(ll.atomicExchangeSequentialU64(this, ll.f64ToBits(value)))
 ..

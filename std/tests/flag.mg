@@ -1,9 +1,9 @@
 mod main
-use "std:flag" flag
-use "std:heap" heap
-use "std:strings" strings
-use "std:errors" errors
-use "std:array" array
+use "std:flag" as flag
+use "std:heap" as heap
+use "std:strings" as strings
+use "std:errors" as errors
+use "std:array" as array
 
 pub main() !void:
     parser := try flag.new(heap.allocator(), "tool")
@@ -42,7 +42,7 @@ pub main() !void:
         throw errors.failure("repeated numeric flags changed")
     ..
     usage := try parser.usage()
-    defer usage.free(heap.allocator())
+    defer usage.free()
     position u64, findError error = strings.find(usage, "--verbose")
     if findError.nok():
         throw errors.failure("allocated usage omitted option")

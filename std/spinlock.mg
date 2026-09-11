@@ -5,14 +5,14 @@ mod spinlock
 # Implementation from the 2026 talk "Lock free programming is dead, long live lock free programming"
 # By Fedor Pikus at C++now https://www.youtube.com/watch?v=UdKqfQ3a_sY
 
-use "std:atomic" atomic
-use "std:locker" locker
+use "std:atomic" as atomic
+use "std:locker" as locker
 
 @platform("windows")
-use "std:win/thread_impl" impl_thread
+use "std:win/thread_impl" as impl_thread
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/thread_impl" impl_thread
+use "std:unix/thread_impl" as impl_thread
 
 # Busy-waiting lock intended only for very short, non-blocking critical sections.
 # @warning Do not copy a SpinLock after sharing it between threads.

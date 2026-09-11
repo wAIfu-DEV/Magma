@@ -1,8 +1,8 @@
 mod main
 
-use "std:cast" cast
-use "std:checked" checked
-use "std:errors" errors
+use "std:cast" as cast
+use "std:checked" as checked
+use "std:errors" as errors
 
 expectUOverflow(value u64, err error) !void:
     if err.ok():

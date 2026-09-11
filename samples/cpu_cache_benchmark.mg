@@ -1,12 +1,12 @@
 mod main
 # Linux benchmark: repeated sysconf calls versus std:cpu's process cache.
 
-use "std:c" c
-use "std:cast" cast
-use "std:cpu" cpu
-use "std:errors" errors
-use "std:io" io
-use "std:time" time
+use "std:c" as c
+use "std:cast" as cast
+use "std:cpu" as cpu
+use "std:errors" as errors
+use "std:io" as io
+use "std:time" as time
 
 ext ext_sysconf sysconf(name c.int) c.long
 

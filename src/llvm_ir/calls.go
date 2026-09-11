@@ -262,11 +262,7 @@ func irExprCallFuncMember(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (Ss
 			ownerSsa = allocSsa
 		}
 	} else {
-		var isSsaOwner = false
-		switch n := fnCall.Callee.(type) {
-		case *t.NodeExprName:
-			isSsaOwner = n.Storage.IsSSA()
-		}
+		isSsaOwner := fnCall.MemberOwnerName != nil && fnCall.MemberOwnerName.Storage.IsSSA()
 
 		ownerSsa, e = irExprNameLvalue(ctx, fnCall.MemberOwnerName)
 		if e != nil {
@@ -287,7 +283,7 @@ func irExprCallFuncMember(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (Ss
 			loadedOwner := irSsaLocal(ctx)
 			irWritef(ctx, "  %s = load ptr, ptr %s\n", loadedOwner.Repr, ownerSsa.Repr)
 			ownerSsa = loadedOwner
-		} else if isSsaOwner && !fnCall.MemberOwnerIsPtr {
+		} else if isSsaOwner && !ownerHasMemberPath && !fnCall.MemberOwnerIsPtr {
 			allocSsa := irSsaLocal(ctx)
 			irWritef(ctx, "  %s = alloca ", allocSsa.Repr)
 			e := irType(ctx, fnCall.MemberOwnerType)

@@ -2,15 +2,15 @@ mod file_impl_unix
 # Unix file backend used by the portable file and I/O modules.
 
 
-use "std:c" c
-use "std:allocator" alc
-use "std:slices"    slices
-use "std:strings"   strings
-use "std:cast"      cast
-use "std:errors"    errors
-use "std:writer"    writer
-use "std:reader"    reader
-use "std:file_op_mode" fopm
+use "std:c" as c
+use "std:allocator" as alc
+use "std:slices"    as slices
+use "std:strings"   as strings
+use "std:cast"      as cast
+use "std:errors"    as errors
+use "std:writer"    as writer
+use "std:reader"    as reader
+use "std:file_op_mode" as fopm
 
 ext ext_unix_open  open(path u8*, flags c.int, mode c.int) c.int
 ext ext_unix_close close(fd c.int) c.int

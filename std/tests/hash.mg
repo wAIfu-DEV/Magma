@@ -1,6 +1,6 @@
 mod main
-use "std:errors" errors
-use "std:hash" hash
+use "std:errors" as errors
+use "std:hash" as hash
 pub main() !void:
     value := array u8[3]
     value[0] = 97

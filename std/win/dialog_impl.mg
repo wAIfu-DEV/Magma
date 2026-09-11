@@ -2,24 +2,37 @@ mod dialog_impl_win
 # Modern Windows file dialogs implemented directly with IFileDialog.
 # Derived from Native File Dialog 1.1.6; see licenses/NATIVE_FILE_DIALOG.txt.
 
-use "std:allocator" allocator
-use "std:builder" builder
-use "std:win/types" win
-use "std:cast" cast
-use "std:errors" errors
-use "std:slices" slices
-use "std:strings" strings
-use "std:utf8" utf8
+use "std:allocator" as allocator
+use "std:builder" as builder
+use "std:win/types" as win
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:slices" as slices
+use "std:strings" as strings
+use "std:utf8" as utf8
 
 link "ole32"
 link "shell32"
 
-# SAFETY: immutable GUID constants required by the Windows COM interfaces.
-llvm "@magma.filedialog.clsid.open = private constant { i32, i16, i16, [8 x i8] } { i32 -602121572, i16 -6006, i16 19934, [8 x i8] [i8 -91, i8 -95, i8 96, i8 -8, i8 42, i8 32, i8 -82, i8 -9] }\n"
-llvm "@magma.filedialog.clsid.save = private constant { i32, i16, i16, [8 x i8] } { i32 -1061887245, i16 -17887, i16 18291, [8 x i8] [i8 -115, i8 -70, i8 51, i8 94, i8 -55, i8 70, i8 -21, i8 -117] }\n"
-llvm "@magma.filedialog.iid.open = private constant { i32, i16, i16, [8 x i8] } { i32 -713264504, i16 -11091, i16 18280, [8 x i8] [i8 -66, i8 2, i8 -99, i8 -106, i8 -107, i8 50, i8 -39, i8 96] }\n"
-llvm "@magma.filedialog.iid.save = private constant { i32, i16, i16, [8 x i8] } { i32 -2068001501, i16 24542, i16 19675, [8 x i8] [i8 -82, i8 -92, i8 -81, i8 100, i8 -72, i8 61, i8 120, i8 -85] }\n"
-llvm "@magma.filedialog.iid.shellitem = private constant { i32, i16, i16, [8 x i8] } { i32 1132621086, i16 -6376, i16 17134, [8 x i8] [i8 -68, i8 85, i8 -95, i8 -30, i8 97, i8 -61, i8 123, i8 -2] }\n"
+Guid(
+    data1 i32
+    data2 i16
+    data3 i16
+    data40 i8
+    data41 i8
+    data42 i8
+    data43 i8
+    data44 i8
+    data45 i8
+    data46 i8
+    data47 i8
+)
+
+const clsidOpen := Guid(data1=-602121572, data2=-6006, data3=19934, data40=-91, data41=-95, data42=96, data43=-8, data44=42, data45=32, data46=-82, data47=-9)
+const clsidSave := Guid(data1=-1061887245, data2=-17887, data3=18291, data40=-115, data41=-70, data42=51, data43=94, data44=-55, data45=70, data46=-21, data47=-117)
+const iidOpen := Guid(data1=-713264504, data2=-11091, data3=18280, data40=-66, data41=2, data42=-99, data43=-106, data44=-107, data45=50, data46=-39, data47=96)
+const iidSave := Guid(data1=-2068001501, data2=24542, data3=19675, data40=-82, data41=-92, data42=-81, data43=100, data44=-72, data45=61, data46=120, data47=-85)
+const iidShellItem := Guid(data1=1132621086, data2=-6376, data3=17134, data40=-68, data41=85, data42=-95, data43=-30, data44=97, data45=-61, data46=123, data47=-2)
 
 ext ext_CoInitializeEx CoInitializeEx(reserved win.LPVOID, flags win.DWORD) win.HRESULT
 ext ext_CoUninitialize CoUninitialize() void
@@ -28,34 +41,19 @@ ext ext_CoTaskMemFree CoTaskMemFree(value win.LPVOID) void
 ext ext_SHCreateItemFromParsingName SHCreateItemFromParsingName(path win.LPCWSTR, context win.LPVOID, interfaceId win.LPCVOID, result win.LPVOID*) win.HRESULT
 
 guidOpenClass() ptr:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "ret ptr @magma.filedialog.clsid.open\n"
-    ..
+    ret addrof clsidOpen
 ..
 guidSaveClass() ptr:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "ret ptr @magma.filedialog.clsid.save\n"
-    ..
+    ret addrof clsidSave
 ..
 guidOpenInterface() ptr:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "ret ptr @magma.filedialog.iid.open\n"
-    ..
+    ret addrof iidOpen
 ..
 guidSaveInterface() ptr:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "ret ptr @magma.filedialog.iid.save\n"
-    ..
+    ret addrof iidSave
 ..
 guidShellItem() ptr:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "ret ptr @magma.filedialog.iid.shellitem\n"
-    ..
+    ret addrof iidShellItem
 ..
 
 InputFilter(
@@ -210,7 +208,7 @@ setFilters(a allocator.Allocator, dialog ptr, rawFilters ptr, count u64) !void:
         nameUnits := try utf8.utf8To16NT(filters[built].name)
         pattern := try extensionPattern(a, filters[built].extensions)
         patternUnits := try utf8.utf8To16NT(pattern)
-        pattern.free(a)
+        pattern.free()
         names[built] = slices.toPtr(nameUnits)
         patterns[built] = slices.toPtr(patternUnits)
         specs[built] = FilterSpec(name=names[built], pattern=patterns[built])

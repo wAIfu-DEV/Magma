@@ -1,5 +1,5 @@
 mod main
-use "std:allocator" allocator
+use "std:allocator" as allocator
 alias Allocator = allocator.Allocator
 pub main() void:
     value Allocator

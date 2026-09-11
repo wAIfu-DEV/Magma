@@ -1,8 +1,9 @@
 mod checked
 # Checked integer arithmetic, conversions, sizes, and alignment.
 
-use "std:cast" cast
-use "std:errors" errors
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:llvm" as ll
 
 maxU() u64:
     ret 0 - 1
@@ -29,17 +30,11 @@ minI128() i128:
 ..
 
 u128ToI128Bits(value u128) i128:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "ret i128 %value\n"
-    ..
+    ret ll.unsigned128ToSignedBits(value)
 ..
 
 i128ToU128Bits(value i128) u128:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "ret i128 %value\n"
-    ..
+    ret ll.signed128ToUnsignedBits(value)
 ..
 
 # Checked unsigned 64-bit arithmetic.

@@ -1,19 +1,19 @@
 mod net_tls
 # Nonblocking client-side TLS over a connected std/net socket.
 
-use "std:allocator" allocator
-use "std:net/socket" socket
-use "std:errors" errors
-use "std:slices" slices
+use "std:allocator" as allocator
+use "std:net/socket" as socket
+use "std:errors" as errors
+use "std:slices" as slices
 
 @platform("linux")
-use "std:linux/net/tls_impl" impl
+use "std:linux/net/tls_impl" as impl
 
 @platform("windows")
-use "std:win/net/tls_impl" impl
+use "std:win/net/tls_impl" as impl
 
 @platform("android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:net/tls_unsupported" impl
+use "std:net/tls_unsupported" as impl
 
 pub const WANT_NONE u8 = 0
 pub const WANT_READ u8 = 1

@@ -11,9 +11,9 @@ type semanticTokens struct {
 	Data []uint32 `json:"data"`
 }
 
-// handleSemanticTokens highlights memory-safety syntax. `move` is contextual,
-// so an ordinary function call named move is deliberately not classified as a
-// keyword.
+// handleSemanticTokens highlights expression keywords that need to coexist
+// with identifier-shaped expressions. `move` is contextual, so an ordinary
+// function call named move is deliberately not classified as a keyword.
 func (s *server) handleSemanticTokens(msg message) error {
 	var p struct {
 		TextDocument struct {
@@ -40,7 +40,7 @@ func (s *server) handleSemanticTokens(msg message) error {
 			lineByte += n + 1
 		}
 		word := d.Text[span[0]:span[1]]
-		keyword := word == "bounded" || word == "unsafe"
+		keyword := word == "addrof" || word == "sizeof" || word == "bounded" || word == "unsafe"
 		if word == "move" {
 			next := ""
 			if i+1 < len(words) {

@@ -8,7 +8,7 @@ wide := try utf16.fromUtf8(a, "hello")
 defer slices.free(a, wide)
 
 text := try utf16.toUtf8(a, wide)
-defer text.free(a)
+defer text.free()
 
 it := utf16.iterator(wide)
 while it.hasData():

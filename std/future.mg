@@ -1,18 +1,19 @@
 mod future
+use "std:llvm" as ll
 # Owned asynchronous results that can be awaited and released safely.
 
-use "std:allocator" alc
-use "std:cast" cast
-use "std:errors" errors
-use "std:executor" executor
-use "std:time" time
-use "std:abort" abort
+use "std:allocator" as alc
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:executor" as executor
+use "std:time" as time
+use "std:abort" as abort
 
 @platform("windows")
-use "std:win/address_wait" address_wait
+use "std:win/address_wait" as address_wait
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/address_wait" address_wait
+use "std:unix/address_wait" as address_wait
 
 State[T](
     allocator alc.Allocator
@@ -39,51 +40,27 @@ pub Future[T](
 )
 
 atomicAdd(target u64*, value u64) void:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw add ptr %target, i64 %value monotonic, align 8\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicFetchAddRelaxedU64(target, value)
 ..
 
 atomicLoad(target u64*) u64:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %value = load atomic i64, ptr %target monotonic, align 8\n"
-        llvm "  ret i64 %value\n"
-    ..
+    ret ll.atomicLoadRelaxedU64(target)
 ..
 
 atomicStore(target u64*, value u64) void:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  store atomic i64 %value, ptr %target monotonic, align 8\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreRelaxedU64(target, value)
 ..
 
 publishDone(status u32*) void:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  store atomic i32 1, ptr %status release, align 4\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreReleaseU32(status, 1)
 ..
 
 loadStatus(status u32*) u32:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %value = load atomic i32, ptr %status acquire, align 4\n"
-        llvm "  ret i32 %value\n"
-    ..
+    ret ll.atomicLoadAcquireU32(status)
 ..
 
 releaseReference(references u32*) u32:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %previous = atomicrmw sub ptr %references, i32 1 acq_rel, align 4\n"
-        llvm "  ret i32 %previous\n"
-    ..
+    ret ll.atomicFetchSubAcqRelU32(references, 1)
 ..
 
 releaseState[T](state State[T]*) void:
@@ -97,8 +74,7 @@ releaseState[T](state State[T]*) void:
     ..
 ..
 
-taskMain[T, Context](raw ptr) u64:
-    work Work[T, Context]* = cast.reinterpret[Work[T, Context]](raw)
+taskMain[T, Context](work Work[T, Context]*) u64:
     state State[T]* = addrof work.state
     allowed bool, abortFailure error = checkBeforeStart(state.controller.signal())
     if abortFailure.nok():

@@ -5,8 +5,8 @@ directories. This is the current module name; `file_dialog.md` is retained as
 an older documentation path.
 
 ```magma
-use "std:dialog" dialog
-use "std:heap" heap
+use "std:dialog" as dialog
+use "std:heap" as heap
 
 options := dialog.defaultOptions()
 path := try dialog.openFile(heap.allocator(), options)

@@ -1,10 +1,10 @@
 mod main
 
-use "std:websocket" websocket
-use "std:errors" errors
-use "std:reader" reader
-use "std:slices" slices
-use "std:writer" writer
+use "std:websocket" as websocket
+use "std:errors" as errors
+use "std:reader" as reader
+use "std:slices" as slices
+use "std:writer" as writer
 
 # Compile-time coverage for Client's generic byte-stream adapters.
 checkInterfaces(client websocket.Client*) !void:

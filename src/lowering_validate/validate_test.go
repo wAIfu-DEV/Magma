@@ -233,6 +233,7 @@ func TestRejectsIncompleteSubscript(t *testing.T) {
 
 func TestAcceptsResolvedNameMemberAndSubscript(t *testing.T) {
 	elementType := &mt.NodeType{KindNode: &mt.NodeTypeAbsolute{AbsoluteName: "i64"}}
+	indexType := &mt.NodeType{KindNode: &mt.NodeTypeAbsolute{AbsoluteName: "u64"}}
 	sliceType := &mt.NodeType{KindNode: &mt.NodeTypeSlice{ElemKind: elementType.KindNode}}
 	variable := &mt.NodeExprVarDef{Name: &mt.NodeNameSingle{Name: "items"}, Type: sliceType, Storage: mt.VariableStorageLocal}
 	name := &mt.NodeExprName{Name: variable.Name, InfType: sliceType, AssociatedNode: variable, Storage: mt.VariableStorageLocal}
@@ -243,7 +244,7 @@ func TestAcceptsResolvedNameMemberAndSubscript(t *testing.T) {
 		},
 		BoxType:   sliceType,
 		ElemType:  elementType,
-		IndexType: elementType,
+		IndexType: indexType,
 	}
 	if err := Validate(stateWithExpression(subscript)); err != nil {
 		t.Fatalf("resolved subscript rejected: %v", err)

@@ -1,6 +1,6 @@
 mod main
 
-use "std:context_default" context_default
+use "std:context_default" as context_default
 
 ordinary() u64:
     ret 42

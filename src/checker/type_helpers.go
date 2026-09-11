@@ -74,30 +74,11 @@ func isVoidType(node *t.NodeType) bool {
 }
 
 func isErrType(node *t.NodeType) bool {
-	if node == nil {
-		return false
-	}
-
-	switch n := node.KindNode.(type) {
-	case *t.NodeTypeNamed:
-		switch nn := n.NameNode.(type) {
-		case *t.NodeNameSingle:
-			return nn.Name == "error"
-		}
-	}
-	return false
+	return t.CoreTypeRoleOf(node) == t.CoreTypeError
 }
 
 func isStrType(node *t.NodeType) bool {
-	if node == nil {
-		return false
-	}
-	named, ok := node.KindNode.(*t.NodeTypeNamed)
-	if !ok {
-		return false
-	}
-	single, ok := named.NameNode.(*t.NodeNameSingle)
-	return ok && single.Name == "str"
+	return t.CoreTypeRoleOf(node) == t.CoreTypeString
 }
 
 func isBoolType(node *t.NodeType) bool {
@@ -250,15 +231,7 @@ func isArrayType(node *t.NodeType) bool {
 }
 
 func isUntypedSlice(node *t.NodeType) bool {
-	if node == nil {
-		return false
-	}
-	named, ok := node.KindNode.(*t.NodeTypeNamed)
-	if !ok {
-		return false
-	}
-	single, ok := named.NameNode.(*t.NodeNameSingle)
-	return ok && single.Name == "slice"
+	return t.CoreTypeRoleOf(node) == t.CoreTypeSlice
 }
 
 func isTypedSlice(node *t.NodeType) bool {

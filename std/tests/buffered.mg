@@ -1,13 +1,13 @@
 mod main
 
-use "std:allocator" allocator
-use "std:buffered" buffered
-use "std:cast" cast
-use "std:errors" errors
-use "std:heap" heap
-use "std:reader" reader
-use "std:strings" strings
-use "std:writer" writer
+use "std:allocator" as allocator
+use "std:buffered" as buffered
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:reader" as reader
+use "std:strings" as strings
+use "std:writer" as writer
 
 Sink impl writer.Writer(total u64*)
 
@@ -62,7 +62,7 @@ pub main() !void:
         throw errors.failure("buffered reader fill changed")
     ..
     line := try bufferedInput.readLn()
-    defer line.free(a)
+    defer line.free()
     linePtr u8* = strings.toPtr(line)
     # SAFETY: owned strings reserve a terminator immediately after countBytes.
     unsafe:

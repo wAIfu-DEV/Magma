@@ -21,8 +21,41 @@ func (e *genericInstantiationFailure) Error() string {
 }
 
 func (m *monoCtx) instantiateStruct(module string, baseName string, args []*t.NodeType) (string, error) {
+	specName := MangleSpecializedName(baseName, args)
+	cached := false
+	if m.interfaceOnlyModule(module) {
+		cached = m.shared.GenericSpecializationHit != nil
+		if gl := m.modules[module]; gl != nil {
+			if definition := gl.StructDefs[baseName]; definition != nil {
+				for name, method := range definition.Funcs {
+					if !cached {
+						break
+					}
+					if len(method.Class.TypeParams) != 0 || !m.shared.GenericSpecializationHit(module, module+"."+specName+"."+name) {
+						cached = false
+						break
+					}
+				}
+			} else {
+				cached = false
+			}
+		} else {
+			cached = false
+		}
+		if !cached {
+			if err := m.ensureProvider(module); err != nil {
+				return "", fmt.Errorf("incremental generic specialization of %s.%s: %w", module, baseName, err)
+			}
+		}
+	}
 	templateKey := makeTemplateKey(module, baseName)
 	template, ok := m.structTemplates[templateKey]
+	if !ok && cached {
+		if err := m.ensureProvider(module); err != nil {
+			return "", fmt.Errorf("incremental generic specialization of %s.%s: %w", module, baseName, err)
+		}
+		template, ok = m.structTemplates[templateKey]
+	}
 	if !ok {
 		return "", &genericInstantiationFailure{kind: "struct", name: baseName, unknown: true}
 	}
@@ -35,8 +68,10 @@ func (m *monoCtx) instantiateStruct(module string, baseName string, args []*t.No
 	if n, ok := m.structInstances[instanceKey]; ok {
 		return n, nil
 	}
+	if err := m.reserveInstance(); err != nil {
+		return "", err
+	}
 
-	specName := MangleSpecializedName(baseName, args)
 	m.structInstances[instanceKey] = specName
 	structDisplayName := m.genericDisplayName(sourceModuleName(module)+"."+baseName, args)
 	m.structDisplayNames[module+"."+specName] = structDisplayName
@@ -110,6 +145,7 @@ func (m *monoCtx) instantiateStruct(module string, baseName string, args []*t.No
 		}
 		specFn.AbsName = module + "." + flattenName(specFn.Class.NameNode)
 		specFn.DisplayName = unqualifiedDisplayName(structDisplayName) + "." + memberName
+		specFn.CachedSpecialization = cached
 
 		key := specName + "." + memberName
 		gl.FuncDefs[key] = specFn
@@ -132,8 +168,23 @@ func (m *monoCtx) instantiateStruct(module string, baseName string, args []*t.No
 }
 
 func (m *monoCtx) instantiateFunc(module string, baseName string, args []*t.NodeType) (string, error) {
+	specName := MangleSpecializedName(baseName, args)
+	cached := false
+	if m.interfaceOnlyModule(module) {
+		if m.shared.GenericSpecializationHit != nil && m.shared.GenericSpecializationHit(module, module+"."+specName) {
+			cached = true
+		} else if err := m.ensureProvider(module); err != nil {
+			return "", fmt.Errorf("incremental generic specialization of %s.%s: %w", module, baseName, err)
+		}
+	}
 	templateKey := makeTemplateKey(module, baseName)
 	template, ok := m.funcTemplates[templateKey]
+	if !ok && cached {
+		if err := m.ensureProvider(module); err != nil {
+			return "", fmt.Errorf("incremental generic specialization of %s.%s: %w", module, baseName, err)
+		}
+		template, ok = m.funcTemplates[templateKey]
+	}
 	if !ok {
 		return "", &genericInstantiationFailure{kind: "function", name: baseName, unknown: true}
 	}
@@ -146,8 +197,10 @@ func (m *monoCtx) instantiateFunc(module string, baseName string, args []*t.Node
 	if n, ok := m.funcInstances[instanceKey]; ok {
 		return n, nil
 	}
+	if err := m.reserveInstance(); err != nil {
+		return "", err
+	}
 
-	specName := MangleSpecializedName(baseName, args)
 	m.funcInstances[instanceKey] = specName
 
 	gl := m.modules[module]
@@ -170,6 +223,7 @@ func (m *monoCtx) instantiateFunc(module string, baseName string, args []*t.Node
 	}
 
 	specFn.AbsName = module + "." + specName
+	specFn.CachedSpecialization = cached
 	gl.FuncDefs[specName] = specFn
 	gl.Declarations = append(gl.Declarations, specFn)
 	m.queueFunc(specFn)
@@ -177,8 +231,24 @@ func (m *monoCtx) instantiateFunc(module string, baseName string, args []*t.Node
 }
 
 func (m *monoCtx) instantiateMemberFunc(module string, ownerName string, memberName string, args []*t.NodeType) (string, error) {
+	specMemberName := MangleSpecializedName(memberName, args)
+	cached := false
+	if m.interfaceOnlyModule(module) {
+		symbol := module + "." + ownerName + "." + specMemberName
+		if m.shared.GenericSpecializationHit != nil && m.shared.GenericSpecializationHit(module, symbol) {
+			cached = true
+		} else if err := m.ensureProvider(module); err != nil {
+			return "", fmt.Errorf("incremental generic specialization of %s.%s.%s: %w", module, ownerName, memberName, err)
+		}
+	}
 	templateKey := makeMemberTemplateKey(module, ownerName, memberName)
 	template, ok := m.memberTemplates[templateKey]
+	if !ok && cached {
+		if err := m.ensureProvider(module); err != nil {
+			return "", fmt.Errorf("incremental generic specialization of %s.%s.%s: %w", module, ownerName, memberName, err)
+		}
+		template, ok = m.memberTemplates[templateKey]
+	}
 	if !ok {
 		return "", &genericInstantiationFailure{kind: "member function", name: ownerName + "." + memberName, unknown: true}
 	}
@@ -191,8 +261,10 @@ func (m *monoCtx) instantiateMemberFunc(module string, ownerName string, memberN
 	if n, ok := m.memberInstances[instanceKey]; ok {
 		return n, nil
 	}
+	if err := m.reserveInstance(); err != nil {
+		return "", err
+	}
 
-	specMemberName := MangleSpecializedName(memberName, args)
 	m.memberInstances[instanceKey] = specMemberName
 
 	gl := m.modules[module]
@@ -226,6 +298,7 @@ func (m *monoCtx) instantiateMemberFunc(module string, ownerName string, memberN
 	}
 
 	specFn.AbsName = module + "." + flattenName(specFn.Class.NameNode)
+	specFn.CachedSpecialization = cached
 	gl.FuncDefs[ownerName+"."+specMemberName] = specFn
 	gl.Declarations = append(gl.Declarations, specFn)
 	m.queueFunc(specFn)
@@ -237,4 +310,13 @@ func (m *monoCtx) instantiateMemberFunc(module string, ownerName string, memberN
 	stDef.Funcs[specMemberName] = specFn
 
 	return specMemberName, nil
+}
+
+func (m *monoCtx) interfaceOnlyModule(module string) bool {
+	gl := m.modules[module]
+	if gl == nil {
+		return false
+	}
+	file := m.fileCtxForGlobal(gl)
+	return file != nil && file.InterfaceOnly
 }

@@ -2,17 +2,17 @@ mod process_impl_win
 # Windows child-process backend used by the portable process module.
 
 
-use "std:win/types" win
-use "std:allocator" allocator
-use "std:heap" heap
-use "std:strings" strings
-use "std:slices" slices
-use "std:utf8" utf8
-use "std:errors" errors
-use "std:cast" cast
-use "std:memory" memory
-use "std:checked" checked
-use "std:utf16" utf16
+use "std:win/types" as win
+use "std:allocator" as allocator
+use "std:heap" as heap
+use "std:strings" as strings
+use "std:slices" as slices
+use "std:utf8" as utf8
+use "std:errors" as errors
+use "std:cast" as cast
+use "std:memory" as memory
+use "std:checked" as checked
+use "std:utf16" as utf16
 
 ext ext_win32_CreateProcessW CreateProcessW(applicationName win.LPCWSTR, commandLineValue win.LPWSTR, processAttributes win.LPVOID, threadAttributes win.LPVOID, inheritHandles win.BOOL, creationFlags win.DWORD, environment win.LPVOID, currentDirectory win.LPCWSTR, startupInfo win.LPVOID, processInformation win.LPVOID) win.BOOL
 ext ext_win32_WaitForSingleObject WaitForSingleObject(handle win.HANDLE, milliseconds win.DWORD) win.DWORD
@@ -143,7 +143,7 @@ pub spawn(executable str, arguments str[]) !$Process:
 
     a := heap.allocator()
     line str = try commandLine(a, executable, arguments)
-    defer line.free(a)
+    defer line.free()
     
     line16 u16[] = try utf8.utf8To16NT(line)
     defer a.free(slices.toPtr(line16))
@@ -194,7 +194,7 @@ pub spawnWithEnv(executable str, arguments str[], environment str[]) !$Process:
     ..
     a := heap.allocator()
     line := try commandLine(a, executable, arguments)
-    defer line.free(a)
+    defer line.free()
     line16 := try utf8.utf8To16NT(line)
     defer a.free(slices.toPtr(line16))
     block := try environmentBlock(a, environment)

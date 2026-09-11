@@ -1,11 +1,11 @@
 mod net_tcp
 # TCP listener and stream conveniences.
 
-use "std:net/address" address
-use "std:net/socket" socket
-use "std:reader" reader
-use "std:writer" writer
-use "std:duplex" duplex
+use "std:net/address" as address
+use "std:net/socket" as socket
+use "std:reader" as reader
+use "std:writer" as writer
+use "std:duplex" as duplex
 
 pub Listener(
     socket socket.Socket

@@ -19,34 +19,7 @@ func ctExprLvalue(c *ctx, expr t.NodeExpr) error {
 	case *t.NodeExprMemberAccess:
 		return ctExpr(c, n)
 	case *t.NodeExprSubscript:
-		e := ctExpr(c, n.Expr)
-		if e != nil {
-			return e
-		}
-		e = ctExpr(c, n.Target)
-		if e != nil {
-			return e
-		}
-
-		n.BoxType = n.Target.GetInferredType()
-
-		var elemType *t.NodeType = getBoxedType(n.BoxType)
-		if elemType == nil {
-			return comp_err.CompilationErrorToken(
-				c.FileCtx,
-				&n.Tk,
-				fmt.Sprintf("cannot index value of type '%s'", flattenType(n.BoxType)),
-				"only arrays, slices, and pointers can be indexed",
-			)
-		}
-
-		n.ElemType = elemType
-		n.IndexType = makeNamedType("i64")
-
-		//fmt.Printf("subscript:\n")
-		//fmt.Printf(" type: %s\n", flattenType(n.BoxType))
-		//fmt.Printf(" elemtype: %s\n", flattenType(n.ElemType))
-		return nil
+		return ctExprSubscript(c, n)
 	case *t.NodeExprName:
 		if n.AssociatedNode == nil {
 			//fmt.Printf("name: %s\n", flattenName(n.Name))
@@ -181,7 +154,7 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 				if e := ctExpr(c, entry.Value); e != nil {
 					return e
 				}
-				if !compatibleInitializer(n.ElemType, entry.Value) {
+				if !compatibleInitializer(c, n.ElemType, entry.Value) {
 					return comp_err.CompilationErrorToken(c.FileCtx, &entry.Tk, fmt.Sprintf("array element expects type '%s', but initializer has type '%s'", flattenType(n.ElemType), flattenType(entry.Value.GetInferredType())), "")
 				}
 				warnNumericConversion(c, n.ElemType, entry.Value, "array element")
@@ -196,7 +169,11 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 		if err := ctExpr(c, n.Expr); err != nil {
 			return err
 		}
-		n.InfType = makeNamedType("ptr")
+		valueType := n.Expr.GetInferredType()
+		if valueType == nil || valueType.KindNode == nil {
+			return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, "cannot take the address of an expression with no value type", "")
+		}
+		n.InfType = &t.NodeType{KindNode: &t.NodeTypePointer{Kind: valueType.KindNode}}
 		return nil
 	case *t.NodeExprMove:
 		if err := ctExpr(c, n.Expr); err != nil {
@@ -204,7 +181,49 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 		}
 		n.InfType = n.Expr.GetInferredType()
 		return nil
+	case *t.NodeExprLlvm:
+		arities := map[string]int{
+			"reinterpret": 1, "offset": 2, "ptrtoint": 1, "inttoptr": 1,
+			"load_volatile": 2, "store_volatile": 3,
+			"atomic_load": 3, "atomic_store": 4, "atomic_rmw": 5,
+			"cmpxchg_old": 6, "asm_sideeffect": 1, "sideeffect": 0,
+			"bitcast": 1, "sext": 1, "zext": 1, "trunc": 1,
+			"sitofp": 1, "uitofp": 1, "fptosi": 1, "fptoui": 1,
+			"bswap": 1, "bitreverse": 1, "ctpop": 1, "ctlz": 1,
+			"cttz": 1, "expect": 2, "assume": 1, "fence": 1, "trap": 0,
+		}
+		arity, known := arities[n.Operation]
+		if !known {
+			return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("unknown @llvm operation '%s'", n.Operation), "use a compiler-registered LLVM operation")
+		}
+		if len(n.Args) != arity {
+			return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("@llvm operation '%s' expects %d argument(s), but got %d", n.Operation, arity, len(n.Args)), "")
+		}
+		for _, arg := range n.Args {
+			if err := ctExpr(c, arg); err != nil {
+				return err
+			}
+		}
+		switch n.Operation {
+		case "ptrtoint":
+			if !isPointerType(n.Args[0].GetInferredType()) || !isIntegerType(n.ResultType) {
+				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, "@llvm ptrtoint requires a pointer operand and integer result", "example: `@llvm(\"ptrtoint\", value, u64)`")
+			}
+		case "inttoptr":
+			if !isIntegerType(n.Args[0].GetInferredType()) || !isPointerType(n.ResultType) {
+				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, "@llvm inttoptr requires an integer operand and pointer result", "example: `@llvm(\"inttoptr\", value, ptr)`")
+			}
+		case "store_volatile", "atomic_store", "asm_sideeffect", "sideeffect", "assume", "fence", "trap":
+			if !isVoidType(n.ResultType) {
+				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("@llvm operation '%s' must have result type void", n.Operation), "")
+			}
+		}
+		n.InfType = n.ResultType
+		return nil
 	case *t.NodeExprCall:
+		if n.UnionVariant != nil {
+			return nil
+		}
 		//fmt.Printf("call: %s\n", flattenCallee(n.Callee))
 
 		callArgCount := len(n.Args)
@@ -256,7 +275,7 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 			if e != nil {
 				return e
 			}
-			compatible := compatibleInitializer(expectedArgs[i], a)
+			compatible := compatibleInitializer(c, expectedArgs[i], a)
 			if !compatible && n.AssociatedFnDef != nil && n.AssociatedFnDef.IsExternal {
 				compatible = compatibleNativeCallback(expectedArgs[i], a.GetInferredType(), a)
 			}
@@ -321,7 +340,7 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 			if e := ctExpr(c, field.Expression); e != nil {
 				return e
 			}
-			if !compatibleInitializer(field.FieldType, field.Expression) {
+			if !compatibleInitializer(c, field.FieldType, field.Expression) {
 				return comp_err.CompilationErrorToken(c.FileCtx, &field.Tk, fmt.Sprintf("field '%s' expects type '%s', but initializer has type '%s'", field.Name, flattenType(field.FieldType), flattenType(field.Expression.GetInferredType())), "")
 			}
 			warnNumericConversion(c, field.FieldType, field.Expression, fmt.Sprintf("field '%s'", field.Name))
@@ -336,41 +355,14 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 		}
 		return nil
 	case *t.NodeExprSubscript:
-		e := ctExpr(c, n.Expr)
-		if e != nil {
-			return e
-		}
-		e = ctExpr(c, n.Target)
-		if e != nil {
-			return e
-		}
-
-		n.BoxType = n.Target.GetInferredType()
-
-		var elemType *t.NodeType = getBoxedType(n.BoxType)
-		if elemType == nil {
-			return comp_err.CompilationErrorToken(
-				c.FileCtx,
-				&n.Tk,
-				fmt.Sprintf("cannot index value of type '%s'", flattenType(n.BoxType)),
-				"only arrays, slices, and pointers can be indexed",
-			)
-		}
-
-		n.ElemType = elemType
-		n.IndexType = makeNamedType("i64")
-
-		//fmt.Printf("subscript:\n")
-		//fmt.Printf(" type: %s\n", flattenType(n.BoxType))
-		//fmt.Printf(" elemtype: %s\n", flattenType(n.ElemType))
-		return nil
+		return ctExprSubscript(c, n)
 	case *t.NodeExprLit:
 		switch n.LitType {
 		case t.TokLitNum:
 			n.InfType = numericLiteralDefaultType(n.Value)
 			return nil
 		case t.TokLitStr:
-			n.InfType = makeNamedType("str")
+			n.InfType = makeNamedType(t.CoreTypeString.Name())
 			return nil
 		case t.TokLitBool:
 			n.InfType = makeNamedType("bool")
@@ -379,6 +371,9 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 			n.InfType = makeNamedType("ptr")
 			return nil
 		}
+	case *t.NodeExprEmbed:
+		n.InfType = &t.NodeType{KindNode: &t.NodeTypeSlice{ElemKind: makeNamedType("u8").KindNode}}
+		return nil
 	case *t.NodeExprName:
 		if n.AssociatedNode == nil {
 			//fmt.Printf("name: %s\n", flattenName(n.Name))
@@ -435,7 +430,8 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 		case t.KwCmpEq, t.KwCmpNeq:
 			leftT := n.Left.GetInferredType()
 			rightT := n.Right.GetInferredType()
-			if !compatibleTypes(leftT, rightT) {
+			nullPointerComparison := (isNoneLiteral(n.Left) && (isPointerType(rightT) || isRawPointerType(rightT))) || (isNoneLiteral(n.Right) && (isPointerType(leftT) || isRawPointerType(leftT)))
+			if !compatibleTypes(leftT, rightT) && !compatibleTypes(rightT, leftT) && !nullPointerComparison {
 				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("cannot compare values of unrelated types '%s' and '%s'", flattenType(leftT), flattenType(rightT)), "")
 			}
 			n.InfType = makeNamedType("bool")
@@ -560,7 +556,7 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 
 		if n.VarDef.Type == nil {
 			n.VarDef.Type = n.AssignExpr.GetInferredType()
-		} else if !compatibleInitializer(n.VarDef.Type, n.AssignExpr) {
+		} else if !compatibleInitializer(c, n.VarDef.Type, n.AssignExpr) {
 			return comp_err.CompilationErrorToken(
 				c.FileCtx,
 				&n.Tk,
@@ -581,7 +577,7 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 			return e
 		}
 		n.InfType = n.Left.GetInferredType()
-		if !compatibleInitializer(n.InfType, n.Right) {
+		if !compatibleInitializer(c, n.InfType, n.Right) {
 			return comp_err.CompilationErrorToken(
 				c.FileCtx,
 				&n.Tk,
@@ -640,7 +636,7 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 		}
 
 		if n.ErrDef.Type == nil {
-			n.ErrDef.Type = makeNamedType("error")
+			n.ErrDef.Type = makeNamedType(t.CoreTypeError.Name())
 		}
 		if !isErrType(n.ErrDef.Type) || n.ErrDef.Type.Throws {
 			return comp_err.CompilationErrorToken(c.FileCtx, &n.Call.Tk, fmt.Sprintf("destructuring error binding must have type 'error', but got '%s'", flattenType(n.ErrDef.Type)), "")
@@ -659,4 +655,30 @@ func ctExprWithUsage(c *ctx, expr t.NodeExpr, valueUsed bool) error {
 		return nil
 	}
 	return fmt.Errorf("unexpected expression type")
+}
+
+func isNoneLiteral(expr t.NodeExpr) bool {
+	literal, ok := expr.(*t.NodeExprLit)
+	return ok && literal.LitType == t.TokLitNone
+}
+
+func ctExprSubscript(c *ctx, n *t.NodeExprSubscript) error {
+	if e := ctExpr(c, n.Expr); e != nil {
+		return e
+	}
+	if !isIntegerType(n.Expr.GetInferredType()) {
+		return comp_err.CompilationErrorToken(c.FileCtx, expressionSourceToken(n.Expr), fmt.Sprintf("subscript index must be an integer, but got '%s'", flattenType(n.Expr.GetInferredType())), "use an integer expression to index an array, slice, or pointer")
+	}
+	if e := ctExpr(c, n.Target); e != nil {
+		return e
+	}
+	n.BoxType = n.Target.GetInferredType()
+	n.ElemType = getBoxedType(n.BoxType)
+	if n.ElemType == nil {
+		return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, fmt.Sprintf("cannot index value of type '%s'", flattenType(n.BoxType)), "only arrays, slices, and pointers can be indexed")
+	}
+	// Magma indexes are canonically unsigned. LLVM spells both Magma i64 and u64
+	// as i64, but signedness remains part of the checker/lowering contract.
+	n.IndexType = makeNamedType("u64")
+	return nil
 }

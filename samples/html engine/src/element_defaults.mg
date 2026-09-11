@@ -2,8 +2,8 @@ mod elem_defaults
 
 # A small data-driven user-agent style sheet. A future CSS cascade can populate
 # or replace this registry without changing the layout and paint passes.
-use "std:raylib" rl
-use "std:hash_map" hm
+use "std:raylib" as rl
+use "std:hash_map" as hm
 
 pub const DISPLAY_NONE u8 = 0
 pub const DISPLAY_BLOCK u8 = 1

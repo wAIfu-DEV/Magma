@@ -117,6 +117,7 @@ func clTypeKind(c *ctx, parentType *t.NodeType, kind t.NodeTypeKind, topLevel bo
 			if e == nil {
 				return &t.NodeTypeAbsolute{
 					AbsoluteName: sd.Module + "." + sd.Name,
+					CoreRole:     sd.CoreRole,
 				}, nil
 			}
 			return nil, comp_err.CompilationErrorToken(
@@ -135,6 +136,7 @@ func clTypeKind(c *ctx, parentType *t.NodeType, kind t.NodeTypeKind, topLevel bo
 			if e == nil {
 				return &t.NodeTypeAbsolute{
 					AbsoluteName: sd.Module + "." + sd.Name,
+					CoreRole:     sd.CoreRole,
 				}, nil
 			}
 			if private, ok := e.(*privateSymbolError); ok {

@@ -2,14 +2,15 @@ mod thread_impl_unix
 # Unix native-thread backend used by the portable thread module.
 
 
-use "std:c" c
+use "std:c" as c
 @platform("linux", "freebsd", "netbsd", "openbsd")
 link "pthread"
 
-use "std:cast" cast
-use "std:errors" errors
-use "std:heap" heap
-use "std:context" context
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:context" as context
+use "std:llvm" as ll
 
 ext ext_pthread_create pthread_create(thread u64*, attributes ptr, startRoutine noctx (ptr) u64, argument ptr) c.int
 ext ext_pthread_join   pthread_join(thread u64, result ptr) c.int
@@ -28,19 +29,11 @@ Launch(
 )
 
 storeCompleted(value u8*) void:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  store atomic i8 1, ptr %value release, align 1\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreReleaseU8(value, 1)
 ..
 
 loadCompleted(value u8*) u8:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %done = load atomic i8, ptr %value acquire, align 1\n"
-        llvm "  ret i8 %done\n"
-    ..
+    ret ll.atomicLoadAcquireU8(value)
 ..
 
 noctx threadMain(raw ptr) u64:
@@ -60,7 +53,7 @@ pub spawn(entry (ptr) u64, context ptr) !$Thread:
         throw errors.invalidArgument("thread entry is null")
     ..
 
-    launch Launch* = try heap.alloc(sizeof Launch)
+    launch Launch* = cast.reinterpret[Launch](try heap.alloc(sizeof Launch))
     onerror heap.free(launch)
     launch.entry = entry
     # SAFETY: Launch stores the opaque context required by its matching entry callback.

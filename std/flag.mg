@@ -1,15 +1,15 @@
 mod flag
 # Declarative typed command-line option parsing without shell interpretation.
 
-use "std:allocator" allocator
-use "std:array" array
-use "std:strings" strings
-use "std:slices" slices
-use "std:strconv" strconv
-use "std:errors" errors
-use "std:cast" cast
-use "std:writer" writer
-use "std:builder" builder
+use "std:allocator" as allocator
+use "std:array" as array
+use "std:strings" as strings
+use "std:slices" as slices
+use "std:strconv" as strconv
+use "std:errors" as errors
+use "std:cast" as cast
+use "std:writer" as writer
+use "std:builder" as builder
 
 const KIND_BOOL u8 = 1
 const KIND_STRING u8 = 2
@@ -249,6 +249,7 @@ Parser.writeUsage(output writer.Writer) !void:
 Parser.usage() !$str:
     text := try builder.new()
     defer text.free()
+
     try text.appendBorrowed("usage: ")
     try text.appendBorrowed(this.program)
     try text.appendBorrowed(" [options]\n")

@@ -1,9 +1,9 @@
 mod main
 
-use "std:io" io
-use "std:fmt" fmt
-use "std:file" file
-use "std:time" time
+use "std:io" as io
+use "std:fmt" as fmt
+use "std:file" as file
+use "std:time" as time
 
 pub main() !void:
     f := try file.open("main.go", file.mode().read())
@@ -22,7 +22,7 @@ pub main() !void:
     fmt.str(ctx.alloc, "\nTook (µs): ").uint(took).str("\n").print()
 
     contents := try future.await()
-    defer contents.free(ctx.alloc)
+    defer contents.free()
 
     io.printLn(contents)
 ..

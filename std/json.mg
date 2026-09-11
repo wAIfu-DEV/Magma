@@ -1,42 +1,43 @@
 mod json
 # Parsing, construction, lookup, ownership, and serialization of JSON values.
 
-use "std:allocator"  alc
-use "std:array"      arr
-use "std:builder"    builder
-use "std:cast"       cast
-use "std:errors"     errors
-use "std:footgun"    footgun
-use "std:linear_map" linear_map
-use "std:slices"     slices
-use "std:strings"    strings
-use "std:writer"     writer
-use "std:memory"     memory
-use "std:utf8"       utf8
+use "std:allocator"  as alc
+use "std:array"      as arr
+use "std:builder"    as builder
+use "std:cast"       as cast
+use "std:errors"     as errors
+use "std:footgun"    as footgun
+use "std:linear_map" as linear_map
+use "std:slices"     as slices
+use "std:strings"    as strings
+use "std:writer"     as writer
+use "std:memory"     as memory
+use "std:utf8"       as utf8
 
-pub const KIND_NULL u8 = 0
-pub const KIND_BOOL u8 = 1
-pub const KIND_FLOAT u8 = 2
-pub const KIND_STRING u8 = 3
-pub const KIND_OBJECT u8 = 4
-pub const KIND_ARRAY u8 = 5
+pub proto Serializable(
+    writeJsonTo(w writer.Writer) !void
+    serializeToJson() !$str
+)
 
-# JSON value. Payloads are stored in raw u128 storage and reinterpreted based
-# on the kind tag. This keeps Value independent of its recursive payload types.
-pub Value(
-    value u128
-    kind u8
-    allocator alc.Allocator
+pub union Value impl Serializable(
+    Null
+    Bool(value bool)
+    Float(value f64)
+    String(value $str)
+    Object(value Object, allocator alc.Allocator)
+    Array(value Array, allocator alc.Allocator)
+    Int(value i64)
+)
+
+pub proto Convertible(
+    fromJson(v Value) !void
+    toJson() !$Value
 )
 
 # Borrowed, copyable view of a JSON object. Pointer storage is private to this
 # module; public APIs pass Object by value.
 pub Object(
     data ObjectData*
-)
-
-pub proto Serializable(
-    toJson() !$Value
 )
 
 ObjectData(
@@ -54,12 +55,12 @@ ArrayData(
     values arr.Array[Value]
 )
 
-Value.stringify() !$str:
-    bld := try builder.newWithCapacity(16)
+Value.serializeToJson() !$str:
+    bld := try builder.newWithCapacity(32)
     defer bld.free()
 
     writer := bld.writer()
-    try this.writeTo(writer)
+    try this.writeJsonTo(writer)
 
     ret try bld.build()
 ..
@@ -70,10 +71,13 @@ Value.stringify() !$str:
 # @example
 #   try value.asNull()
 Value.asNull() !void:
-    if this.kind != 0:
+    valueCopy Value = *this
+    match valueCopy as value:
+    case Value.Null:
+        ret
+    else:
         throw errors.invalidType("json value is not null")
     ..
-    ret
 ..
 
 # Returns the stored boolean.
@@ -82,13 +86,15 @@ Value.asNull() !void:
 # @example
 #   enabled := try value.asBool()
 Value.asBool() !bool:
-    if this.kind != 1:
+    valueCopy Value = *this
+    match valueCopy as value:
+    case Value.Bool:
+        ret value.value
+    else:
         throw errors.invalidType("json value is not bool")
     ..
-    r bool* = cast.reinterpret[bool](addrof this.value)
-    ret *r
 ..
-
+ 
 # Returns a numeric value as f64, converting an integer when necessary.
 # @warning Large integers can lose precision during conversion.
 # @throws invalidType if this value is not numeric
@@ -96,14 +102,15 @@ Value.asBool() !bool:
 # @example
 #   ratio := try value.asFloat()
 Value.asFloat() !f64:
-    if this.kind == 6:
-        ret cast.itof(try this.asInt())
-    ..
-    if this.kind != 2:
+    valueCopy Value = *this
+    match valueCopy as value:
+    case Value.Int:
+        ret cast.itof(value.value)
+    case Value.Float:
+        ret value.value
+    else:
         throw errors.invalidType("json value is not float")
     ..
-    r f64* = cast.reinterpret[f64](addrof this.value)
-    ret *r
 ..
 
 # Returns a numeric value as i64, truncating a floating-point value if necessary.
@@ -113,14 +120,15 @@ Value.asFloat() !f64:
 # @example
 #   count := try value.asInt()
 Value.asInt() !i64:
-    if this.kind == 2:
-        ret cast.ftoi(try this.asFloat())
-    ..
-    if this.kind != 6:
+    valueCopy Value = *this
+    match valueCopy as value:
+    case Value.Float:
+        ret cast.ftoi(value.value)
+    case Value.Int:
+        ret value.value
+    else:
         throw errors.invalidType("json value is not int")
     ..
-    r i64* = cast.reinterpret[i64](addrof this.value)
-    ret *r
 ..
 
 # Returns the stored string as a borrowed view.
@@ -130,11 +138,13 @@ Value.asInt() !i64:
 # @example
 #   name := try value.asString()
 Value.asString() !str:
-    if this.kind != 3:
+    valueCopy Value = *this
+    match valueCopy as value:
+    case Value.String:
+        ret value.value
+    else:
         throw errors.invalidType("json value is not string")
     ..
-    r str* = cast.reinterpret[str](addrof this.value)
-    ret *r
 ..
 
 # Returns a borrowed object view.
@@ -144,11 +154,13 @@ Value.asString() !str:
 # @example
 #   object := try value.asObject()
 Value.asObject() !Object:
-    if this.kind != 4:
+    valueCopy Value = *this
+    match valueCopy as value:
+    case Value.Object:
+        ret value.value
+    else:
         throw errors.invalidType("json value is not object")
     ..
-    r Object* = cast.reinterpret[Object](addrof this.value)
-    ret *r
 ..
 
 # Returns a borrowed array view.
@@ -158,37 +170,38 @@ Value.asObject() !Object:
 # @example
 #   items := try value.asArray()
 Value.asArray() !Array:
-    if this.kind != 5:
+    valueCopy Value = *this
+    match valueCopy as value:
+    case Value.Array:
+        ret value.value
+    else:
         throw errors.invalidType("json value is not array")
     ..
-    r Array* = cast.reinterpret[Array](addrof this.value)
-    ret *r
 ..
 
 releaseValue(val Value) void:
-    if val.kind == 3:
-        value str* = cast.reinterpret[str](addrof val.value)
-        val.allocator.free(strings.toPtr(*value))
-    elif val.kind == 4:
-        value Object* = cast.reinterpret[Object](addrof val.value)
-        if value.data != none:
+    match val as value:
+    case Value.String:
+        value.value.free()
+    case Value.Object:
+        if value.value.data != none:
             unsafe:
-                value.data.entries.free()
-                val.allocator.free(value.data)
+                value.value.data.entries.free()
+                value.allocator.free(value.value.data)
             ..
         ..
-    elif val.kind == 5:
-        value Array* = cast.reinterpret[Array](addrof val.value)
-        if value.data != none:
+    case Value.Array:
+        if value.value.data != none:
             unsafe:
-                value.data.values.free(value.data.allocator, arrayValueCleanup)
-                val.allocator.free(value.data)
+                value.value.data.values.free(value.value.data.allocator, arrayValueCleanup)
+                value.allocator.free(value.value.data)
             ..
         ..
+    else:
     ..
 ..
 
-valueCleanup(val $Value) void:
+pub valueCleanup(val $Value) void:
     releaseValue(val)
     footgun.drop[Value](move val)
 ..
@@ -210,11 +223,7 @@ pub object() !$Value:
     unsafe:
         data.entries = move entries
     ..
-    out := Value(value=0, kind=4, allocator=a)
-    objectView := Object(data=data)
-    payload Object* = cast.reinterpret[Object](addrof out.value)
-    *payload = objectView
-    ret move out
+    ret Value.Object(value=Object(data=data), allocator=a)
 ..
 
 # Creates an owned empty JSON array.
@@ -227,11 +236,7 @@ pub array() !$Value:
         data.allocator = a
         data.values = move values
     ..
-    out := Value(value=0, kind=5, allocator=a)
-    arrayView := Array(data=data)
-    payload Array* = cast.reinterpret[Array](addrof out.value)
-    *payload = arrayView
-    ret move out
+    ret Value.Array(value=Array(data=data), allocator=a)
 ..
 
 # Creates a JSON null value.
@@ -239,7 +244,7 @@ pub array() !$Value:
 # @example
 #   value := json.null()
 pub null() $Value:
-    ret memory.zeroValue[Value]()
+    ret Value.Null()
 ..
 
 # Creates a JSON boolean value.
@@ -247,11 +252,7 @@ pub null() $Value:
 # @example
 #   value := json.bool(true)
 pub bool(value bool) $Value:
-    out Value = memory.zeroValue[Value]()
-    out.kind = 1
-    r bool* = cast.reinterpret[bool](addrof out.value)
-    *r = value
-    ret out
+    ret Value.Bool(value=value)
 ..
 
 # Creates a floating-point JSON number.
@@ -260,11 +261,7 @@ pub bool(value bool) $Value:
 # @example
 #   value := json.numberFloat(3.5)
 pub numberFloat(value f64) $Value:
-    out Value = memory.zeroValue[Value]()
-    out.kind = 2
-    r f64* = cast.reinterpret[f64](addrof out.value)
-    *r = value
-    ret out
+    ret Value.Float(value=value)
 ..
 
 # Creates an exact signed-integer JSON number.
@@ -272,21 +269,11 @@ pub numberFloat(value f64) $Value:
 # @example
 #   value := json.numberInt(42)
 pub numberInt(value i64) $Value:
-    out Value = memory.zeroValue[Value]()
-    out.kind = 6
-    r i64* = cast.reinterpret[i64](addrof out.value)
-    *r = value
-    ret out
+    ret Value.Int(value=value)
 ..
 
-stringOwned(value $str) $Value:
-    a := ctx.alloc
-    out Value = memory.zeroValue[Value]()
-    out.kind = 3
-    out.allocator = a
-    r str* = cast.reinterpret[str](addrof out.value)
-    *r = move value
-    ret out
+pub stringOwned(value $str) $Value:
+    ret Value.String(value=move value)
 ..
 
 # Copies text into an owned JSON string.
@@ -373,7 +360,7 @@ Array.append(value $Value) !void:
     try this.data.values.set(this.data.allocator, index, move value, arrayValueCleanup)
 ..
 
-arrayValueCleanup(a alc.Allocator, val $Value) void:
+arrayValueCleanup(val $Value) void:
     valueCleanup(move val)
 ..
 
@@ -414,6 +401,157 @@ Value.set(key str, value $Value) !void:
     ..
     try view.set(key, move value)
 ..
+
+writeObject(w writer.Writer, value Object, precision u64) !void:
+    try value.write(w, precision)
+..
+
+writeArray(w writer.Writer, value Array, precision u64) !void:
+    try value.write(w, precision)
+..
+
+finite(value f64) bool:
+    valueCopy f64 = value
+    unsafe:
+        bits u64* = addrof valueCopy
+        ret (*bits & 0x7FF0000000000000) != 0x7FF0000000000000
+    ..
+..
+
+writeEscaped(w writer.Writer, value str) !void:
+    single := array u8[1]
+    single[0] = 34
+    try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(single), 1))
+    i u64 = 0
+    bound := value.countBytes()
+    hex str = "0123456789abcdef"
+    pair := array u8[2]
+    pair[0] = 92
+    escaped := array u8[6]
+    escaped[0] = 92
+    escaped[1] = 117
+    escaped[2] = 48
+    escaped[3] = 48
+
+    loop i < bound:
+        byte := strings.byteAt(value, i)
+        if byte == 34:
+            pair[1] = 34
+            try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(pair), 2))
+        elif byte == 92:
+            pair[1] = 92
+            try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(pair), 2))
+        elif byte == 8:
+            pair[1] = 98
+            try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(pair), 2))
+        elif byte == 9:
+            pair[1] = 116
+            try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(pair), 2))
+        elif byte == 10:
+            pair[1] = 110
+            try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(pair), 2))
+        elif byte == 12:
+            pair[1] = 102
+            try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(pair), 2))
+        elif byte == 13:
+            pair[1] = 114
+            try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(pair), 2))
+        elif byte < 32:
+            escaped[4] = strings.byteAt(hex, byte >> 4)
+            escaped[5] = strings.byteAt(hex, byte & 15)
+            try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(escaped), 6))
+        else:
+            one ptr = cast.utop(cast.ptou(strings.toPtr(value)) + i)
+            try w.writeAll(strings.fromPtrNoCopy(one, 1))
+        ..
+        i = i + 1
+    ..
+    try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(single), 1))
+..
+
+
+writeValue(w writer.Writer, value Value, precision u64) !void:
+    match value as selected:
+    case Value.Null:
+        try w.writeAll("null")
+    case Value.Bool:
+        try w.writeBool(selected.value)
+    case Value.Float:
+        if finite(selected.value) == false:
+            throw errors.invalidArgument("JSON number must be finite")
+        ..
+        try w.writeFloat64(selected.value, precision)
+    case Value.String:
+        try writeEscaped(w, selected.value)
+    case Value.Object:
+        if selected.value.data == none:
+            throw errors.invalidArgument("JSON object pointer is null")
+        ..
+        try writeObject(w, selected.value, precision)
+    case Value.Array:
+        if selected.value.data == none:
+            throw errors.invalidArgument("JSON array pointer is null")
+        ..
+        try writeArray(w, selected.value, precision)
+    case Value.Int:
+        try w.writeInt64(selected.value)
+    else:
+        throw errors.invalidArgument("invalid JSON value kind")
+    ..
+..
+
+# Serializes this value as compact JSON with six fractional digits.
+# @complexity O(N) for serialized byte count
+# @example
+#   try value.writeTo(output)
+Value.writeJsonTo(w writer.Writer) !void:
+    try writeValue(w, *this, 6)
+..
+
+# Serializes this value with an explicit fractional precision.
+Value.writeWithPrecision(w writer.Writer, precision u64) !void:
+    try writeValue(w, *this, precision)
+..
+
+# Serializes this object as compact JSON in insertion order.
+# @complexity O(N) for serialized byte count
+# @example
+#   try object.write(output, 6)
+Object.write(w writer.Writer, precision u64) !void:
+    try w.writeAll("{")
+    keys := this.data.entries.keysView()
+    values := this.data.entries.valuesView()
+    for i u64 = 0 to this.count():
+        bounded i < keys.count(), i < values.count():
+            if i != 0:
+                try w.writeAll(",")
+            ..
+            try writeEscaped(w, keys[i])
+            try w.writeAll(":")
+            try writeValue(w, values[i], precision)
+        ..
+    ..
+    try w.writeAll("}")
+..
+
+# Serializes this array as compact JSON.
+# @complexity O(N) for serialized byte count
+# @example
+#   try items.write(output, 6)
+Array.write(w writer.Writer, precision u64) !void:
+    try w.writeAll("[")
+    values := this.data.values.view()
+    for i u64 = 0 to this.count():
+        bounded i < values.count():
+            if i != 0:
+                try w.writeAll(",")
+            ..
+            try writeValue(w, values[i], precision)
+        ..
+    ..
+    try w.writeAll("]")
+..
+
 
 const MAX_PARSE_DEPTH u64 = 128
 
@@ -502,7 +640,7 @@ Parser.parseString() !$str:
             this.index = this.index + 1
             result := try output.build()
             if utf8.validate(result) == false:
-                result.free(ctx.alloc)
+                result.free()
                 throw errors.invalidArgument("invalid UTF-8 in JSON string")
             ..
             ret move result
@@ -694,7 +832,13 @@ Parser.parseNumber() !Value:
 
     if hasFraction == false && hasExponent == false:
         integer := this.parseInteger(start, integerEnd, negative)
-        if integer.kind == 6:
+        isInteger bool = false
+        match integer as parsed:
+        case Value.Int:
+            isInteger = true
+        else:
+        ..
+        if isInteger:
             ret integer
         ..
     ..
@@ -811,17 +955,17 @@ Parser.parseObject(depth u64) !$Value:
         key := try this.parseString()
         this.skipWhitespace()
         if this.index >= this.count() || this.current() != 58:
-            key.free(a)
+            key.free()
             throw errors.invalidArgument("expected colon after JSON object key")
         ..
         this.index = this.index + 1
         value $Value, parseError error = this.parseValue(depth + 1)
         if parseError.nok():
-            key.free(a)
+            key.free()
             throw parseError
         ..
         inserted bool, setError error = setParsedObjectValue(objectView, key, move value)
-        key.free(a)
+        key.free()
         if setError.nok():
             throw setError
         ..
@@ -920,157 +1064,4 @@ pub parse(source str) !$Value:
         throw errors.invalidArgument("trailing content after JSON value")
     ..
     ret move value
-..
-
-writeEscaped(w writer.Writer, value str) !void:
-    single := array u8[1]
-    single[0] = 34
-    try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(single), 1))
-    i u64 = 0
-    bound := value.countBytes()
-    hex str = "0123456789abcdef"
-    pair := array u8[2]
-    pair[0] = 92
-    escaped := array u8[6]
-    escaped[0] = 92
-    escaped[1] = 117
-    escaped[2] = 48
-    escaped[3] = 48
-
-    loop i < bound:
-        byte := strings.byteAt(value, i)
-        if byte == 34:
-            pair[1] = 34
-            try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(pair), 2))
-        elif byte == 92:
-            pair[1] = 92
-            try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(pair), 2))
-        elif byte == 8:
-            pair[1] = 98
-            try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(pair), 2))
-        elif byte == 9:
-            pair[1] = 116
-            try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(pair), 2))
-        elif byte == 10:
-            pair[1] = 110
-            try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(pair), 2))
-        elif byte == 12:
-            pair[1] = 102
-            try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(pair), 2))
-        elif byte == 13:
-            pair[1] = 114
-            try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(pair), 2))
-        elif byte < 32:
-            escaped[4] = strings.byteAt(hex, byte >> 4)
-            escaped[5] = strings.byteAt(hex, byte & 15)
-            try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(escaped), 6))
-        else:
-            one ptr = cast.utop(cast.ptou(strings.toPtr(value)) + i)
-            try w.writeAll(strings.fromPtrNoCopy(one, 1))
-        ..
-        i = i + 1
-    ..
-    try w.writeAll(strings.fromPtrNoCopy(slices.toPtr(single), 1))
-..
-
-finite(value f64) bool:
-    valueCopy f64 = value
-    bits u64* = addrof valueCopy
-    ret (*bits & 0x7FF0000000000000) != 0x7FF0000000000000
-..
-
-writeObject(w writer.Writer, value Object, precision u64) !void:
-    try value.write(w, precision)
-..
-
-writeArray(w writer.Writer, value Array, precision u64) !void:
-    try value.write(w, precision)
-..
-
-writeValue(w writer.Writer, value Value, precision u64) !void:
-    valueCopy Value = value
-    if valueCopy.kind == 0:
-        try w.writeAll("null")
-    elif valueCopy.kind == 1:
-        booleanPtr bool* = cast.reinterpret[bool](addrof valueCopy.value)
-        try w.writeBool(*booleanPtr)
-    elif valueCopy.kind == 2:
-        floatNumber f64* = cast.reinterpret[f64](addrof valueCopy.value)
-        if finite(*floatNumber) == false:
-            throw errors.invalidArgument("JSON number must be finite")
-        ..
-        try w.writeFloat64(*floatNumber, precision)
-    elif valueCopy.kind == 3:
-        text str* = cast.reinterpret[str](addrof valueCopy.value)
-        try writeEscaped(w, *text)
-    elif valueCopy.kind == 4:
-        objectView Object* = cast.reinterpret[Object](addrof valueCopy.value)
-        if objectView.data == none:
-            throw errors.invalidArgument("JSON object pointer is null")
-        ..
-        try writeObject(w, *objectView, precision)
-    elif valueCopy.kind == 5:
-        arrayView Array* = cast.reinterpret[Array](addrof valueCopy.value)
-        if arrayView.data == none:
-            throw errors.invalidArgument("JSON array pointer is null")
-        ..
-        try writeArray(w, *arrayView, precision)
-    elif valueCopy.kind == 6:
-        intNumber i64* = cast.reinterpret[i64](addrof valueCopy.value)
-        try w.writeInt64(*intNumber)
-    else:
-        throw errors.invalidArgument("invalid JSON value kind")
-    ..
-..
-
-# Serializes this value as compact JSON with six fractional digits.
-# @complexity O(N) for serialized byte count
-# @example
-#   try value.writeTo(output)
-Value.writeTo(w writer.Writer) !void:
-    try writeValue(w, *this, 6)
-..
-
-# Serializes this value with an explicit fractional precision.
-Value.writeWithPrecision(w writer.Writer, precision u64) !void:
-    try writeValue(w, *this, precision)
-..
-
-# Serializes this object as compact JSON in insertion order.
-# @complexity O(N) for serialized byte count
-# @example
-#   try object.write(output, 6)
-Object.write(w writer.Writer, precision u64) !void:
-    try w.writeAll("{")
-    keys := this.data.entries.keysView()
-    values := this.data.entries.valuesView()
-    for i u64 = 0 to this.count():
-        bounded i < keys.count(), i < values.count():
-            if i != 0:
-                try w.writeAll(",")
-            ..
-            try writeEscaped(w, keys[i])
-            try w.writeAll(":")
-            try writeValue(w, values[i], precision)
-        ..
-    ..
-    try w.writeAll("}")
-..
-
-# Serializes this array as compact JSON.
-# @complexity O(N) for serialized byte count
-# @example
-#   try items.write(output, 6)
-Array.write(w writer.Writer, precision u64) !void:
-    try w.writeAll("[")
-    values := this.data.values.view()
-    for i u64 = 0 to this.count():
-        bounded i < values.count():
-            if i != 0:
-                try w.writeAll(",")
-            ..
-            try writeValue(w, values[i], precision)
-        ..
-    ..
-    try w.writeAll("]")
 ..

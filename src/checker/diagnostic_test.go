@@ -116,7 +116,7 @@ test() void:
 func TestGenericStructTypeRequiresTypeArguments(t *testing.T) {
 	diagnostic, message := checkSource(t, `mod test
 
-use "std:linear_map" lm
+use "std:linear_map" as lm
 
 pub encode(kv lm.LinearMap) void:
 ..

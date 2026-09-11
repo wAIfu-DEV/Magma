@@ -1,6 +1,6 @@
 mod main
-use "std:errors" errors
-use "std:strings" strings
+use "std:errors" as errors
+use "std:strings" as strings
 
 tracedFailure() !u8:
     throw errors.invalidArgument("traced failure")

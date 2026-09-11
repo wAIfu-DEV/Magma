@@ -2,8 +2,8 @@ mod hash
 # Stable non-cryptographic hashing for byte slices and strings.
 # @warning Do not use these hashes for passwords or cryptographic integrity.
 
-use "std:strings" strings
-use "std:slices" slices
+use "std:strings" as strings
+use "std:slices" as slices
 
 # Computes the 64-bit FNV-1a hash of a byte slice.
 # @complexity O(N)

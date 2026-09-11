@@ -7,6 +7,38 @@ import (
 	"fmt"
 )
 
+func parseLambdaExpr(ctx *ParseCtx, fnTk t.Token) (t.NodeExpr, error) {
+	consume(ctx) // fn
+
+	args, err := parseArgsList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	returnTk, err := peek(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx.LambdaCounter++
+	// '$' cannot occur in a source identifier, so lifted functions cannot
+	// collide with user declarations in the module namespace.
+	name := fmt.Sprintf("$lambda.%d", ctx.LambdaCounter)
+	for ctx.GlobalNode.FuncDefs[name] != nil {
+		ctx.LambdaCounter++
+		name = fmt.Sprintf("$lambda.%d", ctx.LambdaCounter)
+	}
+	nameNode := &t.NodeNameSingle{Tk: fnTk, Name: name}
+	class := t.NodeGenericClass{NameNode: nameNode, ArgsNode: args}
+	definition, err := parseFuncDef(ctx, fnTk, returnTk, class, "")
+	if err != nil {
+		return nil, err
+	}
+	definition.IsLambda = true
+	ctx.GlobalNode.Declarations = append(ctx.GlobalNode.Declarations, definition)
+
+	return &t.NodeExprName{Tk: fnTk, Name: &t.NodeNameSingle{Tk: fnTk, Name: name}}, nil
+}
+
 func parseArrayExpr(ctx *ParseCtx, arrayTk t.Token) (t.NodeExpr, error) {
 	typeTk, e := peek(ctx)
 	if e != nil {
@@ -140,6 +172,12 @@ func parseArrayExpr(ctx *ParseCtx, arrayTk t.Token) (t.NodeExpr, error) {
 }
 
 func parseSimplePrimaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
+	if tk.KeywType == t.KwAt {
+		return parseLlvmExpr(ctx, tk)
+	}
+	if tk.KeywType == t.KwFn {
+		return parseLambdaExpr(ctx, tk)
+	}
 	// `array` is contextual so existing variables, imports, and modules may
 	// continue to use that name. It starts an array expression only when it is
 	// followed by the beginning of an element type.
@@ -251,6 +289,95 @@ func parseSimplePrimaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
 		fmt.Sprintf("syntax error: unexpected '%s' in expression", tk.Repr),
 		"",
 	)
+}
+
+// parseLlvmExpr parses @llvm("operation", values..., ResultType). The final
+// type is part of the operation contract rather than a value expression. Even
+// statement operations spell their result as void, which keeps parsing and
+// backend dispatch uniform.
+func parseLlvmExpr(ctx *ParseCtx, at t.Token) (t.NodeExpr, error) {
+	consume(ctx) // @
+	name, err := peek(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if (name.Type != t.TokName && name.KeywType != t.KwLlvm) || name.Repr != "llvm" {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &name, "unknown expression directive", "expected `@llvm(\"operation\", value, ResultType)`")
+	}
+	consume(ctx)
+	open, err := peek(ctx)
+	if err != nil || open.KeywType != t.KwParenOp {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &name, "@llvm requires an argument list", "expected `@llvm(\"operation\", value, ResultType)`")
+	}
+	consume(ctx)
+	op, err := peek(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if op.Type != t.TokLitStr {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &op, "@llvm operation must be a string literal", "expected a registered operation such as \"ptrtoint\"")
+	}
+	consume(ctx)
+	comma, err := peek(ctx)
+	if err != nil || comma.KeywType != t.KwComma {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &op, "@llvm operation requires a result type", "expected `@llvm(\"operation\", values..., ResultType)`")
+	}
+	consume(ctx)
+	args := []t.NodeExpr{}
+	for {
+		itemTk, itemErr := peek(ctx)
+		if itemErr != nil {
+			return nil, itemErr
+		}
+		// A top-level comma before this directive's closing parenthesis means
+		// this item is a value/configuration argument. Otherwise it is the
+		// mandatory final result type.
+		depth := 0
+		hasFollowingItem := false
+		for i := ctx.TokIdx; i < len(ctx.Toks); i++ {
+			switch ctx.Toks[i].KeywType {
+			case t.KwParenOp, t.KwBrackOp:
+				depth++
+			case t.KwParenCl:
+				if depth == 0 {
+					i = len(ctx.Toks)
+				} else {
+					depth--
+				}
+			case t.KwBrackCl:
+				if depth > 0 {
+					depth--
+				}
+			case t.KwComma:
+				if depth == 0 {
+					hasFollowingItem = true
+					i = len(ctx.Toks)
+				}
+			}
+		}
+		if !hasFollowingItem {
+			resultType, typeErr := parseType(ctx, itemTk, false)
+			if typeErr != nil {
+				return nil, typeErr
+			}
+			close, closeErr := peek(ctx)
+			if closeErr != nil || close.KeywType != t.KwParenCl {
+				return nil, comp_err.CompilationErrorToken(ctx.Fctx, &itemTk, "@llvm argument list is not closed", "expected ')'")
+			}
+			consume(ctx)
+			return &t.NodeExprLlvm{Tk: at, Operation: op.Repr, Args: args, ResultType: resultType}, nil
+		}
+		arg, argErr := parseExpression(ctx, itemTk, 0)
+		if argErr != nil {
+			return nil, argErr
+		}
+		args = append(args, arg)
+		separator, separatorErr := peek(ctx)
+		if separatorErr != nil || separator.KeywType != t.KwComma {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &itemTk, "@llvm arguments must be comma-separated", "expected ','")
+		}
+		consume(ctx)
+	}
 }
 
 func expressionToken(expr t.NodeExpr, fallback t.Token) t.Token {
@@ -470,6 +597,27 @@ func isKnownFunction(ctx *ParseCtx, expr t.NodeExpr) bool {
 	return ok
 }
 
+func isKnownUnionConstructor(ctx *ParseCtx, expr t.NodeExpr) bool {
+	nameExpr, ok := expr.(*t.NodeExprName)
+	if !ok {
+		return false
+	}
+	name, ok := nameExpr.Name.(*t.NodeNameComposite)
+	if !ok || len(name.Parts) != 2 {
+		return false
+	}
+	union := ctx.GlobalNode.UnionDefs[name.Parts[0]]
+	if union == nil {
+		return false
+	}
+	for _, variant := range union.Variants {
+		if variant.Name == name.Parts[1] {
+			return true
+		}
+	}
+	return false
+}
+
 func parsePostfixNamedCall(ctx *ParseCtx, tk t.Token, calleeExpr t.NodeExpr, genericArgs []*t.NodeType) (*t.NodeExprCall, error) {
 	init, err := parsePostfixStructInit(ctx, tk, calleeExpr, genericArgs)
 	if err != nil {
@@ -659,7 +807,9 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 				}
 			}
 
-			if isStructInitList(ctx) && isKnownFunction(ctx, expr) {
+			if isKnownUnionConstructor(ctx, expr) {
+				expr, e = parsePostfixStructInit(ctx, tk, expr, nil)
+			} else if isStructInitList(ctx) && isKnownFunction(ctx, expr) {
 				expr, e = parsePostfixNamedCall(ctx, tk, expr, nil)
 			} else if isStructInitList(ctx) {
 				expr, e = parsePostfixStructInit(ctx, tk, expr, nil)

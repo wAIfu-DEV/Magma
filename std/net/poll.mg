@@ -1,19 +1,19 @@
 mod net_poll
 # Allocation-free readiness polling with cross-thread interruption.
 
-use "std:allocator" allocator
-use "std:errors" errors
-use "std:slices" slices
-use "std:net/socket" socket
+use "std:allocator" as allocator
+use "std:errors" as errors
+use "std:slices" as slices
+use "std:net/socket" as socket
 
 @platform("linux", "android")
-use "std:linux/net/poll_impl" impl
+use "std:linux/net/poll_impl" as impl
 
 @platform("windows")
-use "std:win/net/poll_impl" impl
+use "std:win/net/poll_impl" as impl
 
 @platform("darwin", "ios", "freebsd", "netbsd", "openbsd")
-use "std:unix/net/poll_impl" impl
+use "std:unix/net/poll_impl" as impl
 
 pub const READ u32 = 1
 pub const WRITE u32 = 2

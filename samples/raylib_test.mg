@@ -1,6 +1,6 @@
 mod main
 
-use "../std/raylib.mg" rl
+use "../std/raylib.mg" as rl
 
 pub main() !void:
     rl.initWindow(800, 450, "raylib [core] example - basic window")

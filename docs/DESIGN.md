@@ -2,8 +2,8 @@
 
 This document describes the compiler present in `main.go` and `src/`. It is an
 implementation map, not a proposed architecture. The command-line driver owns
-Clang discovery and native emission; packages under `src/` load a whole Magma
-program, validate it, and produce LLVM IR.
+Clang discovery and native emission; packages under `src/` validate Magma
+modules and produce cached LLVM bitcode for a final whole-program link.
 
 ## Pipeline
 
@@ -48,10 +48,13 @@ completion-bearing handles, and subscript range proofs. Definite safety
 diagnostics stop compilation unless warning mode was explicitly selected;
 resource cleanup and leak diagnostics remain warnings.
 
-`llvm_ir.IrWrite` emits a whole LLVM module, and `ir_cleaner.CleanIr` removes
-redundant textual fragments. The driver passes the result to Clang. LLVM output
-stops before native compilation; object output stops before linking;
-executable output also links declared libraries and copies declared bundles.
+The default native pipeline independently lowers modules to cached LLVM
+bitcode, links all required units, performs whole-program optimization, and
+emits native code. `llvm_ir.IrWrite` and `ir_cleaner.CleanIr` implement the
+deprecated whole-program textual backend selected with `--backend textual`.
+LLVM output remains a non-incremental inspection mode; object output stops
+before native linking, while executable output also links declared libraries
+and copies declared bundles.
 
 ## Program representation
 
@@ -63,8 +66,10 @@ annotate this shared representation in place.
 
 Each `FileCtx` contains source bytes, line indexes, tokens, its AST and scope
 tree, module identity, import aliases, native libraries, and bundles. The
-parser assigns every loaded module a unique internal package name, preventing
-backend symbol collisions while source keeps using declared names and aliases.
+parser assigns every loaded module a stable internal package name derived from
+its canonical backing-module identity. Import aliases and declared module names
+do not define identity, so both LLVM backends avoid symbol collisions while
+source keeps using its local spellings.
 
 AST nodes acquire information through the pipeline. Parsing records source
 shape, linking attaches declaration identity, type checking supplies semantic
@@ -84,6 +89,19 @@ An import alias names the imported namespace. Nested module traversal is
 allowed through `pub use` re-exports, and `types.ResolveModulePrefix` requires
 every intermediate namespace to be public. Declaration visibility is checked
 separately by the linker.
+
+`src/module_interface` defines the versioned `.mgi` semantic-interface format
+used by the default incremental bitcode pipeline. It extracts only public
+declarations from parsed modules, preserves existing ownership annotations and
+complete public aggregate layouts, records canonical dependency identities, and
+encodes them deterministically. Source fingerprints are deliberately excluded
+from semantic interface bytes; they belong to implementation-cache metadata.
+`compilerpipeline.ParseWithInterfaces` can replace selected imported source
+modules with declaration-only `FileCtx` values materialized from those
+interfaces. Link and type-interface resolution still see the declarations, but
+implementation linking, type checking, lowering validation, and ownership
+analysis skip their absent bodies. Imported generic instantiation is rejected
+explicitly until provider-side specialization is implemented.
 
 ## Targets and native emission
 

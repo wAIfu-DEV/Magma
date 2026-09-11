@@ -1,13 +1,13 @@
 mod net_tls_impl_linux
 # OpenSSL 3 client backend. OpenSSL objects are opaque C pointers.
 
-use "std:allocator" allocator
-use "std:c" c
-use "std:cast" cast
-use "std:errors" errors
-use "std:net/socket" socket
-use "std:slices" slices
-use "std:strings" strings
+use "std:allocator" as allocator
+use "std:c" as c
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:net/socket" as socket
+use "std:slices" as slices
+use "std:strings" as strings
 
 link ":libssl.so.3"
 link ":libcrypto.so.3"

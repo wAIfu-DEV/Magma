@@ -158,6 +158,15 @@ func parseDeclNameWithGenerics(ctx *ParseCtx) (*parsedDeclName, error) {
 			return nil, e
 		}
 	}
+	if thirdDot, thirdErr := peek(ctx); thirdErr == nil && thirdDot.KeywType == t.KwDot {
+		consume(ctx)
+		thirdTk, thirdErr := peek(ctx)
+		if thirdErr != nil || thirdTk.Type != t.TokName {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &thirdDot, "syntax error: expected variant member name after '.'", "expected: `Union.Variant.method`")
+		}
+		consume(ctx)
+		return &parsedDeclName{NameNode: &t.NodeNameComposite{Tokens: []t.Token{firstTk, secondTk, thirdTk}, Parts: []string{firstName, secondName, thirdTk.Repr}}, OwnerTypeParams: firstParams, TypeParams: secondParams}, nil
+	}
 
 	return &parsedDeclName{
 		NameNode: &t.NodeNameComposite{

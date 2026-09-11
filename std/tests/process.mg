@@ -1,13 +1,13 @@
 mod main
 
-use "std:process" process
-use "std:errors" errors
-use "std:heap" heap
-use "std:fs" fs
-use "std:strings" strings
-use "std:time" time
-use "std:thread_pool" thread_pool
-use "std:context" context
+use "std:process" as process
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:fs" as fs
+use "std:strings" as strings
+use "std:time" as time
+use "std:thread_pool" as thread_pool
+use "std:context" as context
 
 const readyFile str = "std_process_kill_ready.tmp"
 
@@ -15,7 +15,7 @@ fileExists(path str) bool:
     a := heap.allocator()
     contents str, readError error = fs.readFile(path)
     if readError.ok():
-        contents.free(a)
+        contents.free()
         ret true
     ..
     ret false

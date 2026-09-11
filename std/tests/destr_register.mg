@@ -1,6 +1,6 @@
 mod main
 
-use "std:destr_register" dreg
+use "std:destr_register" as dreg
 
 main() void:
     # TODO: add tests

@@ -1,13 +1,13 @@
 mod queue
 # Allocator-backed first-in, first-out queues of owned generic values.
 
-use "std:array"     arr
-use "std:allocator" alc
+use "std:array"     as arr
+use "std:allocator" as alc
 # First-in, first-out collection that owns its enqueued values.
 pub Queue[T](
     allocator alc.Allocator
     data     arr.Array[T]
-    cleanup   (alc.Allocator, $T) void
+    cleanup   ($T) void
 )
 
 # Creates an empty queue.
@@ -17,7 +17,7 @@ pub Queue[T](
 # @ownership Release with Queue.free.
 # @example
 #   pending := try queue.new[u64](a, none)
-pub new[T](cleanup (alc.Allocator, $T) void) !$Queue[T]:
+pub new[T](cleanup ($T) void) !$Queue[T]:
     a := ctx.alloc
     data := try arr.new[T](a)
     q Queue[T]

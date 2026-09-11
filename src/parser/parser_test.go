@@ -3,9 +3,48 @@ package parser
 import (
 	"Magma/src/tokenizer"
 	mt "Magma/src/types"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestEmbedConstantResolvesRelativeFile(t *testing.T) {
+	directory := t.TempDir()
+	assetPath := filepath.Join(directory, "asset.bin")
+	if err := os.WriteFile(assetPath, []byte{0, 1, 2, 255}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	source := "mod main\nconst data := @embed(\"asset.bin\")\n"
+	fctx := &mt.FileCtx{FilePath: filepath.Join(directory, "main.mg"), Content: []byte(source), ImportAlias: map[string]string{}, PackageName: "main_test"}
+	tokens, err := tokenizer.Tokenize(fctx, fctx.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fctx.Tokens = tokens
+	global, err := Parse(&mt.SharedState{}, fctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	embedded, ok := global.Declarations[0].(*mt.NodeConstDef).Initializer.(*mt.NodeExprEmbed)
+	if !ok || embedded.Path != assetPath || embedded.Size != 4 || embedded.Symbol == "" {
+		t.Fatalf("embedded constant = %#v", global.Declarations[0])
+	}
+}
+
+func TestEmbedConstantRejectsMissingFile(t *testing.T) {
+	directory := t.TempDir()
+	source := "mod main\nconst data := @embed(\"missing.bin\")\n"
+	fctx := &mt.FileCtx{FilePath: filepath.Join(directory, "main.mg"), Content: []byte(source), ImportAlias: map[string]string{}, PackageName: "main_test"}
+	tokens, err := tokenizer.Tokenize(fctx, fctx.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fctx.Tokens = tokens
+	if _, err := Parse(&mt.SharedState{}, fctx); err == nil || !strings.Contains(err.Error(), "cannot inspect embedded file") {
+		t.Fatalf("missing embed error = %v", err)
+	}
+}
 
 func parseTestSource(tt *testing.T, source string) (*mt.NodeGlobal, error) {
 	tt.Helper()
@@ -57,6 +96,51 @@ main() void:
 	}
 	if len(identity.Body.Statements) != 1 {
 		t.Fatalf("identity statements = %d, want 1", len(identity.Body.Statements))
+	}
+}
+
+func TestGlobalModifierMarksProcessWideVariable(t *testing.T) {
+	global, err := parseTestSource(t, "mod main\nglobal counter u64\nlocalCounter u64\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	processWide := global.Declarations[0].(*mt.NodeExprVarDef)
+	threadLocal := global.Declarations[1].(*mt.NodeExprVarDef)
+	if !processWide.IsProcessGlobal || threadLocal.IsProcessGlobal {
+		t.Fatalf("unexpected storage flags: global=%v local=%v", processWide.IsProcessGlobal, threadLocal.IsProcessGlobal)
+	}
+}
+
+func TestCompilerKnownConstantRequiresTypeAndResolvesValue(t *testing.T) {
+	source := "mod main\nconst CAPACITY u64 = @compiler_known(\"CAPACITY\")\n"
+	fctx := &mt.FileCtx{FilePath: "test.mg", Content: []byte(source), ImportAlias: map[string]string{}}
+	tokens, err := tokenizer.Tokenize(fctx, fctx.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fctx.Tokens = tokens
+	global, err := Parse(&mt.SharedState{CompilerArgs: map[string]string{"CAPACITY": "256"}}, fctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	constant := global.Declarations[0].(*mt.NodeConstDef)
+	literal, ok := constant.Initializer.(*mt.NodeExprLit)
+	if !ok || literal.Value != "256" || literal.LitType != mt.TokLitNum {
+		t.Fatalf("compiler constant = %#v", constant.Initializer)
+	}
+	if _, err := parseTestSource(t, "mod main\nconst CAPACITY := @compiler_known(\"CAPACITY\")\n"); err == nil {
+		t.Fatal("untyped compiler-known constant was accepted")
+	}
+}
+
+func TestExternalGlobalHasSourceAliasAndProcessStorage(t *testing.T) {
+	global, err := parseTestSource(t, "mod main\next environment environ ptr\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	variable := global.Declarations[0].(*mt.NodeExprVarDef)
+	if !variable.IsExternal || !variable.IsProcessGlobal || variable.ExternalName != "environ" {
+		t.Fatalf("unexpected external global: %#v", variable)
 	}
 }
 
@@ -235,6 +319,33 @@ main() void:
 	}
 }
 
+func TestParseCapturelessLambdaLiftsFunction(t *testing.T) {
+	global, err := parseTestSource(t, `mod main
+main() void:
+    callback := fn(value u64) u64:
+        ret value
+    ..
+    callback(1)
+..
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lambda := global.FuncDefs["$lambda.1"]
+	if lambda == nil || !lambda.IsLambda {
+		t.Fatalf("lifted lambda = %#v", lambda)
+	}
+	if len(lambda.Class.ArgsNode.Args) != 1 || lambda.Class.ArgsNode.Args[0].Name != "value" {
+		t.Fatalf("lambda arguments = %#v", lambda.Class.ArgsNode.Args)
+	}
+	mainFn := global.FuncDefs["main"]
+	assignment := mainFn.Body.Statements[0].(*mt.NodeStmtExpr).Expression.(*mt.NodeExprVarDefAssign)
+	name, ok := assignment.AssignExpr.(*mt.NodeExprName)
+	if !ok || name.Name.(*mt.NodeNameSingle).Name != "$lambda.1" {
+		t.Fatalf("lambda expression = %#v", assignment.AssignExpr)
+	}
+}
+
 func TestParseCharacterizesForLoop(t *testing.T) {
 	global, err := parseTestSource(t, `mod main
 main() void:
@@ -312,5 +423,33 @@ func TestParseCharacterizesPrematureEOF(t *testing.T) {
 	_, err := parseTestSource(t, "mod main\nmain() void:\n")
 	if err == nil || !strings.Contains(err.Error(), "reached end of file prematurely") {
 		t.Fatalf("error = %v, want premature EOF diagnostic", err)
+	}
+}
+
+func TestParseUnionAndMatch(t *testing.T) {
+	global, err := parseTestSource(t, `mod main
+union Value(
+    Null
+    String(value str)
+)
+main(value Value) void:
+    match value as x:
+    case Value.String:
+        x.render()
+    else:
+        throw "not a string"
+    ..
+..
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	union := global.UnionDefs["Value"]
+	if union == nil || len(union.Variants) != 2 || union.Variants[1].Name != "String" {
+		t.Fatalf("union = %#v", union)
+	}
+	match, ok := global.FuncDefs["main"].Body.Statements[0].(*mt.NodeStmtMatch)
+	if !ok || len(match.Cases) != 1 || match.ElseBody == nil {
+		t.Fatalf("match = %#v", match)
 	}
 }

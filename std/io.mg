@@ -1,16 +1,16 @@
 mod io
 # Standard input, output, and error stream access.
 
-use "std:writer"    writer
-use "std:reader"    reader
-use "std:buffered"  buffered
-use "std:allocator" alc
+use "std:writer"    as writer
+use "std:reader"    as reader
+use "std:buffered"  as buffered
+use "std:allocator" as alc
 
 @platform("windows")
-use "std:win/file_impl" impl_file
+use "std:win/file_impl" as impl_file
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/file_impl" impl_file
+use "std:unix/file_impl" as impl_file
 
 # Returns a buffered writer for standard output.
 # @complexity O(1).

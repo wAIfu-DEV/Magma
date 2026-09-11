@@ -3,34 +3,25 @@ mod win_net_runtime
 
 link "ws2_32"
 
-use "std:errors" errors
-use "std:cast" cast
-use "std:slices" slices
+use "std:errors" as errors
+use "std:cast" as cast
+use "std:slices" as slices
+use "std:llvm" as ll
 
 ext ext_WSAStartup WSAStartup(version u16, data ptr) i32
 
-llvm "@magma.winsock.state = internal global i8 0, align 1\n"
+global winsockState u8
 
 loadState() u8:
-    unsafe:
-        llvm "  %value = load atomic i8, ptr @magma.winsock.state acquire, align 1\n"
-        llvm "  ret i8 %value\n"
-    ..
+    ret ll.atomicLoadAcquireU8(addrof winsockState)
 ..
 
 claimInitialization() bool:
-    unsafe:
-        llvm "  %result = cmpxchg ptr @magma.winsock.state, i8 0, i8 1 acq_rel acquire\n"
-        llvm "  %claimed = extractvalue { i8, i1 } %result, 1\n"
-        llvm "  ret i1 %claimed\n"
-    ..
+    ret ll.atomicCompareExchangeAcqRelU8(addrof winsockState, 0, 1) == 0
 ..
 
 publishState(value u8) void:
-    unsafe:
-        llvm "  store atomic i8 %value, ptr @magma.winsock.state release, align 1\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreReleaseU8(addrof winsockState, value)
 ..
 
 pub ensure() !void:

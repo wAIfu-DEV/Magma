@@ -106,10 +106,10 @@ pub identity[T](value T) T:
 ..
 `,
 		"library.mg": `mod library
-pub use "heap.mg" heap
+pub use "heap.mg" as heap
 `,
 		"main.mg": `mod main
-use "library.mg" lib
+use "library.mg" as lib
 main() void:
     value lib.heap.Allocator = lib.heap.allocator()
     generic u64 = lib.heap.identity[u64](9)
@@ -118,6 +118,161 @@ main() void:
 	})
 	if err != nil {
 		t.Fatalf("public module re-export failed: %v", err)
+	}
+}
+
+func TestCyclicModulesMayUsePublicInterfaces(t *testing.T) {
+	err := checkModuleSet(t, map[string]string{
+		"alpha.mg": `mod alpha
+use "beta.mg" as beta
+pub Alpha(peer beta.Beta*)
+pub fromAlpha() u64:
+    ret beta.fromBeta()
+..
+`,
+		"beta.mg": `mod beta
+use "alpha.mg" as alpha
+pub Beta(peer alpha.Alpha*)
+pub fromBeta() u64:
+    ret 7
+..
+`,
+		"main.mg": `mod main
+use "alpha.mg" as alpha
+use "beta.mg" as beta
+main() void:
+    value u64 = alpha.fromAlpha()
+    left alpha.Alpha
+    right beta.Beta
+..
+`,
+	})
+	if err != nil {
+		t.Fatalf("cyclic public module interfaces failed: %v", err)
+	}
+}
+
+func TestCyclicModulesPreserveVisibility(t *testing.T) {
+	err := checkModuleSet(t, map[string]string{
+		"alpha.mg": `mod alpha
+use "beta.mg" as beta
+hidden() u64:
+    ret beta.visible()
+..
+`,
+		"beta.mg": `mod beta
+use "alpha.mg" as alpha
+pub visible() u64:
+    ret alpha.hidden()
+..
+`,
+		"main.mg": `mod main
+use "beta.mg" as beta
+main() void:
+    beta.visible()
+..
+`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "private") {
+		t.Fatalf("cyclic import exposed a private declaration: %v", err)
+	}
+}
+
+func TestCyclicModulesResolveInferredGlobalsToFixedPoint(t *testing.T) {
+	err := checkModuleSet(t, map[string]string{
+		"alpha.mg": `mod alpha
+use "beta.mg" as beta
+pub inferred := beta.seed
+`,
+		"beta.mg": `mod beta
+use "alpha.mg" as alpha
+pub seed := 7
+pub read() u64:
+    ret alpha.inferred
+..
+`,
+		"main.mg": `mod main
+use "beta.mg" as beta
+main() void:
+    value u64 = beta.read()
+..
+`,
+	})
+	if err != nil {
+		t.Fatalf("cyclic inferred global dependency failed: %v", err)
+	}
+}
+
+func TestCyclicModulesSpecializeGenericsAcrossCycle(t *testing.T) {
+	err := checkModuleSet(t, map[string]string{
+		"alpha.mg": `mod alpha
+use "beta.mg" as beta
+pub convert[T](value T) T:
+    ret beta.pass[T](value)
+..
+`,
+		"beta.mg": `mod beta
+use "alpha.mg" as alpha
+pub pass[T](value T) T:
+    ret value
+..
+pub bounce() u64:
+    ret alpha.convert[u64](7)
+..
+`,
+		"main.mg": `mod main
+use "beta.mg" as beta
+main() void:
+    value u64 = beta.bounce()
+..
+`,
+	})
+	if err != nil {
+		t.Fatalf("generic specialization across import cycle failed: %v", err)
+	}
+}
+
+func TestCyclicModuleGlobalInferenceCycleRejected(t *testing.T) {
+	err := checkModuleSet(t, map[string]string{
+		"alpha.mg": `mod alpha
+use "beta.mg" as beta
+pub first := beta.second
+`,
+		"beta.mg": `mod beta
+use "alpha.mg" as alpha
+pub second := alpha.first
+`,
+		"main.mg": `mod main
+use "alpha.mg" as alpha
+main() void:
+    value := alpha.first
+..
+`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot infer cyclic module-level declaration") {
+		t.Fatalf("module-level inference cycle diagnostic = %v", err)
+	}
+}
+
+func TestCyclicModuleConstantInitializerCycleRejected(t *testing.T) {
+	err := checkModuleSet(t, map[string]string{
+		"alpha.mg": `mod alpha
+use "beta.mg" as beta
+pub const FIRST u64 = beta.SECOND
+`,
+		"beta.mg": `mod beta
+use "alpha.mg" as alpha
+pub const SECOND u64 = alpha.FIRST
+`,
+		"main.mg": `mod main
+use "alpha.mg" as alpha
+main() void:
+    value u64 = alpha.FIRST
+..
+`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "constant initializer cycle") {
+		t.Fatalf("constant initializer cycle diagnostic = %v", err)
 	}
 }
 
@@ -162,7 +317,7 @@ privateGeneric[T](value T) T:
 
 func TestPublicFunctionsStructsAndMethodsCrossModules(t *testing.T) {
 	main := `mod main
-use "library.mg" lib
+use "library.mg" as lib
 
 main() void:
     value lib.Public
@@ -194,7 +349,7 @@ main() void:
 
 func TestImportedGenericFunctionValue(t *testing.T) {
 	main := `mod main
-use "library.mg" lib
+use "library.mg" as lib
 
 main() void:
     callback := lib.publicGeneric[u64]
@@ -253,7 +408,7 @@ main() void:
 
 func TestPrivateFunctionRejectedAcrossModules(t *testing.T) {
 	main := `mod main
-use "library.mg" lib
+use "library.mg" as lib
 
 main() void:
     lib.privateHelper()
@@ -267,7 +422,7 @@ main() void:
 
 func TestPrivateStructRejectedAcrossModules(t *testing.T) {
 	main := `mod main
-use "library.mg" lib
+use "library.mg" as lib
 
 main() void:
     value lib.Private
@@ -313,7 +468,7 @@ pub Outer(inner Inner, ptr Inner*)
 pub config Outer
 `
 	main := `mod main
-use "library.mg" lib
+use "library.mg" as lib
 main() void:
     current u64 = lib.config.inner.value
     lib.config.inner.value = current

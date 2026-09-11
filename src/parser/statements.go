@@ -90,6 +90,8 @@ func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
 		return parseLlvm(ctx, tk)
 	case t.KwIf:
 		return parseStmtIf(ctx, tk)
+	case t.KwMatch:
+		return parseStmtMatch(ctx, tk)
 	case t.KwWhile:
 		return parseStmtWhile(ctx, tk)
 	case t.KwFor:
@@ -133,6 +135,113 @@ func parseStatement(ctx *ParseCtx, tk t.Token) (t.NodeStatement, error) {
 	}
 
 	return &t.NodeStmtExpr{Expression: expr}, nil
+}
+
+func parseMatchArmBody(ctx *ParseCtx, open t.Token) (t.NodeBody, error) {
+	if open.KeywType != t.KwColon {
+		return t.NodeBody{}, comp_err.CompilationErrorToken(ctx.Fctx, &open, "match arm requires ':'", "expected: `case Union.Variant:`")
+	}
+	consume(ctx)
+	body := t.NodeBody{}
+	for {
+		tk, err := peek(ctx)
+		if err != nil {
+			return t.NodeBody{}, err
+		}
+		if tk.KeywType == t.KwNewline {
+			consume(ctx)
+			continue
+		}
+		if tk.KeywType == t.KwCase || tk.KeywType == t.KwElse || tk.KeywType == t.KwDots {
+			return body, nil
+		}
+		stmt, err := parseStatement(ctx, tk)
+		if err != nil {
+			return t.NodeBody{}, err
+		}
+		body.Statements = append(body.Statements, stmt)
+	}
+}
+
+func parseStmtMatch(ctx *ParseCtx, matchTk t.Token) (*t.NodeStmtMatch, error) {
+	consume(ctx)
+	first, err := peek(ctx)
+	if err != nil {
+		return nil, err
+	}
+	expression, err := parseExpression(ctx, first, 0)
+	if err != nil {
+		return nil, err
+	}
+	asTk, err := peek(ctx)
+	if err != nil || asTk.KeywType != t.KwAs {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &matchTk, "match requires a narrowed binding", "expected: `match value as binding:`")
+	}
+	consume(ctx)
+	binding, err := peek(ctx)
+	if err != nil || binding.Type != t.TokName {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &asTk, "expected a binding name after 'as'", "expected: `match value as binding:`")
+	}
+	consume(ctx)
+	colon, err := peek(ctx)
+	if err != nil || colon.KeywType != t.KwColon {
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &binding, "match header requires ':'", "expected: `match value as binding:`")
+	}
+	consume(ctx)
+	stmt := &t.NodeStmtMatch{Tk: matchTk, Expression: expression, BindingTk: binding}
+	for {
+		next, nextErr := peek(ctx)
+		if nextErr != nil {
+			return nil, nextErr
+		}
+		if next.KeywType == t.KwNewline {
+			consume(ctx)
+			continue
+		}
+		if next.KeywType == t.KwDots {
+			consume(ctx)
+			return stmt, nil
+		}
+		if next.KeywType == t.KwElse {
+			consume(ctx)
+			open, openErr := peek(ctx)
+			if openErr != nil {
+				return nil, openErr
+			}
+			body, bodyErr := parseMatchArmBody(ctx, open)
+			if bodyErr != nil {
+				return nil, bodyErr
+			}
+			stmt.ElseBody = &body
+			continue
+		}
+		if next.KeywType != t.KwCase {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &next, "expected 'case', 'else', or '..' in match", "")
+		}
+		caseTk := next
+		consume(ctx)
+		nameTk, nameErr := peek(ctx)
+		if nameErr != nil || nameTk.Type != t.TokName {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &caseTk, "case requires an explicit union variant", "expected: `case Union.Variant:`")
+		}
+		name, nameErr := parseName(ctx, nameTk, true)
+		if nameErr != nil {
+			return nil, nameErr
+		}
+		if composite, ok := name.(*t.NodeNameComposite); !ok || len(composite.Parts) < 2 {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &nameTk, "case variant must include its union name", "expected: `case Union.Variant:`")
+		}
+		open, openErr := peek(ctx)
+		if openErr != nil {
+			return nil, openErr
+		}
+		body, bodyErr := parseMatchArmBody(ctx, open)
+		if bodyErr != nil {
+			return nil, bodyErr
+		}
+		bindingDef := &t.NodeExprVarDef{Name: &t.NodeNameSingle{Tk: binding, Name: binding.Repr}}
+		stmt.Cases = append(stmt.Cases, &t.NodeMatchCase{Tk: caseTk, VariantName: name, Binding: bindingDef, Body: body})
+	}
 }
 
 func parseStmtBounded(ctx *ParseCtx, tk t.Token) (*t.NodeStmtBounded, error) {

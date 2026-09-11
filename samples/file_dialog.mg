@@ -1,9 +1,9 @@
 mod main
-use "std:allocator" allocator
-use "std:dialog" dialog
-use "std:errors" errors
-use "std:heap" heap
-use "std:io" io
+use "std:allocator" as allocator
+use "std:dialog" as dialog
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:io" as io
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()
@@ -16,6 +16,6 @@ pub main() !void:
         ..
         throw dialogError
     ..
-    defer selected.free(a)
+    defer selected.free()
     try io.printLn(selected)
 ..

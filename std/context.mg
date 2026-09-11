@@ -1,7 +1,7 @@
 mod context
 
-use "std:allocator" alc
-use "std:executor" exe
+use "std:allocator" as alc
+use "std:executor" as exe
 
 pub Ctx(
     alloc alc.Allocator

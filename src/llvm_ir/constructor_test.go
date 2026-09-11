@@ -16,6 +16,61 @@ import (
 	"testing"
 )
 
+func TestGlobalModifierEmitsProcessWideStorage(t *testing.T) {
+	ir, err := compileSource(t, "mod main\nglobal sharedCounter u64\nthreadCounter u64\nmain() void:\n..\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ir, "private global i64 zeroinitializer") {
+		t.Fatal("global variable did not emit process-wide storage")
+	}
+	if !strings.Contains(ir, "private thread_local global i64 zeroinitializer") {
+		t.Fatal("ordinary top-level variable lost thread-local storage")
+	}
+}
+
+func TestGlobalArrayUsesStaticMutableBacking(t *testing.T) {
+	ir, err := compileSource(t, "mod main\nconst CAPACITY u64 = @compiler_known(\"ERROR_TRACE_SLOTS\")\nglobal values := array u64[CAPACITY]\nmain() void:\n..\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ir, ".values.data = private global [1024 x i64]") || !strings.Contains(ir, ".values = private global %type.slice") {
+		t.Fatal("global array did not emit mutable static backing and descriptor")
+	}
+}
+
+func TestEmbeddedFileLowersToExternalByteSlice(t *testing.T) {
+	asset := filepath.Join(t.TempDir(), "asset.bin")
+	if err := os.WriteFile(asset, []byte{0, 1, 2, 255}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ir, err := compileSource(t, "mod main\nconst data := @embed(\""+filepath.ToSlash(asset)+"\")\nmain() void:\n..\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{" = external constant [4 x i8]", "private constant %type.slice", "i64 4"} {
+		if !strings.Contains(ir, expected) {
+			t.Fatalf("embedded IR is missing %q:\n%s", expected, ir)
+		}
+	}
+}
+
+func TestExternalGlobalUsesNativeSymbol(t *testing.T) {
+	ir, err := compileSource(t, `mod main
+ext environment environ ptr
+
+main() ptr:
+    ret environment
+..
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ir, "@environ = external global ptr") || !strings.Contains(ir, "load ptr, ptr @environ") {
+		t.Fatalf("external global was not lowered through its native symbol:\n%s", ir)
+	}
+}
+
 func TestWindowsMainConvertsWideArgumentsToUtf8(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows entry-point lowering")
@@ -105,7 +160,7 @@ main() void:
 	}
 }
 
-func TestStringEqualityUsesRuntimeHelper(t *testing.T) {
+func TestStringEqualityUsesCoreCompareMethod(t *testing.T) {
 	ir, err := compileSource(t, `mod main
 
 equal(a str, b str) bool:
@@ -119,14 +174,32 @@ different(a str, b str) bool:
 	if err != nil {
 		t.Fatalf("compile string comparisons: %v", err)
 	}
-	if got := strings.Count(ir, "call i1 @magma.string.equal(%type.str"); got != 2 {
-		t.Fatalf("expected two string equality helper calls, got %d", got)
+	if got := strings.Count(ir, ".str.compare\n"); got != 2 {
+		t.Fatalf("expected two core string comparison calls, got %d", got)
+	}
+	if strings.Contains(ir, "@magma.string.equal") {
+		t.Fatal("string equality still depends on the removed LLVM runtime helper")
 	}
 	if !strings.Contains(ir, "xor i1 %") {
 		t.Fatal("string inequality did not invert the equality result")
 	}
 	if strings.Contains(ir, "icmp eq %type.str") || strings.Contains(ir, "icmp ne %type.str") {
 		t.Fatal("string comparison emitted an aggregate icmp")
+	}
+}
+
+func TestStringLiteralUsesNullEmbeddedAllocator(t *testing.T) {
+	ir, err := compileSource(t, `mod main
+
+main() void:
+    value str = "literal"
+..
+`)
+	if err != nil {
+		t.Fatalf("compile string literal: %v", err)
+	}
+	if !strings.Contains(ir, "i64 7, ptr null, ptr null }") {
+		t.Fatalf("string literal does not carry a null embedded allocator:\n%s", ir)
 	}
 }
 
@@ -818,6 +891,61 @@ main() void:
 	readIR := ir[start : namePos+endOffset]
 	if !strings.Contains(readIR, "load ptr, ptr") {
 		t.Fatal("member call did not load its pointer-valued owner field")
+	}
+}
+
+func TestMemberCallOnNestedValueFieldUsesExistingAddress(t *testing.T) {
+	source := `mod main
+
+Leaf(value u64)
+Level1(leaf Leaf)
+Level2(level1 Level1)
+Level3(level2 Level2)
+
+Leaf.get() u64:
+    ret this.value
+..
+
+Level1.read1() u64:
+    ret this.leaf.get()
+..
+
+Level2.read2() u64:
+    ret this.level1.leaf.get()
+..
+
+Level3.read3() u64:
+    ret this.level2.level1.leaf.get()
+..
+
+main() void:
+    ret
+..
+`
+
+	ir, err := compileSource(t, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{".read1(", ".read2(", ".read3("} {
+		namePos := strings.Index(ir, method)
+		if namePos < 0 {
+			t.Fatalf("%s function was not emitted", method)
+		}
+		start := strings.LastIndex(ir[:namePos], "define ")
+		endOffset := strings.Index(ir[namePos:], "\n}")
+		if start < 0 || endOffset < 0 {
+			t.Fatalf("could not isolate emitted %s function", method)
+		}
+		methodIR := ir[start : namePos+endOffset]
+		for _, line := range strings.Split(methodIR, "\n") {
+			if strings.Contains(line, "store %struct.") && strings.Contains(line, ".Leaf ") {
+				t.Fatalf("nested receiver address was materialized as a struct value in %s:\n%s", method, methodIR)
+			}
+		}
+		if !strings.Contains(methodIR, "getelementptr %struct.") || !strings.Contains(methodIR, "Leaf.get(ptr %.ctx.addr, ptr %") {
+			t.Fatalf("nested receiver address was not passed directly in %s:\n%s", method, methodIR)
+		}
 	}
 }
 

@@ -789,6 +789,13 @@ func buildDefinitionIndex(state *types.SharedState) map[string]location {
 						index[file.PackageName+"\x00"+name+"."+field.Name] = tokenLocation(file.FilePath, field.Tk)
 					}
 				}
+			case *types.NodeUnionDef:
+				if node.Def != nil {
+					index[file.PackageName+"\x00"+node.Def.Name] = tokenLocation(file.FilePath, node.Tk)
+					for _, variant := range node.Def.Variants {
+						index[file.PackageName+"\x00"+node.Def.Name+"."+variant.Name] = tokenLocation(file.FilePath, variant.Tk)
+					}
+				}
 			case *types.NodeTypeAlias:
 				if node.Alias != nil {
 					index[file.PackageName+"\x00"+node.Alias.Name] = tokenLocation(file.FilePath, node.Alias.Tk)
@@ -1241,6 +1248,10 @@ func (f *hoverFinder) inspect(value any) {
 	case *types.NodeStructDef:
 		if f.nameAt(n.Class.NameNode) {
 			f.value = f.analysis.withDocs(code("struct "+flattenName(n.Class.NameNode)), n)
+		}
+	case *types.NodeUnionDef:
+		if n.Def != nil && f.tokenAt(n.Tk) {
+			f.value = f.analysis.withDocs(code("union "+n.Def.Name), n)
 		}
 	case *types.NodeTypeAlias:
 		if n.Alias != nil && f.tokenAt(n.Alias.Tk) {

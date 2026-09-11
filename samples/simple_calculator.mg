@@ -1,22 +1,22 @@
 mod main
 
-use "../std/heap.mg" heap
-use "../std/io.mg" io
-use "../std/strconv.mg" strconv
-use "../std/strings.mg" strings
+use "../std/heap.mg" as heap
+use "../std/io.mg" as io
+use "../std/strconv.mg" as strconv
+use "../std/strings.mg" as strings
 
 readNumber(a alc.Allocator, input buffered.Reader, output buffered.Writer, prompt str) !u64:
     try output.writer().write(prompt)
     try output.flush()
 
     text := try input.readLn(a)
-    defer text.free(a)
+    defer text.free()
 
     ret try strconv.parseUint(text)
 ..
 
-use "../std/allocator.mg" alc
-use "../std/buffered.mg" buffered
+use "../std/allocator.mg" as alc
+use "../std/buffered.mg" as buffered
 
 main() !void:
     a := heap.allocator()
@@ -36,7 +36,7 @@ main() !void:
     try stdout.flush()
 
     op := try stdin.readLn(a)
-    defer op.free(a)
+    defer op.free()
 
     result u64
     if strings.compare(op, "+"):

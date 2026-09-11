@@ -1,10 +1,10 @@
 mod duplex
 # Type-erased bidirectional byte streams supporting reads and writes.
 
-use "std:slices" slices
-use "std:errors" errors
-use "std:writer" writer
-use "std:reader" reader
+use "std:slices" as slices
+use "std:errors" as errors
+use "std:writer" as writer
+use "std:reader" as reader
 
 pub proto Duplex impl writer.Writer reader.Reader(
     write(bytes str) !u64

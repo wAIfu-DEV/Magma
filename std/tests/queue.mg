@@ -1,10 +1,10 @@
 mod main
 
-use "std:allocator" allocator
-use "std:errors" errors
-use "std:heap" heap
-use "std:queue" queue
-use "std:cast" cast
+use "std:allocator" as allocator
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:queue" as queue
+use "std:cast" as cast
 
 pub main() !void:
     a allocator.Allocator = heap.allocator()

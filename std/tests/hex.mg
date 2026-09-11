@@ -1,9 +1,9 @@
 mod main
-use "std:errors" errors
-use "std:heap" heap
-use "std:hex" hex
-use "std:slices" slices
-use "std:strings" strings
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:hex" as hex
+use "std:slices" as slices
+use "std:strings" as strings
 
 pub main() !void:
     a := heap.allocator()
@@ -13,7 +13,7 @@ pub main() !void:
     input[2] = 0xFF
     view u8[] = slices.fromPtr(slices.toPtr(input), 3)
     encoded := try hex.encode(view)
-    defer encoded.free(a)
+    defer encoded.free()
     if strings.compare(encoded, "00abff") == false:
         throw errors.failure("hexadecimal encoding changed")
     ..

@@ -1,14 +1,14 @@
 mod reader
 # Type-erased byte input with convenience methods for exact and allocated reads.
 
-use "std:context"   context
-use "std:allocator" alc
-use "std:slices"    slices
-use "std:strings"   strings
-use "std:errors"    errors
-use "std:cast"      cast
-use "std:future"    future
-use "std:abort"     abort
+use "std:context"   as context
+use "std:allocator" as alc
+use "std:slices"    as slices
+use "std:strings"   as strings
+use "std:errors"    as errors
+use "std:cast"      as cast
+use "std:future"    as future
+use "std:abort"     as abort
 
 # Reader interface for pulling bytes into strings or buffers.
 # @complexity O(1) wrapper calls; underlying reader decides cost.
@@ -30,7 +30,7 @@ Reader.read(nBytes u64) !$str:
         ret try strings.alloc(0)
     ..
     result str = try strings.alloc(nBytes)
-    onerror result.free(a)
+    onerror result.free()
 
     buffPtr u8* = strings.toPtr(result)
     buff u8[] = slices.fromPtr(buffPtr, nBytes)

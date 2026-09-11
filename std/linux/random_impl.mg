@@ -1,9 +1,9 @@
 mod random_impl_linux
 
-use "std:c" c
-use "std:cast" cast
-use "std:errors" errors
-use "std:slices" slices
+use "std:c" as c
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:slices" as slices
 
 ext ext_linux_getrandom getrandom(buffer ptr, count c.size_t, flags c.unsigned_int) i64
 

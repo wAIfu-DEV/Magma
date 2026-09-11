@@ -46,9 +46,9 @@ imports canonically use `std:`; project imports are relative to the importing
 file:
 
 ```magma
-use "std:allocator" alc
-use "std:io" io
-use "models/user" user
+use "std:allocator" as alc
+use "std:io" as io
+use "models/user" as user
 ```
 
 Imported declarations are qualified through that alias, for example
@@ -58,7 +58,7 @@ the importing source file. There are no wildcard or selective imports, and
 aliases provide the namespace visible to the importer.
 
 `pub use` re-exports an imported module namespace. If a module imported as
-`lib` contains `pub use "std:heap" heap`, its clients can access
+`lib` contains `pub use "std:heap" as heap`, its clients can access
 `lib.heap.allocator()` without exposing private declarations from `std:heap`.
 
 `pub` marks a top-level declaration as exported:
@@ -177,8 +177,10 @@ Constant initializers are restricted to LLVM-compatible literals, constant and
 function references, global addresses, initialized arrays, and struct
 aggregates; Magma does not perform general compile-time evaluation. Globals use
 the same `name Type` form at module scope and accept the same restricted
-initializers. They lower as thread-local storage: omitted initializers are zeroed,
-and each thread has a separate instance.
+initializers. They lower as thread-local storage by default: omitted initializers
+are zeroed, and each thread has a separate instance. The `global` modifier gives
+a mutable top-level variable one process-wide instance; it does not make access
+atomic.
 
 `:=` is declaration syntax, not general assignment. Its left side is a simple
 new name, so field or indexed inference such as `obj.field := x` is not part of
@@ -317,7 +319,7 @@ Slices are a pointer-and-count view. Pointers and slices share indexing syntax,
 and stack-backed arrays are accepted by generic slice utilities in the examples.
 
 The untyped `ptr` is the raw interoperation type. Typed and raw pointers are
-frequently passed through explicit functions from `use "std:cast" cast`.
+frequently passed through explicit functions from `use "std:cast" as cast`.
 
 ### 4.3 Ownership marker `$`
 
@@ -733,15 +735,17 @@ uncaught trace connects the caller to the asynchronous task's failure origin.
 
 ```magma
 @platform("windows")
-use "std:win/file_impl" impl_file
+use "std:win/file_impl" as impl_file
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/file_impl" impl_file
+use "std:unix/file_impl" as impl_file
 ```
 
 This permits both branches to use the same alias and present one portable module
 API. It is item-level conditional compilation, not a general compile-time
-expression system.
+expression system. Selectors may name either an operating system or a target
+architecture, allowing low-level declarations to distinguish targets such as
+`"x86_64"` and `"aarch64"`.
 
 ### 9.2 Foreign functions
 

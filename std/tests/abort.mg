@@ -1,8 +1,8 @@
 mod main
 
-use "std:abort" abort
-use "std:errors" errors
-use "std:time" time
+use "std:abort" as abort
+use "std:errors" as errors
+use "std:time" as time
 
 checkSignal(signal abort.Signal) !bool:
     try signal.check()

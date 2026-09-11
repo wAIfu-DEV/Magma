@@ -2,15 +2,15 @@ mod net_event_loop
 # Readiness callback loop supporting synchronous execution or ownership transfer
 # to an existing asynchronous worker pool.
 
-use "std:allocator" allocator
-use "std:context" context
-use "std:atomic" atomic
-use "std:errors" errors
-use "std:future" future
-use "std:memory" memory
-use "std:spinlock" spinlock
-use "std:net/poll" poll
-use "std:net/socket" socket
+use "std:allocator" as allocator
+use "std:context" as context
+use "std:atomic" as atomic
+use "std:errors" as errors
+use "std:future" as future
+use "std:memory" as memory
+use "std:adaptive_spinlock" as adaptive_spinlock
+use "std:net/poll" as poll
+use "std:net/socket" as socket
 
 pub alias Callback = (ptr, u64, u32) !void
 
@@ -42,7 +42,7 @@ State(
     commandHead u64
     commandTail u64
     commandCount u64
-    commandLock spinlock.SpinLock
+    commandLock adaptive_spinlock.AdaptiveSpinLock
     stopping atomic.U64
     running atomic.U64
 )
@@ -82,7 +82,7 @@ pub new(a allocator.Allocator, capacity u64, commandCapacity u64) !$EventLoop:
     state.capacity = capacity
     state.commands = commands
     state.commandCapacity = commandCapacity
-    state.commandLock = spinlock.new()
+    state.commandLock = adaptive_spinlock.new()
     state.stopping = atomic.newU64(0)
     state.running = atomic.newU64(0)
     ret EventLoop(state=state)
@@ -234,12 +234,7 @@ runOnceState(state State*, timeoutMs i64) !u64:
 ..
 
 slicesFromEvents(events poll.Event*, count u64) poll.Event[]:
-    # SAFETY: this audited implementation injects the required low-level IR.
-    unsafe:
-        llvm "  %s0 = insertvalue %type.slice zeroinitializer, ptr %events, 0\n"
-        llvm "  %s1 = insertvalue %type.slice %s0, i64 %count, 1\n"
-        llvm "  ret %type.slice %s1\n"
-    ..
+    ret slice(__data=events, __count=count)
 ..
 
 EventLoop.runOnce(timeoutMs i64) !u64:

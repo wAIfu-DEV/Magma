@@ -4,14 +4,14 @@ mod dialog
 # The Windows implementation is a Magma port derived from Native File Dialog
 # by Michael Labbe. See std/licenses/NATIVE_FILE_DIALOG.txt.
 
-use "std:allocator" allocator
-use "std:slices" slices
+use "std:allocator" as allocator
+use "std:slices" as slices
 
 @platform("windows")
-use "std:win/dialog_impl" impl
+use "std:win/dialog_impl" as impl
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/dialog_impl" impl
+use "std:unix/dialog_impl" as impl
 
 # A named group of comma-separated file extensions, without leading dots.
 # For example Filter(name="Images", extensions="png,jpg,jpeg").

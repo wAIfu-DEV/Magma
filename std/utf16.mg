@@ -1,15 +1,15 @@
 mod utf16
 # Validated UTF-16 iteration, conversion, lossy recovery, and byte decoding.
 
-use "std:allocator" alc
-use "std:cast" cast
-use "std:checked" checked
-use "std:errors" errors
-use "std:footgun" footgun
-use "std:slices" slices
-use "std:strings" strings
-use "std:unicode" unicode
-use "std:utf8" utf8
+use "std:allocator" as alc
+use "std:cast" as cast
+use "std:checked" as checked
+use "std:errors" as errors
+use "std:footgun" as footgun
+use "std:slices" as slices
+use "std:strings" as strings
+use "std:unicode" as unicode
+use "std:utf8" as utf8
 
 pub const ENDIAN_LITTLE u8 = 1
 pub const ENDIAN_BIG u8 = 2
@@ -268,7 +268,7 @@ fromUtf8SizeUsingIterator(text str) !u64:
 pub toUtf8Lossy(a alc.Allocator, units u16[]) !$str:
     maximum := try checked.uMul(slices.count(units), 3)
     owned $str = try strings.alloc(maximum)
-    onerror owned.free(a)
+    onerror owned.free()
     out := strings.toPtr(owned)
     inputIndex u64 = 0
     outputIndex u64 = 0

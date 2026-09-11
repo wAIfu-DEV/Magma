@@ -1,17 +1,17 @@
 mod process
 # Starts, waits for, and asynchronously executes child processes.
 
-use "std:allocator" allocator
-use "std:future" future
-use "std:thread_pool" thread_pool
-use "std:abort" abort
-use "std:time" time
+use "std:allocator" as allocator
+use "std:future" as future
+use "std:thread_pool" as thread_pool
+use "std:abort" as abort
+use "std:time" as time
 
 @platform("windows")
-use "std:win/process_impl" impl_process
+use "std:win/process_impl" as impl_process
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/process_impl" impl_process
+use "std:unix/process_impl" as impl_process
 
 # A spawned child process. A Process owns its native process resource and must
 # be waited exactly once.

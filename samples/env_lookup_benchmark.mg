@@ -1,14 +1,15 @@
 mod main
 # Unix benchmark: libc getenv versus the standard library's environ scan.
 
-use "std:env" env
-use "std:errors" errors
-use "std:heap" heap
-use "std:io" io
-use "std:strings" strings
-use "std:time" time
+use "std:env" as env
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:io" as io
+use "std:strings" as strings
+use "std:time" as time
 
 legacyGetenv(name u8*) u8*:
+    # SAFETY: LLVM
     unsafe:
         llvm "  call void asm sideeffect \"\", \"~{memory}\"()\n"
         llvm "  %value = call ptr @getenv(ptr %name)\n"

@@ -2,27 +2,22 @@ mod cpu_impl_win
 # Windows processor-count backend used by the portable cpu module.
 
 
-use "std:win/types" win
-use "std:cast" cast
+use "std:win/types" as win
+use "std:cast" as cast
+use "std:llvm" as ll
 
 # ALL_PROCESSOR_GROUPS. Counting all groups avoids the 64-processor limit of
 # GetSystemInfo on large Windows machines.
 ext ext_win32_GetActiveProcessorCount GetActiveProcessorCount(groupNumber win.WORD) win.DWORD
 
-llvm "@magma.cpu.count = internal global i64 0, align 8\n"
+global cpuCount u64
 
 cachedCount() u64:
-    unsafe:
-        llvm "  %value = load atomic i64, ptr @magma.cpu.count acquire, align 8\n"
-        llvm "  ret i64 %value\n"
-    ..
+    ret ll.atomicLoadAcquireU64(addrof cpuCount)
 ..
 
 publishCount(value u64) void:
-    unsafe:
-        llvm "  store atomic i64 %value, ptr @magma.cpu.count release, align 8\n"
-        llvm "  ret void\n"
-    ..
+    ll.atomicStoreReleaseU64(addrof cpuCount, value)
 ..
 
 pub coreCount() u64:

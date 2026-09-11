@@ -1,12 +1,12 @@
 mod main
 
-use "std:allocator" allocator
-use "std:errors" errors
-use "std:future" future
-use "std:heap" heap
-use "std:thread_pool" thread_pool
-use "std:abort" abort
-use "std:time" time
+use "std:allocator" as allocator
+use "std:errors" as errors
+use "std:future" as future
+use "std:heap" as heap
+use "std:thread_pool" as thread_pool
+use "std:abort" as abort
+use "std:time" as time
 
 doubleValue(context u64*) !u64:
     ret *context * 2

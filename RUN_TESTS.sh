@@ -21,11 +21,23 @@ total=0
 passed=0
 failed=0
 
-if [[ ! -x "$COMPILER" ]]; then
-    echo "[FAIL] Magma compiler not found or not executable: $COMPILER" >&2
-    echo "Build the compiler before running the tests." >&2
-    exit 1
-fi
+case "$(uname -s)" in
+    Linux)
+        COMPILER="$WORK_DIR/Magma-object"
+        echo "Building the LLVM object-lowering compiler..."
+        if ! GOCACHE="${GOCACHE:-$TEMP_ROOT/magma-go-cache}" go build -tags "llvm_object llvm22" -o "$COMPILER" .; then
+            echo "[FAIL] Could not build the LLVM object-lowering compiler." >&2
+            exit 1
+        fi
+        ;;
+    *)
+        if [[ ! -x "$COMPILER" ]]; then
+            echo "[FAIL] Magma compiler not found or not executable: $COMPILER" >&2
+            echo "Build the compiler before running the tests." >&2
+            exit 1
+        fi
+        ;;
+esac
 
 for directory in "$TEST_ROOT" "$STD_TEST_ROOT"; do
     if [[ ! -d "$directory" ]]; then
@@ -151,7 +163,8 @@ echo
 echo "Running Magma compilation tests..."
 while IFS= read -r -d '' test_file; do
     run_one "$test_file" "$TEST_ROOT" n
-done < <(find "$TEST_ROOT" -type f -name '*.mg' -print0)
+done < <(find "$TEST_ROOT" -type f -name '*.mg' \
+    \( ! -path "$TEST_ROOT/incremental_baseline/*" -o -path "$TEST_ROOT/incremental_baseline/main.mg" \) -print0)
 
 echo
 echo "Running standard library compilation and assertion tests..."

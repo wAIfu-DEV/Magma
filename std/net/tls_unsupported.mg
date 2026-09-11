@@ -1,8 +1,8 @@
 mod net_tls_unsupported
 
-use "std:allocator" allocator
-use "std:errors" errors
-use "std:net/socket" socket
+use "std:allocator" as allocator
+use "std:errors" as errors
+use "std:net/socket" as socket
 
 pub Result(count u64, want u8, complete bool)
 

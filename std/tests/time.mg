@@ -1,6 +1,6 @@
 mod main
-use "std:errors" errors
-use "std:time" time
+use "std:errors" as errors
+use "std:time" as time
 pub main() !void:
     start := time.ticks()
     if time.ticksToSec(time.secToTicks(2)) != 2 || time.ticksToMs(time.msToTicks(5)) != 5 || time.ticksToUs(time.usToTicks(5)) != 5 || time.ticksToNs(time.nsToTicks(100)) != 100:

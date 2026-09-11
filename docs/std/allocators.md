@@ -4,7 +4,7 @@ Convenience namespace that groups the standard allocator modules under one
 import:
 
 ```magma
-use "std:allocators" allocators
+use "std:allocators" as allocators
 
 a := allocators.heap.allocator()
 ctx.alloc = a

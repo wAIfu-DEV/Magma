@@ -1,28 +1,28 @@
 mod main
 
-use "std:allocator" allocator
-use "std:context" context
-use "std:atomic" atomic
-use "std:builder" builder
-use "std:cast" cast
-use "std:errors" errors
-use "std:heap" heap
-use "std:slices" slices
-use "std:strconv" strconv
-use "std:strings" strings
-use "std:thread" thread
-use "std:thread_pool" thread_pool
-use "std:time" time
-use "std:net/address" address
-use "std:net/byte_order" byte_order
-use "std:net/dns" dns
-use "std:net/event_loop" event_loop
-use "std:net/listener" net_listener
-use "std:net/poll" poll
-use "std:net/socket" socket
-use "std:net/tcp" tcp
-use "std:net/udp" udp
-use "std:http" http_client
+use "std:allocator" as allocator
+use "std:context" as context
+use "std:atomic" as atomic
+use "std:builder" as builder
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:slices" as slices
+use "std:strconv" as strconv
+use "std:strings" as strings
+use "std:thread" as thread
+use "std:thread_pool" as thread_pool
+use "std:time" as time
+use "std:net/address" as address
+use "std:net/byte_order" as byte_order
+use "std:net/dns" as dns
+use "std:net/event_loop" as event_loop
+use "std:net/listener" as net_listener
+use "std:net/poll" as poll
+use "std:net/socket" as socket
+use "std:net/tcp" as tcp
+use "std:net/udp" as udp
+use "std:http" as http_client
 
 CallbackContext(socket socket.Socket*, calls atomic.U64)
 AcceptContext(calls atomic.U64)
@@ -242,14 +242,14 @@ testHttpClient() !void:
         running.await()
     ..
     portText := try strconv.formatUint(endpoint.port)
-    defer portText.free(a)
+    defer portText.free()
     urlBuilder := try builder.new()
     defer urlBuilder.free()
     try urlBuilder.appendBorrowed("http://127.0.0.1:")
     try urlBuilder.appendBorrowed(portText)
     try urlBuilder.appendBorrowed("/test")
     url := try urlBuilder.build()
-    defer url.free(a)
+    defer url.free()
     client := try http_client.new(http_client.defaultOptions())
     defer client.close()
     headers http_client.Header[] = slices.fromPtr(none, 0)

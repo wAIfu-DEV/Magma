@@ -1,10 +1,10 @@
 mod main
-use "std:allocator" allocator
-use "std:cast" cast
-use "std:errors" errors
-use "std:heap" heap
-use "std:reader" reader
-use "std:strings" strings
+use "std:allocator" as allocator
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:reader" as reader
+use "std:strings" as strings
 
 Source impl reader.Reader(value u8)
 
@@ -24,7 +24,7 @@ pub main() !void:
     source := Source(value=0)
     input := source.proto[reader.Reader]()
     result := try input.read(1)
-    defer result.free(a)
+    defer result.free()
     if strings.compare(result, "A") == false:
         throw errors.failure("reader behavior changed")
     ..

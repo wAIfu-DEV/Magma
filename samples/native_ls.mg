@@ -1,10 +1,10 @@
 mod main
-use "std:allocator" allocator
-use "std:errors" errors
-use "std:dialog" dialog
-use "std:fs" fs
-use "std:heap" heap
-use "std:io" io
+use "std:allocator" as allocator
+use "std:errors" as errors
+use "std:dialog" as dialog
+use "std:fs" as fs
+use "std:heap" as heap
+use "std:io" as io
 
 pub main() !void:
     a := heap.allocator()
@@ -18,7 +18,7 @@ pub main() !void:
         ..
         throw dialogError
     ..
-    defer selectedDir.free(a)
+    defer selectedDir.free()
 
     try io.printLn(selectedDir)
     directory := try fs.openDir(selectedDir)

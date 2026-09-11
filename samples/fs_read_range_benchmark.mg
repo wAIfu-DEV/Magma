@@ -1,12 +1,12 @@
 mod main
 # Path-based range read: generic open/seek/read/close versus fs.readRange.
 
-use "std:errors" errors
-use "std:file" file
-use "std:fs" fs
-use "std:heap" heap
-use "std:io" io
-use "std:time" time
+use "std:errors" as errors
+use "std:file" as file
+use "std:fs" as fs
+use "std:heap" as heap
+use "std:io" as io
+use "std:time" as time
 
 const ITERATIONS u64 = 10000
 
@@ -20,7 +20,7 @@ legacy() !u64:
         reader := try value.reader()
         bytes := try reader.read(64)
         total = total + bytes.countBytes()
-        bytes.free(heap.allocator())
+        bytes.free()
         try value.close()
     ..
     ret total
@@ -31,7 +31,7 @@ positional() !u64:
     for i u64 = 0 to ITERATIONS:
         bytes := try fs.readRange("/tmp/magma-range-source", 1024, 64)
         total = total + bytes.countBytes()
-        bytes.free(heap.allocator())
+        bytes.free()
     ..
     ret total
 ..

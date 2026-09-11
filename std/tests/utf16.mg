@@ -1,9 +1,9 @@
 mod main
 
-use "std:errors" errors
-use "std:heap" heap
-use "std:slices" slices
-use "std:utf16" utf16
+use "std:errors" as errors
+use "std:heap" as heap
+use "std:slices" as slices
+use "std:utf16" as utf16
 
 pub main() !void:
     a := heap.allocator()
@@ -27,7 +27,7 @@ pub main() !void:
         throw errors.failure("UTF-16 scalar encoding changed")
     ..
     text := try utf16.toUtf8(a, view)
-    defer text.free(a)
+    defer text.free()
     roundTrip := try utf16.fromUtf8(a, text)
     defer slices.free(roundTrip)
     if slices.count(roundTrip) != 3:
@@ -53,7 +53,7 @@ pub main() !void:
         throw errors.failure("malformed UTF-16 accepted")
     ..
     lossy := try utf16.toUtf8Lossy(a, malformedView)
-    defer lossy.free(a)
+    defer lossy.free()
     if lossy.countBytes() != 3:
         throw errors.failure("lossy UTF-16 replacement changed")
     ..

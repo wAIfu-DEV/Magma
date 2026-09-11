@@ -27,7 +27,7 @@ pub config Outer
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(mainPath, []byte(`mod main
-use "library.mg" lib
+use "library.mg" as lib
 main() void:
     current u64 = lib.config.inner.value
     lib.config.inner.value = current

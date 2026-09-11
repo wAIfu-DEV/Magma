@@ -1,9 +1,9 @@
 mod main
 
-use "../std/heap.mg" heap
-use "../std/io.mg" io
-use "../std/strconv.mg" strconv
-use "../std/strings.mg" strings
+use "../std/heap.mg" as heap
+use "../std/io.mg" as io
+use "../std/strconv.mg" as strconv
+use "../std/strings.mg" as strings
 
 won(board u8[], mark u8) bool:
     bounded 9 <= board.count():
@@ -51,7 +51,7 @@ printBoard(out writer.Writer, board u8[]) !void:
     ..
 ..
 
-use "../std/writer.mg" writer
+use "../std/writer.mg" as writer
 
 main() !void:
     a := heap.allocator()
@@ -82,7 +82,7 @@ main() !void:
 
         text := try stdin.readLn(a)
         position := try strconv.parseUint(text)
-        text.free(a)
+        text.free()
 
         if position >= 1 && position <= 9 && board[position - 1] == 0:
             board[position - 1] = mark

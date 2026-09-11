@@ -1,7 +1,7 @@
 mod main
-use "std:errors" errors
-use "std:memory" memory
-use "std:slices" slices
+use "std:errors" as errors
+use "std:memory" as memory
+use "std:slices" as slices
 pub main() !void:
     source := array u8[4]
     target := array u8[4]

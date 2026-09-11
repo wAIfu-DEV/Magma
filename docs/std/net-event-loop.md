@@ -22,3 +22,7 @@ cross-thread command capacities. Both must be nonzero.
 Do not call the synchronous `EventLoop.watch` while its loop is running
 asynchronously. Tokens are application identifiers; readiness flags come from
 [`std/net/poll`](net-poll.md).
+
+The cross-thread command ring uses an adaptive spin lock. Only bounded queue
+indexing and command copies occur while it is held; poll interruption and
+command execution happen after it is released.

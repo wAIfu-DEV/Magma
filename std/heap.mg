@@ -2,16 +2,16 @@ mod heap
 # Process-heap allocation and a compatible Allocator interface.
 # @ownership Returned memory belongs to the caller until freed or transferred.
 
-use "std:allocator" a
-use "std:errors"    e
-use "std:cast"      cast
-use "std:memory"    mem
+use "std:allocator" as a
+use "std:errors"    as e
+use "std:cast"      as cast
+use "std:memory"    as mem
 
 @platform("windows")
-use "std:win/heap_impl" impl_heap
+use "std:win/heap_impl" as impl_heap
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/heap_impl" impl_heap
+use "std:unix/heap_impl" as impl_heap
 
 # Returns an allocator object that uses the OS's standard heap allocation methods.
 # @complexity O(1)
@@ -74,7 +74,7 @@ pub allocZero(nBytes u64) !$u8*:
 # @ownership The returned pointer replaces in; do not use the old pointer.
 # @example
 #   block = try heap.realloc(block, 128)
-pub realloc(in u8*, nBytes u64) !$u8*:
+pub realloc(in ptr, nBytes u64) !$u8*:
     ret try impl_heap.realloc(in, nBytes)
 ..
 
@@ -93,7 +93,7 @@ pub realloc(in u8*, nBytes u64) !$u8*:
 # @warning prevNbytes must be the actual size of the existing allocation.
 # @example
 #   block = try heap.reallocZero(block, 128, 64)
-pub reallocZero(in u8*, nBytes u64, prevNbytes u64) !$u8*:
+pub reallocZero(in ptr, nBytes u64, prevNbytes u64) !$u8*:
     ret try impl_heap.reallocZero(in, nBytes, prevNbytes)
 ..
 
@@ -105,6 +105,6 @@ pub reallocZero(in u8*, nBytes u64, prevNbytes u64) !$u8*:
 # @warning in must be an active allocation returned by this heap.
 # @example
 #   heap.free(block)
-pub free(in u8*) void:
+pub free(in ptr) void:
     impl_heap.free(in)
 ..

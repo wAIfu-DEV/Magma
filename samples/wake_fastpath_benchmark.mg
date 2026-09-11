@@ -1,11 +1,11 @@
 mod main
 # POSIX retained-token benchmark: condition-variable calls versus atomics.
 
-use "std:c" c
-use "std:errors" errors
-use "std:io" io
-use "std:time" time
-use "std:wake" wake
+use "std:c" as c
+use "std:errors" as errors
+use "std:io" as io
+use "std:time" as time
+use "std:wake" as wake
 
 link "pthread"
 

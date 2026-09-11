@@ -1,7 +1,7 @@
 mod main
 
-use "std:errors" errors
-use "std:pair" pair
+use "std:errors" as errors
+use "std:pair" as pair
 
 pub main() !void:
     value pair.Pair[u64, bool] = pair.new[u64, bool](42, true)

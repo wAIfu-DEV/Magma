@@ -1,10 +1,10 @@
 mod strconv
 # Parses numbers and formats primitive values as owned strings.
 
-use "std:allocator" alc
-use "std:strings" strings
-use "std:errors" errors
-use "std:cast" cast
+use "std:allocator" as alc
+use "std:strings" as strings
+use "std:errors" as errors
+use "std:cast" as cast
 
 # Parses a non-empty decimal string as u64.
 # @complexity O(N)

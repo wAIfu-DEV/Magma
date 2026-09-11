@@ -12,6 +12,46 @@ import (
 	"sync"
 )
 
+func coreTypeDefinition(ctx *IrCtx, role t.CoreTypeRole) (*t.StructDef, error) {
+	definition := ctx.Shared.CoreTypes[role]
+	if definition == nil {
+		return nil, fmt.Errorf("missing core type definition for %q", role.Name())
+	}
+	return definition, nil
+}
+
+func coreFieldIndex(ctx *IrCtx, role t.CoreTypeRole, field string) (int, error) {
+	definition, err := coreTypeDefinition(ctx, role)
+	if err != nil {
+		return 0, err
+	}
+	index, ok := definition.FieldNb[field]
+	if !ok {
+		return 0, fmt.Errorf("core type %q is missing required field %q", role.Name(), field)
+	}
+	return index, nil
+}
+
+func isCoreNamedType(node *t.NodeType, role t.CoreTypeRole) bool {
+	if node == nil {
+		return false
+	}
+	named, ok := node.KindNode.(*t.NodeTypeNamed)
+	if !ok {
+		return false
+	}
+	single, ok := named.NameNode.(*t.NodeNameSingle)
+	return ok && t.CoreTypeRoleForName(single.Name) == role
+}
+
+func isStringSliceType(node *t.NodeType) bool {
+	if node == nil {
+		return false
+	}
+	slice, ok := node.KindNode.(*t.NodeTypeSlice)
+	return ok && isCoreNamedType(&t.NodeType{KindNode: slice.ElemKind}, t.CoreTypeString)
+}
+
 type ScopeBuilder struct {
 	Struct  *bytes.Buffer
 	StructM *sync.Mutex
@@ -255,15 +295,7 @@ func isBoolType(node *t.NodeType) bool {
 }
 
 func isStrType(node *t.NodeType) bool {
-	if node == nil {
-		return false
-	}
-	named, ok := node.KindNode.(*t.NodeTypeNamed)
-	if !ok {
-		return false
-	}
-	single, ok := named.NameNode.(*t.NodeNameSingle)
-	return ok && single.Name == "str"
+	return t.CoreTypeRoleOf(node) == t.CoreTypeString
 }
 
 func isPointerType(node *t.NodeType) bool {

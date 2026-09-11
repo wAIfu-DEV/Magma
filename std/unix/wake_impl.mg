@@ -2,13 +2,13 @@ mod wake_impl_unix
 # Unix wait-and-notify backend used by the portable wake module.
 
 
-use "std:c" c
+use "std:c" as c
 @platform("linux", "freebsd", "netbsd", "openbsd")
 link "pthread"
 
-use "std:cast" cast
-use "std:errors" errors
-use "std:atomic" atomic
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:atomic" as atomic
 
 const conditionStrategy u8 = 0
 

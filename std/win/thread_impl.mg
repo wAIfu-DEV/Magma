@@ -2,11 +2,11 @@ mod thread_impl_win
 # Windows native-thread backend used by the portable thread module.
 
 
-use "std:win/types" win
-use "std:cast" cast
-use "std:errors" errors
-use "std:context" context
-use "std:heap" heap
+use "std:win/types" as win
+use "std:cast" as cast
+use "std:errors" as errors
+use "std:context" as context
+use "std:heap" as heap
 
 ext ext_win32_CreateThread       CreateThread(attributes win.LPVOID, stackSize win.SIZE_T, startAddress noctx (win.LPVOID) u64, parameter win.LPVOID, creationFlags win.DWORD, threadId win.LPVOID) win.HANDLE
 ext ext_win32_WaitForSingleObject WaitForSingleObject(handle win.HANDLE, milliseconds win.DWORD) win.DWORD
@@ -39,7 +39,7 @@ pub spawn(entry (ptr) u64, context ptr) !$Thread:
         throw errors.invalidArgument("thread entry is null")
     ..
 
-    launch Launch* = try heap.alloc(sizeof Launch)
+    launch Launch* = cast.reinterpret[Launch](try heap.alloc(sizeof Launch))
     onerror:
         unsafe:
             heap.free(launch)

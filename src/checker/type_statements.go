@@ -177,7 +177,7 @@ func ctReturn(c *ctx, ret *t.NodeStmtRet) error {
 
 	expectedValue := *ret.OwnerFuncType
 	expectedValue.Throws = false
-	if !compatibleInitializer(&expectedValue, ret.Expression) {
+	if !compatibleInitializer(c, &expectedValue, ret.Expression) {
 		return comp_err.CompilationErrorToken(
 			c.FileCtx,
 			&ret.Tk,
@@ -202,6 +202,18 @@ func ctBody(c *ctx, bdy *t.NodeBody) error {
 			e = ctThrow(c, n)
 		case *t.NodeStmtIf:
 			e = ctIfStmt(c, n)
+		case *t.NodeStmtMatch:
+			e = ctExpr(c, n.Expression)
+			if e == nil {
+				for _, arm := range n.Cases {
+					if e = ctBody(c, &arm.Body); e != nil {
+						break
+					}
+				}
+			}
+			if e == nil && n.ElseBody != nil {
+				e = ctBody(c, n.ElseBody)
+			}
 		case *t.NodeStmtWhile:
 			e = ctWhileStmt(c, n)
 		case *t.NodeStmtFor:
@@ -209,7 +221,9 @@ func ctBody(c *ctx, bdy *t.NodeBody) error {
 		case *t.NodeStmtBounded:
 			e = ctBoundedStmt(c, n)
 		case *t.NodeStmtUnsafe:
+			c.UnsafeDepth++
 			e = ctBody(c, &n.Body)
+			c.UnsafeDepth--
 		case *t.NodeStmtBreak:
 			if c.LoopDepth == 0 {
 				e = comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, "cannot use 'break' outside a loop", "place 'break' inside a loop")

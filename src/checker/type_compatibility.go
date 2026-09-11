@@ -16,8 +16,23 @@ func sameType(a *t.NodeType, b *t.NodeType) bool {
 	return sameTypeKind(a.KindNode, b.KindNode)
 }
 
-func compatibleInitializer(expected *t.NodeType, expr t.NodeExpr) bool {
+func compatibleInitializer(c *ctx, expected *t.NodeType, expr t.NodeExpr) bool {
 	actual := expr.GetInferredType()
+	if literal, ok := expr.(*t.NodeExprLit); ok && literal.LitType == t.TokLitNum && isNumberType(expected) {
+		// Numeric literals are contextually typed. Recording that decision in
+		// the checked AST keeps both LLVM lowerings from first materializing a
+		// potentially narrower default integer and converting it afterward.
+		literal.InfType = expected
+		actual = expected
+	}
+	// `none` is the only raw-pointer value that may acquire a typed pointer
+	// type implicitly. Other ptr -> T* conversions must go through cast.reinterpret.
+	if lit, ok := expr.(*t.NodeExprLit); ok && lit.LitType == t.TokLitNone && isPointerType(expected) {
+		return true
+	}
+	if c != nil && c.UnsafeDepth > 0 && isPointerLike(expected) && isPointerLike(actual) {
+		return true
+	}
 	if compatibleTypes(expected, actual) {
 		markContextAdapter(expected, actual, expr)
 		return true
@@ -26,6 +41,10 @@ func compatibleInitializer(expected *t.NodeType, expr t.NodeExpr) bool {
 		return true
 	}
 	return false
+}
+
+func isPointerLike(node *t.NodeType) bool {
+	return isPointerType(node) || isRawPointerType(node) || isFunctionType(node)
 }
 
 func markContextAdapter(expected, actual *t.NodeType, expr t.NodeExpr) {
@@ -39,6 +58,9 @@ func markContextAdapter(expected, actual *t.NodeType, expr t.NodeExpr) {
 	}
 	if name, ok := expr.(*t.NodeExprName); ok {
 		name.ContextAdapter = true
+		if function, ok := name.AssociatedNode.(*t.NodeFuncDef); ok {
+			function.NeedsContextAdapter = true
+		}
 	}
 }
 
@@ -97,7 +119,14 @@ func compatibleTypes(expected *t.NodeType, actual *t.NodeType) bool {
 	if expected == nil || actual == nil {
 		return false
 	}
-	if isPointerType(expected) && isPointerType(actual) {
+	// A typed pointer may be erased to ptr implicitly. Recovering a pointee type,
+	// or changing one pointee type into another, is an explicit reinterpretation.
+	if isRawPointerType(expected) && (isPointerType(actual) || isFunctionType(actual)) {
+		return true
+	}
+	// Function values use ptr as their explicit type-erased callback ABI. Unlike
+	// data pointers, there is no pointee type that cast.reinterpret can name.
+	if isFunctionType(expected) && isRawPointerType(actual) {
 		return true
 	}
 	if expected.Throws != actual.Throws {
@@ -106,12 +135,12 @@ func compatibleTypes(expected *t.NodeType, actual *t.NodeType) bool {
 	if sameType(expected, actual) {
 		return true
 	}
+	if intrinsicBackingCompatible(expected, actual) {
+		return true
+	}
 	expectedFunc, expectedIsFunc := expected.KindNode.(*t.NodeTypeFunc)
 	actualFunc, actualIsFunc := actual.KindNode.(*t.NodeTypeFunc)
 	if expectedIsFunc || actualIsFunc {
-		if (expectedIsFunc && isPointerType(actual)) || (actualIsFunc && isPointerType(expected)) {
-			return true
-		}
 		if !expectedIsFunc || !actualIsFunc || (expectedFunc.ContextABI != actualFunc.ContextABI && !(expectedFunc.ContextABI == t.ContextABIContextful && actualFunc.ContextABI == t.ContextABIContextless)) || len(expectedFunc.Args) != len(actualFunc.Args) {
 			return false
 		}
@@ -134,6 +163,31 @@ func compatibleTypes(expected *t.NodeType, actual *t.NodeType) bool {
 		return true
 	}
 	return false
+}
+
+func intrinsicBackingCompatible(a, b *t.NodeType) bool {
+	left, right := t.CoreTypeRoleOf(a), t.CoreTypeRoleOf(b)
+	return left != t.CoreTypeNone && left == right
+}
+
+func isRawPointerType(node *t.NodeType) bool {
+	if node == nil || node.Throws {
+		return false
+	}
+	named, ok := node.KindNode.(*t.NodeTypeNamed)
+	if !ok || len(named.GenericArgs) != 0 {
+		return false
+	}
+	name, ok := named.NameNode.(*t.NodeNameSingle)
+	return ok && name.Name == "ptr"
+}
+
+func isFunctionType(node *t.NodeType) bool {
+	if node == nil {
+		return false
+	}
+	_, ok := node.KindNode.(*t.NodeTypeFunc)
+	return ok
 }
 
 func sameTypeKind(a t.NodeTypeKind, b t.NodeTypeKind) bool {

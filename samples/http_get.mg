@@ -1,11 +1,11 @@
 mod main
 
-use "../std/heap.mg"      heap
-use "../std/io.mg"        io
-use "../std/fmt.mg"       fmt
-use "../std/strings.mg"   strs
-use "../std/http.mg"      http
-use "../std/slices.mg"    slices
+use "../std/heap.mg"      as heap
+use "../std/io.mg"        as io
+use "../std/fmt.mg"       as fmt
+use "../std/strings.mg"   as strs
+use "../std/http.mg"      as http
+use "../std/slices.mg"    as slices
 
 pub main(args str[]) !void:
     a := heap.allocator()
@@ -22,7 +22,7 @@ pub main(args str[]) !void:
         io.print("URL: ")
 
         input := try in.readLn(a)
-        defer input.free(a)
+        defer input.free()
 
         headers http.Header[] = slices.fromPtr(none, 0)
         request := http.noBody("GET", input, headers)

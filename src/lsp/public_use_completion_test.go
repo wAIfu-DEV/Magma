@@ -10,7 +10,7 @@ import (
 func TestPublicUseModuleAliasCompletion(t *testing.T) {
 	directory := t.TempDir()
 	mustWriteCompletionSource(t, filepath.Join(directory, "nested.mg"), "mod nested\npub allocator() void:\n..\n")
-	mustWriteCompletionSource(t, filepath.Join(directory, "library.mg"), "mod library\npub use \"./nested.mg\" heap\n")
+	mustWriteCompletionSource(t, filepath.Join(directory, "library.mg"), "mod library\npub use \"./nested.mg\" as heap\n")
 
 	tests := []struct {
 		name   string

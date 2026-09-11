@@ -67,7 +67,7 @@ func irStmtReturnDeferred(ctx *IrCtx, stmtRet *t.NodeStmtRet) error {
 	switch stmtRet.Expression.(type) {
 	case *t.NodeExprVoid:
 		if stmtRet.OwnerFuncType.Throws {
-			irWrite(ctx, "  store { %type.error } { %type.error zeroinitializer }, ptr %.defer.rv\n")
+			irWritef(ctx, "  store { %s } { %s zeroinitializer }, ptr %%.defer.rv\n", t.CoreTypeError.LLVMName(), t.CoreTypeError.LLVMName())
 		}
 		irJmpToDefer(ctx)
 		return nil
@@ -135,7 +135,7 @@ func irMakeThrowingRetVal(ctx *IrCtx, retType *t.NodeType, errSsa SsaName, valSs
 	if e != nil {
 		return SsaName{}, e
 	}
-	irWrite(ctx, " zeroinitializer, %type.error")
+	irWritef(ctx, " zeroinitializer, %s", t.CoreTypeError.LLVMName())
 
 	if errSsa.Repr == "" {
 		irWrite(ctx, " zeroinitializer")
@@ -185,13 +185,50 @@ func irErrorSite(ctx *IrCtx, pos t.FilePos) SsaName {
 	// Runtime diagnostics should identify the source without embedding the
 	// build machine's absolute directory in the executable.
 	fileStr := ctx.traceStrings.intern(filepath.Base(ctx.fCtx.FilePath))
+	traceSiteType, _, err := coreTraceSymbols(ctx)
+	if err != nil {
+		panic(err)
+	}
 	site := irSsaGlobal(ctx)
-	irWriteGlf(ctx, "%s = private constant %%type.error.site { ptr %s, ptr %s, i32 %d, i32 %d }\n",
-		site.Repr, functionStr.Repr, fileStr.Repr, pos.Line, pos.Col)
+	irWriteGlf(ctx, "%s = private constant %%struct.%s { ptr %s, i64 %d, ptr %s, i64 %d, i32 %d, i32 %d }\n",
+		site.Repr, traceSiteType, functionStr.Repr, len(functionName), fileStr.Repr, len(filepath.Base(ctx.fCtx.FilePath)), pos.Line, pos.Col)
 	return site
 }
 
+func coreTraceSymbols(ctx *IrCtx) (string, string, error) {
+	ctx.Shared.FilesM.Lock()
+	defer ctx.Shared.FilesM.Unlock()
+	for _, file := range ctx.Shared.Files {
+		if file.ModuleName != "core" || file.GlNode == nil {
+			continue
+		}
+		site := file.GlNode.StructDefs["ErrorTraceSite"]
+		push := file.GlNode.FuncDefs["errorTracePush"]
+		if site != nil && push != nil {
+			return site.Module + "." + site.Name, push.AbsName, nil
+		}
+	}
+	return "", "", fmt.Errorf("core trace implementation is incomplete")
+}
+
+func moduleFunctionSymbol(ctx *IrCtx, module, name string) (string, error) {
+	ctx.Shared.FilesM.Lock()
+	defer ctx.Shared.FilesM.Unlock()
+	for _, file := range ctx.Shared.Files {
+		if file.ModuleName == module && file.GlNode != nil {
+			if fn := file.GlNode.FuncDefs[name]; fn != nil {
+				return fn.AbsName, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("missing %s.%s implementation", module, name)
+}
+
 func irThrowSsa(ctx *IrCtx, errSsa SsaName, fnDef *t.NodeFuncDef, pos t.FilePos) error {
+	codeField, err := coreFieldIndex(ctx, t.CoreTypeError, "__code")
+	if err != nil {
+		return err
+	}
 	fieldSsa := irSsaLocal(ctx)
 	compSsa := irSsaLocal(ctx)
 
@@ -199,7 +236,7 @@ func irThrowSsa(ctx *IrCtx, errSsa SsaName, fnDef *t.NodeFuncDef, pos t.FilePos)
 	neqLabel := irSsaName(ctx)
 
 	// get error code field
-	irWritef(ctx, "  %s = extractvalue %%type.error %s, 1\n", fieldSsa.Repr, errSsa.Repr)
+	irWritef(ctx, "  %s = extractvalue %s %s, %d\n", fieldSsa.Repr, t.CoreTypeError.LLVMName(), errSsa.Repr, codeField)
 
 	// if errcode != 0
 	irWritef(ctx, "  %s = icmp ne i32 %s, 0\n", compSsa.Repr, fieldSsa.Repr)
@@ -211,9 +248,13 @@ func irThrowSsa(ctx *IrCtx, errSsa SsaName, fnDef *t.NodeFuncDef, pos t.FilePos)
 	// Add source metadata only on the failing edge. The runtime uses bounded
 	// static storage and retains recent propagation sites without allocating.
 	site := irErrorSite(ctx, pos)
+	_, tracePush, err := coreTraceSymbols(ctx)
+	if err != nil {
+		return err
+	}
 	tracedErrSsa := irSsaLocal(ctx)
-	irWritef(ctx, "  %s = call %%type.error @magma.error.push(%%type.error %s, ptr %s)\n",
-		tracedErrSsa.Repr, errSsa.Repr, site.Repr)
+	irWritef(ctx, "  %s = call %s @%s(%s %s, ptr %s)\n",
+		tracedErrSsa.Repr, t.CoreTypeError.LLVMName(), tracePush, t.CoreTypeError.LLVMName(), errSsa.Repr, site.Repr)
 	errSsa = tracedErrSsa
 
 	retValSsa := errSsa
@@ -244,7 +285,27 @@ func irThrowSsa(ctx *IrCtx, errSsa SsaName, fnDef *t.NodeFuncDef, pos t.FilePos)
 }
 
 func irStmtThrow(ctx *IrCtx, stmtThrow *t.NodeStmtThrow, fnDef *t.NodeFuncDef) error {
-	if flattenType(stmtThrow.Expression.GetInferredType()) == "str" {
+	if t.CoreTypeRoleOf(stmtThrow.Expression.GetInferredType()) == t.CoreTypeString {
+		messageField, e := coreFieldIndex(ctx, t.CoreTypeString, "__data")
+		if e != nil {
+			return e
+		}
+		byteCountField, e := coreFieldIndex(ctx, t.CoreTypeString, "__byteCount")
+		if e != nil {
+			return e
+		}
+		errorMessageField, e := coreFieldIndex(ctx, t.CoreTypeError, "__message")
+		if e != nil {
+			return e
+		}
+		errorCodeField, e := coreFieldIndex(ctx, t.CoreTypeError, "__code")
+		if e != nil {
+			return e
+		}
+		errorLengthField, e := coreFieldIndex(ctx, t.CoreTypeError, "__messageLength")
+		if e != nil {
+			return e
+		}
 		strSsa, e := irExpression(ctx, stmtThrow.Expression.GetInferredType(), stmtThrow.Expression, false)
 		if e != nil {
 			return e
@@ -257,14 +318,14 @@ func irStmtThrow(ctx *IrCtx, stmtThrow *t.NodeStmtThrow, fnDef *t.NodeFuncDef) e
 		errorMessage := irSsaLocal(ctx)
 		errorCode := irSsaLocal(ctx)
 		errorValue := irSsaLocal(ctx)
-		irWritef(ctx, "  %s = extractvalue %%type.str %s, 0\n", message.Repr, strSsa.Repr)
-		irWritef(ctx, "  %s = extractvalue %%type.str %s, 1\n", length64.Repr, strSsa.Repr)
+		irWritef(ctx, "  %s = extractvalue %s %s, %d\n", message.Repr, t.CoreTypeString.LLVMName(), strSsa.Repr, messageField)
+		irWritef(ctx, "  %s = extractvalue %s %s, %d\n", length64.Repr, t.CoreTypeString.LLVMName(), strSsa.Repr, byteCountField)
 		irWritef(ctx, "  %s = icmp ugt i64 %s, 65535\n", lengthTooLong.Repr, length64.Repr)
 		irWritef(ctx, "  %s = select i1 %s, i64 65535, i64 %s\n", lengthBounded.Repr, lengthTooLong.Repr, length64.Repr)
 		irWritef(ctx, "  %s = trunc i64 %s to i16\n", length16.Repr, lengthBounded.Repr)
-		irWritef(ctx, "  %s = insertvalue %%type.error zeroinitializer, ptr %s, 0\n", errorMessage.Repr, message.Repr)
-		irWritef(ctx, "  %s = insertvalue %%type.error %s, i32 1, 1\n", errorCode.Repr, errorMessage.Repr)
-		irWritef(ctx, "  %s = insertvalue %%type.error %s, i16 %s, 3\n", errorValue.Repr, errorCode.Repr, length16.Repr)
+		irWritef(ctx, "  %s = insertvalue %s zeroinitializer, ptr %s, %d\n", errorMessage.Repr, t.CoreTypeError.LLVMName(), message.Repr, errorMessageField)
+		irWritef(ctx, "  %s = insertvalue %s %s, i32 1, %d\n", errorCode.Repr, t.CoreTypeError.LLVMName(), errorMessage.Repr, errorCodeField)
+		irWritef(ctx, "  %s = insertvalue %s %s, i16 %s, %d\n", errorValue.Repr, t.CoreTypeError.LLVMName(), errorCode.Repr, length16.Repr, errorLengthField)
 		return irThrowSsa(ctx, errorValue, fnDef, stmtThrow.Pos)
 	}
 	exprSsa, e := irExpression(ctx, stmtThrow.Expression.GetInferredType(), stmtThrow.Expression, false)
@@ -287,7 +348,7 @@ func irExprDestructureAssign(ctx *IrCtx, expr *t.NodeExprDestructureAssign) (Ssa
 	}
 
 	capturedError := irSsaLocal(ctx)
-	irWritef(ctx, "  %s = alloca %%type.error\n", capturedError.Repr)
+	irWritef(ctx, "  %s = alloca %s\n", capturedError.Repr, t.CoreTypeError.LLVMName())
 	failureLabel, endLabel := irSsaName(ctx), irSsaName(ctx)
 	previousMode, previousSlot, previousFailure := ctx.ErrorMode, ctx.CapturedErrorSlot, ctx.ErrorFailureLabel
 	ctx.ErrorMode, ctx.CapturedErrorSlot, ctx.ErrorFailureLabel = 2, capturedError, failureLabel
@@ -322,8 +383,8 @@ func irExprDestructureAssign(ctx *IrCtx, expr *t.NodeExprDestructureAssign) (Ssa
 	// Every throwing subcall in the RHS converges here.
 	irWritef(ctx, "%s:\n", failureLabel.Repr)
 	errVal := irSsaLocal(ctx)
-	irWritef(ctx, "  %s = load %%type.error, ptr %s\n", errVal.Repr, capturedError.Repr)
-	irWritef(ctx, "  store %%type.error %s, ptr %s\n", errVal.Repr, errPtr.Repr)
+	irWritef(ctx, "  %s = load %s, ptr %s\n", errVal.Repr, t.CoreTypeError.LLVMName(), capturedError.Repr)
+	irWritef(ctx, "  store %s %s, ptr %s\n", t.CoreTypeError.LLVMName(), errVal.Repr, errPtr.Repr)
 	irWritef(ctx, "  br label %%%s\n", endLabel.Repr)
 	irWritef(ctx, "%s:\n", endLabel.Repr)
 
@@ -347,6 +408,8 @@ func irStatement(ctx *IrCtx, stmtNode t.NodeStatement, fnDef *t.NodeFuncDef) err
 		return nil
 	case *t.NodeStmtIf:
 		e = irStmtIf(ctx, s, fnDef)
+	case *t.NodeStmtMatch:
+		e = irStmtMatch(ctx, s, fnDef)
 	case *t.NodeStmtWhile:
 		e = irStmtWhile(ctx, s, fnDef)
 	case *t.NodeStmtFor:
@@ -361,6 +424,61 @@ func irStatement(ctx *IrCtx, stmtNode t.NodeStatement, fnDef *t.NodeFuncDef) err
 		e = irStmtBreak(ctx, s)
 	}
 	return e
+}
+
+func irStmtMatch(ctx *IrCtx, stmt *t.NodeStmtMatch, fnDef *t.NodeFuncDef) error {
+	value, err := irExpression(ctx, stmt.Expression.GetInferredType(), stmt.Expression, false)
+	if err != nil {
+		return err
+	}
+	tag := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = extractvalue ", tag.Repr)
+	if err := irType(ctx, stmt.Expression.GetInferredType()); err != nil {
+		return err
+	}
+	irWrite(ctx, " ")
+	irPossibleLitSsa(ctx, value)
+	irWrite(ctx, ", 0\n")
+	end := irSsaName(ctx)
+	next := irSsaName(ctx)
+	for index, arm := range stmt.Cases {
+		bodyLabel := irSsaName(ctx)
+		if index > 0 {
+			irWritef(ctx, "%s:\n", next.Repr)
+			next = irSsaName(ctx)
+		}
+		comparison := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = icmp eq i64 %s, %d\n", comparison.Repr, tag.Repr, arm.Variant.Tag)
+		irWritef(ctx, "  br i1 %s, label %%%s, label %%%s\n%s:\n", comparison.Repr, bodyLabel.Repr, next.Repr, bodyLabel.Repr)
+		if _, err := irVarDef(ctx, arm.Binding); err != nil {
+			return err
+		}
+		payload := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = extractvalue ", payload.Repr)
+		if err := irType(ctx, stmt.Expression.GetInferredType()); err != nil {
+			return err
+		}
+		irWrite(ctx, " ")
+		irPossibleLitSsa(ctx, value)
+		irWritef(ctx, ", %d\n", arm.Variant.Tag+1)
+		irWrite(ctx, "  store ")
+		if err := irType(ctx, arm.Binding.Type); err != nil {
+			return err
+		}
+		irWritef(ctx, " %s, ptr %s\n", payload.Repr, ctx.localSlots[arm.Binding].Repr)
+		if err := irBody(ctx, &arm.Body, fnDef, false); err != nil {
+			return err
+		}
+		irWritef(ctx, "  br label %%%s\n", end.Repr)
+	}
+	irWritef(ctx, "%s:\n", next.Repr)
+	if stmt.ElseBody != nil {
+		if err := irBody(ctx, stmt.ElseBody, fnDef, false); err != nil {
+			return err
+		}
+	}
+	irWritef(ctx, "  br label %%%s\n%s:\n", end.Repr, end.Repr)
+	return nil
 }
 
 func irStmtBounded(ctx *IrCtx, stmt *t.NodeStmtBounded, fnDef *t.NodeFuncDef) error {
@@ -409,7 +527,11 @@ func irStmtIf(ctx *IrCtx, ifStmt *t.NodeStmtIf, fnDef *t.NodeFuncDef) error {
 	irWrite(ctx, "  br i1 ")
 	irPossibleLitSsa(ctx, condSsa)
 
-	irWritef(ctx, ", label %%%s, label %%%s\n", eqLabel.Repr, neqLabel.Repr)
+	irWritef(ctx, ", label %%%s, label %%%s", eqLabel.Repr, neqLabel.Repr)
+	if weights := irErrorPredicateWeights(ifStmt.CondExpr); weights != "" {
+		irWritef(ctx, ", !prof %s", weights)
+	}
+	irWrite(ctx, "\n")
 
 	irWritef(ctx, "%s:\n", eqLabel.Repr)
 
@@ -441,6 +563,21 @@ func irStmtIf(ctx *IrCtx, ifStmt *t.NodeStmtIf, fnDef *t.NodeFuncDef) error {
 
 	irWritef(ctx, "%s:\n", endLabel.Repr)
 	return nil
+}
+
+func irErrorPredicateWeights(expression t.NodeExpr) string {
+	call, ok := expression.(*t.NodeExprCall)
+	if !ok || call.AssociatedFnDef == nil {
+		return ""
+	}
+	switch call.AssociatedFnDef.ErrorPredicate {
+	case t.ErrorPredicateNok:
+		return "!9000"
+	case t.ErrorPredicateOk:
+		return "!9001"
+	default:
+		return ""
+	}
 }
 
 func irStmtWhile(ctx *IrCtx, ifStmt *t.NodeStmtWhile, fnDef *t.NodeFuncDef) error {

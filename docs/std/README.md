@@ -3,8 +3,8 @@
 Import a module with its path under `std/`, omitting the `.mg` extension:
 
 ```magma
-use "std:heap" heap
-use "std:net/tcp" tcp
+use "std:heap" as heap
+use "std:net/tcp" as tcp
 ```
 
 The pages in this directory document public modules and a few cross-module
@@ -17,7 +17,7 @@ written as `!T`, and `$T` marks ownership transfer.
 [`allocators`](allocators.md), [`heap`](heap.md), [`arena_alloc`](arena_alloc.md),
 [`scratch_alloc`](scratch_alloc.md), [`debug_alloc`](debug_alloc.md),
 [`fake_alloc`](fake_alloc.md), [`memory`](memory.md), [`cast`](cast.md),
-[`checked`](checked.md), [`c`](c.md), and [`footgun`](footgun.md).
+[`llvm`](llvm.md), [`checked`](checked.md), [`c`](c.md), and [`footgun`](footgun.md).
 
 ## Collections and text
 

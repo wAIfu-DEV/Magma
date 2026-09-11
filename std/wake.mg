@@ -1,13 +1,13 @@
 mod wake
 # Portable wait-and-notify primitives for coordinating threads.
 
-use "std:errors" errors
+use "std:errors" as errors
 
 @platform("windows")
-use "std:win/wake_impl" impl_wake
+use "std:win/wake_impl" as impl_wake
 
 @platform("linux", "android", "ios", "darwin", "freebsd", "netbsd", "openbsd")
-use "std:unix/wake_impl" impl_wake
+use "std:unix/wake_impl" as impl_wake
 
 # A condition variable plus an internal counter.
 # Notifications are retained as tokens when no thread is waiting.

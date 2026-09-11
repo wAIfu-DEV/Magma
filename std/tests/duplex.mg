@@ -1,6 +1,6 @@
 mod main
-use "std:duplex" duplex
-use "std:errors" errors
+use "std:duplex" as duplex
+use "std:errors" as errors
 
 Stream impl duplex.Duplex(value u8)
 

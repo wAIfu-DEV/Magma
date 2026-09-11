@@ -33,7 +33,7 @@ alias internal_size = u64
 pub alias size_t = internal_size
 `
 	main := `mod main
-use "library.mg" c
+use "library.mg" as c
 
 identity(value c.size_t) c.size_t:
     ret value

@@ -25,7 +25,7 @@ func Validate(shared *t.SharedState) error {
 
 	for _, path := range paths {
 		file := files[path]
-		if file == nil || file.GlNode == nil {
+		if file == nil || file.GlNode == nil || file.InterfaceOnly {
 			continue
 		}
 		for _, declaration := range file.GlNode.Declarations {
@@ -666,7 +666,7 @@ func expressionValid(file *t.FileCtx, expression t.NodeExpr) error {
 		if namedTypeIs(&callValue, "void") {
 			return invalid(file, &node.Call.Tk, "destructuring assignment call has no value result")
 		}
-		if !namedTypeIs(node.ErrDef.Type, "error") {
+		if t.CoreTypeRoleOf(node.ErrDef.Type) != t.CoreTypeError {
 			return invalid(file, &node.Call.Tk, "destructuring error binding does not have type 'error'")
 		}
 		return nil
@@ -726,6 +726,22 @@ func expressionValid(file *t.FileCtx, expression t.NodeExpr) error {
 			return err
 		}
 		return expressionValid(file, node.Expr)
+	case *t.NodeExprLlvm:
+		if node.Operation == "" {
+			return invalid(file, &node.Tk, "typed LLVM expression is incomplete")
+		}
+		if err := typeValid(file, node.ResultType, "typed LLVM result"); err != nil {
+			return err
+		}
+		if err := typeValid(file, node.InfType, "typed LLVM inferred result"); err != nil {
+			return err
+		}
+		for _, arg := range node.Args {
+			if err := expressionValid(file, arg); err != nil {
+				return err
+			}
+		}
+		return nil
 	case *t.NodeExprStructInit:
 		if err := typeValid(file, node.Type, "struct initializer result"); err != nil {
 			return err
@@ -765,8 +781,8 @@ func expressionValid(file *t.FileCtx, expression t.NodeExpr) error {
 		if err := valueTypeValid(file, node.IndexType, "subscript index representation"); err != nil {
 			return err
 		}
-		if !namedTypeIs(node.IndexType, "i64") {
-			return invalid(file, &node.Tk, "subscript index representation is not i64")
+		if !namedTypeIs(node.IndexType, "u64") {
+			return invalid(file, &node.Tk, "subscript index representation is not u64")
 		}
 		switch node.BoxType.KindNode.(type) {
 		case *t.NodeTypeSlice, *t.NodeTypePointer, *t.NodeTypeRfc:
@@ -838,6 +854,11 @@ func expressionValid(file *t.FileCtx, expression t.NodeExpr) error {
 		return expressionValid(file, node.Right)
 	case *t.NodeExprLit:
 		return typeValid(file, node.InfType, "literal inferred type")
+	case *t.NodeExprEmbed:
+		if node.Path == "" || node.Symbol == "" {
+			return invalid(file, &node.Tk, "embedded file has incomplete path or symbol metadata")
+		}
+		return typeValid(file, node.InfType, "embedded file inferred type")
 	case *t.NodeExprSizeof:
 		if err := valueTypeValid(file, node.Type, "sizeof operand"); err != nil {
 			return err

@@ -1,11 +1,11 @@
 mod abort
 # Cooperative abort signals for synchronous and asynchronous work.
 
-use "std:allocator" allocator
-use "std:atomic" atomic
-use "std:errors" errors
-use "std:thread" thread
-use "std:time" time
+use "std:allocator" as allocator
+use "std:atomic" as atomic
+use "std:errors" as errors
+use "std:thread" as thread
+use "std:time" as time
 
 pub const REASON_NONE u64 = 0
 pub const REASON_REQUESTED u64 = 1
@@ -38,7 +38,9 @@ pub new() !$Controller:
     ret Controller(state=state)
 ..
 
-Controller.signal() Signal: ret Signal(state=this.state) ..
+Controller.signal() Signal:
+    ret Signal(state=this.state)
+..
 
 Controller.abort() void:
     if this.state != none:

@@ -91,6 +91,12 @@ const (
 	KwUnsafe
 	KwNoCtx
 	KwNot
+	KwFn
+	KwAs
+	KwUnion
+	KwMatch
+	KwCase
+	KwGlobal
 )
 
 var KwTypeToRepr []string = []string{
@@ -160,6 +166,12 @@ var KwTypeToRepr []string = []string{
 	KwUnsafe:     "unsafe",
 	KwNoCtx:      "noctx",
 	KwNot:        "not",
+	KwFn:         "fn",
+	KwAs:         "as",
+	KwUnion:      "union",
+	KwMatch:      "match",
+	KwCase:       "case",
+	KwGlobal:     "global",
 }
 
 var KwReprToType map[string]KwType = map[string]KwType{
@@ -218,6 +230,7 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"ext":      KwExtern,
 	"%":        KwPercent,
 	"addrof":   KwAddrof,
+	"fn":       KwFn,
 	"/":        KwSlash,
 	":=":       KwInfer,
 	"destr":    KwDestructor,
@@ -228,6 +241,11 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	"unsafe":   KwUnsafe,
 	"noctx":    KwNoCtx,
 	"not":      KwNot,
+	"as":       KwAs,
+	"union":    KwUnion,
+	"match":    KwMatch,
+	"case":     KwCase,
+	"global":   KwGlobal,
 }
 
 type Token struct {

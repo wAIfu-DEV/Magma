@@ -1,12 +1,12 @@
 mod context_default
 
-use "std:context" context
-use "std:allocator" alc
-use "std:heap" heap
-use "std:thread_pool" tp
-use "std:atomic" atomic
-use "std:executor" executor
-use "std:errors" errors
+use "std:context" as context
+use "std:allocator" as alc
+use "std:heap" as heap
+use "std:thread_pool" as tp
+use "std:atomic" as atomic
+use "std:executor" as executor
+use "std:errors" as errors
 
 initFlag atomic.U8
 allocator alc.Allocator

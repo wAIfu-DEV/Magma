@@ -2,8 +2,8 @@ mod dialog_impl_unix
 # XDG Desktop Portal backend boundary. The D-Bus implementation is pending;
 # keeping it behind this module preserves the portable API.
 
-use "std:allocator" allocator
-use "std:errors" errors
+use "std:allocator" as allocator
+use "std:errors" as errors
 
 pub openFile(filters ptr, filterCount u64, defaultPath str, title str, parent ptr) !$str:
     a := ctx.alloc

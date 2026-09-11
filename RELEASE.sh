@@ -17,7 +17,7 @@ if ! command -v zip >/dev/null 2>&1; then
 fi
 
 echo "Building the release compiler..."
-if ! go build -trimpath -o "$ROOT/Magma" .; then
+if ! go build -tags "llvm_object llvm22" -trimpath -o "$ROOT/Magma" .; then
     echo "Compiler build failed." >&2
     exit 1
 fi
@@ -35,7 +35,7 @@ if ! GOOS=windows GOARCH=amd64 go build -trimpath -o "$ROOT/Magma.exe" .; then
 fi
 
 echo "Cross-compiling Linux amd64 release..."
-if ! GOOS=linux GOARCH=amd64 go build -trimpath -o "$ROOT/Magma" .; then
+if ! GOOS=linux GOARCH=amd64 go build -tags "llvm_object llvm22" -trimpath -o "$ROOT/Magma" .; then
     echo "Linux amd64 build failed." >&2
     exit 1
 fi

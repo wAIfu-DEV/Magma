@@ -1,8 +1,8 @@
 mod main
-use "std:errors" errors
-use "std:cast" cast
-use "std:strings" strings
-use "std:writer" writer
+use "std:errors" as errors
+use "std:cast" as cast
+use "std:strings" as strings
+use "std:writer" as writer
 Sink impl writer.Writer(value u8)
 Sink.write(bytes str) !u64:
     ret bytes.countBytes()
