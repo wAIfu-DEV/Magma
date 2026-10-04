@@ -38,7 +38,7 @@ pub main() !void:
     if value.isEmpty() == false || value.byteCount() != 0:
         throw errors.failure("builder reset changed")
     ..
-    output := value.proto[writer.Writer]()
+    output := value.protoBorrow[writer.Writer]()
     temporary := try strings.copy("writer copy")
     writeCount := try output.write(temporary)
     temporary.free()

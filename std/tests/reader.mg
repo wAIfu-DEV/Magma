@@ -22,7 +22,7 @@ Source.readRaw(bytes u8[], count u64) !u64:
 pub main() !void:
     a allocator.Allocator = heap.allocator()
     source := Source(value=0)
-    input := source.proto[reader.Reader]()
+    input := source.protoBorrow[reader.Reader]()
     result := try input.read(1)
     defer result.free()
     if strings.compare(result, "A") == false:

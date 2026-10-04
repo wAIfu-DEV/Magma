@@ -216,11 +216,25 @@ func parseArgument(ctx *ParseCtx) (t.NodeArg, error) {
 	if e != nil {
 		return t.NodeArg{}, e
 	}
+	boundedCount := ""
+	if next, err := peek(ctx); err == nil && next.KeywType == t.KwBounded {
+		consume(ctx)
+		count, err := peek(ctx)
+		if err != nil {
+			return t.NodeArg{}, err
+		}
+		if count.Type != t.TokName && count.Type != t.TokLitNum {
+			return t.NodeArg{}, comp_err.CompilationErrorToken(ctx.Fctx, &count, "bounded parameter extent must name another parameter or be a non-negative integer literal", "use: p u8* bounded count, count u64; or p u32* bounded 1")
+		}
+		boundedCount = count.Repr
+		consume(ctx)
+	}
 
 	return t.NodeArg{
-		Tk:       name,
-		Name:     name.Repr,
-		TypeNode: ndType,
+		Tk:           name,
+		Name:         name.Repr,
+		TypeNode:     ndType,
+		BoundedCount: boundedCount,
 	}, nil
 }
 

@@ -321,7 +321,7 @@ func parseProtoDef(ctx *ParseCtx, protoTk t.Token) (t.NodeGlobalDecl, error) {
 	}
 	ctx.GlobalNode.Declarations = append(ctx.GlobalNode.Declarations, vtNode)
 
-	protoArgs := []t.NodeArg{{Name: "impl", TypeNode: syntheticNamed("ptr")}, {Name: "vtable", TypeNode: &t.NodeType{KindNode: &t.NodeTypePointer{Kind: &t.NodeTypeNamed{NameNode: vtName}}}}}
+	protoArgs := []t.NodeArg{{Name: "vtable", TypeNode: &t.NodeType{KindNode: &t.NodeTypePointer{Kind: &t.NodeTypeNamed{NameNode: vtName}}}}}
 	protoClass := t.NodeGenericClass{NameNode: name, TypeParams: decl.TypeParams, ArgsNode: t.NodeArgList{Args: protoArgs}}
 	protoNode, e := parseStructDef(ctx, name.Tk, protoClass)
 	if e != nil {

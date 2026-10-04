@@ -6,6 +6,35 @@ import (
 	"fmt"
 )
 
+func jsonValueType(c *ctx, call *t.NodeExprCall, node *t.NodeType) bool {
+	if node == nil {
+		return false
+	}
+	targetModule, ok := c.GlobalNode.ImportAlias[call.JSONModuleAlias]
+	if !ok {
+		return false
+	}
+	canonicalName := targetModule + ".Value"
+	if module := c.ModuleBundle.Modules[targetModule]; module != nil {
+		if definition := module.UnionDefs["Value"]; definition != nil {
+			canonicalName = definition.Module + "." + definition.Name
+		}
+	}
+	switch kind := node.KindNode.(type) {
+	case *t.NodeTypeAbsolute:
+		return kind.AbsoluteName == canonicalName
+	case *t.NodeTypeNamed:
+		name, ok := kind.NameNode.(*t.NodeNameComposite)
+		if !ok || len(name.Parts) < 2 || name.Parts[len(name.Parts)-1] != "Value" {
+			return false
+		}
+		resolved, consumed, err := t.ResolveModulePrefix(c.ModuleBundle.Modules, c.GlobalNode, name.Parts)
+		return err == nil && consumed == len(name.Parts)-1 && resolved == targetModule
+	default:
+		return false
+	}
+}
+
 func clExprCall(c *ctx, call *t.NodeExprCall) error {
 	if name, ok := call.Callee.(*t.NodeExprName); ok && len(call.Args) == 0 {
 		if variant, ownerType := clResolveUnionConstructor(c, &t.NodeType{KindNode: &t.NodeTypeNamed{NameNode: name.Name}}); variant != nil {
@@ -106,6 +135,84 @@ func clExprCall(c *ctx, call *t.NodeExprCall) error {
 		e := clExpr(c, arg, false)
 		if e != nil {
 			return e
+		}
+	}
+
+	if call.JSONLiteral {
+		for i, arg := range call.Args {
+			if err := ctExpr(c, arg); err != nil {
+				return err
+			}
+			if jsonValueType(c, call, arg.GetInferredType()) {
+				continue
+			}
+			typeName := flattenType(arg.GetInferredType())
+			helper := ""
+			throwing := false
+			switch typeName {
+			case "bool":
+				helper = "bool"
+			case "i64":
+				helper = "numberInt"
+			case "f64":
+				helper = "numberFloat"
+			case "str":
+				helper = "string"
+				throwing = true
+			}
+			if helper != "" {
+				token := *expressionSourceToken(arg)
+				name := &t.NodeExprName{Tk: token, Name: &t.NodeNameComposite{Parts: []string{call.JSONModuleAlias, helper}, Tokens: []t.Token{token, token}}}
+				conversionArg := arg
+				if shorthand, ok := arg.(*t.NodeExprMove); ok {
+					conversionArg = shorthand.Expr
+				}
+				conversion := &t.NodeExprCall{Tk: token, Callee: name, Args: []t.NodeExpr{conversionArg}}
+				var converted t.NodeExpr = conversion
+				if throwing {
+					converted = &t.NodeExprTry{Tk: token, Pos: token.Pos, Call: conversion}
+				}
+				if err := clExpr(c, converted, false); err != nil {
+					return err
+				}
+				call.Args[i] = converted
+				continue
+			}
+			slice, ok := arg.GetInferredType().KindNode.(*t.NodeTypeSlice)
+			if !ok {
+				return comp_err.CompilationErrorToken(c.FileCtx, expressionSourceToken(arg), fmt.Sprintf("JSON literals cannot encode a value of type '%s'", typeName), "supported value types are bool, i64, f64, str, json.Value, and supported typed slices")
+			}
+			element := &t.NodeType{KindNode: slice.ElemKind}
+			helper = ""
+			if jsonValueType(c, call, element) {
+				helper = "sliceValue"
+			}
+			switch flattenType(element) {
+			case "bool":
+				helper = "sliceBool"
+			case "i64":
+				helper = "sliceInt"
+			case "f64":
+				helper = "sliceFloat"
+			case "str":
+				helper = "sliceString"
+			default:
+				if helper == "" {
+					return comp_err.CompilationErrorToken(c.FileCtx, expressionSourceToken(arg), fmt.Sprintf("JSON literals cannot encode a slice of '%s'", flattenType(element)), "supported slice element types are bool, i64, f64, str, and json.Value")
+				}
+			}
+			token := *expressionSourceToken(arg)
+			name := &t.NodeExprName{Tk: token, Name: &t.NodeNameComposite{Parts: []string{call.JSONModuleAlias, helper}, Tokens: []t.Token{token, token}}}
+			conversionArg := arg
+			if shorthand, ok := arg.(*t.NodeExprMove); ok {
+				conversionArg = shorthand.Expr
+			}
+			conversion := &t.NodeExprCall{Tk: token, Callee: name, Args: []t.NodeExpr{conversionArg}}
+			attempt := &t.NodeExprTry{Tk: token, Pos: token.Pos, Call: conversion}
+			if err := clExpr(c, attempt, false); err != nil {
+				return err
+			}
+			call.Args[i] = attempt
 		}
 	}
 
@@ -399,6 +506,18 @@ func clExpr(c *ctx, expr t.NodeExpr, lvalue bool) error {
 		if e := ctExpr(c, n.Target); e != nil {
 			return e
 		}
+		if n.ProtoType == nil {
+			ownerType := n.Target.GetInferredType()
+			if dereferenced, isPointer := clDerefOne(ownerType); isPointer {
+				ownerType = dereferenced
+			}
+			owner, err := clGetStructDefFromType(c, ownerType)
+			if err != nil || owner == nil || len(owner.Implements) != 1 || owner.Implements[0].Proto == nil {
+				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, "cannot infer prototype type", "specify the prototype with `.proto[Prototype]()` or `.protoBorrow[Prototype]()`")
+			}
+			proto := owner.Implements[0].Proto
+			n.ProtoType = &t.NodeType{KindNode: &t.NodeTypeAbsolute{AbsoluteName: proto.Module + "." + proto.Name, DisplayName: proto.Name}}
+		}
 		if e := clType(c, n.ProtoType); e != nil {
 			return e
 		}
@@ -408,6 +527,9 @@ func clExpr(c *ctx, expr t.NodeExpr, lvalue bool) error {
 		}
 		ownerType := n.Target.GetInferredType()
 		if dereferenced, isPointer := clDerefOne(ownerType); isPointer {
+			if !n.Borrowed {
+				return comp_err.CompilationErrorToken(c.FileCtx, &n.Tk, "owning `.proto()` requires an implementation value", "use `.protoBorrow()` for a pointer-backed view")
+			}
 			ownerType = dereferenced
 			n.TargetIsPointer = true
 		}

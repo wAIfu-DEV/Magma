@@ -104,6 +104,50 @@ numbers, or hexadecimal integers:
 0x7FF0000000000000
 ```
 
+### JSON value literals
+
+With `std:json` imported under its canonical `json` alias, contextual `json`
+literals construct owned `json.Value` values. Aggregate construction is
+fallible and is used with `try`:
+
+```magma
+use "std:json" as json
+
+namedValue := json.numberInt(7)
+value := try json {
+    "field": "value",
+    field2: 0.01,
+    namedValue,
+    arr: [{nested: true}],
+    absent: none,
+}
+defer value.free()
+```
+
+Object keys may be string literals or identifiers. A bare identifier entry is
+shorthand for a field with the same name and consumes the named `json.Value`.
+Keys and elements are comma-separated and may have a trailing comma. Duplicate
+object keys are rejected. Nested braces and brackets remain in JSON context;
+`none` constructs `Value.Null` rather than a null pointer.
+
+Every JSON scalar can also be constructed directly:
+
+```magma
+text := try json "test"
+ratio := json 0.1
+enabled := json true
+missing := json none
+items := try json [1, 2, {}, none]
+```
+
+Strings, objects, and arrays can allocate and therefore produce throwing owned
+values. Numeric, boolean, and null literals use the corresponding non-throwing
+`std:json` constructors.
+
+Typed slices can be used as object values or array entries when their element
+type is `bool`, `i64`, `f64`, `str`, or `json.Value`. The resulting JSON array
+owns copies of the slice elements; the input slice remains borrowed.
+
 ## Blocks
 
 Blocks begin with `:` and end with `..`.
@@ -358,8 +402,8 @@ Allocator(impl ptr, vtable VTable*)
 
 ### Prototypes
 
-Prototypes provide compiler-generated versions of the same two-word
-implementation-pointer and immutable-vtable pattern:
+Prototypes provide a compiler-generated immutable vtable and inline storage
+large enough for the largest implementation in the build:
 
 ```magma
 pub proto Allocator(
@@ -398,8 +442,7 @@ pub proto Duplex impl Writer Reader(
 )
 ```
 
-Construct the implementation normally, then create a borrowed prototype view
-from stable named storage:
+Construct an implementation, then move it into an owning prototype value:
 
 ```magma
 heap := Heap(handle=nativeHandle)
@@ -412,14 +455,28 @@ The prototype type may instead be inferred from a typed expectation:
 a Allocator = heap.proto()
 ```
 
-The expectation must resolve to a type declared with `proto`. An inferred
-binding such as `a := heap.proto()` is rejected because it provides no target
-prototype.
+The expectation must resolve to a type declared with `proto`. When an
+implementation declares exactly one prototype, the compiler can also infer it
+for bindings such as `a := heap.proto()`. An implementation with multiple
+prototypes needs an explicit target type.
 
-The implementation must remain alive and unmoved while the view is used.
-Creating a view directly from a temporary is rejected. Prototype requirements
-become vtable entries; additional methods declared on the prototype are
-ordinary methods and do not affect its layout:
+`.proto()` consumes `heap`; using it again is an ownership error, even if
+`Heap` has no destructor. For a borrowed view, use `.protoBorrow()`:
+
+```magma
+heap := Heap(handle=nativeHandle)
+a Allocator = heap.protoBorrow()
+```
+
+The borrowed value stores a pointer to `heap` and uses a separate constant
+vtable whose methods load that pointer. It cannot outlive `heap`, and `heap`
+must not move while borrowed. `.protoBorrow()` also accepts a pointer to an
+implementation. Both forms produce the same `Allocator` type.
+
+An implementation cannot contain its own proto by value because that would
+require storage larger than itself. Store a pointer to the proto in the
+implementation instead. Prototype requirements become vtable entries;
+additional methods declared on the prototype are ordinary methods:
 
 ```magma
 Allocator.allocT[T](count u64) !$T*:
@@ -940,8 +997,8 @@ local to the loop, advances by one after each iteration, and is also advanced
 when an iteration leaves through `continue`, `break`, `ret`, or `throw`.
 
 Ordinary slice subscripts require a dominating range proof. Canonical `for`
-and conditional `loop` headers establish that proof automatically. A dynamic
-relation can be checked once for a lexical region with `bounded`:
+and conditional `loop` headers establish that proof automatically. A relation
+can be asserted for a lexical region with `bounded`:
 
 ```magma
 bounded i < left.count(), i < right.count():
@@ -949,9 +1006,53 @@ bounded i < left.count(), i < right.count():
 ..
 ```
 
-The compiler emits one entry guard for the predicate list and no per-access
-checks. Assigning an index, bound, or relevant container descriptor invalidates
-the affected fact; an unproven ordinary subscript is a safety error.
+The compiler emits no runtime check or branch for `bounded`. Its predicates
+are programmer assertions used only during compilation. If an assertion is
+false at runtime, a subscript justified by it can access invalid memory.
+Assigning an index, bound, or relevant container descriptor invalidates the
+affected fact; an unproven ordinary subscript is a safety error.
+
+Raw pointers have no intrinsic extent. Declare one with `by` before the
+comparison predicates:
+
+```magma
+bounded ptr by count, i < count:
+    ptr[i] = 1
+..
+```
+
+`ptr by count` states that `count` elements beginning at `ptr` are valid.
+Multiple pointers can share a block: `bounded source by count, target by count, i < count:`.
+It performs no allocation check. The pointer and extent must be stable named
+values or constants. When the extent is not already proven, this declaration
+must be inside `unsafe`; the indexed accesses in its body need no individual
+`unsafe` wrappers. A bare pointer subscript still requires `unsafe`.
+
+Function parameters can carry the same extent across calls:
+
+```magma
+sum(p u8* bounded count, count u64) u64:
+    total u64 = 0
+    for i u64 = 0 to count:
+        total = total + p[i]
+    ..
+    ret total
+..
+```
+
+The `bounded count` annotation has no ABI representation and emits no runtime
+check. Within the function, it establishes the pointer extent. At a Magma
+call site, the compiler requires a known extent at least as large as the count
+argument. Contracts can be forwarded by annotating the caller's parameter.
+Fixed extents can use an integer literal, such as `source u32* bounded 1`.
+When a proven `u32*` is reinterpreted as `u8*`, the compiler carries its
+four-byte extent to the byte pointer. A block such as `bounded bytes by 4:`
+then permits constant indices 0 through 3 without separate comparisons.
+Within `for i u64 = 0 to count:`, the compiler also knows `i < count`;
+no additional `bounded i < count:` block is needed for a pointer whose
+extent is already `count`.
+An unbounded pointer from native code needs an explicit local `bounded p by
+count` assertion before it can be passed to such a function.
 
 ## Errors
 

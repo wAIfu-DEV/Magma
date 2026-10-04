@@ -44,7 +44,7 @@ pub Leak(
 
 # Owned tracking state wrapping a borrowed target allocator.
 pub DebugAllocator impl allocator.Allocator(
-    target allocator.Allocator
+    target allocator.Allocator*
     entries Entry*
     capacityValue u64
     count u64
@@ -84,6 +84,7 @@ findFreeEntry(debug DebugAllocator*) Entry*:
 ..
 
 grow(debug DebugAllocator*) !void:
+    target := debug.target
     if debug.options.canGrow == false:
         throw errors.outOfMemory("debug allocator tracking capacity exhausted")
     ..
@@ -95,7 +96,7 @@ grow(debug DebugAllocator*) !void:
     if sizeof Entry != 0 && newCapacity > maxU64 / sizeof Entry:
         throw errors.wouldOverflow("debug allocator metadata size overflow")
     ..
-    newEntries := try debug.target.allocT[Entry](newCapacity)
+    newEntries := try target.allocT[Entry](newCapacity)
     memory.zero(newEntries, newCapacity * sizeof Entry)
     i u64 = 0
     writeIndex u64 = 0
@@ -110,7 +111,7 @@ grow(debug DebugAllocator*) !void:
         ..
         i = i + 1
     ..
-    debug.target.free(debug.entries)
+    target.free(debug.entries)
     debug.entries = newEntries
     debug.capacityValue = newCapacity
 ..
@@ -148,7 +149,8 @@ debugAlloc(raw ptr, byteCount u64) !u8*:
         throw errors.invalidArgument("debug allocation size must be greater than zero")
     ..
     entry := try reserveEntry(debug)
-    pointer := try debug.target.alloc(byteCount)
+    target := debug.target
+    pointer := try target.alloc(byteCount)
     record(debug, entry, pointer, byteCount)
     debug.allocationCallsValue = debug.allocationCallsValue + 1
     ret pointer
@@ -164,16 +166,17 @@ debugFree(raw ptr, pointer u8*) void:
         debug = raw
     ..
     entry := findEntry(debug, pointer)
+    target := debug.target
     if entry == none:
         debug.rejectedFreesValue = debug.rejectedFreesValue + 1
         if debug.options.rejectUntrackedFree == false:
-            debug.target.free(pointer)
+            target.free(pointer)
             debug.freeCallsValue = debug.freeCallsValue + 1
         ..
         ret
     ..
     size := entry.size
-    debug.target.free(pointer)
+    target.free(pointer)
     entry.pointer = none
     entry.size = 0
     entry.active = false
@@ -200,7 +203,8 @@ debugRealloc(raw ptr, pointer u8*, byteCount u64) !u8*:
         throw errors.invalidArgument("block is not tracked by debug allocator")
     ..
     oldSize := entry.size
-    replacement := try debug.target.realloc(pointer, byteCount)
+    target := debug.target
+    replacement := try target.realloc(pointer, byteCount)
     entry.pointer = replacement
     entry.size = byteCount
     if byteCount >= oldSize:
@@ -237,9 +241,14 @@ pub new(target allocator.Allocator, options Options) !$DebugAllocator:
         throw errors.wouldOverflow("debug allocator metadata size overflow")
     ..
     entries := try target.allocT[Entry](options.initialCapacity)
+    onerror target.free(entries)
     memory.zero(entries, options.initialCapacity * sizeof Entry)
+    targetPtr := try target.allocT[allocator.Allocator](1)
+    unsafe:
+        *targetPtr = target
+    ..
     ret DebugAllocator(
-        target=target,
+        target=targetPtr,
         entries=entries,
         capacityValue=options.initialCapacity,
         count=0,
@@ -265,7 +274,7 @@ pub newDefault(target allocator.Allocator) !$DebugAllocator:
 # Returns a non-owning allocator view. DebugAllocator must remain at a stable
 # address and outlive the returned value.
 DebugAllocator.allocator() allocator.Allocator:
-    ret this.proto()
+    ret this.protoBorrow()
 ..
 
 DebugAllocator.stats() Stats:
@@ -310,9 +319,14 @@ DebugAllocator.leak(index u64) !Leak:
 # Releases tracking metadata. Live user allocations are intentionally left
 # untouched so their pointers are not invalidated implicitly.
 destr DebugAllocator.destroy() void:
+    target := this.target
     if this.entries != none:
-        this.target.free(this.entries)
+        target.free(this.entries)
     ..
+    if this.target != none:
+        target.free(this.target)
+    ..
+    this.target = none
     this.entries = none
     this.capacityValue = 0
 ..

@@ -11,13 +11,15 @@ import (
 )
 
 type Lowerer struct {
-	backend      lb.Backend
-	state        *t.SharedState
-	definitions  map[string]*t.StructDef
-	structIDs    map[*t.StructDef]lb.TypeID
-	defined      map[*t.StructDef]bool
-	defining     map[*t.StructDef]bool
-	structErrors map[*t.StructDef]error
+	backend              lb.Backend
+	state                *t.SharedState
+	definitions          map[string]*t.StructDef
+	structIDs            map[*t.StructDef]lb.TypeID
+	defined              map[*t.StructDef]bool
+	defining             map[*t.StructDef]bool
+	structErrors         map[*t.StructDef]error
+	ProtoBorrowFunctions map[string]lb.FunctionID
+	ProtoVtableGlobals   map[string]lb.GlobalID
 	// CrossModule makes ordinary Magma definitions externally linkable while
 	// independently lowering bitcode units. Whole-program textual/object
 	// lowering leaves this false and retains internal linkage.
@@ -35,7 +37,7 @@ func New(backend lb.Backend, state *t.SharedState) (*Lowerer, error) {
 	if backend == nil || state == nil {
 		return nil, fmt.Errorf("type lowerer requires a backend and shared state")
 	}
-	result := &Lowerer{backend: backend, state: state, definitions: make(map[string]*t.StructDef), structIDs: make(map[*t.StructDef]lb.TypeID), defined: make(map[*t.StructDef]bool), defining: make(map[*t.StructDef]bool), structErrors: make(map[*t.StructDef]error)}
+	result := &Lowerer{backend: backend, state: state, definitions: make(map[string]*t.StructDef), structIDs: make(map[*t.StructDef]lb.TypeID), defined: make(map[*t.StructDef]bool), defining: make(map[*t.StructDef]bool), structErrors: make(map[*t.StructDef]error), ProtoBorrowFunctions: make(map[string]lb.FunctionID), ProtoVtableGlobals: make(map[string]lb.GlobalID)}
 	state.FilesM.Lock()
 	defer state.FilesM.Unlock()
 	for _, file := range state.Files {
@@ -56,6 +58,90 @@ func New(backend lb.Backend, state *t.SharedState) (*Lowerer, error) {
 		}
 	}
 	return result, nil
+}
+
+// ValidateProtoLayouts forces every proto's inline storage to a finite target layout.
+func (l *Lowerer) ValidateProtoLayouts() error {
+	for _, definition := range l.definitions {
+		if definition == nil || !definition.IsProto {
+			continue
+		}
+		if err := l.validateProtoStorage(definition, map[*t.StructDef]bool{}); err != nil {
+			return err
+		}
+		id, err := l.lowerStruct(definition)
+		if err != nil {
+			return err
+		}
+		if _, err := l.backend.TypeLayout(id); err != nil {
+			return fmt.Errorf("recursive proto storage for %s has no finite inline size; store a pointer to the proto in the implementation instead: %w", definition.Module+"."+definition.Name, err)
+		}
+	}
+	return nil
+}
+
+func (l *Lowerer) validateProtoStorage(definition *t.StructDef, path map[*t.StructDef]bool) error {
+	if path[definition] {
+		return fmt.Errorf("recursive proto storage through %s.%s has no finite inline size; store a pointer to the proto in the implementation instead", definition.Module, definition.Name)
+	}
+	path[definition] = true
+	defer delete(path, definition)
+	if definition.IsProto && definition.Proto != nil {
+		for _, candidate := range l.definitions {
+			for _, relation := range candidate.Implements {
+				if relation != nil && relation.Proto != nil && relation.Proto.Module == definition.Proto.Module && relation.Proto.Name == definition.Proto.Name {
+					if err := l.validateProtoStorage(candidate, path); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+	for _, fieldName := range definition.FieldOrder {
+		field := definition.Fields[fieldName]
+		if field == nil {
+			continue
+		}
+		dependent := l.storageDependency(definition, field.KindNode)
+		if dependent == nil {
+			continue
+		}
+		if err := l.validateProtoStorage(dependent, path); err != nil {
+			return fmt.Errorf("field %s.%s: %w", definition.Name, fieldName, err)
+		}
+	}
+	return nil
+}
+
+func (l *Lowerer) storageDependency(owner *t.StructDef, kind t.NodeTypeKind) *t.StructDef {
+	switch node := kind.(type) {
+	case *t.NodeTypeAbsolute:
+		if node.CoreRole != t.CoreTypeNone {
+			return l.state.CoreTypes[node.CoreRole]
+		}
+		return l.definitions[node.AbsoluteName]
+	case *t.NodeTypeNamed:
+		switch name := node.NameNode.(type) {
+		case *t.NodeNameSingle:
+			if role := t.CoreTypeRoleForName(name.Name); role != t.CoreTypeNone {
+				return l.state.CoreTypes[role]
+			}
+			return l.definitions[owner.Module+"."+name.Name]
+		case *t.NodeNameComposite:
+			if len(name.Parts) != 2 {
+				return nil
+			}
+			for _, file := range l.state.Files {
+				if file == nil || file.PackageName != owner.Module || file.GlNode == nil {
+					continue
+				}
+				packageName := file.GlNode.ImportAlias[name.Parts[0]]
+				return l.definitions[packageName+"."+name.Parts[1]]
+			}
+		}
+	}
+	return nil
 }
 
 func (l *Lowerer) register(definition *t.StructDef) error {
@@ -200,6 +286,111 @@ func (l *Lowerer) lowerStruct(definition *t.StructDef) (lb.TypeID, error) {
 		l.defining[definition] = false
 		l.structErrors[definition] = err
 		return 0, err
+	}
+	if definition.IsProto && definition.Proto != nil {
+		pointer, err := l.backend.InternType(lb.TypeSpec{Kind: lb.TypePointer})
+		if err != nil {
+			return fail(err)
+		}
+		pointerLayout, err := l.backend.TypeLayout(pointer)
+		if err != nil {
+			return fail(err)
+		}
+		maxSize, maxAlign, alignType := pointerLayout.AllocationSize, pointerLayout.ABIAlignment, pointer
+		for _, candidate := range l.definitions {
+			for _, implementation := range candidate.Implements {
+				if implementation == nil || implementation.Proto == nil || implementation.Proto.Module != definition.Proto.Module || implementation.Proto.Name != definition.Proto.Name {
+					continue
+				}
+				concrete, err := l.lowerStruct(candidate)
+				if err != nil {
+					return fail(err)
+				}
+				layout, err := l.backend.TypeLayout(concrete)
+				if err != nil {
+					return fail(fmt.Errorf("recursive proto storage for %s has no finite inline size; store a pointer to the proto in the implementation instead: %w", definition.Module+"."+definition.Name, err))
+				}
+				if layout.AllocationSize > maxSize {
+					maxSize = layout.AllocationSize
+				}
+				if layout.ABIAlignment > maxAlign {
+					maxAlign, alignType = layout.ABIAlignment, concrete
+				}
+			}
+		}
+		byteType, err := l.backend.InternType(lb.TypeSpec{Kind: lb.TypeInteger, Bits: 8})
+		if err != nil {
+			return fail(err)
+		}
+		aligner, err := l.backend.InternType(lb.TypeSpec{Kind: lb.TypeArray, Element: alignType, Length: 0})
+		if err != nil {
+			return fail(err)
+		}
+		storage, err := l.backend.InternType(lb.TypeSpec{Kind: lb.TypeArray, Element: byteType, Length: maxSize})
+		if err != nil {
+			return fail(err)
+		}
+		if err := l.backend.DefineStruct(id, []lb.TypeID{pointer, aligner, storage}, false); err != nil {
+			return fail(err)
+		}
+		l.defining[definition], l.defined[definition] = false, true
+		return id, nil
+	}
+	// A union's semantic fields name all variants for checking and matching, but
+	// its physical representation overlays their payloads.
+	for _, file := range l.state.Files {
+		if file == nil || file.GlNode == nil || file.GlNode.UnionDefs[definition.Name] == nil || file.GlNode.UnionDefs[definition.Name].Module != definition.Module {
+			continue
+		}
+		union := file.GlNode.UnionDefs[definition.Name]
+		tag, err := l.backend.InternType(lb.TypeSpec{Kind: lb.TypeInteger, Bits: 64})
+		if err != nil {
+			return fail(err)
+		}
+		byteType, err := l.backend.InternType(lb.TypeSpec{Kind: lb.TypeInteger, Bits: 8})
+		if err != nil {
+			return fail(err)
+		}
+		var maxSize uint64
+		var maxAlign uint32 = 1
+		var alignType lb.TypeID
+		for _, variant := range union.Variants {
+			variantDef := l.definitions[definition.Module+".__union_"+definition.Name+"_"+variant.Name]
+			if variantDef == nil {
+				return fail(fmt.Errorf("missing union variant %s.%s", definition.Name, variant.Name))
+			}
+			variantType, err := l.lowerStruct(variantDef)
+			if err != nil {
+				return fail(err)
+			}
+			layout, err := l.backend.TypeLayout(variantType)
+			if err != nil {
+				return fail(err)
+			}
+			if layout.AllocationSize > maxSize {
+				maxSize = layout.AllocationSize
+			}
+			if layout.ABIAlignment > maxAlign {
+				maxAlign, alignType = layout.ABIAlignment, variantType
+			}
+		}
+		if alignType == 0 {
+			alignType = byteType
+		}
+		aligner, err := l.backend.InternType(lb.TypeSpec{Kind: lb.TypeArray, Element: alignType, Length: 0})
+		if err != nil {
+			return fail(err)
+		}
+		bytes, err := l.backend.InternType(lb.TypeSpec{Kind: lb.TypeArray, Element: byteType, Length: maxSize})
+		if err != nil {
+			return fail(err)
+		}
+		if err := l.backend.DefineStruct(id, []lb.TypeID{tag, aligner, bytes}, false); err != nil {
+			return fail(err)
+		}
+		l.defining[definition] = false
+		l.defined[definition] = true
+		return id, nil
 	}
 	elements := make([]lb.TypeID, len(definition.FieldOrder))
 	for i, field := range definition.FieldOrder {

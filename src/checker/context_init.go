@@ -8,6 +8,7 @@ import (
 type contextInitState struct {
 	file        *t.FileCtx
 	initialized bool
+	assigned    *bool
 }
 
 func contextInitError(state *contextInitState, token *t.Token) error {
@@ -99,6 +100,9 @@ func checkContextExpr(state *contextInitState, expr t.NodeExpr, assignmentTarget
 				return err
 			}
 			state.initialized = true
+			if state.assigned != nil {
+				*state.assigned = true
+			}
 			return nil
 		}
 		if err := checkContextExpr(state, n.Left, true); err != nil {
@@ -147,7 +151,7 @@ func checkContextBody(state *contextInitState, body *t.NodeBody) (bool, error) {
 			}
 			incoming := state.initialized
 			outputs := []bool{}
-			branch := &contextInitState{file: state.file, initialized: incoming}
+			branch := &contextInitState{file: state.file, initialized: incoming, assigned: state.assigned}
 			falls, err := checkContextBody(branch, &n.Body)
 			if err != nil {
 				return true, err
@@ -159,7 +163,7 @@ func checkContextBody(state *contextInitState, body *t.NodeBody) (bool, error) {
 			for next := n.NextCondStmt; next != nil; {
 				switch alternative := next.(type) {
 				case *t.NodeStmtIf:
-					branch = &contextInitState{file: state.file, initialized: incoming}
+					branch = &contextInitState{file: state.file, initialized: incoming, assigned: state.assigned}
 					if err := checkContextExpr(branch, alternative.CondExpr, false); err != nil {
 						return true, err
 					}
@@ -173,7 +177,7 @@ func checkContextBody(state *contextInitState, body *t.NodeBody) (bool, error) {
 					next = alternative.NextCondStmt
 				case *t.NodeStmtElse:
 					hasElse = true
-					branch = &contextInitState{file: state.file, initialized: incoming}
+					branch = &contextInitState{file: state.file, initialized: incoming, assigned: state.assigned}
 					falls, err = checkContextBody(branch, &alternative.Body)
 					if err != nil {
 						return true, err
@@ -200,7 +204,7 @@ func checkContextBody(state *contextInitState, body *t.NodeBody) (bool, error) {
 			if err := checkContextExpr(state, n.CondExpr, false); err != nil {
 				return true, err
 			}
-			branch := &contextInitState{file: state.file, initialized: state.initialized}
+			branch := &contextInitState{file: state.file, initialized: state.initialized, assigned: state.assigned}
 			if _, err := checkContextBody(branch, &n.Body); err != nil {
 				return true, err
 			}
@@ -211,11 +215,19 @@ func checkContextBody(state *contextInitState, body *t.NodeBody) (bool, error) {
 			if err := checkContextExpr(state, n.BoundExpr, false); err != nil {
 				return true, err
 			}
-			branch := &contextInitState{file: state.file, initialized: state.initialized}
+			branch := &contextInitState{file: state.file, initialized: state.initialized, assigned: state.assigned}
 			if _, err := checkContextBody(branch, &n.Body); err != nil {
 				return true, err
 			}
 		case *t.NodeStmtBounded:
+			if n.Pointer != nil {
+				if err := checkContextExpr(state, n.Pointer, false); err != nil {
+					return true, err
+				}
+				if err := checkContextExpr(state, n.Extent, false); err != nil {
+					return true, err
+				}
+			}
 			for _, predicate := range n.Predicates {
 				if err := checkContextExpr(state, predicate, false); err != nil {
 					return true, err
@@ -230,7 +242,7 @@ func checkContextBody(state *contextInitState, body *t.NodeBody) (bool, error) {
 			}
 		case *t.NodeStmtDefer:
 			if n.IsBody {
-				branch := &contextInitState{file: state.file, initialized: state.initialized}
+				branch := &contextInitState{file: state.file, initialized: state.initialized, assigned: state.assigned}
 				if _, err := checkContextBody(branch, &n.Body); err != nil {
 					return true, err
 				}
@@ -245,10 +257,12 @@ func checkContextBody(state *contextInitState, body *t.NodeBody) (bool, error) {
 }
 
 func checkContextInitialization(file *t.FileCtx, fn *t.NodeFuncDef) error {
-	if fn.IsExternal || fn.ContextABI == t.ContextABIContextful {
+	if fn.IsExternal {
 		return nil
 	}
-	state := &contextInitState{file: file}
+	assigned := false
+	state := &contextInitState{file: file, initialized: fn.ContextABI == t.ContextABIContextful, assigned: &assigned}
 	_, err := checkContextBody(state, &fn.Body)
+	fn.ImplicitContextMutable = assigned
 	return err
 }

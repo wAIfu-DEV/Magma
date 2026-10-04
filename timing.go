@@ -14,9 +14,10 @@ type timingEntry struct {
 }
 
 type compilationTimings struct {
-	enabled bool
-	started time.Time
-	entries []timingEntry
+	enabled  bool
+	reported bool
+	started  time.Time
+	entries  []timingEntry
 }
 
 func newCompilationTimings(enabled bool) *compilationTimings {
@@ -40,9 +41,10 @@ func (t *compilationTimings) start(major, minor string) func() {
 }
 
 func (t *compilationTimings) report(w io.Writer) {
-	if !t.enabled {
+	if !t.enabled || t.reported {
 		return
 	}
+	t.reported = true
 	total := time.Since(t.started)
 	majorTotals := make(map[string]time.Duration)
 	majorOrder := make([]string, 0, len(t.entries))

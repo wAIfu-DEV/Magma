@@ -48,10 +48,11 @@ completion-bearing handles, and subscript range proofs. Definite safety
 diagnostics stop compilation unless warning mode was explicitly selected;
 resource cleanup and leak diagnostics remain warnings.
 
-The default native pipeline independently lowers modules to cached LLVM
-bitcode, links all required units, performs whole-program optimization, and
-emits native code. `llvm_ir.IrWrite` and `ir_cleaner.CleanIr` implement the
-deprecated whole-program textual backend selected with `--backend textual`.
+The default native pipeline independently lowers modules to cached summarized
+LLVM bitcode and lets LLD perform ThinLTO optimization and native emission.
+`--strategy whole` retains merged whole-program optimization.
+`llvm_ir.IrWrite` and `ir_cleaner.CleanIr` implement the deprecated
+whole-program textual backend selected with `--strategy textual`.
 LLVM output remains a non-incremental inspection mode; object output stops
 before native linking, while executable output also links declared libraries
 and copies declared bundles.

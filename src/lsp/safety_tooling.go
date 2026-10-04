@@ -41,6 +41,13 @@ func (s *server) handleSemanticTokens(msg message) error {
 		}
 		word := d.Text[span[0]:span[1]]
 		keyword := word == "addrof" || word == "sizeof" || word == "bounded" || word == "unsafe"
+		if word == "json" {
+			next := ""
+			if i+1 < len(words) {
+				next = d.Text[words[i+1][0]:words[i+1][1]]
+			}
+			keyword = next == "{" || next == "[" || next == "\"" || next == "true" || next == "false" || next == "none" || next == "-" || (len(next) != 0 && next[0] >= '0' && next[0] <= '9')
+		}
 		if word == "move" {
 			next := ""
 			if i+1 < len(words) {

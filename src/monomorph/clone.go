@@ -257,6 +257,10 @@ func cloneStmt(in t.NodeStatement) t.NodeStatement {
 		}
 	case *t.NodeStmtBounded:
 		out := &t.NodeStmtBounded{Tk: n.Tk, Body: cloneBody(&n.Body)}
+		if n.Pointer != nil {
+			out.Pointer = cloneExpr(n.Pointer)
+			out.Extent = cloneExpr(n.Extent)
+		}
 		for _, predicate := range n.Predicates {
 			out.Predicates = append(out.Predicates, cloneExpr(predicate))
 		}
@@ -304,6 +308,7 @@ func cloneFuncDef(in *t.NodeFuncDef) *t.NodeFuncDef {
 		NoAliasName:             in.NoAliasName,
 		DisplayName:             in.DisplayName,
 		ContextABI:              in.ContextABI,
+		ImplicitContextMutable:  in.ImplicitContextMutable,
 		IsDestructor:            in.IsDestructor,
 		IsMember:                in.IsMember,
 		IsEntryPoint:            in.IsEntryPoint,
@@ -326,9 +331,10 @@ func cloneFuncDef(in *t.NodeFuncDef) *t.NodeFuncDef {
 	}
 	for i, a := range in.Class.ArgsNode.Args {
 		out.Class.ArgsNode.Args[i] = t.NodeArg{
-			Tk:       a.Tk,
-			Name:     a.Name,
-			TypeNode: cloneType(a.TypeNode),
+			Tk:           a.Tk,
+			Name:         a.Name,
+			TypeNode:     cloneType(a.TypeNode),
+			BoundedCount: a.BoundedCount,
 		}
 	}
 	return out

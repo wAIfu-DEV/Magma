@@ -3,6 +3,7 @@ mod memory
 # @safety Callers must provide valid pointers spanning the requested byte count.
 
 use "std:cast" as cast
+use "std:llvm" as llvm_ir
 
 # Copies n bytes from 'from' to 'to'.
 # @warning prefer move() for possibly overlapping regions
@@ -20,9 +21,15 @@ pub copy(from ptr, to ptr, n u64) void:
     unsafe:
         au u8* = from
         bu u8* = to
-        for i u64 = 0 to n:
-            bu[i] = au[i]
+        bounded au by n, bu by n:
+            copyBytes(au, bu, n)
         ..
+    ..
+..
+
+copyBytes(from u8* bounded n, to u8* bounded n, n u64) void:
+    for i u64 = 0 to n:
+        to[i] = from[i]
     ..
 ..
 
@@ -46,16 +53,24 @@ pub move(from ptr, to ptr, n u64) void:
         unsafe:
             au u8* = from
             bu u8* = to
-            bound u64 = 0 - 1 # U64_MAX
-            i u64 = n - 1
-            loop i != bound: # stops after 0
-                bu[i] = au[i]
-                i = i - 1
+            bounded au by n, bu by n:
+                moveBytesBackward(au, bu, n)
             ..
         ..
     else:
         # safe to copy left-to-right
         copy(from, to, n)
+    ..
+..
+
+moveBytesBackward(from u8* bounded n, to u8* bounded n, n u64) void:
+    bound u64 = 0 - 1 # U64_MAX
+    i u64 = n - 1
+    loop i != bound: # stops after 0
+        bounded i < n:
+            to[i] = from[i]
+        ..
+        i = i - 1
     ..
 ..
 
@@ -73,11 +88,17 @@ pub swap(x ptr, y ptr, n u64) void:
     unsafe:
         ax u8* = x
         ay u8* = y
-        for i u64 = 0 to n:
-            tmp u8 = ax[i]
-            ax[i] = ay[i]
-            ay[i] = tmp
+        bounded ax by n, ay by n:
+            swapBytes(ax, ay, n)
         ..
+    ..
+..
+
+swapBytes(x u8* bounded n, y u8* bounded n, n u64) void:
+    for i u64 = 0 to n:
+        tmp u8 = x[i]
+        x[i] = y[i]
+        y[i] = tmp
     ..
 ..
 
@@ -98,10 +119,39 @@ pub compare(a ptr, b ptr, n u64) bool:
     unsafe:
         au u8* = a
         bu u8* = b
-        for i u64 = 0 to n:
-            if au[i] != bu[i]:
-                ret false
-            ..
+        bounded au by n, bu by n:
+            ret compareBytes(au, bu, n)
+        ..
+    ..
+..
+
+compareBytes(a u8* bounded n, b u8* bounded n, n u64) bool:
+    for i u64 = 0 to n:
+        if a[i] != b[i]:
+            ret false
+        ..
+    ..
+    ret true
+..
+
+# Reports whether every byte in a readable range is zero.
+# @complexity O(N) for n bytes.
+# @param in start of the readable range
+# @param n number of bytes to inspect
+# @safety in must reference a readable range of at least n bytes.
+pub isZero(in ptr, n u64) bool:
+    unsafe:
+        bytes u8* = in
+        bounded bytes by n:
+            ret isZeroBytes(bytes, n)
+        ..
+    ..
+..
+
+isZeroBytes(bytes u8* bounded n, n u64) bool:
+    for i u64 = 0 to n:
+        if bytes[i] != 0:
+            ret false
         ..
     ..
     ret true
@@ -121,9 +171,15 @@ pub set(in ptr, n u64, with u8) void:
     # SAFETY: the API contract requires a writable n-byte range.
     unsafe:
         inu u8* = in
-        for i u64 = 0 to n:
-            inu[i] = with
+        bounded inu by n:
+            setBytes(inu, n, with)
         ..
+    ..
+..
+
+setBytes(in u8* bounded n, n u64, with u8) void:
+    for i u64 = 0 to n:
+        in[i] = with
     ..
 ..
 

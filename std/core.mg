@@ -243,9 +243,12 @@ str.compare(other str) bool:
     if this.__byteCount != other.__byteCount:
         ret false
     ..
-    for i := 0 to this.__byteCount:
-        unsafe:
-            if this.__data[i] != other.__data[i]:
+    leftData u8* = this.__data
+    rightData u8* = other.__data
+    size := this.__byteCount
+    bounded leftData by size, rightData by size:
+        for i := 0 to size:
+            if leftData[i] != rightData[i]:
                 ret false
             ..
         ..

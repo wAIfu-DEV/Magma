@@ -22,6 +22,7 @@ type scalarFunction struct {
 	backend      lb.Backend
 	types        *loweringtypes.Lowerer
 	fn           lb.FunctionID
+	entry        lb.BlockID
 	block        lb.BlockID
 	slots        map[*t.NodeExprVarDef]lb.ValueID
 	args         map[string]lb.ValueID
@@ -67,6 +68,10 @@ func lowerFunctionWithGlobals(backend lb.Backend, typeLowerer *loweringtypes.Low
 	if backend == nil || typeLowerer == nil || definition == nil || definition.ReturnType == nil {
 		return 0, fmt.Errorf("scalar function lowering requires a backend, type lowerer, and complete function")
 	}
+	if definition.IsExternal || definition.NoAliasName != "" {
+		function, _, _, err := declareExternalFunction(backend, typeLowerer, definition)
+		return function, err
+	}
 	result, err := typeLowerer.Lower(definition.ReturnType)
 	if err != nil {
 		return 0, err
@@ -107,6 +112,12 @@ func lowerFunctionWithGlobals(backend lb.Backend, typeLowerer *loweringtypes.Low
 		return 0, err
 	}
 	linkage := lb.LinkageInternal
+	if typeLowerer.IsTracePush(definition) {
+		// Keep the canonical error return type as an ABI boundary. Internal
+		// functions are eligible for LLVM return promotion, which otherwise
+		// rewrites this helper to an anonymous aggregate at higher opt levels.
+		linkage = lb.LinkageExternal
+	}
 	if typeLowerer.CrossModule || definition.IsExternal || definition.NoAliasName != "" {
 		linkage = lb.LinkageExternal
 		if definition.NoAliasName != "" {
@@ -133,34 +144,26 @@ func lowerFunctionWithGlobals(backend lb.Backend, typeLowerer *loweringtypes.Low
 		}
 		return function, nil
 	}
-	context := &scalarFunction{backend: backend, types: typeLowerer, fn: function, block: entry, slots: make(map[*t.NodeExprVarDef]lb.ValueID), args: make(map[string]lb.ValueID), directArgs: make(map[string]bool), globals: globals, definition: definition}
+	context := &scalarFunction{backend: backend, types: typeLowerer, fn: function, entry: entry, block: entry, slots: make(map[*t.NodeExprVarDef]lb.ValueID), args: make(map[string]lb.ValueID), directArgs: make(map[string]bool), globals: globals, definition: definition}
 	if definition.ImplicitContext != nil {
 		if definition.ImplicitContext.Type == nil {
 			return 0, fmt.Errorf("implicit context has no resolved type")
 		}
-		contextType, err := typeLowerer.Lower(definition.ImplicitContext.Type)
-		if err != nil {
+		if _, err := typeLowerer.Lower(definition.ImplicitContext.Type); err != nil {
 			return 0, fmt.Errorf("implicit context: %w", err)
-		}
-		contextSlot, err := backend.StaticAlloca(function, contextType, 0)
-		if err != nil {
-			return 0, err
 		}
 		if definition.ContextABI == t.ContextABIContextful {
 			contextPointer, err := backend.Parameter(function, 0)
 			if err != nil {
 				return 0, err
 			}
-			contextValue, err := backend.Load(entry, contextType, contextPointer, 0, false)
-			if err != nil {
-				return 0, err
-			}
-			if _, err := backend.Store(entry, contextValue, contextSlot, 0, false); err != nil {
+			context.context = contextPointer
+		}
+		if definition.ImplicitContextMutable {
+			if err := context.materializeContext(definition.ImplicitContext); err != nil {
 				return 0, err
 			}
 		}
-		context.slots[definition.ImplicitContext] = contextSlot
-		context.context = contextSlot
 	}
 	if definition.IsMember {
 		receiver := definition.Class.ArgsNode.Args[0]
@@ -236,15 +239,11 @@ func lowerProtoDispatch(backend lb.Backend, types *loweringtypes.Lowerer, defini
 	if err != nil {
 		return err
 	}
-	implementationAddress, err := backend.StructFieldAddress(entry, view, receiver, 0)
+	implementation, err := backend.StructFieldAddress(entry, view, receiver, 2)
 	if err != nil {
 		return err
 	}
-	implementation, err := backend.Load(entry, pointer, implementationAddress, 0, false)
-	if err != nil {
-		return err
-	}
-	vtableAddress, err := backend.StructFieldAddress(entry, view, receiver, 1)
+	vtableAddress, err := backend.StructFieldAddress(entry, view, receiver, 0)
 	if err != nil {
 		return err
 	}
@@ -748,47 +747,21 @@ func (c *scalarFunction) loopBranch(continued bool) (bool, error) {
 }
 
 func (c *scalarFunction) boundedStatement(node *t.NodeStmtBounded, returnType *t.NodeType) (bool, error) {
-	if len(node.Predicates) == 0 || len(node.Proofs) == 0 {
+	if len(node.Proofs) == 0 {
 		return false, fmt.Errorf("bounded statement lacks validated range facts")
 	}
-	var condition lb.ValueID
-	for index, predicate := range node.Predicates {
-		value, err := c.expression(predicate, predicate.GetInferredType())
-		if err != nil {
-			return false, err
-		}
-		if index == 0 {
-			condition = value
-		} else {
-			condition, err = c.backend.Binary(c.block, lb.BinaryAnd, condition, value)
-			if err != nil {
-				return false, err
-			}
-		}
-	}
-	body, err := c.newBlock("bounded.body")
-	if err != nil {
-		return false, err
-	}
-	exit, err := c.newBlock("bounded.exit")
-	if err != nil {
-		return false, err
-	}
-	if err := c.backend.CondBranch(c.block, condition, body, exit); err != nil {
-		return false, err
-	}
-	c.block = body
 	terminated, err := c.statements(node.Body.Statements, returnType)
 	if err != nil {
 		return false, err
 	}
-	if !terminated {
-		if err := c.backend.Branch(c.block, exit); err != nil {
+	if terminated {
+		// Later statements are lowered in an unreachable continuation. A bounded
+		// assertion itself emits no branch or runtime check.
+		c.block, err = c.newBlock("bounded.cont")
+		if err != nil {
 			return false, err
 		}
 	}
-	c.block = exit
-	// The false guard path always reaches exit, so the surrounding flow remains live.
 	return false, nil
 }
 
@@ -954,7 +927,30 @@ func (c *scalarFunction) matchStatement(node *t.NodeStmtMatch, returnType *t.Nod
 		if err != nil {
 			return false, err
 		}
-		payload, err := c.backend.ExtractValue(c.block, matched, []uint32{uint32(arm.Variant.Tag + 1)})
+		unionType, err := c.types.Lower(node.Expression.GetInferredType())
+		if err != nil {
+			return false, err
+		}
+		unionAddress, err := c.backend.Alloca(c.block, unionType, 0)
+		if err != nil {
+			return false, err
+		}
+		if _, err = c.backend.Store(c.block, matched, unionAddress, 0, false); err != nil {
+			return false, err
+		}
+		payloadAddress, err := c.backend.StructFieldAddress(c.block, unionType, unionAddress, 2)
+		if err != nil {
+			return false, err
+		}
+		payloadAddress, err = c.backend.ReinterpretPointer(payloadAddress)
+		if err != nil {
+			return false, err
+		}
+		payloadType, err := c.types.Lower(arm.Binding.Type)
+		if err != nil {
+			return false, err
+		}
+		payload, err := c.backend.Load(c.block, payloadType, payloadAddress, 1, false)
 		if err != nil {
 			return false, err
 		}
@@ -1066,6 +1062,11 @@ func (c *scalarFunction) expression(expression t.NodeExpr, expected *t.NodeType)
 		}
 		return value, nil
 	case *t.NodeExprAssign:
+		if variable := implicitContextVariable(node.Left); variable != nil {
+			if err := c.materializeContext(variable); err != nil {
+				return 0, err
+			}
+		}
 		storage, err := c.lvalue(node.Left)
 		if err != nil {
 			return 0, err
@@ -1566,7 +1567,29 @@ func (c *scalarFunction) structInit(node *t.NodeExprStructInit) (lb.ValueID, err
 				return 0, err
 			}
 		}
-		return c.backend.InsertValue(c.block, current, payload, []uint32{uint32(node.UnionVariant.Tag + 1)})
+		unionType, err := c.types.Lower(node.Type)
+		if err != nil {
+			return 0, err
+		}
+		address, err := c.backend.Alloca(c.block, unionType, 0)
+		if err != nil {
+			return 0, err
+		}
+		if _, err = c.backend.Store(c.block, current, address, 0, false); err != nil {
+			return 0, err
+		}
+		payloadAddress, err := c.backend.StructFieldAddress(c.block, unionType, address, 2)
+		if err != nil {
+			return 0, err
+		}
+		payloadAddress, err = c.backend.ReinterpretPointer(payloadAddress)
+		if err != nil {
+			return 0, err
+		}
+		if _, err = c.backend.Store(c.block, payload, payloadAddress, 1, false); err != nil {
+			return 0, err
+		}
+		return c.backend.Load(c.block, unionType, address, 0, false)
 	}
 	for _, field := range node.Fields {
 		if field.FieldIndex < 0 {
@@ -1596,13 +1619,15 @@ func (c *scalarFunction) protoView(node *t.NodeExprProtoView) (lb.ValueID, error
 	var err error
 	if node.TargetIsPointer {
 		implementation, err = c.expression(node.Target, node.Target.GetInferredType())
-	} else {
+	} else if node.Borrowed {
 		implementation, err = c.lvalue(node.Target)
+	} else {
+		implementation, err = c.expression(node.Target, node.Target.GetInferredType())
 	}
 	if err != nil {
 		return 0, err
 	}
-	vtable, err := c.protoVtable(node.Implementation)
+	vtable, err := c.protoVtable(node.Implementation, node.Borrowed)
 	if err != nil {
 		return 0, err
 	}
@@ -1610,14 +1635,54 @@ func (c *scalarFunction) protoView(node *t.NodeExprProtoView) (lb.ValueID, error
 	if err != nil {
 		return 0, err
 	}
-	return c.backend.BuildAggregate(c.block, viewType, []lb.ValueID{implementation, vtable})
+	zero, err := c.backend.InternConstant(lb.ConstantSpec{Kind: lb.ConstantZero, Type: viewType})
+	if err != nil {
+		return 0, err
+	}
+	initial, err := c.backend.ConstantValue(zero)
+	if err != nil {
+		return 0, err
+	}
+	address, err := c.backend.Alloca(c.block, viewType, 0)
+	if err != nil {
+		return 0, err
+	}
+	if _, err = c.backend.Store(c.block, initial, address, 0, false); err != nil {
+		return 0, err
+	}
+	vtableAddress, err := c.backend.StructFieldAddress(c.block, viewType, address, 0)
+	if err != nil {
+		return 0, err
+	}
+	if _, err = c.backend.Store(c.block, vtable, vtableAddress, 0, false); err != nil {
+		return 0, err
+	}
+	storageAddress, err := c.backend.StructFieldAddress(c.block, viewType, address, 2)
+	if err != nil {
+		return 0, err
+	}
+	storageAddress, err = c.backend.ReinterpretPointer(storageAddress)
+	if err != nil {
+		return 0, err
+	}
+	if _, err = c.backend.Store(c.block, implementation, storageAddress, 1, false); err != nil {
+		return 0, err
+	}
+	return c.backend.Load(c.block, viewType, address, 0, false)
 }
 
-func (c *scalarFunction) protoVtable(implementation *t.ProtoImpl) (lb.ValueID, error) {
+func (c *scalarFunction) protoVtable(implementation *t.ProtoImpl, borrowed bool) (lb.ValueID, error) {
 	if implementation == nil || implementation.Owner == nil || implementation.Proto == nil || implementation.Proto.VtableName == "" {
 		return 0, fmt.Errorf("prototype implementation has incomplete vtable metadata")
 	}
 	proto := implementation.Proto
+	symbol := t.ProtoVtableSymbol(implementation.Owner, proto)
+	if borrowed {
+		symbol = t.ProtoBorrowVtableSymbol(implementation.Owner, proto)
+	}
+	if existing := c.types.ProtoVtableGlobals[symbol]; existing != 0 {
+		return c.backend.GlobalAddress(existing)
+	}
 	vtableType, err := c.types.Lower(&t.NodeType{KindNode: &t.NodeTypeAbsolute{AbsoluteName: proto.Module + "." + proto.VtableName}})
 	if err != nil {
 		return 0, err
@@ -1635,7 +1700,12 @@ func (c *scalarFunction) protoVtable(implementation *t.ProtoImpl) (lb.ValueID, e
 		if concrete == nil {
 			return 0, fmt.Errorf("missing resolved prototype method %s.%s", implementation.Owner.Name, method.Name)
 		}
-		function, err := c.declareCallable(concrete)
+		var function lb.FunctionID
+		if borrowed {
+			function, err = c.protoBorrowThunk(implementation, method, concrete)
+		} else {
+			function, err = c.declareCallable(concrete)
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -1648,11 +1718,95 @@ func (c *scalarFunction) protoVtable(implementation *t.ProtoImpl) (lb.ValueID, e
 	if err != nil {
 		return 0, err
 	}
-	global, err := c.backend.DeclareGlobal(lb.GlobalSpec{Symbol: t.ProtoVtableSymbol(implementation.Owner, proto), Type: vtableType, Initializer: initializer, Linkage: lb.LinkagePrivate, Visibility: lb.VisibilityDefault, Constant: true, Definition: true})
+	global, err := c.backend.DeclareGlobal(lb.GlobalSpec{Symbol: symbol, Type: vtableType, Initializer: initializer, Linkage: lb.LinkagePrivate, Visibility: lb.VisibilityDefault, Constant: true, Definition: true})
 	if err != nil {
 		return 0, err
 	}
+	c.types.ProtoVtableGlobals[symbol] = global
 	return c.backend.GlobalAddress(global)
+}
+
+func (c *scalarFunction) protoBorrowThunk(implementation *t.ProtoImpl, method *t.ProtoMethod, concrete *t.NodeFuncDef) (lb.FunctionID, error) {
+	symbol := t.ProtoBorrowThunkSymbol(implementation.Owner, implementation.Proto, method)
+	if existing := c.types.ProtoBorrowFunctions[symbol]; existing != 0 {
+		return existing, nil
+	}
+	pointer, err := c.backend.InternType(lb.TypeSpec{Kind: lb.TypePointer})
+	if err != nil {
+		return 0, err
+	}
+	result, err := c.types.Lower(method.Ret)
+	if err != nil {
+		return 0, err
+	}
+	parameters := make([]lb.TypeID, 0, len(method.Args)+2)
+	if method.ContextABI == t.ContextABIContextful {
+		parameters = append(parameters, pointer)
+	}
+	parameters = append(parameters, pointer)
+	for _, argument := range method.Args {
+		parameter, err := c.types.Lower(argument.TypeNode)
+		if err != nil {
+			return 0, err
+		}
+		parameters = append(parameters, parameter)
+	}
+	function, err := c.backend.DeclareFunction(lb.FunctionSpec{Symbol: symbol, Result: result, Parameters: parameters, Linkage: lb.LinkagePrivate, CallingConvention: lb.CallingConventionC, Definition: true})
+	if err != nil {
+		return 0, err
+	}
+	entry, err := c.backend.AppendBlock(function, "entry")
+	if err != nil {
+		return 0, err
+	}
+	arguments := make([]lb.ValueID, 0, len(parameters))
+	index := 0
+	if method.ContextABI == t.ContextABIContextful {
+		context, err := c.backend.Parameter(function, index)
+		if err != nil {
+			return 0, err
+		}
+		arguments = append(arguments, context)
+		index++
+	}
+	storage, err := c.backend.Parameter(function, index)
+	if err != nil {
+		return 0, err
+	}
+	receiver, err := c.backend.Load(entry, pointer, storage, 1, false)
+	if err != nil {
+		return 0, err
+	}
+	arguments = append(arguments, receiver)
+	for i := index + 1; i < len(parameters); i++ {
+		value, err := c.backend.Parameter(function, i)
+		if err != nil {
+			return 0, err
+		}
+		arguments = append(arguments, value)
+	}
+	callee, err := c.declareCallable(concrete)
+	if err != nil {
+		return 0, err
+	}
+	value, err := c.backend.Call(entry, callee, arguments)
+	if err != nil {
+		return 0, err
+	}
+	ordinary := *method.Ret
+	ordinary.Throws = false
+	if name, named := scalarTypeName(&ordinary); named && name == "void" && !method.Ret.Throws {
+		if err = c.backend.ReturnVoid(entry); err != nil {
+			return 0, err
+		}
+	} else if err = c.backend.Return(entry, value); err != nil {
+		return 0, err
+	}
+	if err = c.backend.FinalizeFunction(function); err != nil {
+		return 0, err
+	}
+	c.types.ProtoBorrowFunctions[symbol] = function
+	return function, nil
 }
 
 func (c *scalarFunction) member(node *t.NodeExprMemberAccess) (lb.ValueID, error) {
@@ -1703,6 +1857,9 @@ func (c *scalarFunction) subscriptAddress(node *t.NodeExprSubscript) (lb.ValueID
 	case *t.NodeTypeSlice:
 		return c.types.ProvenSliceElementAddress(c.block, target, index, element, node.RangeProof)
 	case *t.NodeTypePointer:
+		if node.RangeProof == nil {
+			return 0, fmt.Errorf("pointer subscript lacks validated range proof")
+		}
 		return c.backend.GEP(c.block, element, target, []lb.ValueID{index}, false)
 	case *t.NodeTypeRfc:
 		if node.RangeProof == nil {
@@ -1839,7 +1996,7 @@ func (c *scalarFunction) memberCall(node *t.NodeExprCall, discard, keepPhysical 
 			pointerFieldOwner = lastAccess.ResultIsPtr
 		}
 		pointerLocalOwner := !isSSAOwner && isPointerSemantic(node.MemberOwnerType)
-		if callee.ProtoDispatch == nil && (pointerFieldOwner || pointerLocalOwner) {
+		if pointerFieldOwner || pointerLocalOwner {
 			pointer, err := c.backend.InternType(lb.TypeSpec{Kind: lb.TypePointer})
 			if err != nil {
 				return 0, err
@@ -1957,61 +2114,22 @@ func (c *scalarFunction) externalCall(node *t.NodeExprCall, discard bool) (lb.Va
 	if callee == nil || callee.ReturnType == nil || callee.ReturnType.Throws {
 		return 0, fmt.Errorf("external C call has an invalid checked signature")
 	}
-	state := c.types.State()
-	returnPlan, err := loweringcabi.Classify(c.backend, c.types, state, callee.ReturnType, true)
-	if err != nil {
-		return 0, fmt.Errorf("external return type: %w", err)
-	}
-	physicalResult, err := loweringcabi.PhysicalResult(c.backend, returnPlan)
+	function, returnPlan, argumentPlans, err := declareExternalFunction(c.backend, c.types, callee)
 	if err != nil {
 		return 0, err
 	}
-	pointer, err := c.backend.InternType(lb.TypeSpec{Kind: lb.TypePointer})
-	if err != nil {
-		return 0, err
-	}
-	parameterTypes := make([]lb.TypeID, 0, len(node.Args)+2)
-	attributes := make([]lb.AttributeSpec, 0)
+	parameterCount := 0
 	if returnPlan.Class == loweringcabi.Indirect {
-		parameterTypes = append(parameterTypes, pointer)
-		attributes = append(attributes,
-			lb.AttributeSpec{Kind: lb.AttributeStructReturn, Placement: lb.AttributeParameter, Parameter: 0, Type: returnPlan.Logical},
-			lb.AttributeSpec{Kind: lb.AttributeAlignment, Placement: lb.AttributeParameter, Parameter: 0, Value: uint64(returnPlan.Alignment)},
-		)
+		parameterCount++
 	}
-	argumentPlans := make([]loweringcabi.Value, len(callee.Class.ArgsNode.Args))
-	for index, argument := range callee.Class.ArgsNode.Args {
-		argumentPlans[index], err = loweringcabi.Classify(c.backend, c.types, state, argument.TypeNode, false)
-		if err != nil {
-			return 0, fmt.Errorf("external argument %d: %w", index+1, err)
-		}
-		switch plan := argumentPlans[index]; plan.Class {
-		case loweringcabi.Indirect:
-			parameter := len(parameterTypes)
-			parameterTypes = append(parameterTypes, pointer)
-			if plan.ByValue {
-				attributes = append(attributes,
-					lb.AttributeSpec{Kind: lb.AttributeByValue, Placement: lb.AttributeParameter, Parameter: uint32(parameter), Type: plan.Logical},
-					lb.AttributeSpec{Kind: lb.AttributeAlignment, Placement: lb.AttributeParameter, Parameter: uint32(parameter), Value: uint64(plan.Alignment)},
-				)
-			}
-		case loweringcabi.Coerce:
-			for _, part := range plan.Parts {
-				parameterTypes = append(parameterTypes, part.Type)
-			}
-		default:
-			parameterTypes = append(parameterTypes, plan.Logical)
+	for _, plan := range argumentPlans {
+		if plan.Class == loweringcabi.Coerce {
+			parameterCount += len(plan.Parts)
+		} else {
+			parameterCount++
 		}
 	}
-	symbol := callee.NoAliasName
-	if symbol == "" {
-		symbol = callee.AbsName
-	}
-	function, err := c.backend.DeclareFunction(lb.FunctionSpec{Symbol: symbol, Result: physicalResult, Parameters: parameterTypes, Linkage: lb.LinkageExternal, CallingConvention: lb.CallingConventionC, Attributes: attributes})
-	if err != nil {
-		return 0, err
-	}
-	arguments := make([]lb.ValueID, 0, len(parameterTypes))
+	arguments := make([]lb.ValueID, 0, parameterCount)
 	var resultStorage lb.ValueID
 	if returnPlan.Class == loweringcabi.Indirect {
 		resultStorage, err = c.backend.Alloca(c.block, returnPlan.Logical, returnPlan.Alignment)
@@ -2073,6 +2191,67 @@ func (c *scalarFunction) externalCall(node *t.NodeExprCall, discard bool) (lb.Va
 		return 0, err
 	}
 	return c.backend.Load(c.block, returnPlan.Logical, storage, returnPlan.Alignment, false)
+}
+
+func declareExternalFunction(backend lb.Backend, types *loweringtypes.Lowerer, callee *t.NodeFuncDef) (lb.FunctionID, loweringcabi.Value, []loweringcabi.Value, error) {
+	if backend == nil || types == nil || callee == nil || callee.ReturnType == nil || callee.ReturnType.Throws {
+		return 0, loweringcabi.Value{}, nil, fmt.Errorf("external C function has an invalid checked signature")
+	}
+	state := types.State()
+	returnPlan, err := loweringcabi.Classify(backend, types, state, callee.ReturnType, true)
+	if err != nil {
+		return 0, loweringcabi.Value{}, nil, fmt.Errorf("external return type: %w", err)
+	}
+	physicalResult, err := loweringcabi.PhysicalResult(backend, returnPlan)
+	if err != nil {
+		return 0, loweringcabi.Value{}, nil, err
+	}
+	pointer, err := backend.InternType(lb.TypeSpec{Kind: lb.TypePointer})
+	if err != nil {
+		return 0, loweringcabi.Value{}, nil, err
+	}
+	parameterTypes := make([]lb.TypeID, 0, len(callee.Class.ArgsNode.Args)+2)
+	attributes := make([]lb.AttributeSpec, 0)
+	if returnPlan.Class == loweringcabi.Indirect {
+		parameterTypes = append(parameterTypes, pointer)
+		attributes = append(attributes,
+			lb.AttributeSpec{Kind: lb.AttributeStructReturn, Placement: lb.AttributeParameter, Parameter: 0, Type: returnPlan.Logical},
+			lb.AttributeSpec{Kind: lb.AttributeAlignment, Placement: lb.AttributeParameter, Parameter: 0, Value: uint64(returnPlan.Alignment)},
+		)
+	}
+	argumentPlans := make([]loweringcabi.Value, len(callee.Class.ArgsNode.Args))
+	for index, argument := range callee.Class.ArgsNode.Args {
+		argumentPlans[index], err = loweringcabi.Classify(backend, types, state, argument.TypeNode, false)
+		if err != nil {
+			return 0, loweringcabi.Value{}, nil, fmt.Errorf("external argument %d: %w", index+1, err)
+		}
+		switch plan := argumentPlans[index]; plan.Class {
+		case loweringcabi.Indirect:
+			parameter := len(parameterTypes)
+			parameterTypes = append(parameterTypes, pointer)
+			if plan.ByValue {
+				attributes = append(attributes,
+					lb.AttributeSpec{Kind: lb.AttributeByValue, Placement: lb.AttributeParameter, Parameter: uint32(parameter), Type: plan.Logical},
+					lb.AttributeSpec{Kind: lb.AttributeAlignment, Placement: lb.AttributeParameter, Parameter: uint32(parameter), Value: uint64(plan.Alignment)},
+				)
+			}
+		case loweringcabi.Coerce:
+			for _, part := range plan.Parts {
+				parameterTypes = append(parameterTypes, part.Type)
+			}
+		default:
+			parameterTypes = append(parameterTypes, plan.Logical)
+		}
+	}
+	symbol := callee.NoAliasName
+	if symbol == "" {
+		symbol = callee.AbsName
+	}
+	function, err := backend.DeclareFunction(lb.FunctionSpec{Symbol: symbol, Result: physicalResult, Parameters: parameterTypes, Linkage: lb.LinkageExternal, CallingConvention: lb.CallingConventionC, Attributes: attributes})
+	if err != nil {
+		return 0, loweringcabi.Value{}, nil, err
+	}
+	return function, returnPlan, argumentPlans, nil
 }
 
 func (c *scalarFunction) cABIValueParts(plan loweringcabi.Value, value lb.ValueID) ([]lb.ValueID, error) {
@@ -2551,6 +2730,12 @@ func (c *scalarFunction) declareCallableWithAttributes(definition *t.NodeFuncDef
 	attributes = append(attributes, additional...)
 	symbol := definition.AbsName
 	linkage := lb.LinkageInternal
+	if c.types.IsTracePush(definition) {
+		// Keep the canonical error return type as an ABI boundary. Internal
+		// functions are eligible for LLVM return promotion, which otherwise
+		// rewrites this helper to an anonymous aggregate at higher opt levels.
+		linkage = lb.LinkageExternal
+	}
 	if c.types.CrossModule || definition.IsExternal || definition.NoAliasName != "" {
 		linkage = lb.LinkageExternal
 		if definition.NoAliasName != "" {
@@ -3196,14 +3381,12 @@ func isPointerSemantic(node *t.NodeType) bool {
 }
 
 func (c *scalarFunction) nameStorage(node *t.NodeExprName) (lb.ValueID, *t.NodeType, error) {
-	variable, ok := node.AssociatedNode.(*t.NodeExprVarDef)
-	if !ok {
-		if assignment, assignmentOK := node.AssociatedNode.(*t.NodeExprVarDefAssign); assignmentOK {
-			variable, ok = assignment.VarDef, assignment.VarDef != nil
-		}
-	}
-	if !ok || variable == nil {
+	variable := resolvedVariable(node)
+	if variable == nil {
 		return 0, nil, fmt.Errorf("name expression has no resolved variable")
+	}
+	if variable.IsImplicitContext && c.context != 0 {
+		return c.context, variable.Type, nil
 	}
 	ssaReceiver := false
 	if name, nameOK := variable.Name.(*t.NodeNameSingle); nameOK {
@@ -3235,6 +3418,61 @@ func (c *scalarFunction) nameStorage(node *t.NodeExprName) (lb.ValueID, *t.NodeT
 		resolvedName = name.Name
 	}
 	return 0, nil, fmt.Errorf("unsupported or undefined storage %d for variable %q", variable.Storage, resolvedName)
+}
+
+func resolvedVariable(node *t.NodeExprName) *t.NodeExprVarDef {
+	if node == nil {
+		return nil
+	}
+	if variable, ok := node.AssociatedNode.(*t.NodeExprVarDef); ok {
+		return variable
+	}
+	if assignment, ok := node.AssociatedNode.(*t.NodeExprVarDefAssign); ok {
+		return assignment.VarDef
+	}
+	return nil
+}
+
+func implicitContextVariable(expression t.NodeExpr) *t.NodeExprVarDef {
+	switch node := expression.(type) {
+	case *t.NodeExprName:
+		if variable := resolvedVariable(node); variable != nil && variable.IsImplicitContext {
+			return variable
+		}
+	case *t.NodeExprMemberAccess:
+		return implicitContextVariable(node.Target)
+	}
+	return nil
+}
+
+func (c *scalarFunction) materializeContext(variable *t.NodeExprVarDef) error {
+	if variable == nil || variable.Type == nil {
+		return fmt.Errorf("implicit context has no resolved type")
+	}
+	if slot := c.slots[variable]; slot != 0 {
+		c.context = slot
+		return nil
+	}
+	contextType, err := c.types.Lower(variable.Type)
+	if err != nil {
+		return err
+	}
+	slot, err := c.backend.StaticAlloca(c.fn, contextType, 0)
+	if err != nil {
+		return err
+	}
+	if c.context != 0 {
+		value, err := c.backend.Load(c.entry, contextType, c.context, 0, false)
+		if err != nil {
+			return err
+		}
+		if _, err := c.backend.Store(c.entry, value, slot, 0, false); err != nil {
+			return err
+		}
+	}
+	c.slots[variable] = slot
+	c.context = slot
+	return nil
 }
 
 func variableName(node *t.NodeExprName) (string, bool) {

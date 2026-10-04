@@ -717,6 +717,53 @@ func TestMemberFunctionHoverUsesResolvedSignature(t *testing.T) {
 	}
 }
 
+func TestInferredBorrowedProtoHover(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "borrow_hover.mg")
+	source := "mod main\nproto Value(read() u64)\nBox impl Value(value u64)\nBox.read() u64:\n    ret this.value\n..\nmain() void:\n    b := Box(value=7)\n    g := b.protoBorrow()\n    g.read()\n..\n"
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := analyze((&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String(), source, testStdRoot())
+	if result.err != nil {
+		t.Fatalf("analysis failed: %v", result.err)
+	}
+	for _, pos := range []position{{Line: 8, Character: 4}, {Line: 9, Character: 4}} {
+		if got := result.hover(pos); !strings.Contains(got, "g Value") {
+			t.Fatalf("hover at %v = %q, want inferred Value", pos, got)
+		}
+	}
+	if got := result.hover(position{Line: 8, Character: 13}); !strings.Contains(got, "Available prototypes: `Value`.") {
+		t.Fatalf("protoBorrow hover = %q, want available prototype", got)
+	}
+}
+
+func TestImportedInferredBorrowedProtoHover(t *testing.T) {
+	directory := t.TempDir()
+	implementationPath := filepath.Join(directory, "implementation.mg")
+	implementation := "mod implementation\npub proto Value(read() u64)\npub Box impl Value(value u64)\nBox.read() u64:\n    ret this.value\n..\n"
+	if err := os.WriteFile(implementationPath, []byte(implementation), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "main.mg")
+	source := "mod main\nuse \"./implementation.mg\" as imp\nmain() void:\n    b := imp.Box(value=7)\n    g := b.protoBorrow()\n    g.read()\n..\n"
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := analyze((&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String(), source, testStdRoot())
+	if result.err != nil {
+		t.Fatalf("analysis failed: %v", result.err)
+	}
+	for _, pos := range []position{{Line: 4, Character: 4}, {Line: 5, Character: 4}} {
+		if got := result.hover(pos); !strings.Contains(got, "g Value") {
+			t.Fatalf("hover at %v = %q, want inferred Value", pos, got)
+		}
+	}
+	if got := result.hover(position{Line: 4, Character: 13}); !strings.Contains(got, "Available prototypes: `Value`.") {
+		t.Fatalf("imported protoBorrow hover = %q, want available prototype", got)
+	}
+}
+
 func TestArgumentUsageSurvivesGenericTemplatePruning(t *testing.T) {
 	u64Type := &types.NodeType{KindNode: &types.NodeTypeNamed{NameNode: name("u64")}}
 	usageToken := types.Token{Repr: "index", Type: types.TokName, Pos: types.FilePos{Line: 3, Col: 8}}

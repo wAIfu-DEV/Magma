@@ -176,6 +176,30 @@ later() void:
 	}
 }
 
+func TestTypeCompletionIncludesPublicModulesInDeclarationArguments(t *testing.T) {
+	directory := t.TempDir()
+	dependency := filepath.Join(directory, "dependency.mg")
+	child := filepath.Join(directory, "child.mg")
+	if err := os.WriteFile(dependency, []byte("mod dependency\npub use \"./child.mg\" child\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(child, []byte("mod child\npub Value(data u64)\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := "mod completion\nuse \"./dependency.mg\" dep\n\npub DashBoard(\n    test dep.\n)\n"
+	path := filepath.Join(directory, "completion.mg")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	items := complete("file:///"+filepath.ToSlash(path), source, position{Line: 4, Character: 13}, testStdRoot())
+	for _, item := range items {
+		if item.Label == "child" && item.Kind == 9 {
+			return
+		}
+	}
+	t.Fatalf("completion items %#v do not include public module child", items)
+}
+
 func TestExpressionCompletionWithOtherIncompleteStatements(t *testing.T) {
 	tests := []struct {
 		name string

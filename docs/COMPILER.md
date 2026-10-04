@@ -21,6 +21,19 @@ native emission. Definite ownership violations are errors by default; use
   such as `-O2` are accepted; the default is 3.
 - `--target` selects a Clang target triple or architecture. With no value, the
   resolved Clang installation's native target is used.
+- `--strategy` selects `thinlto` (the default), `whole`, or `textual`. The
+  textual and Go-LLVM implementations share the checked language and typed
+  `@llvm` operation surface. In the ThinLTO pipeline, cached modules are
+  emitted as summarized bitcode; Clang and LLD perform the global
+  index, parallel optimization/code generation, and persistent native-object
+  caching. `--jobs` sets the number of LLD ThinLTO backend workers. This route
+  preserves cross-module importing and inlining while avoiding whole-program
+  recompilation after a local implementation change.
+- `--preset` supplies defaults for flags not explicitly provided by the user.
+  `default` selects ThinLTO at `-O3`; `fast-comp` selects the textual pipeline
+  at `-O0`; `fast-runtime` selects whole-program compilation at `-O3`.
+  Explicit `--strategy`, `-O` and `--jobs` values always win, regardless of
+  argument order.
 
 Executable emission resolves declarations made with `link` and copies files
 declared with `bundle` beside the completed executable. LLVM and object

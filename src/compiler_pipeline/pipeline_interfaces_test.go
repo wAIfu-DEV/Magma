@@ -34,6 +34,31 @@ pub current u64 = 9
 pub const LIMIT u64 = 7
 `
 
+func TestOrdinaryImplementationBytesDistinguishesSlicesFromGenerics(t *testing.T) {
+	source := []byte(`mod main
+identity[T](value T) T:
+    ret value
+..
+main(args str[]) !void:
+    print("microseconds")
+..
+bytes() u8[]:
+    ret u8[](0)
+..
+`)
+
+	got := string(ordinaryImplementationBytes(source))
+	if strings.Contains(got, "ret value") {
+		t.Fatalf("generic template body remained in ordinary implementation:\n%s", got)
+	}
+	if !strings.Contains(got, `print("microseconds")`) {
+		t.Fatalf("slice parameter caused ordinary function body to be removed:\n%s", got)
+	}
+	if !strings.Contains(got, "ret u8[](0)") {
+		t.Fatalf("slice return type caused ordinary function body to be removed:\n%s", got)
+	}
+}
+
 func interfaceBackedProgram(t *testing.T, mainSource string) (ValidatedProgram, string) {
 	t.Helper()
 	directory := t.TempDir()

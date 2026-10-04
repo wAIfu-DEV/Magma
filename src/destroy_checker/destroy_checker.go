@@ -10,6 +10,7 @@ import (
 	place "Magma/src/safety/place"
 	"Magma/src/types"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -56,6 +57,8 @@ type flow struct {
 	scopes     []deferScope
 	terminated bool
 	ranges     map[rangeRelation]*types.RangeProof
+	// pointerAliases connects local pointer values known to address the same storage.
+	pointerAliases map[string]map[string]bool
 	// provenance is compiler-only metadata for pointer and stack-backed slice
 	// values. Its key is the place holding the value, not the pointed-to place.
 	provenance map[placeKey]pointerProvenance
@@ -74,6 +77,7 @@ type pointerProvenance struct {
 	allocations []allocatorOrigin
 	stackSlice  bool
 	unknown     bool
+	protoLoan   bool
 }
 
 type allocatorOrigin struct {
@@ -132,7 +136,7 @@ const (
 )
 
 func cloneFlow(in flow) flow {
-	out := flow{states: map[*types.NodeExprVarDef]State{}, absent: map[placeKey]types.Token{}, deferred: map[*types.NodeExprVarDef]bool{}, consumedAt: map[*types.NodeExprVarDef]types.Token{}, deferredAt: map[*types.NodeExprVarDef]types.Token{}, conditions: map[*types.NodeExprVarDef]*types.NodeExprVarDef{}, errorFacts: map[*types.NodeExprVarDef]int8{}, ranges: map[rangeRelation]*types.RangeProof{}, provenance: map[placeKey]pointerProvenance{}, allocators: map[placeKey]allocatorFact{}, retentions: map[placeKey]pointerProvenance{}, terminated: in.terminated}
+	out := flow{states: map[*types.NodeExprVarDef]State{}, absent: map[placeKey]types.Token{}, deferred: map[*types.NodeExprVarDef]bool{}, consumedAt: map[*types.NodeExprVarDef]types.Token{}, deferredAt: map[*types.NodeExprVarDef]types.Token{}, conditions: map[*types.NodeExprVarDef]*types.NodeExprVarDef{}, errorFacts: map[*types.NodeExprVarDef]int8{}, ranges: map[rangeRelation]*types.RangeProof{}, pointerAliases: map[string]map[string]bool{}, provenance: map[placeKey]pointerProvenance{}, allocators: map[placeKey]allocatorFact{}, retentions: map[placeKey]pointerProvenance{}, terminated: in.terminated}
 	for variable, state := range in.states {
 		out.states[variable] = state
 	}
@@ -156,6 +160,12 @@ func cloneFlow(in flow) flow {
 	}
 	for relation, proof := range in.ranges {
 		out.ranges[relation] = proof
+	}
+	for pointer, aliases := range in.pointerAliases {
+		out.pointerAliases[pointer] = map[string]bool{}
+		for alias := range aliases {
+			out.pointerAliases[pointer][alias] = true
+		}
 	}
 	for key, provenance := range in.provenance {
 		copy := provenance
@@ -409,7 +419,7 @@ func borrowedPlace(out *flow, expr types.NodeExpr) bool {
 }
 
 func mergeProvenance(left, right pointerProvenance) pointerProvenance {
-	out := pointerProvenance{stackSlice: left.stackSlice || right.stackSlice, unknown: left.unknown || right.unknown}
+	out := pointerProvenance{stackSlice: left.stackSlice || right.stackSlice, unknown: left.unknown || right.unknown, protoLoan: left.protoLoan || right.protoLoan}
 	for _, source := range append(append([]place.Place{}, left.sources...), right.sources...) {
 		seen := false
 		for _, old := range out.sources {
@@ -734,6 +744,19 @@ func (a *analyzer) allocatorOperation(out *flow, call *types.NodeExprCall) (stri
 
 func (a *analyzer) provenanceForExpr(out *flow, expr types.NodeExpr) (pointerProvenance, bool) {
 	switch node := expr.(type) {
+	case *types.NodeExprProtoView:
+		if !node.Borrowed {
+			return a.provenanceForExpr(out, node.Target)
+		}
+		if node.TargetIsPointer {
+			provenance, ok := a.provenanceForExpr(out, node.Target)
+			provenance.protoLoan = true
+			return provenance, ok
+		}
+		if source, ok := resolvedPlace(node.Target); ok {
+			return pointerProvenance{sources: []place.Place{source}, protoLoan: true}, true
+		}
+		return pointerProvenance{unknown: true}, true
 	case *types.NodeExprTry:
 		return a.provenanceForExpr(out, node.Call)
 	case *types.NodeExprMove:
@@ -1115,7 +1138,7 @@ func (a *analyzer) checkLiveLoans(out *flow, changed place.Place, token types.To
 			// that originating holder is not a competing alias.
 			continue
 		}
-		if holder.root == nil || !a.futureUses[holder.root] {
+		if holder.root == nil || (!a.futureUses[holder.root] && !(provenance.protoLoan && action == "move")) {
 			continue
 		}
 		for _, source := range provenance.sources {
@@ -1290,7 +1313,7 @@ func rangeExprKey(expr types.NodeExpr) string {
 					}
 				}
 			}
-			if name == "count" || name == "Count" {
+			if name == "count" || name == "Count" || name == "countBytes" {
 				if owner, ok := resolvedPlace(ownerExpr); ok {
 					return fmt.Sprintf("n:%p:%s", owner.Root, keyFor(owner).path)
 				}
@@ -1511,11 +1534,58 @@ func invalidateVariableRanges(out *flow, variable *types.NodeExprVarDef) {
 	placePrefix := fmt.Sprintf("p:%p:", variable)
 	countPrefix := fmt.Sprintf("n:%p:", variable)
 	for relation := range out.ranges {
-		if relation.lower == valueKey || relation.upper == valueKey ||
-			strings.HasPrefix(relation.lower, placePrefix) || strings.HasPrefix(relation.upper, placePrefix) ||
-			strings.HasPrefix(relation.lower, countPrefix) || strings.HasPrefix(relation.upper, countPrefix) {
+		if strings.Contains(relation.lower, valueKey) || strings.Contains(relation.upper, valueKey) ||
+			strings.Contains(relation.lower, placePrefix) || strings.Contains(relation.upper, placePrefix) ||
+			strings.Contains(relation.lower, countPrefix) || strings.Contains(relation.upper, countPrefix) {
 			delete(out.ranges, relation)
 		}
+	}
+	removePointerAlias(out, fmt.Sprintf("n:%p:", variable))
+}
+
+func addPointerAlias(out *flow, left, right string) {
+	if left == "" || right == "" || left == right {
+		return
+	}
+	if out.pointerAliases == nil {
+		out.pointerAliases = map[string]map[string]bool{}
+	}
+	for _, pair := range [][2]string{{left, right}, {right, left}} {
+		if out.pointerAliases[pair[0]] == nil {
+			out.pointerAliases[pair[0]] = map[string]bool{}
+		}
+		out.pointerAliases[pair[0]][pair[1]] = true
+	}
+}
+
+func removePointerAlias(out *flow, pointer string) {
+	for alias := range out.pointerAliases[pointer] {
+		delete(out.pointerAliases[alias], pointer)
+	}
+	delete(out.pointerAliases, pointer)
+}
+
+func invalidateAliasedPointerExtents(out *flow, pointer string) {
+	queue := []string{pointer}
+	seen := map[string]bool{}
+	for len(queue) != 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if seen[current] {
+			continue
+		}
+		seen[current] = true
+		for alias := range out.pointerAliases[current] {
+			queue = append(queue, alias)
+		}
+	}
+	for current := range seen {
+		for relation := range out.ranges {
+			if relation.lower == current || relation.upper == current {
+				delete(out.ranges, relation)
+			}
+		}
+		removePointerAlias(out, current)
 	}
 }
 
@@ -1531,17 +1601,19 @@ func (a *analyzer) authorizeSubscript(out *flow, node *types.NodeExprSubscript) 
 		node.RangeProof = a.newRangeProof(false)
 		return
 	}
-	switch node.BoxType.KindNode.(type) {
-	case *types.NodeTypePointer:
-		a.safetyError(node.Tk, "pointer subscript has no proven extent and requires an unsafe block")
-		return
-	}
+	_, pointer := node.BoxType.KindNode.(*types.NodeTypePointer)
 	upper := rangeContainerKey(node.Target)
 	if upper == "" {
 		a.safetyError(node.Tk, "ordinary subscript has no stable container for a range proof")
 		return
 	}
-	if index, constant := literalUint(node.Expr); constant {
+	if index, constant := literalUint(node.Expr); constant && pointer && index != ^uint64(0) {
+		if proof := constantPointerExtentProof(out, upper, index+1); proof != nil {
+			node.RangeProof = proof
+			return
+		}
+	}
+	if index, constant := literalUint(node.Expr); constant && !pointer {
 		if target, ok := resolvedPlace(node.Target); ok {
 			if extent, fixed := a.staticExtents[target.Root]; fixed && index < extent {
 				node.RangeProof = a.newRangeProof(false)
@@ -1570,7 +1642,232 @@ func (a *analyzer) authorizeSubscript(out *flow, node *types.NodeExprSubscript) 
 		node.RangeProof = proof
 		return
 	}
+	if pointer {
+		a.safetyError(node.Tk, "pointer subscript has no proven extent and requires an unsafe block or bounded pointer extent")
+		return
+	}
 	a.safetyError(node.Tk, "ordinary subscript is not proven in range; use a bounded block or checked-access API")
+}
+
+func constantPointerExtentProof(out *flow, pointerKey string, minimum uint64) *types.RangeProof {
+	for relation, proof := range out.ranges {
+		if relation.upper != pointerKey || !strings.HasPrefix(relation.lower, "c:") {
+			continue
+		}
+		count, err := strconv.ParseUint(strings.TrimPrefix(relation.lower, "c:"), 0, 64)
+		if err == nil && count >= minimum {
+			return proof
+		}
+	}
+	return nil
+}
+
+func pointerElementBytes(typ *types.NodeType) (uint64, bool) {
+	if typ == nil {
+		return 0, false
+	}
+	pointer, ok := typ.KindNode.(*types.NodeTypePointer)
+	if !ok {
+		return 0, false
+	}
+	switch types.DisplayType(&types.NodeType{KindNode: pointer.Kind}) {
+	case "u8", "i8", "bool":
+		return 1, true
+	case "u16", "i16":
+		return 2, true
+	case "u32", "i32", "f32":
+		return 4, true
+	case "u64", "i64", "f64":
+		return 8, true
+	case "u128", "i128":
+		return 16, true
+	}
+	return 0, false
+}
+
+func (a *analyzer) isStandardFunction(call *types.NodeExprCall, moduleFile, suffix string) bool {
+	if call == nil || call.AssociatedFnDef == nil || !strings.HasSuffix(types.SourceName(call.AssociatedFnDef.AbsName), suffix) {
+		return false
+	}
+	standardFile := filepath.Clean(filepath.Join(a.shared.StdRoot, moduleFile))
+	for _, file := range a.shared.Files {
+		if filepath.Clean(file.FilePath) == standardFile && strings.HasPrefix(call.AssociatedFnDef.AbsName, file.PackageName+".") {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *analyzer) propagateBytePointerExtent(out *flow, destination *types.NodeExprVarDef, value types.NodeExpr) {
+	if destination == nil || destination.Type == nil {
+		return
+	}
+	destinationSize, ok := pointerElementBytes(destination.Type)
+	if !ok || destinationSize != 1 {
+		return
+	}
+	source := value
+	if call, ok := value.(*types.NodeExprCall); ok {
+		if !a.isStandardFunction(call, "cast.mg", ".reinterpret") || len(call.Args) != 1 {
+			return
+		}
+		source = call.Args[0]
+	}
+	sourceSize, ok := pointerElementBytes(source.GetInferredType())
+	if !ok {
+		return
+	}
+	sourceKey := rangeContainerKey(source)
+	if sourceKey == "" {
+		return
+	}
+	destinationKey := fmt.Sprintf("n:%p:", destination)
+	addPointerAlias(out, sourceKey, destinationKey)
+	var byteExtents []uint64
+	for relation := range out.ranges {
+		if relation.upper != sourceKey {
+			continue
+		}
+		if !strings.HasPrefix(relation.lower, "c:") {
+			if _, equal := out.ranges[rangeRelation{lower: sourceKey, upper: relation.lower}]; equal {
+				byteCount := fmt.Sprintf("e:%d:(%s):(c:%d)", types.KwAsterisk, relation.lower, sourceSize)
+				proof := a.newRangeProof(false)
+				out.ranges[rangeRelation{lower: byteCount, upper: destinationKey}] = proof
+				out.ranges[rangeRelation{lower: destinationKey, upper: byteCount}] = proof
+			}
+			continue
+		}
+		count, err := strconv.ParseUint(strings.TrimPrefix(relation.lower, "c:"), 0, 64)
+		if err != nil || count > ^uint64(0)/sourceSize {
+			continue
+		}
+		byteExtents = append(byteExtents, count*sourceSize)
+	}
+	for _, count := range byteExtents {
+		a.addConstantPointerExtent(out, destinationKey, count)
+	}
+}
+
+func (a *analyzer) propagatePointerExtent(out *flow, destination *types.NodeExprVarDef, value types.NodeExpr) {
+	if destination == nil || !isPointerType(destination.Type) {
+		return
+	}
+	destinationKey := fmt.Sprintf("n:%p:", destination)
+	if address, ok := value.(*types.NodeExprAddrof); ok {
+		if indexed, indexedPointer := address.Expr.(*types.NodeExprSubscript); indexedPointer && indexed.BoxType != nil {
+			if _, pointer := indexed.BoxType.KindNode.(*types.NodeTypePointer); pointer {
+				baseKey, offsetKey := rangeContainerKey(indexed.Target), rangeExprKey(indexed.Expr)
+				if baseKey != "" && offsetKey != "" && rangeProof(out, offsetKey, baseKey, true) != nil {
+					addPointerAlias(out, baseKey, destinationKey)
+					var bounds []string
+					for relation := range out.ranges {
+						if relation.upper == baseKey {
+							if _, exact := out.ranges[rangeRelation{lower: baseKey, upper: relation.lower}]; exact {
+								bounds = append(bounds, relation.lower)
+							}
+						}
+					}
+					for _, bound := range bounds {
+						remaining := fmt.Sprintf("e:%d:(%s):(%s)", types.KwMinus, bound, offsetKey)
+						proof := a.newRangeProof(false)
+						out.ranges[rangeRelation{lower: remaining, upper: destinationKey}] = proof
+						out.ranges[rangeRelation{lower: destinationKey, upper: remaining}] = proof
+						out.ranges[rangeRelation{lower: "c:0", upper: remaining, strict: true}] = proof
+						if count, countOK := rangeKeyUint(bound); countOK {
+							if offset, offsetOK := rangeKeyUint(offsetKey); offsetOK && offset <= count {
+								a.addConstantPointerExtent(out, destinationKey, count-offset)
+							}
+						}
+					}
+					return
+				}
+			}
+		}
+		if _, stable := resolvedPlace(address.Expr); stable {
+			a.addConstantPointerExtent(out, destinationKey, 1)
+		}
+		return
+	}
+	if countKey, ownerKey := a.stringBackingCountKey(value); countKey != "" {
+		addPointerAlias(out, ownerKey, destinationKey)
+		proof := a.newRangeProof(false)
+		out.ranges[rangeRelation{lower: countKey, upper: destinationKey}] = proof
+		out.ranges[rangeRelation{lower: destinationKey, upper: countKey}] = proof
+		return
+	}
+	if sourceKey := rangeContainerKey(value); sourceKey != "" && types.DisplayType(destination.Type) == types.DisplayType(value.GetInferredType()) {
+		addPointerAlias(out, sourceKey, destinationKey)
+		var bounds []string
+		for relation := range out.ranges {
+			if relation.upper == sourceKey {
+				bounds = append(bounds, relation.lower)
+			}
+		}
+		for _, bound := range bounds {
+			proof := a.newRangeProof(false)
+			out.ranges[rangeRelation{lower: bound, upper: destinationKey}] = proof
+		}
+	}
+	call, ok := value.(*types.NodeExprCall)
+	if wrapped, isTry := value.(*types.NodeExprTry); isTry {
+		call, ok = wrapped.Call.(*types.NodeExprCall)
+	}
+	if !ok || call.AssociatedFnDef == nil {
+		return
+	}
+	if a.isStandardFunction(call, "strings.mg", ".toPtr") && len(call.Args) == 1 && isStringType(call.Args[0].GetInferredType()) {
+		if stringKey := rangeContainerKey(call.Args[0]); stringKey != "" {
+			addPointerAlias(out, stringKey, destinationKey)
+			proof := a.newRangeProof(false)
+			out.ranges[rangeRelation{lower: stringKey, upper: destinationKey}] = proof
+			out.ranges[rangeRelation{lower: destinationKey, upper: stringKey}] = proof
+		}
+		return
+	}
+	if a.allocatorProto == nil || !strings.HasPrefix(call.AssociatedFnDef.AbsName, a.allocatorProto.Module+".") || len(call.Args) == 0 {
+		return
+	}
+	operation := types.SourceName(call.AssociatedFnDef.AbsName)
+	var count types.NodeExpr
+	switch {
+	case strings.HasSuffix(operation, ".alloc"), strings.HasSuffix(operation, ".allocT"):
+		count = call.Args[len(call.Args)-1]
+	case strings.HasSuffix(operation, ".realloc"), strings.HasSuffix(operation, ".reallocT"):
+		if len(call.Args) < 2 {
+			return
+		}
+		count = call.Args[len(call.Args)-1]
+	default:
+		return
+	}
+	countKey := rangeExprKey(count)
+	if countKey == "" {
+		return
+	}
+	proof := a.newRangeProof(false)
+	out.ranges[rangeRelation{lower: countKey, upper: destinationKey}] = proof
+	out.ranges[rangeRelation{lower: destinationKey, upper: countKey}] = proof
+}
+
+func (a *analyzer) addConstantPointerExtent(out *flow, pointerKey string, count uint64) {
+	countKey := fmt.Sprintf("c:%d", count)
+	proof := a.newRangeProof(false)
+	out.ranges[rangeRelation{lower: countKey, upper: pointerKey}] = proof
+	out.ranges[rangeRelation{lower: pointerKey, upper: countKey}] = proof
+}
+
+func (a *analyzer) stringBackingCountKey(value types.NodeExpr) (string, string) {
+	backing, ok := resolvedPlace(value)
+	if !ok || len(backing.Projections) == 0 {
+		return "", ""
+	}
+	field := backing.Projections[len(backing.Projections)-1]
+	if field.Kind != place.Field || field.FieldIndex != 0 || field.FieldOwner != a.shared.CoreTypes[types.CoreTypeString] {
+		return "", ""
+	}
+	owner := place.Place{Root: backing.Root, Projections: append([]place.Projection(nil), backing.Projections[:len(backing.Projections)-1]...)}
+	countPlace := place.Place{Root: backing.Root, Projections: append(append([]place.Projection(nil), owner.Projections...), place.Projection{Kind: place.Field, FieldOwner: field.FieldOwner, FieldIndex: 1})}
+	return fmt.Sprintf("p:%p:%s", countPlace.Root, keyFor(countPlace).path), fmt.Sprintf("n:%p:%s", owner.Root, keyFor(owner).path)
 }
 
 func (a *analyzer) authorizeAddressedSubscript(out *flow, node *types.NodeExprSubscript) bool {
@@ -1712,6 +2009,29 @@ func (a *analyzer) tracked(out *flow, variable *types.NodeExprVarDef) bool {
 	}
 	state, exists := out.states[variable]
 	return exists && state != stateBorrowed
+}
+
+func (a *analyzer) consumeProtoView(out *flow, node *types.NodeExprProtoView) {
+	if node.Borrowed {
+		a.borrowExpr(out, node.Target)
+		return
+	}
+	resolved, ok := resolvedPlace(node.Target)
+	if !ok {
+		a.borrowExpr(out, node.Target)
+		return
+	}
+	if a.tracked(out, resolved.Root) {
+		a.movePlace(out, resolved, node.Tk)
+		return
+	}
+	// Proto conversion consumes even values without a user destructor.
+	a.checkLiveLoans(out, resolved, node.Tk, "move")
+	a.usePlace(out, resolved, node.Tk)
+	if out.absent == nil {
+		out.absent = map[placeKey]types.Token{}
+	}
+	out.absent[keyFor(resolved)] = node.Tk
 }
 
 func (a *analyzer) use(out *flow, variable *types.NodeExprVarDef) {
@@ -1979,7 +2299,7 @@ func (a *analyzer) borrowExpr(out *flow, expr types.NodeExpr) {
 	case *types.NodeExprStructInit:
 		a.transferStructFields(out, node)
 	case *types.NodeExprProtoView:
-		a.borrowExpr(out, node.Target)
+		a.consumeProtoView(out, node)
 	}
 }
 
@@ -2112,6 +2432,9 @@ func (a *analyzer) call(out *flow, call *types.NodeExprCall) {
 				if owner, ok := resolvedPlace(call.MemberOwnerExpr); ok {
 					clearRetention(out, owner)
 				}
+				if isStringType(call.MemberOwnerExpr.GetInferredType()) {
+					invalidateAliasedPointerExtents(out, rangeContainerKey(call.MemberOwnerExpr))
+				}
 			}
 		} else {
 			a.borrowExpr(out, call.MemberOwnerExpr)
@@ -2124,6 +2447,9 @@ func (a *analyzer) call(out *flow, call *types.NodeExprCall) {
 				a.consumeExpression(out, call.MemberOwnerName, "destructor call", call.Tk)
 				if owner, ok := resolvedPlace(call.MemberOwnerName); ok {
 					clearRetention(out, owner)
+				}
+				if isStringType(call.MemberOwnerName.GetInferredType()) {
+					invalidateAliasedPointerExtents(out, rangeContainerKey(call.MemberOwnerName))
 				}
 			}
 		} else {
@@ -2144,6 +2470,45 @@ func (a *analyzer) call(out *flow, call *types.NodeExprCall) {
 			a.borrowExpr(out, argument)
 		}
 	}
+	for index, parameter := range definition.Class.ArgsNode.Args {
+		if parameter.BoundedCount == "" {
+			continue
+		}
+		actualIndex := index - offset
+		if actualIndex < 0 || actualIndex >= len(call.Args) {
+			continue
+		}
+		countKey := ""
+		if count, err := strconv.ParseUint(parameter.BoundedCount, 0, 64); err == nil {
+			countKey = fmt.Sprintf("c:%d", count)
+		} else {
+			for candidate, countParameter := range definition.Class.ArgsNode.Args {
+				if countParameter.Name == parameter.BoundedCount {
+					countIndex := candidate - offset
+					if countIndex >= 0 && countIndex < len(call.Args) {
+						countKey = rangeExprKey(call.Args[countIndex])
+					}
+					break
+				}
+			}
+		}
+		pointerKey := rangeContainerKey(call.Args[actualIndex])
+		if pointerKey != "" && strings.HasPrefix(countKey, "c:") {
+			if count, err := strconv.ParseUint(strings.TrimPrefix(countKey, "c:"), 0, 64); err == nil && constantPointerExtentProof(out, pointerKey, count) != nil {
+				continue
+			}
+		}
+		if countKey == "c:1" {
+			if address, ok := call.Args[actualIndex].(*types.NodeExprAddrof); ok {
+				if _, stable := resolvedPlace(address.Expr); stable {
+					continue
+				}
+			}
+		}
+		if pointerKey == "" || countKey == "" || rangeProof(out, countKey, pointerKey, false) == nil {
+			a.safetyError(call.Tk, "call cannot prove bounded pointer extent for parameter '"+parameter.Name+"'")
+		}
+	}
 	// Visible helpers may wrap a destructor in order to adapt its throwing-void
 	// result. Propagate only effects proven to occur in the helper's
 	// unconditional leading path; conditional or later calls are deliberately
@@ -2157,6 +2522,12 @@ func (a *analyzer) call(out *flow, call *types.NodeExprCall) {
 			continue
 		}
 		a.consumeExpression(out, address.Expr, "destructor helper call", call.Tk)
+	}
+	if operation, _, ok := a.allocatorOperation(out, call); ok && (operation == "free" || strings.HasPrefix(operation, "realloc")) && len(call.Args) != 0 {
+		if pointer, ok := resolvedPlace(call.Args[0]); ok {
+			invalidateAliasedPointerExtents(out, rangeContainerKey(call.Args[0]))
+			invalidateVariableRanges(out, pointer.Root)
+		}
 	}
 }
 
@@ -2235,6 +2606,9 @@ func (a *analyzer) addLocal(out *flow, variable *types.NodeExprVarDef) {
 // borrowed locals stay borrowed; owned calls and owned locals transfer.
 func (a *analyzer) transferValue(out *flow, value types.NodeExpr) bool {
 	switch node := value.(type) {
+	case *types.NodeExprProtoView:
+		a.consumeProtoView(out, node)
+		return false
 	case *types.NodeExprMove:
 		resolved, ok := resolvedPlace(node.Expr)
 		if !ok {
@@ -2360,8 +2734,11 @@ func (a *analyzer) valueInto(out *flow, destination *types.NodeExprVarDef, value
 	if destination != nil {
 		a.checkRetentionReplacement(out, place.Place{Root: destination}, variableToken(destination))
 	}
-	if destination != nil && (isPointerType(destination.Type) || isSliceType(destination.Type)) {
+	_, protoView := value.(*types.NodeExprProtoView)
+	if destination != nil && (isPointerType(destination.Type) || isSliceType(destination.Type) || protoView || (destination.Type != nil && a.structFor(destination.Type.KindNode) != nil && a.structFor(destination.Type.KindNode).IsProto)) {
 		a.setProvenance(out, place.Place{Root: destination}, value)
+		a.propagatePointerExtent(out, destination, value)
+		a.propagateBytePointerExtent(out, destination, value)
 	}
 	if destination != nil && a.isAllocatorType(destination.Type) {
 		a.setAllocatorFact(out, place.Place{Root: destination}, value)
@@ -2472,7 +2849,14 @@ func (a *analyzer) assignment(out *flow, assignment *types.NodeExprAssign) {
 		a.setContextAllocatorFields(out, destination, assignment.Right)
 		a.setAggregateRegions(out, destination, assignment.Right)
 		if _, indexed := assignment.Left.(*types.NodeExprSubscript); !indexed {
+			if len(destination.Projections) == 0 && isStringType(destination.Root.Type) {
+				invalidateAliasedPointerExtents(out, rangeContainerKey(assignment.Left))
+			}
 			invalidateVariableRanges(out, destination.Root)
+			if len(destination.Projections) == 0 && isPointerType(destination.Root.Type) {
+				a.propagatePointerExtent(out, destination.Root, assignment.Right)
+				a.propagateBytePointerExtent(out, destination.Root, assignment.Right)
+			}
 		}
 		fieldType := assignment.Left.GetInferredType()
 		ownershipStorage := fieldType != nil && fieldType.Owned && a.destructible(fieldType)
@@ -2527,6 +2911,16 @@ func mergeFlows(left, right flow) flow {
 	for relation := range out.ranges {
 		if _, ok := right.ranges[relation]; !ok {
 			delete(out.ranges, relation)
+		}
+	}
+	for pointer, aliases := range out.pointerAliases {
+		for alias := range aliases {
+			if !right.pointerAliases[pointer][alias] {
+				delete(aliases, alias)
+			}
+		}
+		if len(aliases) == 0 {
+			delete(out.pointerAliases, pointer)
 		}
 	}
 	for key, provenance := range right.provenance {
@@ -3041,13 +3435,37 @@ func (a *analyzer) statement(out *flow, statement types.NodeStatement) {
 	case *types.NodeStmtBounded:
 		bounded := cloneFlow(*out)
 		node.Proofs = nil
+		if node.Pointer != nil {
+			a.borrowExpr(&bounded, node.Pointer)
+			a.borrowExpr(&bounded, node.Extent)
+			pointerKey, extentKey := rangeContainerKey(node.Pointer), rangeExprKey(node.Extent)
+			if pointerKey == "" || extentKey == "" {
+				a.safetyError(node.Tk, "bounded pointer and extent must be stable named places or constants")
+			} else {
+				if a.unsafeDepth == 0 && rangeProof(out, extentKey, pointerKey, false) == nil {
+					a.safetyError(node.Tk, "bounded pointer extent is not proven; establish it in unsafe at the trust boundary")
+				}
+				proof := a.newRangeProof(false)
+				for _, relation := range []rangeRelation{{lower: pointerKey, upper: extentKey}, {lower: extentKey, upper: pointerKey}} {
+					if _, existed := bounded.ranges[relation]; !existed {
+						bounded.ranges[relation] = proof
+					}
+				}
+				node.Proofs = append(node.Proofs, proof)
+			}
+		}
 		for _, predicate := range node.Predicates {
 			a.borrowExpr(&bounded, predicate)
-			if proof := a.addRangePredicate(&bounded, predicate, true, true); proof != nil {
+			if proof := a.addRangePredicate(&bounded, predicate, true, false); proof != nil {
 				node.Proofs = append(node.Proofs, proof)
 			}
 		}
 		a.body(&bounded, &node.Body)
+		for relation, proof := range bounded.ranges {
+			if original, existed := out.ranges[relation]; !existed || original != proof {
+				delete(bounded.ranges, relation)
+			}
+		}
 		*out = bounded
 	case *types.NodeStmtUnsafe:
 		a.unsafeDepth++
@@ -3348,6 +3766,20 @@ func (a *analyzer) function(function *types.NodeFuncDef) {
 		}
 		for _, argument := range function.Class.ArgsNode.Args {
 			variable := fnScope.Scope.DeclVars[argument.Name]
+			if variable != nil && argument.BoundedCount != "" {
+				countKey := ""
+				if count, err := strconv.ParseUint(argument.BoundedCount, 0, 64); err == nil {
+					countKey = fmt.Sprintf("c:%d", count)
+				} else if countVariable := fnScope.Scope.DeclVars[argument.BoundedCount]; countVariable != nil {
+					countKey = fmt.Sprintf("v:%p", countVariable)
+				}
+				if countKey != "" {
+					pointerKey := fmt.Sprintf("n:%p:", variable)
+					proof := a.newRangeProof(false)
+					out.ranges[rangeRelation{lower: pointerKey, upper: countKey}] = proof
+					out.ranges[rangeRelation{lower: countKey, upper: pointerKey}] = proof
+				}
+			}
 			if variable != nil && argument.Name == "this" && function.IsDestructor {
 				// A destructor exclusively owns the receiver for the duration of its
 				// implementation, including projected field cleanup through `this`.

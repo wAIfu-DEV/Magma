@@ -62,6 +62,10 @@ func (m *monoCtx) resolveCandidateStmt(module string, gl *t.NodeGlobal, stmt t.N
 		node.BoundExpr = m.resolveCandidateExpr(module, gl, node.BoundExpr)
 		m.resolveCandidateBody(module, gl, &node.Body)
 	case *t.NodeStmtBounded:
+		if node.Pointer != nil {
+			node.Pointer = m.resolveCandidateExpr(module, gl, node.Pointer)
+			node.Extent = m.resolveCandidateExpr(module, gl, node.Extent)
+		}
 		for i, predicate := range node.Predicates {
 			node.Predicates[i] = m.resolveCandidateExpr(module, gl, predicate)
 		}

@@ -42,6 +42,23 @@ func clResolveImplementations(c *ctx, st *t.StructDef) error {
 				if !sameType(actual[i+1].TypeNode, requirement.Args[i].TypeNode) {
 					return comp_err.CompilationErrorToken(c.FileCtx, &actual[i+1].Tk, fmt.Sprintf("method '%s.%s' parameter %d has type '%s', expected '%s'", st.Name, requirement.Name, i+1, t.DisplayType(actual[i+1].TypeNode), t.DisplayType(requirement.Args[i].TypeNode)), "")
 				}
+				requiredCount, actualCount := -1, -1
+				for j, parameter := range requirement.Args {
+					if parameter.Name == requirement.Args[i].BoundedCount && parameter.Name != "" {
+						requiredCount = j
+					}
+				}
+				for j, parameter := range actual[1:] {
+					if parameter.Name == actual[i+1].BoundedCount && parameter.Name != "" {
+						actualCount = j
+					}
+				}
+				if requiredCount != actualCount {
+					return comp_err.CompilationErrorToken(c.FileCtx, &actual[i+1].Tk, fmt.Sprintf("method '%s.%s' parameter %d has a mismatched bounded extent contract", st.Name, requirement.Name, i+1), "match the prototype's bounded parameter contract")
+				}
+				if requiredCount == -1 && requirement.Args[i].BoundedCount != actual[i+1].BoundedCount {
+					return comp_err.CompilationErrorToken(c.FileCtx, &actual[i+1].Tk, fmt.Sprintf("method '%s.%s' parameter %d has a mismatched bounded extent contract", st.Name, requirement.Name, i+1), "match the prototype's bounded parameter contract")
+				}
 			}
 			if !sameType(method.ReturnType, requirement.Ret) {
 				return comp_err.CompilationErrorToken(c.FileCtx, &implementation.Tk, fmt.Sprintf("method '%s.%s' returns '%s', expected '%s'", st.Name, requirement.Name, t.DisplayType(method.ReturnType), t.DisplayType(requirement.Ret)), "")

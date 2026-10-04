@@ -30,6 +30,9 @@ func Build(backend lb.Backend, state *t.SharedState) error {
 	if err != nil {
 		return err
 	}
+	if err := types.ValidateProtoLayouts(); err != nil {
+		return err
+	}
 	state.FilesM.Lock()
 	files := make(map[string]*t.FileCtx, len(state.Files))
 	for path, file := range state.Files {
@@ -1123,6 +1126,9 @@ func declareFunctionReference(backend lb.Backend, types *loweringtypes.Lowerer, 
 	}
 	symbol := function.AbsName
 	linkage := lb.LinkageInternal
+	if types.IsTracePush(function) {
+		linkage = lb.LinkageExternal
+	}
 	// Independently lowered units may carry function addresses in constant
 	// globals. Those references must use the same externally linkable
 	// declaration as ordinary cross-module calls and the eventual definition.

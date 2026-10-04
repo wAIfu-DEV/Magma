@@ -1,9 +1,10 @@
 # Magma
 
 Magma is a statically typed systems programming language. Its compiler is
-written in Go. Native builds cache per-module LLVM bitcode, link it into a
-whole program for optimization, and emit an object or executable. The older
-whole-program textual LLVM IR backend remains available but is deprecated.
+written in Go. Native builds cache per-module LLVM bitcode and use ThinLTO by
+default for parallel cross-module optimization and native emission. Merged
+whole-program LLVM remains available for maximum runtime performance; the
+textual LLVM IR pipeline is also supported as the fastest compilation preset.
 
 The language includes pointers, manual allocation, external symbols, inline
 LLVM, generics, methods, deferred statements, and typed error propagation. The
@@ -199,6 +200,9 @@ usage: magma [options] <input-file>
   --version, -v           print the compiler version
   --out, -o <path>        output path (default depends on --emit)
   --emit, -e <kind>       llvm, object, or exe (default exe)
+  --strategy <kind>       thinlto (default), whole, or textual
+  --preset <kind>         default, fast-comp, or fast-runtime
+  --jobs <n>              ThinLTO workers or LLVM whole-program thread limit
   --opt, -O <0-3>         LLVM optimization level (default 3)
   --error-trace-slots <n> trace slots per runtime shard (default 1024)
   --safety-warnings       downgrade memory-safety diagnostics to warnings
@@ -211,6 +215,11 @@ usage: magma [options] <input-file>
 Executable output and optimization level 3 are the defaults. The compiler
 accepts `llvm`, `object`, and `exe` as output kinds. If `--out` is omitted, the
 output name depends on the selected kind and target platform.
+
+The default preset uses cached ThinLTO at `-O3`. `--preset fast-comp` selects
+the textual pipeline at `-O0`, while `--preset fast-runtime` selects merged
+whole-program LLVM at `-O3`. A directly supplied `--strategy`, `-O`, or
+`--jobs` value overrides its preset value regardless of argument order.
 
 By default, the compiler uses the `std` directory beside the compiler
 executable. `--std` is primarily useful while developing the compiler or

@@ -29,44 +29,37 @@ SpinContext(lock spinlock.SpinLock*, counter u64*, ready atomic.U64*, start atom
 
 compareExchange(value atomic.U32*, expected u32, desired u32) u32:
     unsafe:
-        llvm "  %result = cmpxchg ptr %value, i32 %expected, i32 %desired acquire monotonic, align 4\n"
-        llvm "  %observed = extractvalue { i32, i1 } %result, 0\n"
-        llvm "  ret i32 %observed\n"
+        ret @llvm("cmpxchg_old", value, expected, desired, "acquire", "monotonic", 4, u32)
     ..
 ..
 
 loadRelaxed(value atomic.U32*) u32:
     unsafe:
-        llvm "  %observed = load atomic i32, ptr %value monotonic, align 4\n"
-        llvm "  ret i32 %observed\n"
+        ret @llvm("atomic_load", value, "monotonic", 4, u32)
     ..
 ..
 
 storeRelease(value atomic.U32*, desired u32) void:
     unsafe:
-        llvm "  store atomic i32 %desired, ptr %value release, align 4\n"
-        llvm "  ret void\n"
+        @llvm("atomic_store", value, desired, "release", 4, void)
     ..
 ..
 
 exchangeAcquire(value atomic.U32*, desired u32) u32:
     unsafe:
-        llvm "  %previous = atomicrmw xchg ptr %value, i32 %desired acquire, align 4\n"
-        llvm "  ret i32 %previous\n"
+        ret @llvm("atomic_rmw", value, desired, "xchg", "acquire", 4, u32)
     ..
 ..
 
 cpuRelax() void:
     unsafe:
-        llvm "  call void asm sideeffect \"pause\", \"~{memory}\"()\n"
-        llvm "  ret void\n"
+        @llvm("asm_sideeffect", "pause", void)
     ..
 ..
 
 consume(value ptr) void:
     unsafe:
-        llvm "  call void asm sideeffect \"\", \"r,~{memory}\"(ptr %value)\n"
-        llvm "  ret void\n"
+        @llvm("sideeffect", void)
     ..
 ..
 

@@ -287,6 +287,64 @@ pub string(value str) !$Value:
     ret stringOwned(move owned)
 ..
 
+# Converts a borrowed slice of JSON booleans into an owned JSON array.
+pub sliceBool(values bool[]) !$Value:
+    result := try array()
+    onerror result.free()
+    view := try result.asArray()
+    for i u64 = 0 to slices.count(values):
+        try view.append(bool(values[i]))
+    ..
+    ret move result
+..
+
+# Converts a borrowed slice of JSON integers into an owned JSON array.
+pub sliceInt(values i64[]) !$Value:
+    result := try array()
+    onerror result.free()
+    view := try result.asArray()
+    for i u64 = 0 to slices.count(values):
+        try view.append(numberInt(values[i]))
+    ..
+    ret move result
+..
+
+# Converts a borrowed slice of JSON numbers into an owned JSON array.
+pub sliceFloat(values f64[]) !$Value:
+    result := try array()
+    onerror result.free()
+    view := try result.asArray()
+    for i u64 = 0 to slices.count(values):
+        try view.append(numberFloat(values[i]))
+    ..
+    ret move result
+..
+
+# Converts a borrowed string slice, copying every string.
+pub sliceString(values str[]) !$Value:
+    result := try array()
+    onerror result.free()
+    view := try result.asArray()
+    for i u64 = 0 to slices.count(values):
+        try view.append(try string(values[i]))
+    ..
+    ret move result
+..
+
+# Converts borrowed JSON values by deep-copying them through their canonical
+# representation, so ownership remains with the input slice.
+pub sliceValue(values Value[]) !$Value:
+    result := try array()
+    onerror result.free()
+    view := try result.asArray()
+    for i u64 = 0 to slices.count(values):
+        encoded := try values[i].serializeToJson()
+        defer encoded.free()
+        try view.append(try parse(encoded))
+    ..
+    ret move result
+..
+
 # Inserts or replaces key and transfers value ownership into the object.
 # @complexity O(N) lookup plus key-copy cost
 # @ownership Consumes value, including on failure.

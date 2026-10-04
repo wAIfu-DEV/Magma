@@ -37,7 +37,7 @@ render(value json.Value, precision u64) !$str:
     output Capture
     output.data = storage
     output.count = 0
-    sink := output.proto[writer.Writer]()
+    sink := output.protoBorrow[writer.Writer]()
     try value.writeWithPrecision(sink, precision)
     view := strings.fromPtrNoCopy(output.data, output.count)
     ret try strings.copy(view)

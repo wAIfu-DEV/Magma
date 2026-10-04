@@ -99,6 +99,22 @@ func ctForStmt(c *ctx, forStmt *t.NodeStmtFor) error {
 }
 
 func ctBoundedStmt(c *ctx, stmt *t.NodeStmtBounded) error {
+	if stmt.Pointer != nil {
+		if e := ctExpr(c, stmt.Pointer); e != nil {
+			return e
+		}
+		if _, ok := stmt.Pointer.GetInferredType().KindNode.(*t.NodeTypePointer); !ok {
+			return comp_err.CompilationErrorToken(c.FileCtx, &stmt.Tk, "bounded 'by' requires a typed pointer", "")
+		}
+		if e := ctExpr(c, stmt.Extent); e != nil {
+			return e
+		}
+		literal, isLiteral := stmt.Extent.(*t.NodeExprLit)
+		unsignedLiteral := isLiteral && literal.LitType == t.TokLitNum
+		if descriptor, ok := numericDescriptor(stmt.Extent.GetInferredType()); !unsignedLiteral && (!ok || descriptor.IsFloat || descriptor.IsSigned) {
+			return comp_err.CompilationErrorToken(c.FileCtx, &stmt.Tk, "bounded pointer extent must be an unsigned integer", "")
+		}
+	}
 	for _, predicate := range stmt.Predicates {
 		if e := ctExpr(c, predicate); e != nil {
 			return e

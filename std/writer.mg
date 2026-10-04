@@ -83,7 +83,7 @@ ConstWriter.writeLn(bytes str) !u64:
 # @example
 #   writer := output.toWriter()
 ConstWriter.toWriter() Writer:
-    ret this.proto()
+    ret this.protoBorrow()
 ..
 
 # Writes the complete byte string or returns an error if the adapter makes no

@@ -274,5 +274,5 @@ destr Builder.buildFinal() !$str:
 ..
 
 Builder.writer() writer.Writer:
-    ret this.proto()
+    ret this.protoBorrow()
 ..

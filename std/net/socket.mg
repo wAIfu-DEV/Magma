@@ -188,17 +188,17 @@ Socket.write(bytes str) !u64:
 
 Socket.reader() !reader.Reader:
     try this.requireOpen()
-    ret this.proto()
+    ret this.protoBorrow()
 ..
 
 Socket.writer() !writer.Writer:
     try this.requireOpen()
-    ret this.proto()
+    ret this.protoBorrow()
 ..
 
 Socket.duplex() !duplex.Duplex:
     try this.requireOpen()
-    ret this.proto()
+    ret this.protoBorrow()
 ..
 
 Socket.nativeHandle() !ptr:

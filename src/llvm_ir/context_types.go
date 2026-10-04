@@ -72,17 +72,19 @@ func ssaName(name string) SsaName {
 }
 
 type IrCtx struct {
-	Shared    *t.SharedState
-	fCtx      *t.FileCtx
-	bld       ScopeBuilder
-	parentBld ScopeBuilder
-	nextSsa   *int
-	moduleIdx int
-	CurrFunc  *t.NodeFuncDef
+	Shared      *t.SharedState
+	layoutStack map[string]bool
+	fCtx        *t.FileCtx
+	bld         ScopeBuilder
+	parentBld   ScopeBuilder
+	nextSsa     *int
+	moduleIdx   int
+	CurrFunc    *t.NodeFuncDef
 	// ContextPtr is the activation-local context pointer passed to contextful
 	// descendants. Contextless functions leave it empty until source-level ctx
 	// initialization establishes one.
 	ContextPtr   SsaName
+	contextLocal bool
 	traceStrings *traceStringPool
 	constStrings map[*t.NodeExprLit]SsaName
 	localSlots   map[*t.NodeExprVarDef]SsaName

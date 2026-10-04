@@ -47,18 +47,25 @@ func TestEmbedConstantRejectsMissingFile(t *testing.T) {
 }
 
 func parseTestSource(tt *testing.T, source string) (*mt.NodeGlobal, error) {
+	return parseTestSourceWithImports(tt, source, nil)
+}
+
+func parseTestSourceWithImports(tt *testing.T, source string, imports map[string]string) (*mt.NodeGlobal, error) {
 	tt.Helper()
 	fctx := &mt.FileCtx{
 		FilePath:    "test.mg",
 		Content:     []byte(source),
-		ImportAlias: map[string]string{},
+		ImportAlias: imports,
+	}
+	if fctx.ImportAlias == nil {
+		fctx.ImportAlias = map[string]string{}
 	}
 	tokens, err := tokenizer.Tokenize(fctx, fctx.Content)
 	if err != nil {
 		tt.Fatalf("tokenize: %v", err)
 	}
 	fctx.Tokens = tokens
-	shared := &mt.SharedState{ExportedSymbols: map[string]string{}}
+	shared := &mt.SharedState{StdRoot: "/std", ExportedSymbols: map[string]string{}}
 	return Parse(shared, fctx)
 }
 
@@ -451,5 +458,40 @@ main(value Value) void:
 	match, ok := global.FuncDefs["main"].Body.Statements[0].(*mt.NodeStmtMatch)
 	if !ok || len(match.Cases) != 1 || match.ElseBody == nil {
 		t.Fatalf("match = %#v", match)
+	}
+}
+
+func TestParseJSONLiteralFamily(t *testing.T) {
+	global, err := parseTestSourceWithImports(t, `mod main
+main(namedValue $json.Value) !void:
+    object := try json {
+        "field": "value",
+        field2: 0.01,
+        namedValue,
+        arr: [{}],
+        absent: none,
+    }
+    text := json "test"
+    number := json 0.1
+    boolean := json true
+    nothing := json none
+..
+`, map[string]string{"json": "/std/json.mg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := global.FuncDefs["main"]
+	if main == nil || len(main.Body.Statements) != 5 {
+		t.Fatalf("main body = %#v", main)
+	}
+	if len(global.FuncDefs) < 4 { // main plus generated object/array helpers
+		t.Fatalf("generated JSON helpers missing: %#v", global.FuncDefs)
+	}
+}
+
+func TestJSONLiteralRequiresJSONImport(t *testing.T) {
+	_, err := parseTestSource(t, "mod main\nmain() !void:\n    value := try json {}\n..\n")
+	if err == nil || !strings.Contains(err.Error(), "JSON literals require the standard json module") {
+		t.Fatalf("missing JSON import diagnostic = %v", err)
 	}
 }

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	llvm "tinygo.org/x/go-llvm"
+
 	lb "Magma/src/lowering_backend"
 	loweringprogram "Magma/src/lowering_program"
 	loweringruntime "Magma/src/lowering_runtime"
@@ -74,6 +76,23 @@ func ProgramObject(name string, state *t.SharedState, options TargetOptions) ([]
 // whole-program pipeline exactly once on the merged module.
 func LinkBitcodeObject(name string, units []BitcodeUnit, options TargetOptions) ([]byte, error) {
 	return linkBitcodeObject(name, units, options, nil)
+}
+
+// ThinLTOBitcode adds the module summary consumed by LLVM's ThinLTO index.
+// It performs no optimization or native code generation; those remain the
+// linker's responsibility and can therefore use LLD's persistent cache.
+func ThinLTOBitcode(name string, bitcode []byte) ([]byte, error) {
+	module, err := MergeBitcode(name, []BitcodeUnit{{Name: name, Data: bitcode}})
+	if err != nil {
+		return nil, err
+	}
+	defer module.Close()
+	if err := module.Verify(); err != nil {
+		return nil, fmt.Errorf("verify ThinLTO module: %w", err)
+	}
+	buffer := llvm.WriteThinLTOBitcodeToMemoryBuffer(module.raw)
+	defer buffer.Dispose()
+	return append([]byte(nil), buffer.Bytes()...), nil
 }
 
 // LinkBitcodeObjectPreserving closes the linked world while retaining native

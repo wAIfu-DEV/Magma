@@ -482,7 +482,7 @@ Client.writeAll(bytes str) !u64:
 # Returns a borrowed generic writer view of this client.
 # The client must remain alive and unmoved while the view is used.
 Client.writer() writer.Writer:
-    ret this.proto[writer.Writer]()
+    ret this.protoBorrow[writer.Writer]()
 ..
 
 Client.readPayload(length u64) !$str:
@@ -616,7 +616,7 @@ Client.readRaw(buff u8[], nBytes u64) !u64:
 # Returns a borrowed generic reader view of this client.
 # The client must remain alive and unmoved while the view is used.
 Client.reader() reader.Reader:
-    ret this.proto[reader.Reader]()
+    ret this.protoBorrow[reader.Reader]()
 ..
 
 destr Message.close() void:

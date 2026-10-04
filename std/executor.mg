@@ -22,7 +22,7 @@ NullExecutor.releaseRaw() void:
 gl_nullExecutor := NullExecutor(value=0)
 
 pub noctx null() Executor:
-    ret gl_nullExecutor.proto()
+    ret gl_nullExecutor.protoBorrow()
 ..
 
 # Schedules entry(context) for execution.

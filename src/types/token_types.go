@@ -31,6 +31,8 @@ const (
 	KwParenCl
 	KwBrackOp
 	KwBrackCl
+	KwBraceOp
+	KwBraceCl
 	KwColon
 	KwDot
 	KwDots
@@ -106,6 +108,8 @@ var KwTypeToRepr []string = []string{
 	KwParenCl:    ")",
 	KwBrackOp:    "[",
 	KwBrackCl:    "]",
+	KwBraceOp:    "{",
+	KwBraceCl:    "}",
 	KwColon:      ":",
 	KwDot:        ".",
 	KwDots:       "..",
@@ -181,6 +185,8 @@ var KwReprToType map[string]KwType = map[string]KwType{
 	")":        KwParenCl,
 	"[":        KwBrackOp,
 	"]":        KwBrackCl,
+	"{":        KwBraceOp,
+	"}":        KwBraceCl,
 	":":        KwColon,
 	".":        KwDot,
 	"..":       KwDots,

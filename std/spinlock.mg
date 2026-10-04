@@ -63,5 +63,5 @@ SpinLock.releaseRaw() void:
 # @complexity O(1)
 # @ownership The SpinLock must outlive the returned Locker.
 SpinLock.locker() locker.Locker:
-    ret this.proto()
+    ret this.protoBorrow()
 ..

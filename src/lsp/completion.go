@@ -85,7 +85,13 @@ func complete(uri, source string, pos position, stdRoot string) []completionItem
 			if module == "" {
 				return []completionItem{}
 			}
-			return result.docs.typeCompletions(module, context.prefix, true, false)
+			items := result.docs.typeCompletions(module, context.prefix, true, false)
+			// A public module alias can be the first component of a qualified
+			// type (for example `std.array.Array`). Keep it available while the
+			// cursor is immediately after the imported module's dot.
+			items = append(items, result.docs.publicModuleCompletions(module, context.prefix)...)
+			sort.Slice(items, func(i, j int) bool { return items[i].Label < items[j].Label })
+			return items
 		}
 		items := result.docs.typeCompletions(result.file.PackageName, context.prefix, false, true)
 		for alias, module := range result.importedPackages() {
@@ -1077,6 +1083,7 @@ func (a *analysis) expressionCompletions(prefix string, line uint32, expectedTyp
 		{"break", "exit the nearest loop", "break"},
 		{"continue", "continue the nearest loop", "continue"},
 		{"move", "transfer ownership", "move "},
+		{"json", "construct an owned JSON value", "json ${1:{}}"},
 		{"bounded", "establish a range proof", "bounded ${1:condition}:\n    ${0}\n.."},
 		{"unsafe", "localize an unverifiable operation", "unsafe:\n    ${0}\n.."},
 		{"sizeof", "size of a type", "sizeof "},
@@ -1445,11 +1452,23 @@ func (d *docIndex) moduleCompletions(module, prefix string) []completionItem {
 	for _, item := range items {
 		seen[item.Label] = true
 	}
-	for alias := range d.publicModuleAliases[module] {
+	for _, item := range d.publicModuleCompletions(module, prefix) {
+		alias := item.Label
 		if seen[alias] || !strings.HasPrefix(alias, prefix) {
 			continue
 		}
-		items = append(items, completionItem{Label: alias, Kind: 9, Detail: "module " + alias})
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Label < items[j].Label })
+	return items
+}
+
+func (d *docIndex) publicModuleCompletions(module, prefix string) []completionItem {
+	items := []completionItem{}
+	for alias := range d.publicModuleAliases[module] {
+		if strings.HasPrefix(alias, prefix) {
+			items = append(items, completionItem{Label: alias, Kind: 9, Detail: "module " + alias})
+		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Label < items[j].Label })
 	return items
@@ -1540,9 +1559,9 @@ func (d *docIndex) completions(keyPrefix, forbiddenDotPrefix, typedPrefix string
 			label = "~" + name
 			filterText = name
 			insertText = name
-		} else if name == "proto" && kind == 2 {
+		} else if (name == "proto" || name == "protoBorrow") && kind == 2 {
 			filterText = name
-			insertText = "proto()"
+			insertText = name + "()"
 		}
 		items = append(items, completionItem{Label: label, Kind: kind, Detail: firstCodeLine(hover), FilterText: filterText, InsertText: insertText, Documentation: map[string]any{"kind": "markdown", "value": hover}})
 	}

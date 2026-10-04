@@ -210,6 +210,14 @@ func clBody(c *ctx, bdy *t.NodeBody) error {
 				return e
 			}
 		case *t.NodeStmtBounded:
+			if n.Pointer != nil {
+				if e := clExpr(c, n.Pointer, false); e != nil {
+					return e
+				}
+				if e := clExpr(c, n.Extent, false); e != nil {
+					return e
+				}
+			}
 			for _, predicate := range n.Predicates {
 				if e := clExpr(c, predicate, false); e != nil {
 					return e

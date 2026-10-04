@@ -512,8 +512,14 @@ func bodyValidAtLoopDepth(file *t.FileCtx, body *t.NodeBody, ownerReturn *t.Node
 				err = bodyValidAtLoopDepth(file, &node.Body, ownerReturn, loopDepth+1)
 			}
 		case *t.NodeStmtBounded:
-			if len(node.Predicates) == 0 {
+			if len(node.Predicates) == 0 && node.Pointer == nil {
 				err = invalid(file, &node.Tk, "bounded statement has no predicates")
+			}
+			if err == nil && node.Pointer != nil {
+				err = expressionValid(file, node.Pointer)
+				if err == nil {
+					err = expressionValid(file, node.Extent)
+				}
 			}
 			for _, predicate := range node.Predicates {
 				if err == nil {

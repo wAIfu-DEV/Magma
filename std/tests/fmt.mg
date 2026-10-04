@@ -43,7 +43,7 @@ pub main() !void:
     captureBytes := try strings.alloc(128)
     defer captureBytes.free()
     capture := Capture(buffer=strings.toPtr(captureBytes), count=0)
-    output := capture.proto[writer.Writer]()
+    output := capture.protoBorrow[writer.Writer]()
     written := try fmt.str(a, "one").str(" two").str(" three").str(" four").str(" five").str(" six").str(" seven").str(" eight").str(" nine").writeTo(output)
     captured := strings.fromPtrNoCopy(capture.buffer, capture.count)
     if written != 44 || strings.compare(captured, "one two three four five six seven eight nine") == false:

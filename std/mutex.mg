@@ -64,5 +64,5 @@ Mutex.releaseRaw() void:
 # @example
 #   lock := guard.locker()
 Mutex.locker() locker.Locker:
-    ret this.proto()
+    ret this.protoBorrow()
 ..

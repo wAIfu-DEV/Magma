@@ -465,24 +465,40 @@ func irExprUnionInit(ctx *IrCtx, init *t.NodeExprStructInit) (SsaName, error) {
 		irWritef(ctx, ", %d\n", field.FieldIndex)
 		payload = next
 	}
-	withTag := irSsaLocal(ctx)
-	irWritef(ctx, "  %s = insertvalue ", withTag.Repr)
+	address := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = alloca ", address.Repr)
 	if err := irType(ctx, init.Type); err != nil {
 		return SsaName{}, err
 	}
-	irWritef(ctx, " zeroinitializer, i64 %d, 0\n", variant.Tag)
-	result := irSsaLocal(ctx)
-	irWritef(ctx, "  %s = insertvalue ", result.Repr)
+	irWrite(ctx, "\n  store ")
 	if err := irType(ctx, init.Type); err != nil {
 		return SsaName{}, err
 	}
-	irWritef(ctx, " %s, ", withTag.Repr)
+	irWritef(ctx, " zeroinitializer, ptr %s\n", address.Repr)
+	tagAddress := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = getelementptr inbounds ", tagAddress.Repr)
+	if err := irType(ctx, init.Type); err != nil {
+		return SsaName{}, err
+	}
+	irWritef(ctx, ", ptr %s, i32 0, i32 0\n  store i64 %d, ptr %s\n", address.Repr, variant.Tag, tagAddress.Repr)
+	payloadAddress := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = getelementptr inbounds ", payloadAddress.Repr)
+	if err := irType(ctx, init.Type); err != nil {
+		return SsaName{}, err
+	}
+	irWritef(ctx, ", ptr %s, i32 0, i32 2\n  store ", address.Repr)
 	if err := irType(ctx, variantType); err != nil {
 		return SsaName{}, err
 	}
 	irWrite(ctx, " ")
 	irPossibleLitSsa(ctx, payload)
-	irWritef(ctx, ", %d\n", variant.Tag+1)
+	irWritef(ctx, ", ptr %s, align 1\n", payloadAddress.Repr)
+	result := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = load ", result.Repr)
+	if err := irType(ctx, init.Type); err != nil {
+		return SsaName{}, err
+	}
+	irWritef(ctx, ", ptr %s\n", address.Repr)
 	return result, nil
 }
 
@@ -494,24 +510,53 @@ func irExprProtoView(ctx *IrCtx, view *t.NodeExprProtoView) (SsaName, error) {
 	var err error
 	if view.TargetIsPointer {
 		target, err = irExpression(ctx, view.Target.GetInferredType(), view.Target, false)
-	} else {
+	} else if view.Borrowed {
 		target, err = irExpressionLvalue(ctx, view.Target)
+	} else {
+		target, err = irExpression(ctx, view.Target.GetInferredType(), view.Target, false)
 	}
 	if err != nil {
 		return SsaName{}, err
 	}
-	current := SsaName{Repr: "zeroinitializer", IsLiteral: true}
-	withImpl := irSsaLocal(ctx)
-	irWritef(ctx, "  %s = insertvalue ", withImpl.Repr)
+	address := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = alloca ", address.Repr)
 	if err := irType(ctx, view.ProtoType); err != nil {
 		return SsaName{}, err
 	}
-	irWritef(ctx, " %s, ptr %s, 0\n", current.Repr, target.Repr)
-	withTable := irSsaLocal(ctx)
-	irWritef(ctx, "  %s = insertvalue ", withTable.Repr)
+	irWrite(ctx, "\n  store ")
 	if err := irType(ctx, view.ProtoType); err != nil {
 		return SsaName{}, err
 	}
-	irWritef(ctx, " %s, ptr @%s, 1\n", withImpl.Repr, t.ProtoVtableSymbol(view.Implementation.Owner, view.Implementation.Proto))
-	return withTable, nil
+	irWritef(ctx, " zeroinitializer, ptr %s\n", address.Repr)
+	vtableAddress := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = getelementptr inbounds ", vtableAddress.Repr)
+	if err := irType(ctx, view.ProtoType); err != nil {
+		return SsaName{}, err
+	}
+	symbol := t.ProtoVtableSymbol(view.Implementation.Owner, view.Implementation.Proto)
+	if view.Borrowed {
+		symbol = t.ProtoBorrowVtableSymbol(view.Implementation.Owner, view.Implementation.Proto)
+	}
+	irWritef(ctx, ", ptr %s, i32 0, i32 0\n  store ptr @%s, ptr %s\n", address.Repr, symbol, vtableAddress.Repr)
+	storageAddress := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = getelementptr inbounds ", storageAddress.Repr)
+	if err := irType(ctx, view.ProtoType); err != nil {
+		return SsaName{}, err
+	}
+	irWritef(ctx, ", ptr %s, i32 0, i32 2\n  store ", address.Repr)
+	if view.Borrowed {
+		irWrite(ctx, "ptr")
+	} else if err := irType(ctx, view.Target.GetInferredType()); err != nil {
+		return SsaName{}, err
+	}
+	irWrite(ctx, " ")
+	irPossibleLitSsa(ctx, target)
+	irWritef(ctx, ", ptr %s, align 1\n", storageAddress.Repr)
+	result := irSsaLocal(ctx)
+	irWritef(ctx, "  %s = load ", result.Repr)
+	if err := irType(ctx, view.ProtoType); err != nil {
+		return SsaName{}, err
+	}
+	irWritef(ctx, ", ptr %s\n", address.Repr)
+	return result, nil
 }

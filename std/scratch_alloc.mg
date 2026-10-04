@@ -18,7 +18,7 @@ Block(
 
 # Fixed-capacity allocator that splits and coalesces blocks within its storage.
 pub Scratch impl allocator.Allocator(
-    backing allocator.Allocator
+    backing allocator.Allocator*
     bytes u8*
     capacityValue u64
     ownsBytes bool
@@ -159,7 +159,14 @@ initialize(bytes u8*, capacity u64, ownsBytes bool) !Scratch:
     initial Block* = cast.reinterpret[Block](bytes)
     initial.size = capacity - sizeof Block
     initial.free = true
-    ret Scratch(backing=a, bytes=bytes, capacityValue=capacity, ownsBytes=ownsBytes)
+    backing allocator.Allocator* = none
+    if ownsBytes:
+        backing = try a.allocT[allocator.Allocator](1)
+        unsafe:
+            *backing = a
+        ..
+    ..
+    ret Scratch(backing=backing, bytes=bytes, capacityValue=capacity, ownsBytes=ownsBytes)
 ..
 
 # Creates owned scratch storage with the requested capacity.
@@ -191,7 +198,7 @@ pub fromBuffer(buffer u8[]) !Scratch:
 
 # Returns a non-owning allocator view. Scratch must remain at a stable address.
 Scratch.allocator() allocator.Allocator:
-    ret this.proto()
+    ret this.protoBorrow()
 ..
 
 # Releases every scratch allocation and restores one free block.
@@ -208,8 +215,11 @@ Scratch.capacity() u64:
 # Releases owned storage. Caller-provided storage is not freed.
 destr Scratch.destroy() void:
     if this.ownsBytes && this.bytes != none:
-        this.backing.free(this.bytes)
+        backing := this.backing
+        backing.free(this.bytes)
+        backing.free(backing)
     ..
+    this.backing = none
     this.bytes = none
     this.capacityValue = 0
     this.ownsBytes = false

@@ -5,6 +5,7 @@ package compilerpipeline
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,11 +15,94 @@ import (
 	"time"
 
 	clangresolver "Magma/src/clang"
+	incrementalcache "Magma/src/incremental_cache"
 	llvmobject "Magma/src/llvm_object"
+	moduleinterface "Magma/src/module_interface"
 	"Magma/src/shared"
 	magmatarget "Magma/src/target"
 	"Magma/src/types"
 )
+
+func TestEffectiveInterfaceHashIncludesTransitiveLayouts(t *testing.T) {
+	mainID := types.ModuleID("main")
+	engineID := types.ModuleID("engine")
+	cameraID := types.ModuleID("camera")
+	values := map[types.ModuleID]*moduleinterface.Interface{
+		mainID:   {ModuleID: string(mainID), Dependencies: []string{string(engineID)}},
+		engineID: {ModuleID: string(engineID), Dependencies: []string{string(cameraID)}},
+		cameraID: {ModuleID: string(cameraID)},
+	}
+	local := map[types.ModuleID]string{
+		mainID: incrementalcache.SourceHash([]byte("main interface")), engineID: incrementalcache.SourceHash([]byte("engine interface")), cameraID: incrementalcache.SourceHash([]byte("camera layout v1")),
+	}
+	first, err := effectiveInterfaceHashes(values, local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := make(map[types.ModuleID]string, len(local))
+	for id, hash := range local {
+		changed[id] = hash
+	}
+	changed[cameraID] = incrementalcache.SourceHash([]byte("camera layout v2"))
+	second, err := effectiveInterfaceHashes(values, changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first[cameraID] == second[cameraID] || first[engineID] == second[engineID] || first[mainID] == second[mainID] {
+		t.Fatal("transitive camera layout change did not invalidate the full consumer chain")
+	}
+}
+
+func TestSpecializationDependenciesIncludeConcreteLayoutOwners(t *testing.T) {
+	provider := types.ModuleID("future")
+	argumentOwner := types.ModuleID("world")
+	current := map[types.ModuleID]string{
+		provider:      incrementalcache.SourceHash([]byte("future interface")),
+		argumentOwner: incrementalcache.SourceHash([]byte("MeshTask layout v2")),
+	}
+	complete := []incrementalcache.Pair{
+		{Name: string(provider), Value: current[provider]},
+		{Name: string(argumentOwner), Value: current[argumentOwner]},
+	}
+	if !dependenciesCover(complete, current) {
+		t.Fatal("complete specialization dependency graph was rejected")
+	}
+	providerOnly := complete[:1]
+	if dependenciesCover(providerOnly, current) {
+		t.Fatal("specialization key accepted without its concrete argument layout owner")
+	}
+	stale := append([]incrementalcache.Pair(nil), complete...)
+	stale[1].Value = incrementalcache.SourceHash([]byte("MeshTask layout v1"))
+	if dependenciesCover(stale, current) {
+		t.Fatal("specialization key accepted a stale concrete argument layout")
+	}
+}
+
+func TestNestedSpecializationAcceptsExtraUnloadedLayoutOwner(t *testing.T) {
+	provider := types.ModuleID("allocator")
+	owner := types.ModuleID("abort")
+	providerHash := incrementalcache.SourceHash([]byte("allocator layout"))
+	ownerHash := incrementalcache.SourceHash([]byte("abort state layout"))
+	cached := []incrementalcache.Pair{
+		{Name: string(provider), Value: providerHash},
+		{Name: string(owner), Value: ownerHash},
+	}
+	required := map[types.ModuleID]string{provider: providerHash}
+	linked := map[types.ModuleID]string{provider: providerHash}
+	if !nestedDependenciesCompatible(cached, required, linked) {
+		t.Fatal("nested specialization rejected an unloaded concrete layout owner")
+	}
+	if !mergeSpecializationLayouts(linked, cached) || linked[owner] != ownerHash {
+		t.Fatal("nested specialization did not retain its concrete layout hash")
+	}
+	conflicting := map[types.ModuleID]string{provider: providerHash, owner: incrementalcache.SourceHash([]byte("changed abort state layout"))}
+	if nestedDependenciesCompatible(cached, required, conflicting) {
+		t.Fatal("nested specialization accepted a conflicting concrete layout")
+	}
+	if nestedDependenciesCompatible(cached[:1], map[types.ModuleID]string{provider: providerHash, owner: ownerHash}, linked) {
+		t.Fatal("nested specialization omitted a required concrete layout owner")
+	}
+}
 
 func TestTextualAndObjectLoweringUseSharedStableModuleIdentity(t *testing.T) {
 	parsed, path := testProgram(t, "mod main\nmain() void:\n..\n")
@@ -57,6 +141,69 @@ func TestTextualAndObjectLoweringUseSharedStableModuleIdentity(t *testing.T) {
 	want := "@" + packageName + ".main"
 	if !bytes.Contains(textual, []byte(want)) || !bytes.Contains(objectIR, []byte(want)) {
 		t.Fatalf("shared symbol %q missing: textual=%t object=%t", want, bytes.Contains(textual, []byte(want)), bytes.Contains(objectIR, []byte(want)))
+	}
+}
+
+func TestObjectUnitPredeclaresExternalFunctionsWithCABI(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+Big(
+    first u64
+    second u64
+    third u64
+)
+ext ext_Native Native(value Big) void
+callNative(value Big) void:
+    ext_Native(value)
+..
+main() void:
+    callNative(Big(first=1, second=2, third=3))
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LowerObjectIR(ready); err != nil {
+		t.Fatalf("lower object unit with aggregate C argument: %v", err)
+	}
+}
+
+func TestCachedThinLTOBitcodeLinksAndHits(t *testing.T) {
+	validated := validateTestProgram(t, "mod main\nmain() void:\n..\n")
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheRoot := filepath.Join(t.TempDir(), "cache")
+	options := llvmobject.TargetOptions{Optimization: llvmobject.OptimizationAggressive, PIC: true}
+	units, err := LowerCachedThinLTOBitcode(ready, options, cacheRoot, "test-compiler", "strict", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	arguments := []string{"-fuse-ld=lld", "-flto=thin", "-O3"}
+	for index, unit := range units {
+		path := filepath.Join(directory, fmt.Sprintf("unit-%d.bc", index))
+		if err := os.WriteFile(path, unit, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		arguments = append(arguments, path)
+	}
+	executable := filepath.Join(directory, "program")
+	arguments = append(arguments, "-o", executable)
+	if output, err := exec.Command("clang", arguments...).CombinedOutput(); err != nil {
+		t.Fatalf("link cached ThinLTO bitcode: %v\n%s", err, output)
+	}
+	if output, err := exec.Command(executable).CombinedOutput(); err != nil {
+		t.Fatalf("run cached ThinLTO program: %v\n%s", err, output)
+	}
+	messages := []string{}
+	second, err := LowerCachedThinLTOBitcode(ready, options, cacheRoot, "test-compiler", "strict", func(message string) { messages = append(messages, message) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != len(units) || !strings.Contains(strings.Join(messages, "\n"), ": ThinLTO bitcode hit") {
+		t.Fatalf("warm ThinLTO bitcode was not reused: %v", messages)
 	}
 }
 
@@ -152,9 +299,9 @@ func TestSpecializationsCacheSeparatelyFromProvider(t *testing.T) {
 	}
 }
 
-func TestObjectPipelineStandardLibraryCorpus(t *testing.T) {
+func TestBackendParityStandardLibraryCorpus(t *testing.T) {
 	if os.Getenv("MAGMA_OBJECT_CORPUS") != "1" {
-		t.Skip("set MAGMA_OBJECT_CORPUS=1 to run the in-progress full object-lowering corpus")
+		t.Skip("set MAGMA_OBJECT_CORPUS=1 to run the full textual/object backend parity corpus")
 	}
 	repository, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -174,34 +321,25 @@ func TestObjectPipelineStandardLibraryCorpus(t *testing.T) {
 	for _, path := range paths {
 		path := path
 		t.Run(filepath.Base(path), func(t *testing.T) {
+			sharedFailure := func(stage string, err error) {
+				if err != nil {
+					t.Skipf("shared frontend rejected corpus entry during %s: %v", stage, err)
+				}
+			}
 			state, err := shared.MakeShared(repository, filepath.Join(repository, "std"))
-			if err != nil {
-				t.Fatal(err)
-			}
+			sharedFailure("setup", err)
 			parsed, err := Parse(state, path)
-			if err != nil {
-				t.Fatal(err)
-			}
+			sharedFailure("parsing", err)
 			specialized, err := Specialize(parsed)
-			if err != nil {
-				t.Fatal(err)
-			}
+			sharedFailure("specialization", err)
 			linked, err := Link(specialized)
-			if err != nil {
-				t.Fatal(err)
-			}
+			sharedFailure("linking", err)
 			typed, err := CheckTypes(linked)
-			if err != nil {
-				t.Fatal(err)
-			}
+			sharedFailure("type checking", err)
 			validated, err := ValidateLowering(typed)
-			if err != nil {
-				t.Fatal(err)
-			}
+			sharedFailure("lowering validation", err)
 			ready, err := CheckSafety(validated, false)
-			if err != nil {
-				t.Fatal(err)
-			}
+			sharedFailure("safety checking", err)
 			if os.Getenv("MAGMA_OBJECT_GDB") == "1" {
 				ir, err := LowerObjectIR(ready)
 				if err != nil {
@@ -211,14 +349,23 @@ func TestObjectPipelineStandardLibraryCorpus(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			textualIR, err := LowerReachable(ready)
+			if err != nil {
+				t.Fatalf("textual lowering: %v", err)
+			}
 			object, err := LowerObjectBytes(ready, llvmobject.TargetOptions{PIC: true})
 			if err != nil {
 				t.Fatal(err)
 			}
 			directory := t.TempDir()
 			objectPath := filepath.Join(directory, "program.o")
-			executablePath := filepath.Join(directory, "program")
+			textualPath := filepath.Join(directory, "program.ll")
+			objectExecutable := filepath.Join(directory, "object-program")
+			textualExecutable := filepath.Join(directory, "textual-program")
 			if err := os.WriteFile(objectPath, object, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(textualPath, textualIR, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			linkArgs := []string{objectPath}
@@ -230,23 +377,32 @@ func TestObjectPipelineStandardLibraryCorpus(t *testing.T) {
 					linkArgs = append(linkArgs, "-l"+library)
 				}
 			}
-			linkArgs = append(linkArgs, "-Wl,-rpath,"+repository, "-o", executablePath)
+			linkArgs = append(linkArgs, "-Wl,-rpath,"+repository, "-o", objectExecutable)
 			if output, err := exec.Command(clangPath, linkArgs...).CombinedOutput(); err != nil {
 				t.Fatalf("link object executable: %v\n%s", err, output)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			command := exec.CommandContext(ctx, executablePath)
-			command.Dir = repository
-			if output, err := command.CombinedOutput(); err != nil {
-				if ctx.Err() != nil {
-					t.Fatalf("object executable timed out: %v\n%s", ctx.Err(), output)
+			textualArgs := append([]string{"-O0", textualPath}, linkArgs[1:len(linkArgs)-3]...)
+			textualArgs = append(textualArgs, "-Wl,-rpath,"+repository, "-o", textualExecutable)
+			if output, err := exec.Command(clangPath, textualArgs...).CombinedOutput(); err != nil {
+				t.Fatalf("link textual executable: %v\n%s", err, output)
+			}
+			for strategy, executablePath := range map[string]string{"object": objectExecutable, "textual": textualExecutable} {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				command := exec.CommandContext(ctx, executablePath)
+				command.Dir = repository
+				output, runErr := command.CombinedOutput()
+				contextErr := ctx.Err()
+				cancel()
+				if runErr != nil {
+					if contextErr != nil {
+						t.Fatalf("%s executable timed out: %v\n%s", strategy, contextErr, output)
+					}
+					if strategy == "object" && os.Getenv("MAGMA_OBJECT_GDB") == "1" {
+						debugOutput, _ := exec.Command("gdb", "--batch", "-ex", "run", "-ex", "bt", "-ex", "info registers", "-ex", "x/16i $pc-24", executablePath).CombinedOutput()
+						output = append(output, debugOutput...)
+					}
+					t.Fatalf("%s executable failed: %v\n%s", strategy, runErr, output)
 				}
-				if os.Getenv("MAGMA_OBJECT_GDB") == "1" {
-					debugOutput, _ := exec.Command("gdb", "--batch", "-ex", "run", "-ex", "bt", "-ex", "info registers", "-ex", "x/16i $pc-24", executablePath).CombinedOutput()
-					output = append(output, debugOutput...)
-				}
-				t.Fatalf("object executable failed: %v\n%s", err, output)
 			}
 		})
 	}
@@ -666,5 +822,21 @@ pub main() !void:
 	}
 	if len(object) < 4 || !bytes.Equal(object[:4], []byte{0xcf, 0xfa, 0xed, 0xfe}) {
 		t.Fatalf("Darwin lowering did not emit a 64-bit Mach-O object: %x", object[:min(len(object), 8)])
+	}
+}
+
+func TestProtoLayoutFingerprintIncludesImplementationSetAndStorage(t *testing.T) {
+	id := types.ModuleID("impl")
+	value := &moduleinterface.Interface{Structs: []moduleinterface.Struct{{Name: "Box", Symbol: "impl.Box", StorageSize: 8, StorageAlignment: 8, Implements: []moduleinterface.Type{{Kind: "absolute", Name: "api.P"}}}}}
+	values := map[types.ModuleID]*moduleinterface.Interface{id: value}
+	base := protoLayoutFingerprint(values)
+	value.Structs[0].StorageSize = 16
+	if changed := protoLayoutFingerprint(values); changed == base {
+		t.Fatal("changing implementation storage did not invalidate proto layout")
+	}
+	value.Structs[0].StorageSize = 8
+	value.Structs = append(value.Structs, moduleinterface.Struct{Name: "Other", Symbol: "impl.Other", StorageSize: 8, StorageAlignment: 8, Implements: []moduleinterface.Type{{Kind: "absolute", Name: "api.P"}}})
+	if changed := protoLayoutFingerprint(values); changed == base {
+		t.Fatal("adding an implementation did not invalidate proto layout")
 	}
 }

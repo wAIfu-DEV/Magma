@@ -32,6 +32,9 @@ func TestContextualKeywordHover(t *testing.T) {
 	}{
 		{"array expression", []types.Token{name("array"), name("u8"), keyword(types.KwBrackOp), {Type: types.TokLitNum, Repr: "8"}, keyword(types.KwBrackCl)}, 0, true},
 		{"array function", []types.Token{name("array"), keyword(types.KwParenOp), keyword(types.KwParenCl)}, 0, false},
+		{"json object", []types.Token{name("json"), keyword(types.KwBraceOp), keyword(types.KwBraceCl)}, 0, true},
+		{"json scalar", []types.Token{name("json"), {Type: types.TokLitStr, Repr: "value"}}, 0, true},
+		{"json identifier", []types.Token{name("json"), name("value")}, 0, false},
 		{"move transfer", []types.Token{name("move"), name("value")}, 0, true},
 		{"move call", []types.Token{name("move"), keyword(types.KwParenOp)}, 0, false},
 		{"prototype declaration", []types.Token{name("proto"), name("Writer"), keyword(types.KwParenOp)}, 0, true},

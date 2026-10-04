@@ -110,6 +110,24 @@ func TestSubstituteTypePreservesPositionOwnership(test *testing.T) {
 	}
 }
 
+func TestSubstituteTypePreservesConcreteOwnership(test *testing.T) {
+	typeParameter := &t.NodeType{
+		KindNode: &t.NodeTypeNamed{
+			NameNode: &t.NodeNameSingle{Name: "T"},
+		},
+	}
+	concrete := &t.NodeType{
+		Owned:    true,
+		KindNode: &t.NodeTypeAbsolute{AbsoluteName: "test.Resource"},
+	}
+
+	result := substituteType(typeParameter, map[string]*t.NodeType{"T": concrete})
+
+	if !result.Owned {
+		test.Fatal("generic substitution discarded ownership from the concrete type argument")
+	}
+}
+
 func TestRegisterGenericMemberTemplate(test *testing.T) {
 	member := &t.NodeFuncDef{Class: t.NodeGenericClass{
 		NameNode:   &t.NodeNameComposite{Parts: []string{"Allocator", "allocT"}},

@@ -397,6 +397,11 @@ type NodeExprCall struct {
 	FuncPtrType   *NodeType
 	FuncPtrOwner  *NodeExprName
 	UnionVariant  *UnionVariant
+	// JSONLiteral marks the compiler-generated aggregate call used by json
+	// literal syntax. It permits the checker to insert type-directed slice
+	// conversions after names and their declared types have been resolved.
+	JSONLiteral     bool
+	JSONModuleAlias string
 }
 
 type NodeStructFieldInit struct {
@@ -423,6 +428,7 @@ type NodeExprProtoView struct {
 	ProtoType       *NodeType
 	Implementation  *ProtoImpl
 	TargetIsPointer bool
+	Borrowed        bool
 	InfType         *NodeType
 }
 
@@ -497,7 +503,7 @@ type NodeExprSubscript struct {
 }
 
 // RangeProof is compiler-only evidence authorizing an unchecked address
-// calculation. Guarded is true for an explicit bounded entry guard.
+// calculation. Guarded marks proof metadata from a runtime condition.
 type RangeProof struct {
 	ID      uint64
 	Guarded bool
@@ -892,10 +898,11 @@ type NodeStmtFor struct {
 	Body      NodeBody
 }
 
-// NodeStmtBounded establishes its comparison list once on entry and makes the
-// resulting range facts available only throughout Body.
+// NodeStmtBounded asserts compile-time range facts for Body without a runtime guard.
 type NodeStmtBounded struct {
 	Tk         Token
+	Pointer    NodeExpr
+	Extent     NodeExpr
 	Predicates []NodeExpr
 	Body       NodeBody
 	Proofs     []*RangeProof
@@ -918,6 +925,10 @@ func (n *NodeStmtUnsafe) Print(indent int) {
 func (n *NodeStmtBounded) Print(indent int) {
 	PrintIndent(indent)
 	fmt.Printf("StmtBounded\n")
+	if n.Pointer != nil {
+		n.Pointer.Print(indent + 1)
+		n.Extent.Print(indent + 1)
+	}
 	for _, predicate := range n.Predicates {
 		predicate.Print(indent + 1)
 	}
@@ -1014,6 +1025,8 @@ type NodeArg struct {
 	Tk       Token
 	Name     string
 	TypeNode *NodeType
+	// BoundedCount names a parameter supplying this pointer's element extent.
+	BoundedCount string
 }
 
 func (n *NodeArg) Print(indent int) {
@@ -1091,7 +1104,8 @@ type NodeFuncDef struct {
 	DisplayName string
 	ContextABI  ContextABI
 	// ImplicitContext is the compiler-provided local binding named ctx.
-	ImplicitContext *NodeExprVarDef
+	ImplicitContext        *NodeExprVarDef
+	ImplicitContextMutable bool
 
 	IsDestructor bool
 	// IsMember records that argument zero is the compiler-inserted receiver.

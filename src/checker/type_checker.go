@@ -4,10 +4,35 @@ import (
 	"Magma/src/comp_err"
 	t "Magma/src/types"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
 func ctFuncDef(c *ctx, fnDef *t.NodeFuncDef) error {
+	for _, argument := range fnDef.Class.ArgsNode.Args {
+		if argument.BoundedCount == "" {
+			continue
+		}
+		if _, pointer := argument.TypeNode.KindNode.(*t.NodeTypePointer); !pointer {
+			return comp_err.CompilationErrorToken(c.FileCtx, &argument.Tk, "bounded parameter must be a typed pointer", "")
+		}
+		if _, err := strconv.ParseUint(argument.BoundedCount, 0, 64); err == nil {
+			continue
+		}
+		found := false
+		for _, count := range fnDef.Class.ArgsNode.Args {
+			if count.Name == argument.BoundedCount {
+				if descriptor, ok := numericDescriptor(count.TypeNode); !ok || descriptor.IsFloat || descriptor.IsSigned {
+					return comp_err.CompilationErrorToken(c.FileCtx, &argument.Tk, "bounded parameter extent must have unsigned integer type", "")
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			return comp_err.CompilationErrorToken(c.FileCtx, &argument.Tk, "bounded parameter extent does not name a parameter", "")
+		}
+	}
 	c.LastFuncDef = fnDef
 	previousTypeFunc := c.CurrentTypeFunc
 	c.CurrentTypeFunc = fnDef
@@ -204,6 +229,9 @@ func ctGlDecl(c *ctx, glDecl t.NodeGlobalDecl) error {
 		return ctExpr(c, n)
 	case *t.NodeStructDef:
 		for _, field := range n.Class.ArgsNode.Args {
+			if field.BoundedCount != "" {
+				return comp_err.CompilationErrorToken(c.FileCtx, &field.Tk, "bounded extent is only valid on function pointer parameters", "")
+			}
 			if field.TypeNode == nil || field.TypeNode.KindNode == nil {
 				return comp_err.CompilationErrorToken(c.FileCtx, &field.Tk, fmt.Sprintf("field '%s' has no resolved type", field.Name), "provide a concrete field type")
 			}

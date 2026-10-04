@@ -30,7 +30,7 @@ Some languages I toyed with during this period include:
 - JavaScript/TypeScript
 
 In 2020 I got a job that required me to use Excel, and I used my free time to explore
-and optimize macros written in the oh so accursed VBA.
+and optimize macros written in the oh-so-accursed VBA.
 This experience is what led to my first attempt at writing my own programming language.
 
 ## Previous attempts
@@ -396,7 +396,7 @@ The interpreter is functional and can be found [here](https://github.com/wAIfu-D
 ### Lithium
 
 Now this one's interesting as it is the closest relative
-to Magma (2025), and shares a name relating to fire and rock.
+to Magma (2025), and shares a name relating to fire and rocks.
 
 Here's a sample:
 ```
@@ -481,13 +481,13 @@ Meant to transpile to both TypeScript and C++, this is
 one of the more mature frontends I made.
 Unlike previous attempts, this one generates a AST,
 then lowers the AST to the target language.
-This is in contrast to the very naive 1-to-1 translation used by the previous transpiled attempts.
+This is in contrast to the naive 1-to-1 translation used by the previous transpiler attempts.
 
 While different from Magma's syntax, some elements are strikingly similar:
 - : and .. scope delimiters
 - T[] arrays (slices)
 
-Ultimately this project was abandoned too. Not because it couldn't be made, but because I felt the self-imposed
+Ultimately this project was abandoned too. Not because it couldn't be made, but because I felt the burden of my self-imposed
 humiliation of having to piggy-back on other, better languages.
 
 ## Not a language, but close
@@ -501,7 +501,7 @@ to make [Wade32](https://github.com/wAIfu-DEV/Wade32), a small QEMU floppy OS.
 
 Some of the most important parts:
 - result types (leading to fallible functions)
-- error codes, largely inspired by Godot's model
+- error codes, largely inspired by Godot's errors-as-values model
 - Vtable-based abstractions (Allocator, Writer)
 - Ownership explicitness
 - module-based OS abstraction

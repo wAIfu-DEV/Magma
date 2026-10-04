@@ -3,7 +3,7 @@ mod errors
 
 use "std:cast" as cast
 
-ext ext_error_printf printf(format u8*, a u64, b u64, c u64, d u64) i32
+ext ext_error_printf printf(format u8*, a u64, b u64, c u64, d u64, e u64, f u64) i32
 
 pub const ERR_OK u32 = 0
 pub const ERR_FAIL u32 = 1
@@ -122,13 +122,13 @@ pub noctx printTrace(e error) void:
     loop cursor.isEmpty() == false:
         function := cursor.function()
         file := cursor.file()
-        format := "  at %s (%s:%u:%u)\n"
-        ext_error_printf(format.__data, cast.ptou(function.__data), cast.ptou(file.__data), cast.u32to64(cursor.line()), cast.u32to64(cursor.column()))
+        format := "  at %.*s (%.*s:%u:%u)\n"
+        ext_error_printf(format.__data, function.__byteCount, cast.ptou(function.__data), file.__byteCount, cast.ptou(file.__data), cast.u32to64(cursor.line()), cast.u32to64(cursor.column()))
         cursor = cursor.next()
     ..
     if cursor.isTruncated():
         warning := "  ... trace truncated: diagnostic storage was reused or traversal reached its bound\n"
-        ext_error_printf(warning.__data, 0, 0, 0, 0)
+        ext_error_printf(warning.__data, 0, 0, 0, 0, 0, 0)
     ..
 ..
 
@@ -136,7 +136,7 @@ pub noctx printTrace(e error) void:
 # initialized Magma context.
 pub noctx printUncaught(e error) void:
     format := "Uncaught Error: %u '%.*s'\n"
-    ext_error_printf(format.__data, cast.u32to64(e.code()), cast.u16to64(e.__messageLength), cast.ptou(e.__message), 0)
+    ext_error_printf(format.__data, cast.u32to64(e.code()), cast.u16to64(e.__messageLength), cast.ptou(e.__message), 0, 0, 0)
     printTrace(e)
 ..
 

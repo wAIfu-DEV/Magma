@@ -453,14 +453,30 @@ func irStmtMatch(ctx *IrCtx, stmt *t.NodeStmtMatch, fnDef *t.NodeFuncDef) error 
 		if _, err := irVarDef(ctx, arm.Binding); err != nil {
 			return err
 		}
-		payload := irSsaLocal(ctx)
-		irWritef(ctx, "  %s = extractvalue ", payload.Repr)
+		unionAddress := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = alloca ", unionAddress.Repr)
+		if err := irType(ctx, stmt.Expression.GetInferredType()); err != nil {
+			return err
+		}
+		irWrite(ctx, "\n  store ")
 		if err := irType(ctx, stmt.Expression.GetInferredType()); err != nil {
 			return err
 		}
 		irWrite(ctx, " ")
 		irPossibleLitSsa(ctx, value)
-		irWritef(ctx, ", %d\n", arm.Variant.Tag+1)
+		irWritef(ctx, ", ptr %s\n", unionAddress.Repr)
+		payloadAddress := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = getelementptr inbounds ", payloadAddress.Repr)
+		if err := irType(ctx, stmt.Expression.GetInferredType()); err != nil {
+			return err
+		}
+		irWritef(ctx, ", ptr %s, i32 0, i32 2\n", unionAddress.Repr)
+		payload := irSsaLocal(ctx)
+		irWritef(ctx, "  %s = load ", payload.Repr)
+		if err := irType(ctx, arm.Binding.Type); err != nil {
+			return err
+		}
+		irWritef(ctx, ", ptr %s, align 1\n", payloadAddress.Repr)
 		irWrite(ctx, "  store ")
 		if err := irType(ctx, arm.Binding.Type); err != nil {
 			return err
@@ -482,36 +498,10 @@ func irStmtMatch(ctx *IrCtx, stmt *t.NodeStmtMatch, fnDef *t.NodeFuncDef) error 
 }
 
 func irStmtBounded(ctx *IrCtx, stmt *t.NodeStmtBounded, fnDef *t.NodeFuncDef) error {
-	if len(stmt.Predicates) == 0 || len(stmt.Proofs) == 0 {
+	if len(stmt.Proofs) == 0 {
 		return fmt.Errorf("cannot lower bounded statement without validated range facts")
 	}
-	var condition SsaName
-	for i, predicate := range stmt.Predicates {
-		value, err := irExpression(ctx, predicate.GetInferredType(), predicate, false)
-		if err != nil {
-			return err
-		}
-		if i == 0 {
-			condition = value
-			continue
-		}
-		combined := irSsaLocal(ctx)
-		irWritef(ctx, "  %s = and i1 ", combined.Repr)
-		irPossibleLitSsa(ctx, condition)
-		irWrite(ctx, ", ")
-		irPossibleLitSsa(ctx, value)
-		irWrite(ctx, "\n")
-		condition = combined
-	}
-	bodyLabel, exitLabel := irSsaName(ctx), irSsaName(ctx)
-	irWrite(ctx, "  br i1 ")
-	irPossibleLitSsa(ctx, condition)
-	irWritef(ctx, ", label %%%s, label %%%s\n%s:\n", bodyLabel.Repr, exitLabel.Repr, bodyLabel.Repr)
-	if err := irBody(ctx, &stmt.Body, fnDef, false); err != nil {
-		return err
-	}
-	irWritef(ctx, "  br label %%%s\n%s:\n", exitLabel.Repr, exitLabel.Repr)
-	return nil
+	return irBody(ctx, &stmt.Body, fnDef, false)
 }
 
 func irStmtIf(ctx *IrCtx, ifStmt *t.NodeStmtIf, fnDef *t.NodeFuncDef) error {

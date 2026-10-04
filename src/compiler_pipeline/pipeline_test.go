@@ -87,6 +87,219 @@ main() void:
 	}
 }
 
+func TestJSONLiteralFamilyDeepNestingPassesFullPipeline(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:json" as json
+main() !void:
+    shorthand := json.numberInt(99)
+    explicit := try json "owned"
+    integerBacking := array i64[3]
+    integerBacking[0] = 1
+    integerBacking[1] = 2
+    integerBacking[2] = 3
+    integers i64[] = integerBacking
+    floatBacking := array f64[2]
+    floatBacking[0] = 1.25
+    floatBacking[1] = 2.5
+    floats f64[] = floatBacking
+    boolBacking := array bool[2]
+    boolBacking[0] = true
+    boolBacking[1] = false
+    booleans bool[] = boolBacking
+    stringBacking := array str[2]
+    stringBacking[0] = "one"
+    stringBacking[1] = "two"
+    strings str[] = stringBacking
+    jsonBacking := array json.Value[2]
+    jsonBacking[0] = json.numberInt(7)
+    jsonBacking[1] = try json.string("eight")
+    jsonValues json.Value[] = jsonBacking
+    value := try json {
+        "quoted-key": "text",
+        integer: 42,
+        negative: -7,
+        floating: 0.125,
+        yes: true,
+        no: false,
+        nullValue: none,
+        shorthand,
+        explicit: move explicit,
+        integers: integers,
+        floats: floats,
+        booleans: booleans,
+        strings: strings,
+        jsonValues: jsonValues,
+        emptyObject: {},
+        emptyArray: [],
+        mixed: ["string", 0, -1, 2.5, true, false, none, {}, []],
+        deep: {l1: [{l2: [{l3: [{l4: [{l5: [{l6: [none]}]}]}]}]}]},
+    }
+    defer value.free()
+    stringRoot := try json "root"
+    defer stringRoot.free()
+    integerRoot := json 123
+    defer integerRoot.free()
+    floatRoot := json 1.5
+    defer floatRoot.free()
+    trueRoot := json true
+    defer trueRoot.free()
+    falseRoot := json false
+    defer falseRoot.free()
+    nullRoot := json none
+    defer nullRoot.free()
+    objectRoot := try json {}
+    defer objectRoot.free()
+    arrayRoot := try json []
+    defer arrayRoot.free()
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Lower(ready); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestJSONLiteralRejectsUnsupportedTypedSlice(t *testing.T) {
+	parsed, _ := testProgram(t, `mod main
+use "std:json" as json
+Record(value i64)
+main() !void:
+    backing := array Record[1]
+    records Record[] = backing
+    value := try json {records: records}
+    defer value.free()
+..
+`)
+	specialized, err := Specialize(*parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Link(specialized)
+	if err == nil || !strings.Contains(err.Error(), "JSON literals cannot encode a slice of 'Record'") {
+		t.Fatalf("unsupported JSON slice diagnostic = %v", err)
+	}
+}
+
+func TestJSONLiteralHonorsJSONImportAlias(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:json" as data
+main() !void:
+    backing := array i64[2]
+    backing[0] = 1
+    backing[1] = 2
+    values i64[] = backing
+    value := try json {nested: ["text", none], values: values}
+    defer value.free()
+    scalar := try json "text"
+    defer scalar.free()
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Lower(ready); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestJSONLiteralConvertsPrimitiveExpressionsAndShorthand(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:json" as data
+ctrlSelect(id str, label str, explicitId str, options str[]) !$data.Value:
+    enabled := true
+    count i64 = 3
+    ratio f64 = 0.5
+    ret try json {
+        id,
+        label,
+        type: "select",
+        options,
+        enabled,
+        count,
+        ratio,
+        explicitId: explicitId,
+    }
+..
+main() void:
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Lower(ready); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestJSONLiteralAllowsClosingNewlineWithoutTrailingComma(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:json" as data
+ctrlRange(id str, label str, min f64, max f64, step f64) !$data.Value:
+    ret try json {
+        id, label,
+        type: "range",
+        min, max, step
+    }
+..
+main() !void:
+    value := try json [
+        1, 2, 3
+    ]
+    defer value.free()
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Lower(ready); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestJSONLiteralAcceptsJSONValueThroughPublicReexport(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:std" std
+use "std:json" json
+ctrlSelect(id str, label str, options str[]) !$json.Value:
+    ret try json {id, label, options, type: "select"}
+..
+ctrlButtons(id str, label str, options str[]) !$std.json.Value:
+    select := try ctrlSelect(id, label, options)
+    try select.set("type", json "buttons")
+    ret move select
+..
+makeSnapshot() !$str:
+    options := array str[2]("Test", "Hello, World!")
+    root := try json {
+        title: "Test",
+        controls: [
+            try ctrlButtons("test_buttons", "Test buttons", options),
+        ],
+    }
+    defer root.free()
+    ret try root.serializeToJson()
+..
+copyValues(values std.json.Value[]) !$json.Value:
+    ret try json {values}
+..
+main() void:
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Lower(ready); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUnsafeExplicitMoveMayClaimBorrowedValue(t *testing.T) {
 	validated := validateTestProgram(t, ownershipProgramPrefix+`forward(value Resource) void:
     unsafe:
@@ -840,7 +1053,7 @@ main() void:
 	}
 }
 
-func TestBoundedSubscriptsShareOneEntryGuard(t *testing.T) {
+func TestBoundedSubscriptsDoNotEmitEntryGuard(t *testing.T) {
 	validated := validateTestProgram(t, `mod main
 read(values u64[], i u64) u64:
     bounded i < values.count():
@@ -868,10 +1081,398 @@ read(values u64[], i u64) u64:
 		t.Fatalf("read function not found in IR")
 	}
 	functionIR := text[start : start+end]
-	// The body has one cleanup conditional; the other is the single bounded
-	// entry guard, independent of the number of authorized accesses.
-	if got := strings.Count(functionIR, "br i1"); got != 2 {
-		t.Fatalf("bounded function emitted %d conditional branches, want one entry guard plus cleanup\n%s", got, functionIR)
+	// The only conditional branch is deferred cleanup; bounded adds none.
+	if got := strings.Count(functionIR, "br i1"); got != 1 {
+		t.Fatalf("bounded function emitted %d conditional branches, want cleanup only\n%s", got, functionIR)
+	}
+}
+
+func TestBoundedPointerExtentAuthorizesIndexedAccess(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+read(values u64*, count u64, i u64) u64:
+    unsafe:
+        bounded values by count, i < count:
+            ret values[i]
+        ..
+    ..
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatalf("bounded pointer rejected: %v", err)
+	}
+	if _, err := Lower(ready); err != nil {
+		t.Fatalf("bounded pointer failed lowering: %v", err)
+	}
+	if _, err := LowerObjectIR(ready); err != nil {
+		t.Fatalf("bounded pointer failed object lowering: %v", err)
+	}
+}
+
+func TestBoundedMultiplePointerExtents(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+copy(from u8*, to u8*, count u64) void:
+    unsafe:
+        bounded from by count, to by count:
+            for i u64 = 0 to count:
+                bounded i < count:
+                    to[i] = from[i]
+                ..
+            ..
+        ..
+    ..
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatalf("multiple bounded pointer extents rejected: %v", err)
+	}
+	if _, err := Lower(ready); err != nil {
+		t.Fatalf("multiple bounded pointer extents failed lowering: %v", err)
+	}
+	if _, err := LowerObjectIR(ready); err != nil {
+		t.Fatalf("multiple bounded pointer extents failed object lowering: %v", err)
+	}
+}
+
+func TestBoundedLiteralContractPreservesBytesThroughCast(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:cast" as cast
+readWord(source u32* bounded 1) u8:
+    bytes u8* = cast.reinterpret[u8](source)
+    bounded bytes by 4:
+        ret bytes[3]
+    ..
+..
+main() void:
+    word u32 = 0
+    readWord(addrof word)
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatalf("bounded byte cast rejected: %v", err)
+	}
+	if _, err := Lower(ready); err != nil {
+		t.Fatalf("bounded byte cast failed lowering: %v", err)
+	}
+	if _, err := LowerObjectIR(ready); err != nil {
+		t.Fatalf("bounded byte cast failed object lowering: %v", err)
+	}
+}
+
+func TestBoundedDynamicContractPreservesBytesThroughCast(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:cast" as cast
+read(source u32* bounded count, count u64, index u64) u8:
+    bytes u8* = cast.reinterpret[u8](source)
+    bounded bytes by count * 4, index < count * 4:
+        ret bytes[index]
+    ..
+..
+`)
+	if _, err := CheckSafety(validated, false); err != nil {
+		t.Fatalf("dynamic byte cast extent rejected: %v", err)
+	}
+}
+
+func TestBoundedPointerOffsetKeepsRemainingExtent(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+read(source u8* bounded count, count u64, offset u64) u8:
+    bounded offset < count:
+        tail u8* = addrof source[offset]
+        bounded tail by count - offset:
+            ret tail[0]
+        ..
+    ..
+    ret 0
+..
+`)
+	if _, err := CheckSafety(validated, false); err != nil {
+		t.Fatalf("pointer offset lost remaining extent: %v", err)
+	}
+}
+
+func TestBoundedPointerOffsetFactDiesWhenCountChanges(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+read(source u8* bounded count, count u64, offset u64) u8:
+    bounded offset < count:
+        tail u8* = addrof source[offset]
+        count = 0
+        bounded tail by count - offset:
+            ret tail[0]
+        ..
+    ..
+    ret 0
+..
+`)
+	if _, err := CheckSafety(validated, false); err == nil || !strings.Contains(err.Error(), "extent is not proven") {
+		t.Fatalf("mutated pointer offset extent result = %v", err)
+	}
+}
+
+func TestBoundedDoesNotTrustArbitraryReinterpretHelper(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+reinterpret(source ptr) u8*:
+    ret none
+..
+read(source u32* bounded 1) u8:
+    bytes u8* = reinterpret(source)
+    bounded bytes by 4:
+        ret bytes[3]
+    ..
+..
+`)
+	if _, err := CheckSafety(validated, false); err == nil || !strings.Contains(err.Error(), "extent is not proven") {
+		t.Fatalf("arbitrary reinterpret extent result = %v", err)
+	}
+}
+
+func TestBoundedStringPointerUsesDescriptorExtent(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:strings" as strings
+read(text str, index u64) u8:
+    data u8* = strings.toPtr(text)
+    bounded data by text.countBytes(), index < text.countBytes():
+        ret data[index]
+    ..
+..
+`)
+	if _, err := CheckSafety(validated, false); err != nil {
+		t.Fatalf("string pointer lost descriptor extent: %v", err)
+	}
+}
+
+func TestBoundedStringPointerExtentDiesAtFree(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:strings" as strings
+main() !void:
+    text $str = try strings.alloc(4)
+    data u8* = strings.toPtr(text)
+    text.free()
+    bounded data by 4:
+        data[0] = 1
+    ..
+..
+`)
+	if _, err := CheckSafety(validated, false); err == nil || !strings.Contains(err.Error(), "extent is not proven") {
+		t.Fatalf("freed string pointer extent result = %v", err)
+	}
+}
+
+func TestBoundedAllocatorExtentAndPointerAlias(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+main() !void:
+    p u8* = try ctx.alloc.allocT[u8](4)
+    defer ctx.alloc.free(p)
+    q u8* = p
+    bounded q by 4:
+        q[3] = 7
+    ..
+..
+`)
+	if _, err := CheckSafety(validated, false); err != nil {
+		t.Fatalf("allocation or alias lost pointer extent: %v", err)
+	}
+}
+
+func TestBoundedConstantPointerIndexRejectsExtentAndMutation(t *testing.T) {
+	for _, body := range []string{
+		`p u8* = try ctx.alloc.allocT[u8](4)
+    defer ctx.alloc.free(p)
+    bounded p by 4:
+        p[4] = 1
+    ..`,
+		`p u8* = try ctx.alloc.allocT[u8](4)
+    defer ctx.alloc.free(p)
+    p = none
+    bounded p by 4:
+        p[0] = 1
+    ..`,
+	} {
+		validated := validateTestProgram(t, "mod main\nmain() !void:\n    "+body+"\n..\n")
+		if _, err := CheckSafety(validated, false); err == nil {
+			t.Fatalf("invalid pointer extent accepted:\n%s", body)
+		}
+	}
+}
+
+func TestBoundedLiteralParameterRejectsUnknownCallerExtent(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+read(source u32* bounded 1) u32:
+    ret *source
+..
+forward(source u32*) u32:
+    ret read(source)
+..
+`)
+	if _, err := CheckSafety(validated, false); err == nil || !strings.Contains(err.Error(), "cannot prove bounded pointer extent") {
+		t.Fatalf("unknown caller extent result = %v", err)
+	}
+}
+
+func TestBoundedByteCastRejectsFourthElement(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+use "std:cast" as cast
+read(source u32* bounded 1) u8:
+    bytes u8* = cast.reinterpret[u8](source)
+    bounded bytes by 4:
+        ret bytes[4]
+    ..
+..
+`)
+	if _, err := CheckSafety(validated, false); err == nil {
+		t.Fatal("out-of-range constant pointer index accepted")
+	}
+}
+
+func TestBoundedAllocatorExtentDiesAtFree(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+main() !void:
+    p u8* = try ctx.alloc.allocT[u8](4)
+    ctx.alloc.free(p)
+    bounded p by 4:
+        p[0] = 1
+    ..
+..
+`)
+	if _, err := CheckSafety(validated, false); err == nil || !strings.Contains(err.Error(), "extent is not proven") {
+		t.Fatalf("freed pointer extent result = %v", err)
+	}
+}
+
+func TestBoundedAliasExtentDiesAtFree(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+main() !void:
+    p u8* = try ctx.alloc.allocT[u8](4)
+    q u8* = p
+    ctx.alloc.free(p)
+    bounded q by 4:
+        q[0] = 1
+    ..
+..
+`)
+	if _, err := CheckSafety(validated, false); err == nil || !strings.Contains(err.Error(), "extent is not proven") {
+		t.Fatalf("freed alias extent result = %v", err)
+	}
+}
+
+func TestBoundedAliasExtentDiesAtRealloc(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+main() !void:
+    p u8* = try ctx.alloc.alloc(4)
+    q u8* = p
+    p = try ctx.alloc.realloc(p, 8)
+    defer ctx.alloc.free(p)
+    bounded q by 4:
+        q[0] = 1
+    ..
+..
+`)
+	if _, err := CheckSafety(validated, false); err == nil || !strings.Contains(err.Error(), "extent is not proven") {
+		t.Fatalf("reallocated alias extent result = %v", err)
+	}
+}
+
+func TestBoundedUnsafeAssertionCannotEscapeThroughAlias(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+forward(p u8*, count u64) void:
+    q u8* = none
+    unsafe:
+        bounded p by count:
+            q = p
+        ..
+    ..
+    bounded q by count:
+        q[0] = 1
+    ..
+..
+`)
+	if _, err := CheckSafety(validated, false); err == nil || !strings.Contains(err.Error(), "extent is not proven") {
+		t.Fatalf("escaped unsafe extent result = %v", err)
+	}
+}
+
+func TestBoundedPointerExtentDoesNotLeakOrSurviveMutation(t *testing.T) {
+	for _, source := range []string{
+		`mod main
+read(values u64* bounded count, count u64, i u64) u64:
+    bounded values by count, i < count:
+        values = none
+        ret values[i]
+    ..
+..
+`,
+		`mod main
+read(values u64*, count u64, i u64) u64:
+    unsafe:
+      bounded values by count, i < count:
+      ..
+    ..
+    ret values[i]
+..
+`,
+	} {
+		validated := validateTestProgram(t, source)
+		if _, err := CheckSafety(validated, false); err == nil {
+			t.Fatal("unproven pointer access was accepted")
+		}
+	}
+}
+
+func TestBoundedPointerExtentRequiresTrustAtUnknownBoundary(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+read(values u64*, count u64, i u64) u64:
+    bounded values by count, i < count:
+        ret values[i]
+    ..
+..
+`)
+	if _, err := CheckSafety(validated, false); err == nil || !strings.Contains(err.Error(), "extent is not proven") {
+		t.Fatalf("unknown local pointer extent error = %v", err)
+	}
+}
+
+func TestBoundedPointerParameterContractForwardsWithoutRuntimeCheck(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+sum(p u8* bounded count, count u64) u64:
+    total u64 = 0
+    for i u64 = 0 to count:
+        total = total + p[i]
+    ..
+    ret total
+..
+forward(p u8* bounded n, n u64) u64:
+    ret sum(p, n)
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatalf("forwarded pointer contract rejected: %v", err)
+	}
+	if _, err := Lower(ready); err != nil {
+		t.Fatalf("textual lowering: %v", err)
+	}
+	if _, err := LowerObjectIR(ready); err != nil {
+		t.Fatalf("object lowering: %v", err)
+	}
+}
+
+func TestBoundedPointerParameterContractRejectsUnknownExtent(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+sum(p u8* bounded count, count u64) u64:
+    total u64 = 0
+    for i u64 = 0 to count:
+        total = total + p[i]
+    ..
+    ret total
+..
+unknown(p u8*, n u64) u64:
+    ret sum(p, n)
+..
+`)
+	if _, err := CheckSafety(validated, false); err == nil || !strings.Contains(err.Error(), "cannot prove bounded pointer extent") {
+		t.Fatalf("unknown extent error = %v", err)
 	}
 }
 
@@ -1752,5 +2353,127 @@ func TestRequireMainModuleIsAnExplicitStage(t *testing.T) {
 	parsed, path := testProgram(t, "mod library\n")
 	if err := RequireMainModule(*parsed, path); err == nil {
 		t.Fatal("expected non-main root module to be rejected")
+	}
+}
+
+func TestProtoConversionConsumesImplementationWithoutDestructor(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+proto Value(read() u64)
+Box impl Value(value u64)
+Box.read() u64:
+    ret this.value
+..
+main() void:
+    box := Box(value=7)
+    value Value = box.proto()
+    value.read()
+    copied := box.value
+..
+`)
+	_, err := CheckSafety(validated, false)
+	if err == nil || !strings.Contains(err.Error(), "may be used after it was moved") {
+		t.Fatalf("expected consumed implementation diagnostic, got %v", err)
+	}
+}
+
+func TestBorrowedProtoCannotEscapeLocalStorage(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+proto Value(read() u64)
+Box impl Value(value u64)
+Box.read() u64:
+    ret this.value
+..
+make() Value:
+    box := Box(value=7)
+    view Value = box.protoBorrow()
+    ret view
+..
+main() void:
+..
+`)
+	_, err := CheckSafety(validated, false)
+	if err == nil || !strings.Contains(err.Error(), "cannot escape its source frame") {
+		t.Fatalf("expected borrowed proto lifetime diagnostic, got %v", err)
+	}
+}
+
+func TestBorrowedProtoPreventsMovingItsImplementation(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+proto Value(read() u64)
+Box impl Value(value u64)
+Box.read() u64:
+    ret this.value
+..
+main() void:
+    box := Box(value=7)
+    borrowed Value = box.protoBorrow()
+    owned Value = box.proto()
+    borrowed.read()
+    owned.read()
+..
+`)
+	_, err := CheckSafety(validated, false)
+	if err == nil || !strings.Contains(err.Error(), "cannot move 'box' while a pointer to it remains live") {
+		t.Fatalf("expected active proto borrow to prevent a move, got %v", err)
+	}
+}
+
+func TestRepeatedBorrowedProtoReusesWrapper(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+proto Value(read() u64)
+Box impl Value(value u64)
+Box.read() u64:
+    ret this.value
+..
+main() void:
+    box := Box(value=7)
+    first Value = box.protoBorrow()
+    second Value = box.protoBorrow()
+    first.read()
+    second.read()
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Lower(ready); err != nil {
+		t.Fatalf("repeated borrowed wrapper lowering: %v", err)
+	}
+}
+
+func TestRecursiveProtoStorageSuggestsPointer(t *testing.T) {
+	validated := validateTestProgram(t, `mod main
+pub proto Value(read() u64)
+pub Box impl Value(inner Value)
+Box.read() u64:
+    ret this.inner.read()
+..
+main() void:
+..
+`)
+	ready, err := CheckSafety(validated, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Lower(ready)
+	if err == nil || !strings.Contains(err.Error(), "store a pointer to the proto") {
+		t.Fatalf("expected recursive proto layout diagnostic, got %v", err)
+	}
+	withPointer := validateTestProgram(t, `mod main
+pub proto Value(read() u64)
+pub Box impl Value(inner Value*)
+Box.read() u64:
+    ret this.inner.read()
+..
+main() void:
+..
+`)
+	ready, err = CheckSafety(withPointer, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Lower(ready); err != nil {
+		t.Fatalf("pointer to proto should break the storage cycle: %v", err)
 	}
 }

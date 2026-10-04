@@ -72,5 +72,5 @@ AdaptiveSpinLock.releaseRaw() void:
 ..
 
 AdaptiveSpinLock.locker() locker.Locker:
-    ret this.proto()
+    ret this.protoBorrow()
 ..

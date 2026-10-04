@@ -11,9 +11,13 @@ func substituteType(tp *t.NodeType, subst map[string]*t.NodeType) *t.NodeType {
 		if nn, ok := n.NameNode.(*t.NodeNameSingle); ok && len(n.GenericArgs) == 0 {
 			if v, ok := subst[nn.Name]; ok {
 				out := cloneType(v)
-				out.Throws = tp.Throws
-				out.Owned = tp.Owned
-				out.Destructor = tp.Destructor
+				// Qualifiers on the type-parameter use add constraints; they must
+				// not erase qualifiers carried by the concrete type argument.
+				out.Throws = out.Throws || tp.Throws
+				out.Owned = out.Owned || tp.Owned
+				if tp.Destructor != nil {
+					out.Destructor = tp.Destructor
+				}
 				return out
 			}
 		}
@@ -183,6 +187,10 @@ func substituteStmt(stmt t.NodeStatement, subst map[string]*t.NodeType) {
 			substituteStmt(s, subst)
 		}
 	case *t.NodeStmtBounded:
+		if n.Pointer != nil {
+			substituteExpr(n.Pointer, subst)
+			substituteExpr(n.Extent, subst)
+		}
 		for _, predicate := range n.Predicates {
 			substituteExpr(predicate, subst)
 		}

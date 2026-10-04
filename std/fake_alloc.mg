@@ -50,5 +50,5 @@ gl_fakeAllocator := FakeAllocator(value=0)
 #   a := fake_alloc.allocator()
 #   block u8*, allocationError error = a.alloc(16)
 pub allocator() a.Allocator:
-    ret gl_fakeAllocator.proto()
+    ret gl_fakeAllocator.protoBorrow()
 ..

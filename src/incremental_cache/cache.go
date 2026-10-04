@@ -1,5 +1,5 @@
 // Package incrementalcache implements the persistent, content-addressed cache
-// used by the experimental object pipeline. It deliberately knows nothing
+// used by the incremental object pipelines. It deliberately knows nothing
 // about ASTs: semantic interfaces, LLVM bitcode, and build metadata are stored
 // as separate immutable objects.
 package incrementalcache

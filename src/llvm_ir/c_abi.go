@@ -68,6 +68,28 @@ type cABILayout struct {
 	leaves      []cABILeaf
 }
 
+// TypeSizeAndAlignment exposes the target layout needed by public implementation interfaces.
+func TypeSizeAndAlignment(state *t.SharedState, typ *t.NodeType) (int, int, error) {
+	ctx := &IrCtx{Shared: state}
+	if absolute, ok := typ.KindNode.(*t.NodeTypeAbsolute); ok {
+		for _, file := range state.Files {
+			if file != nil && file.GlNode != nil {
+				for _, def := range file.GlNode.StructDefs {
+					if def.Module+"."+def.Name == absolute.AbsoluteName {
+						ctx.fCtx = file
+						break
+					}
+				}
+			}
+		}
+	}
+	layout, err := cABITypeLayout(ctx, typ)
+	if err != nil {
+		return 0, 0, err
+	}
+	return layout.size, layout.align, nil
+}
+
 type cABILeaf struct {
 	offset  int
 	size    int
@@ -87,7 +109,25 @@ func cABITypeLayout(ctx *IrCtx, typ *t.NodeType) (cABILayout, error) {
 		return cABILayout{size: bytes * 2, align: bytes, aggregate: true,
 			leaves: []cABILeaf{{offset: 0, size: bytes}, {offset: bytes, size: bytes}}}, nil
 	case *t.NodeTypeNamed:
+		if composite, ok := n.NameNode.(*t.NodeNameComposite); ok && len(composite.Parts) == 2 && ctx.fCtx != nil && ctx.fCtx.GlNode != nil {
+			packageName := ctx.fCtx.GlNode.ImportAlias[composite.Parts[0]]
+			for _, file := range ctx.Shared.Files {
+				if file == nil || file.GlNode == nil || file.PackageName != packageName {
+					continue
+				}
+				if definition := file.GlNode.StructDefs[composite.Parts[1]]; definition != nil {
+					return cABITypeLayout(ctx, &t.NodeType{KindNode: &t.NodeTypeAbsolute{AbsoluteName: definition.Module + "." + definition.Name}})
+				}
+			}
+		}
 		if single, ok := n.NameNode.(*t.NodeNameSingle); ok {
+			if role := t.CoreTypeRoleForName(single.Name); role != t.CoreTypeNone {
+				definition := ctx.Shared.CoreTypes[role]
+				if definition != nil {
+					absolute := &t.NodeType{KindNode: &t.NodeTypeAbsolute{AbsoluteName: definition.Module + "." + definition.Name}}
+					return cABITypeLayout(ctx, absolute)
+				}
+			}
 			if single.Name == "void" {
 				return cABILayout{}, nil
 			}
@@ -102,15 +142,100 @@ func cABITypeLayout(ctx *IrCtx, typ *t.NodeType) (cABILayout, error) {
 				bytes := ctx.Shared.Target.PointerBits / 8
 				return cABILayout{size: bytes, align: bytes, leaves: []cABILeaf{{size: bytes}}}, nil
 			}
+			if ctx.fCtx != nil && ctx.fCtx.GlNode != nil {
+				if definition := ctx.fCtx.GlNode.StructDefs[single.Name]; definition != nil {
+					return cABITypeLayout(ctx, &t.NodeType{KindNode: &t.NodeTypeAbsolute{AbsoluteName: definition.Module + "." + definition.Name}})
+				}
+			}
 		}
 	case *t.NodeTypeAbsolute:
+		if ctx.layoutStack == nil {
+			ctx.layoutStack = map[string]bool{}
+		}
+		if ctx.layoutStack[n.AbsoluteName] {
+			return cABILayout{}, fmt.Errorf("recursive proto storage through %s has no finite inline size; store a pointer to the proto in the implementation instead", n.AbsoluteName)
+		}
+		ctx.layoutStack[n.AbsoluteName] = true
+		defer delete(ctx.layoutStack, n.AbsoluteName)
 		def := cABIStructDef(ctx, n.AbsoluteName)
 		if def == nil {
 			return cABILayout{}, fmt.Errorf("C ABI: cannot resolve struct %s", t.DisplayType(&t.NodeType{KindNode: n}))
 		}
+		if def.IsProto && def.Proto != nil {
+			pointer := ctx.Shared.Target.PointerBits / 8
+			maxSize, maxAlign := pointer, pointer
+			for _, file := range ctx.Shared.Files {
+				if file == nil || file.GlNode == nil {
+					continue
+				}
+				for _, candidate := range file.GlNode.StructDefs {
+					for _, implementation := range candidate.Implements {
+						if implementation == nil || implementation.Proto == nil || implementation.Proto.Module != def.Proto.Module || implementation.Proto.Name != def.Proto.Name {
+							continue
+						}
+						layout, err := cABITypeLayout(ctx, &t.NodeType{KindNode: &t.NodeTypeAbsolute{AbsoluteName: candidate.Module + "." + candidate.Name}})
+						if err != nil {
+							return cABILayout{}, err
+						}
+						if layout.size > maxSize {
+							maxSize = layout.size
+						}
+						if layout.align > maxAlign {
+							maxAlign = layout.align
+						}
+					}
+				}
+			}
+			offset := cABIAlignUp(pointer, maxAlign)
+			return cABILayout{size: cABIAlignUp(offset+maxSize, maxAlign), align: maxAlign, aggregate: true}, nil
+		}
+		for _, file := range ctx.Shared.Files {
+			if file == nil || file.GlNode == nil {
+				continue
+			}
+			union := file.GlNode.UnionDefs[def.Name]
+			if union == nil || union.Module != def.Module {
+				continue
+			}
+			maxSize, maxAlign := 0, 1
+			for _, variant := range union.Variants {
+				variantType := &t.NodeType{KindNode: &t.NodeTypeAbsolute{AbsoluteName: union.Module + ".__union_" + union.Name + "_" + variant.Name}}
+				layout, err := cABITypeLayout(ctx, variantType)
+				if err != nil {
+					return cABILayout{}, err
+				}
+				if layout.size > maxSize {
+					maxSize = layout.size
+				}
+				if layout.align > maxAlign {
+					maxAlign = layout.align
+				}
+			}
+			offset := cABIAlignUp(8, maxAlign)
+			result := cABILayout{size: cABIAlignUp(offset+maxSize, maxAlign), align: maxAlign, aggregate: true, leaves: []cABILeaf{{offset: 0, size: 8}}}
+			if result.align < 8 {
+				result.align = 8
+				result.size = cABIAlignUp(offset+maxSize, 8)
+			}
+			for byteOffset := 0; byteOffset < maxSize; byteOffset += 8 {
+				size := maxSize - byteOffset
+				if size > 8 {
+					size = 8
+				}
+				result.leaves = append(result.leaves, cABILeaf{offset: offset + byteOffset, size: size})
+			}
+			return result, nil
+		}
 		result := cABILayout{aggregate: true, align: 1}
+		fieldCtx := *ctx
+		for _, file := range ctx.Shared.Files {
+			if file != nil && file.GlNode != nil && file.GlNode.StructDefs[def.Name] == def {
+				fieldCtx.fCtx = file
+				break
+			}
+		}
 		for _, name := range def.FieldOrder {
-			field, err := cABITypeLayout(ctx, def.Fields[name])
+			field, err := cABITypeLayout(&fieldCtx, def.Fields[name])
 			if err != nil {
 				return cABILayout{}, err
 			}
@@ -128,7 +253,7 @@ func cABITypeLayout(ctx *IrCtx, typ *t.NodeType) (cABILayout, error) {
 		result.size = cABIAlignUp(result.size, result.align)
 		return result, nil
 	}
-	return cABILayout{}, fmt.Errorf("C ABI: unsupported type %T", typ.KindNode)
+	return cABILayout{}, fmt.Errorf("C ABI: unsupported type %T (%s)", typ.KindNode, t.DisplayType(typ))
 }
 
 func cABIIntegerType(size int) string {

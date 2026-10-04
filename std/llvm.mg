@@ -60,7 +60,10 @@ pub noctx store[T](pointer ptr, value T) void:
 pub noctx stringFromPtr(pointer ptr, byteCount u64) str:
     unsafe:
         data u8* = pointer
-        ret str(__data=data, __byteCount=byteCount, __allocatorImpl=none, __allocatorVtable=none)
+        value str
+        value.__data = data
+        value.__byteCount = byteCount
+        ret value
     ..
 ..
 

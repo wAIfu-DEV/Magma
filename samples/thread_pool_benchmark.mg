@@ -15,8 +15,8 @@ increment(raw ptr) u64:
     # SAFETY: submit passes the address of the live, aligned u64 counter and
     # pool.close joins every task before that counter leaves scope.
     unsafe:
-        llvm "  %ignored = atomicrmw add ptr %raw, i64 1 monotonic, align 8\n"
-        llvm "  ret i64 0\n"
+        ignored := @llvm("atomic_rmw", raw, 1, "add", "monotonic", 8, u64)
+        ret ignored - ignored
     ..
 ..
 

@@ -20,7 +20,7 @@ Header(
 # Owned or borrowed arena storage. Individual frees are no-ops; reset releases
 # every arena allocation at once.
 pub Arena impl allocator.Allocator(
-    backing allocator.Allocator
+    backing allocator.Allocator*
     bytes u8*
     capacityValue u64
     offset u64
@@ -106,8 +106,14 @@ pub new(capacity u64) !$Arena:
     if capacity < HEADER_SIZE + ALIGNMENT:
         throw errors.invalidArgument("arena capacity is too small")
     ..
-    bytes := try ctx.alloc.alloc(capacity)
-    ret Arena(backing=ctx.alloc, bytes=bytes, capacityValue=capacity, offset=0, ownsBytes=true)
+    a := ctx.alloc
+    bytes := try a.alloc(capacity)
+    onerror a.free(bytes)
+    backing := try a.allocT[allocator.Allocator](1)
+    unsafe:
+        *backing = a
+    ..
+    ret Arena(backing=backing, bytes=bytes, capacityValue=capacity, offset=0, ownsBytes=true)
 ..
 
 # Creates an arena with the default 64 KiB capacity.
@@ -124,7 +130,7 @@ pub fromBuffer(buffer u8[]) !Arena:
         throw errors.invalidArgument("arena buffer is too small after alignment")
     ..
     ret Arena(
-        backing=allocator.null(),
+        backing=none,
         bytes=cast.reinterpret[u8](cast.utop(address + padding)),
         capacityValue=buffer.count() - padding,
         offset=0,
@@ -134,7 +140,7 @@ pub fromBuffer(buffer u8[]) !Arena:
 
 # Returns a non-owning allocator view. The arena must remain at a stable address.
 Arena.allocator() allocator.Allocator:
-    ret this.proto()
+    ret this.protoBorrow()
 ..
 
 # Releases all allocations without modifying their bytes.
@@ -153,8 +159,11 @@ Arena.capacity() u64:
 # Releases owned arena storage. Borrowed storage is left untouched.
 destr Arena.destroy() void:
     if this.ownsBytes && this.bytes != none:
-        this.backing.free(this.bytes)
+        backing := this.backing
+        backing.free(this.bytes)
+        backing.free(backing)
     ..
+    this.backing = none
     this.bytes = none
     this.capacityValue = 0
     this.offset = 0

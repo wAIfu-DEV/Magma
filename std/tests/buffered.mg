@@ -36,7 +36,7 @@ pub main() !void:
     a allocator.Allocator = heap.allocator()
     written u64 = 0
     sink := Sink(total=addrof written)
-    raw := sink.proto[writer.Writer]()
+    raw := sink.protoBorrow[writer.Writer]()
     output := try buffered.writerBuffered(raw)
     defer output.close()
     if try output.write("a") != 1 || try output.writeAll("b") != 1 || try output.writeLn("c") != 2:
@@ -52,7 +52,7 @@ pub main() !void:
         throw errors.failure("buffered writer flush changed")
     ..
     source := Source(calls=0)
-    input := source.proto[reader.Reader]()
+    input := source.protoBorrow[reader.Reader]()
     bufferedInput := try buffered.readerBuffered(input)
     defer bufferedInput.close()
     if bufferedInput.filledCount() != 0 || bufferedInput.isEof():

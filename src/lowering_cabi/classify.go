@@ -238,6 +238,32 @@ func structLeaves(backend lb.Backend, types *loweringtypes.Lowerer, state *t.Sha
 	if err != nil {
 		return nil, false, err
 	}
+	for _, file := range state.Files {
+		if file == nil || file.GlNode == nil {
+			continue
+		}
+		union := file.GlNode.UnionDefs[definition.Name]
+		if union == nil || union.Module != definition.Module {
+			continue
+		}
+		layout, err := backend.TypeLayout(id)
+		if err != nil {
+			return nil, false, err
+		}
+		payloadOffset, err := backend.StructFieldOffset(id, 2)
+		if err != nil {
+			return nil, false, err
+		}
+		result := []leaf{{offset: base, size: 8}}
+		for offset := payloadOffset; offset < layout.StoreSize; offset += 8 {
+			size := layout.StoreSize - offset
+			if size > 8 {
+				size = 8
+			}
+			result = append(result, leaf{offset: base + offset, size: size})
+		}
+		return result, true, nil
+	}
 	result := make([]leaf, 0)
 	for index, name := range definition.FieldOrder {
 		offset, err := backend.StructFieldOffset(id, uint32(index))

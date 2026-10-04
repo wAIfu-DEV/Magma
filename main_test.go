@@ -16,6 +16,25 @@ func TestCompilerVersion(t *testing.T) {
 	}
 }
 
+func TestEmitTextualLLVMAtO0WritesIRWithoutClang(t *testing.T) {
+	t.Setenv("MAGMA_CLANG", filepath.Join(t.TempDir(), "missing-clang"))
+	t.Setenv("PATH", "")
+
+	want := []byte("; unoptimized textual IR\nsource_filename = \"test.mg\"\n")
+	output := filepath.Join(t.TempDir(), "program.ll")
+	opts := options{emit: "llvm", opt: 0, out: output, strategy: "textual"}
+	if err := emitOutput(opts, want, nil, nil, nil); err != nil {
+		t.Fatalf("emit unoptimized textual LLVM IR: %v", err)
+	}
+	got, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("emitted IR changed:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestCopyBundles(t *testing.T) {
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "vendor")
@@ -136,6 +155,24 @@ func TestTimingsOption(t *testing.T) {
 	}
 }
 
+func TestRunOption(t *testing.T) {
+	for _, flag := range []string{"--run", "-r"} {
+		opts, err := parseArgs([]string{flag, "input.mg"})
+		if err != nil {
+			t.Fatalf("parse %s: %v", flag, err)
+		}
+		if !opts.run {
+			t.Fatalf("%s was not retained", flag)
+		}
+	}
+}
+
+func TestRunRequiresExecutableOutput(t *testing.T) {
+	if _, err := parseArgs([]string{"--run", "--emit", "object", "input.mg"}); err == nil || !strings.Contains(err.Error(), "requires executable output") {
+		t.Fatalf("error = %v, want executable-output requirement", err)
+	}
+}
+
 func TestIncrementalOptionIsParsedWithoutChangingBackendDefaults(t *testing.T) {
 	opts, err := parseArgs([]string{"--incremental", "input.mg"})
 	if err != nil {
@@ -145,17 +182,17 @@ func TestIncrementalOptionIsParsedWithoutChangingBackendDefaults(t *testing.T) {
 		t.Fatal("--incremental was not retained")
 	}
 	if opts.emit != "exe" {
-		t.Fatalf("incremental option changed defaults: backend=%q emit=%q", opts.backend, opts.emit)
+		t.Fatalf("incremental option changed defaults: strategy=%q emit=%q", opts.strategy, opts.emit)
 	}
 }
 
 func TestTextualBackendIsNonIncrementalByDefault(t *testing.T) {
-	textual, err := parseArgs([]string{"--backend", "textual", "input.mg"})
+	textual, err := parseArgs([]string{"--strategy", "textual", "input.mg"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if textual.backend != "textual" || textual.incremental {
-		t.Fatalf("deprecated textual pipeline inherited incremental mode: %#v", textual)
+	if textual.strategy != "textual" || textual.incremental {
+		t.Fatalf("textual pipeline inherited incremental mode: %#v", textual)
 	}
 }
 
@@ -173,6 +210,17 @@ func TestCompilationTimingReportGroupsMajorAndMinorPhases(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("timing report missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestCompilationTimingReportIsPrintedOnce(t *testing.T) {
+	timings := newCompilationTimings(true)
+
+	var output bytes.Buffer
+	timings.report(&output)
+	timings.report(&output)
+	if got := strings.Count(output.String(), "Compilation timings"); got != 1 {
+		t.Fatalf("timing report printed %d times, want once:\n%s", got, output.String())
 	}
 }
 

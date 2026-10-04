@@ -25,6 +25,13 @@ func (l *Lowerer) TraceABI() (*t.StructDef, *t.NodeFuncDef, error) {
 	return nil, nil, fmt.Errorf("core trace implementation is incomplete")
 }
 
+// IsTracePush reports whether function is the runtime trace propagation
+// helper whose canonical error ABI must remain stable through LLVM IPO.
+func (l *Lowerer) IsTracePush(function *t.NodeFuncDef) bool {
+	_, push, err := l.TraceABI()
+	return err == nil && function == push
+}
+
 // FunctionSource returns the source path owning a checked function identity.
 func (l *Lowerer) FunctionSource(function *t.NodeFuncDef) (string, error) {
 	if function == nil {

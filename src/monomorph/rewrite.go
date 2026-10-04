@@ -411,6 +411,14 @@ func (m *monoCtx) rewriteStmt(module string, gl *t.NodeGlobal, stmt t.NodeStatem
 			}
 		}
 	case *t.NodeStmtBounded:
+		if n.Pointer != nil {
+			if e := m.rewriteExpr(module, gl, n.Pointer, env); e != nil {
+				return e
+			}
+			if e := m.rewriteExpr(module, gl, n.Extent, env); e != nil {
+				return e
+			}
+		}
 		for _, predicate := range n.Predicates {
 			if e := m.rewriteExpr(module, gl, predicate, env); e != nil {
 				return e

@@ -14,7 +14,7 @@ go build -tags "llvm_object llvm22" -o Magma .
 ```
 
 This is the supported Linux compiler build and includes the default go-llvm
-incremental backend. An untagged build contains only the deprecated textual
+incremental backend. An untagged build contains only the textual
 backend. On Windows, which is not yet part of the go-llvm rollout, use
 `go build -o Magma.exe .`. A quick compiler-only verification is:
 

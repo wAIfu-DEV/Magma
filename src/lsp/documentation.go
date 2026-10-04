@@ -176,13 +176,21 @@ func buildDocIndex(state *types.SharedState) *docIndex {
 						}
 						key := file.PackageName + "\x00" + name + ".proto"
 						detail := "proto()"
-						documentation := "Creates a borrowed prototype view."
+						documentation := "Moves the implementation into inline prototype storage."
 						if len(targets) > 0 {
 							documentation += "\n\nAvailable prototypes: `" + strings.Join(targets, "`, `") + "`."
 						}
 						index.hoverSymbols[key] = joinHover(code(detail), documentation)
 						index.completionVisible[key] = true
 						index.completionKinds[key] = 2 // CompletionItemKind.Method
+						borrowKey := file.PackageName + "\x00" + name + ".protoBorrow"
+						borrowDocumentation := "Creates a borrowed prototype value. The implementation must outlive the value and remain unmoved."
+						if len(targets) > 0 {
+							borrowDocumentation += "\n\nAvailable prototypes: `" + strings.Join(targets, "`, `") + "`."
+						}
+						index.hoverSymbols[borrowKey] = joinHover(code("protoBorrow()"), borrowDocumentation)
+						index.completionVisible[borrowKey] = true
+						index.completionKinds[borrowKey] = 2
 					}
 				}
 			case *types.NodeTypeAlias:

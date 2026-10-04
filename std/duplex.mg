@@ -12,11 +12,11 @@ pub proto Duplex impl writer.Writer reader.Reader(
 )
 
 Duplex.writer() writer.Writer:
-    ret this.proto()
+    ret this.protoBorrow()
 ..
 
 Duplex.reader() reader.Reader:
-    ret this.proto()
+    ret this.protoBorrow()
 ..
 
 Duplex.readToBuff(buff u8[], nBytes u64) !u64:

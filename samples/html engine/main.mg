@@ -73,24 +73,21 @@ defaultFontPath() str:
 i32ToF32(value i32) f32:
     # SAFETY: this audited intrinsic performs the language's numeric conversion.
     unsafe:
-        llvm "%result = sitofp i32 %value to float\n"
-        llvm "ret float %result\n"
+        ret @llvm("sitofp", value, f32)
     ..
 ..
 
 f32ToI32(value f32) i32:
     # SAFETY: this audited intrinsic performs the language's numeric conversion.
     unsafe:
-        llvm "%result = fptosi float %value to i32\n"
-        llvm "ret i32 %result\n"
+        ret @llvm("fptosi", value, i32)
     ..
 ..
 
 u64ToI32(value u64) i32:
     # Layout collections are bounded by available memory and screen geometry.
     unsafe:
-        llvm "%result = trunc i64 %value to i32\n"
-        llvm "ret i32 %result\n"
+        ret @llvm("trunc", value, i32)
     ..
 ..
 

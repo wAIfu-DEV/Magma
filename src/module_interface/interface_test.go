@@ -134,6 +134,29 @@ func TestInterfaceRoundTripPreservesPublicSurfaceAndOwnership(t *testing.T) {
 	}
 }
 
+func TestInterfaceRoundTripPreservesBoundedPointerParameter(t *testing.T) {
+	value := loadInterface(t, publicModule+`pub readBytes(p u8* bounded count, count u64) u64:
+    ret count
+..
+`)
+	encoded, err := moduleinterface.Encode(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := moduleinterface.Decode(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := moduleinterface.NewIndex(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := index.Functions["readBytes"]
+	if len(read.Arguments) != 2 || read.Arguments[0].BoundedCount != "count" {
+		t.Fatalf("bounded pointer contract lost: %#v", read)
+	}
+}
+
 func TestInterfaceHashIgnoresPrivateBodiesAndTracksPublicSemantics(t *testing.T) {
 	base := loadInterface(t, publicModule)
 	privateChanged := loadInterface(t, bytes.NewBufferString(publicModule).String()[:len(publicModule)-len("    ret 1\n..\n")]+"    ret 2\n..\n")
@@ -297,6 +320,11 @@ func TestInterfaceGenerationCoversLoadedStandardLibraryModules(t *testing.T) {
 		value, err := moduleinterface.Generate(state, file, "test-compiler")
 		if err != nil {
 			t.Fatalf("generate %s: %v", path, err)
+		}
+		for _, implementation := range value.Structs {
+			if len(implementation.Implements) != 0 && (implementation.StorageSize < 1 || implementation.StorageAlignment < 1) {
+				t.Fatalf("implementation %s omitted storage size or alignment", implementation.Symbol)
+			}
 		}
 		encoded, err := moduleinterface.Encode(value)
 		if err != nil {

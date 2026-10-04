@@ -158,6 +158,7 @@ func allProtoVtables(files map[string]*t.FileCtx) map[string]bool {
 			for _, relation := range implementation.Implements {
 				if relation != nil && relation.Proto != nil {
 					vtables[t.ProtoVtableSymbol(implementation, relation.Proto)] = true
+					vtables[t.ProtoBorrowVtableSymbol(implementation, relation.Proto)] = true
 				}
 			}
 		}
@@ -250,6 +251,10 @@ func (w *reachabilityWalker) statement(statement t.NodeStatement) {
 		w.expression(node.BoundExpr)
 		w.body(&node.Body)
 	case *t.NodeStmtBounded:
+		if node.Pointer != nil {
+			w.expression(node.Pointer)
+			w.expression(node.Extent)
+		}
 		for _, predicate := range node.Predicates {
 			w.expression(predicate)
 		}
@@ -297,7 +302,11 @@ func (w *reachabilityWalker) expression(expression t.NodeExpr) {
 	case *t.NodeExprProtoView:
 		w.expression(node.Target)
 		if node.Implementation != nil && node.Implementation.Owner != nil && node.Implementation.Proto != nil {
-			w.reachableProtoTables[t.ProtoVtableSymbol(node.Implementation.Owner, node.Implementation.Proto)] = true
+			symbol := t.ProtoVtableSymbol(node.Implementation.Owner, node.Implementation.Proto)
+			if node.Borrowed {
+				symbol = t.ProtoBorrowVtableSymbol(node.Implementation.Owner, node.Implementation.Proto)
+			}
+			w.reachableProtoTables[symbol] = true
 			for _, method := range node.Implementation.Proto.Methods {
 				w.enqueue(node.Implementation.Owner.Funcs[method.Name])
 			}

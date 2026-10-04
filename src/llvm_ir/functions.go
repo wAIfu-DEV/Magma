@@ -95,36 +95,14 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 	}
 	cpy.parentBld = cpy.bld
 	if fnDef.ImplicitContext != nil {
-		contextType := fnDef.ImplicitContext.Type
-		irWrite(&cpy, "  %.ctx.addr = alloca ")
-		if contextType != nil {
-			if err := irType(&cpy, contextType); err != nil {
+		if fnDef.ContextABI == t.ContextABIContextful {
+			cpy.ContextPtr = ssaName("%.ctx.in")
+		}
+		if fnDef.ImplicitContextMutable {
+			if err := materializeContext(&cpy, fnDef.ImplicitContext.Type); err != nil {
 				return err
 			}
-		} else {
-			irWrite(&cpy, "%type.context")
 		}
-		irWrite(&cpy, "\n")
-		if fnDef.ContextABI == t.ContextABIContextful {
-			irWrite(&cpy, "  %.ctx.value = load ")
-			if contextType != nil {
-				if err := irType(&cpy, contextType); err != nil {
-					return err
-				}
-			} else {
-				irWrite(&cpy, "%type.context")
-			}
-			irWrite(&cpy, ", ptr %.ctx.in\n  store ")
-			if contextType != nil {
-				if err := irType(&cpy, contextType); err != nil {
-					return err
-				}
-			} else {
-				irWrite(&cpy, "%type.context")
-			}
-			irWrite(&cpy, " %.ctx.value, ptr %.ctx.addr\n")
-		}
-		cpy.ContextPtr = ssaName("%.ctx.addr")
 	}
 
 	for i, arg := range fnDef.Class.ArgsNode.Args {
@@ -293,7 +271,6 @@ func irFuncBody(ctx *IrCtx, bodyNode *t.NodeBody, fnDef *t.NodeFuncDef) error {
 }
 
 func irMainWrapper(ctx *IrCtx, mainFnDef *t.NodeFuncDef) error {
-	irWrite(ctx, "; Entry point\n")
 	if ctx.Shared.Target.OS == "windows" {
 		stringDataField, err := coreFieldIndex(ctx, t.CoreTypeString, "__data")
 		if err != nil {
@@ -539,9 +516,22 @@ func irFuncDef(ctx *IrCtx, fnDefNode *t.NodeFuncDef) error {
 
 	// Magma implementations are private to the generated LLVM module. Native
 	// entry points and explicit export wrappers are emitted separately with
-	// external linkage. Keeping implementations internal allows LLVM to inline
-	// and eliminate functions which are unreachable from those external roots.
-	irWrite(ctx, "define internal ")
+	// Keep errorTracePush's canonical error return type as an ABI boundary.
+	// Internal functions are eligible for LLVM return promotion, which rewrites
+	// this helper to an anonymous aggregate at higher optimization levels.
+	isTracePush := false
+	if ctx.fCtx.ModuleName == "core" {
+		if name, ok := fnDefNode.Class.NameNode.(*t.NodeNameSingle); ok && name.Name == "errorTracePush" {
+			isTracePush = true
+		}
+	}
+	if isTracePush {
+		irWrite(ctx, "define ")
+	} else {
+		// Keeping other implementations internal allows LLVM to inline and
+		// eliminate functions unreachable from external roots.
+		irWrite(ctx, "define internal ")
+	}
 	e := irThrowingType(ctx, fnDefNode.ReturnType)
 	if e != nil {
 		return e
@@ -740,9 +730,8 @@ func irProtoDispatchFunc(ctx *IrCtx, fn *t.NodeFuncDef) error {
 		return err
 	}
 	irWrite(ctx, " alwaysinline {\n")
-	irWritef(ctx, "  %%proto.impl.addr = getelementptr inbounds %%struct.%s.%s, ptr %%this, i32 0, i32 0\n", method.Proto.Module, method.Proto.Name)
-	irWrite(ctx, "  %proto.impl = load ptr, ptr %proto.impl.addr\n")
-	irWritef(ctx, "  %%proto.vtable.addr = getelementptr inbounds %%struct.%s.%s, ptr %%this, i32 0, i32 1\n", method.Proto.Module, method.Proto.Name)
+	irWritef(ctx, "  %%proto.impl = getelementptr inbounds %%struct.%s.%s, ptr %%this, i32 0, i32 2\n", method.Proto.Module, method.Proto.Name)
+	irWritef(ctx, "  %%proto.vtable.addr = getelementptr inbounds %%struct.%s.%s, ptr %%this, i32 0, i32 0\n", method.Proto.Module, method.Proto.Name)
 	irWrite(ctx, "  %proto.vtable = load ptr, ptr %proto.vtable.addr\n")
 	irWritef(ctx, "  %%proto.slot.addr = getelementptr inbounds %%struct.%s.%s, ptr %%proto.vtable, i32 0, i32 %d\n", method.Proto.Module, method.Proto.VtableName, method.Slot)
 	irWrite(ctx, "  %proto.fn = load ptr, ptr %proto.slot.addr\n  ")
@@ -837,6 +826,10 @@ func assignLocalIrNames(ctx *IrCtx, body *t.NodeBody) {
 			assignExprIrNames(ctx, n.DeclExpr)
 			assignLocalIrNames(ctx, &n.Body)
 		case *t.NodeStmtBounded:
+			if n.Pointer != nil {
+				assignExprIrNames(ctx, n.Pointer)
+				assignExprIrNames(ctx, n.Extent)
+			}
 			assignLocalIrNames(ctx, &n.Body)
 		case *t.NodeStmtUnsafe:
 			assignLocalIrNames(ctx, &n.Body)

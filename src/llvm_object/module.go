@@ -1,9 +1,9 @@
 //go:build llvm_object
 
-// Package llvmobject provides an experimental, typed LLVM object backend.
+// Package llvmobject provides the typed LLVM object backend.
 //
 // It is isolated behind the llvm_object build tag. The production compiler
-// continues to use package llvm_ir until this backend reaches feature parity.
+// uses package llvm_ir when the textual strategy is selected.
 package llvmobject
 
 import (

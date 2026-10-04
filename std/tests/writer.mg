@@ -15,7 +15,7 @@ OverreportSink.write(bytes str) !u64:
 
 pub main() !void:
     sink := Sink(value=0)
-    output := sink.proto[writer.Writer]()
+    output := sink.protoBorrow[writer.Writer]()
     if try output.write("ab") != 2 || try output.writeAll("abc") != 3:
         throw errors.failure("writer write behavior changed")
     ..
@@ -39,7 +39,7 @@ pub main() !void:
     ..
 
     overreport := OverreportSink(value=0)
-    invalidCount u64, invalidCountError error = overreport.proto[writer.Writer]().writeAll("x")
+    invalidCount u64, invalidCountError error = overreport.protoBorrow[writer.Writer]().writeAll("x")
     if invalidCountError.ok():
         throw errors.failure("writer accepted an impossible write count")
     ..

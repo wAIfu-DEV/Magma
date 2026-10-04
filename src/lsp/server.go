@@ -1205,6 +1205,15 @@ func (f *hoverFinder) nameAt(name types.NodeName) bool {
 
 func (f *hoverFinder) inspect(value any) {
 	switch n := value.(type) {
+	case *types.NodeExprProtoView:
+		if f.tokenAt(n.Tk) && n.Implementation != nil && n.Implementation.Owner != nil && f.analysis.docs != nil {
+			member := "proto"
+			if n.Borrowed {
+				member = "protoBorrow"
+			}
+			owner := n.Implementation.Owner
+			f.value = f.analysis.docs.hoverSymbols[owner.Module+"\x00"+owner.Name+"."+member]
+		}
 	case *types.NodeExprCall:
 		if n.AssociatedFnDef != nil && callNameAt(n.Callee, f.pos) {
 			f.value = f.analysis.withDocs(code(formatFunction(n.AssociatedFnDef)), n.AssociatedFnDef)
@@ -1235,9 +1244,9 @@ func (f *hoverFinder) inspect(value any) {
 		}
 	case *types.NodeExprSubscript:
 		if f.tokenAt(n.Tk) && n.RangeProof != nil {
-			origin := "control-flow range proof"
+			origin := "compile-time range proof"
 			if n.RangeProof.Guarded {
-				origin = "`bounded` entry proof"
+				origin = "runtime condition"
 			}
 			f.value = "Bounds verified by " + origin + "."
 		}

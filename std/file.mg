@@ -69,7 +69,7 @@ File.writer() !w.Writer:
     if this.open == false || (this.openMode.bits & fopm.FLAG_WRITE) == 0:
         throw errors.invalidArgument("file not open in write mode")
     ..
-    ret this.proto()
+    ret this.protoBorrow()
 ..
 
 # Reads bytes from an open file handle.
@@ -95,7 +95,7 @@ File.reader() !r.Reader:
     if this.open == false || (this.openMode.bits & fopm.FLAG_READ) == 0:
         throw errors.invalidArgument("file not open in read mode")
     ..
-    ret this.proto()
+    ret this.protoBorrow()
 ..
 
 # Advances the file pointer to the desired position.

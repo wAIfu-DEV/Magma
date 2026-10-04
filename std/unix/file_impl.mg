@@ -135,7 +135,7 @@ gl_stdout := Console(fd=1)
 gl_stderr := Console(fd=2)
 
 pub stdout() writer.Writer:
-    ret gl_stdout.proto()
+    ret gl_stdout.protoBorrow()
 ..
 
 # Constant-interface variant used by std:io. Keeping the callback in a
@@ -156,7 +156,7 @@ pub stdoutConst() writer.ConstWriter*:
 # Returns a writer for standard error.
 # O(1).
 pub stderr() writer.Writer:
-    ret gl_stderr.proto()
+    ret gl_stderr.protoBorrow()
 ..
 
 Stdin impl reader.Reader(handle ptr)
@@ -170,7 +170,7 @@ gl_stdin := Stdin(handle=none)
 # Returns a reader for standard input.
 # O(1).
 pub stdin() reader.Reader:
-    ret gl_stdin.proto()
+    ret gl_stdin.protoBorrow()
 ..
 
 # Closes a unix file handle.

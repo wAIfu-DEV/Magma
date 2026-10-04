@@ -81,7 +81,7 @@ ThreadPool.releaseRaw() void:
 # @ownership The pool must outlive the executor and all submitted tasks.
 # @complexity O(1)
 ThreadPool.executor() executor.Executor:
-    ret this.proto()
+    ret this.protoBorrow()
 ..
 
 releaseIdle(value $wake.Wake) void:

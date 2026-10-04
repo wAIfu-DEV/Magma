@@ -14,7 +14,7 @@ Stream.readRaw(bytes u8[], count u64) !u64:
 
 pub main() !void:
     implementation := Stream(value=0)
-    stream := implementation.proto[duplex.Duplex]()
+    stream := implementation.protoBorrow[duplex.Duplex]()
     count := try stream.writer().write("ok")
     if count != 2:
         throw errors.failure("duplex behavior changed")

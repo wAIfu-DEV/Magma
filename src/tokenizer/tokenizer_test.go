@@ -46,3 +46,19 @@ func TestNotIsKeyword(t *testing.T) {
 		t.Fatalf("tokens = %#v", tokens)
 	}
 }
+
+func TestJSONBracesAreTokens(t *testing.T) {
+	ctx := &types.FileCtx{FilePath: "json.mg", Content: []byte(`json {field: "value"}`)}
+	tokens, err := Tokenize(ctx, ctx.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundOpen, foundClose := false, false
+	for _, token := range tokens {
+		foundOpen = foundOpen || token.KeywType == types.KwBraceOp
+		foundClose = foundClose || token.KeywType == types.KwBraceCl
+	}
+	if !foundOpen || !foundClose {
+		t.Fatalf("brace tokens missing: %#v", tokens)
+	}
+}

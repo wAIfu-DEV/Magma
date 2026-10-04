@@ -3,9 +3,252 @@ package parser
 import (
 	"Magma/src/comp_err"
 	magmatypes "Magma/src/magma_types"
+	"Magma/src/tokenizer"
 	t "Magma/src/types"
 	"fmt"
+	"path/filepath"
+	"strconv"
+	"strings"
 )
+
+type jsonLiteralEntry struct {
+	key   string
+	value t.NodeExpr
+}
+
+func jsonSkipNewlines(ctx *ParseCtx) { consumeNewlines(ctx) }
+
+func jsonModuleAlias(ctx *ParseCtx) (string, bool) {
+	wanted := filepath.Clean(filepath.Join(ctx.Shared.StdRoot, "json.mg"))
+	for alias, imported := range ctx.Fctx.ImportAlias {
+		if filepath.Clean(imported) == wanted {
+			return alias, true
+		}
+	}
+	return "", false
+}
+
+func parseGeneratedJSONExpr(ctx *ParseCtx, source string) (t.NodeExpr, error) {
+	fctx := &t.FileCtx{FilePath: ctx.Fctx.FilePath, Content: []byte(source), ImportAlias: ctx.Fctx.ImportAlias, PackageName: ctx.Fctx.PackageName}
+	tokens, err := tokenizer.Tokenize(fctx, fctx.Content)
+	if err != nil {
+		return nil, err
+	}
+	tmp := &ParseCtx{Shared: ctx.Shared, GlobalNode: ctx.GlobalNode, Fctx: ctx.Fctx, Toks: tokens, CurrentFunction: ctx.CurrentFunction, LambdaCounter: ctx.LambdaCounter, ModuleSeen: true}
+	first, err := peek(tmp)
+	if err != nil {
+		return nil, err
+	}
+	expr, err := parseExpression(tmp, first, 0)
+	ctx.LambdaCounter = tmp.LambdaCounter
+	return expr, err
+}
+
+func jsonScalarCall(ctx *ParseCtx, literal *t.NodeExprLit, nested bool) (t.NodeExpr, error) {
+	alias, _ := jsonModuleAlias(ctx)
+	var source string
+	switch literal.LitType {
+	case t.TokLitStr:
+		source = alias + ".string(" + strconv.Quote(literal.Value) + ")\n"
+	case t.TokLitBool:
+		value := "false"
+		if literal.Value == "1" {
+			value = "true"
+		}
+		source = alias + ".bool(" + value + ")\n"
+	case t.TokLitNone:
+		source = alias + ".null()\n"
+	case t.TokLitNum:
+		if strings.Contains(literal.Value, ".") {
+			source = alias + ".numberFloat(" + literal.Value + ")\n"
+		} else {
+			source = alias + ".numberInt(" + literal.Value + ")\n"
+		}
+	default:
+		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &literal.Tk, "unsupported JSON scalar", "expected string, number, boolean, or none")
+	}
+	expr, err := parseGeneratedJSONExpr(ctx, source)
+	if err == nil && nested && literal.LitType == t.TokLitStr {
+		expr = &t.NodeExprTry{Call: expr, Tk: literal.Tk, Pos: literal.Tk.Pos}
+	}
+	return expr, err
+}
+
+func parseJSONValue(ctx *ParseCtx, tk t.Token, nested bool) (t.NodeExpr, error) {
+	if tk.KeywType == t.KwBraceOp {
+		expr, err := parseJSONObject(ctx, tk)
+		if err == nil && nested {
+			expr = &t.NodeExprTry{Call: expr, Tk: tk, Pos: tk.Pos}
+		}
+		return expr, err
+	}
+	if tk.KeywType == t.KwBrackOp {
+		expr, err := parseJSONArray(ctx, tk)
+		if err == nil && nested {
+			expr = &t.NodeExprTry{Call: expr, Tk: tk, Pos: tk.Pos}
+		}
+		return expr, err
+	}
+	expr, err := parseExpression(ctx, tk, 0)
+	if err != nil {
+		return nil, err
+	}
+	if literal, ok := expr.(*t.NodeExprLit); ok {
+		return jsonScalarCall(ctx, literal, nested)
+	}
+	return expr, nil
+}
+
+func parseJSONObject(ctx *ParseCtx, open t.Token) (t.NodeExpr, error) {
+	alias, _ := jsonModuleAlias(ctx)
+	consume(ctx)
+	jsonSkipNewlines(ctx)
+	entries := []jsonLiteralEntry{}
+	seen := map[string]bool{}
+	for {
+		keyTk, err := peek(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if keyTk.KeywType == t.KwBraceCl {
+			consume(ctx)
+			break
+		}
+		if keyTk.Type != t.TokName && keyTk.Type != t.TokLitStr {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &keyTk, "invalid JSON object key", "use an identifier, a string literal, or shorthand identifier")
+		}
+		consume(ctx)
+		key := keyTk.Repr
+		if seen[key] {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &keyTk, "duplicate JSON object key '"+key+"'", "each key may appear only once")
+		}
+		seen[key] = true
+		next, err := peek(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var value t.NodeExpr
+		if next.KeywType == t.KwColon {
+			consume(ctx)
+			jsonSkipNewlines(ctx)
+			valueTk, valueErr := peek(ctx)
+			if valueErr != nil {
+				return nil, valueErr
+			}
+			value, err = parseJSONValue(ctx, valueTk, true)
+		} else if keyTk.Type == t.TokName {
+			name := &t.NodeExprName{Tk: keyTk, Name: &t.NodeNameSingle{Tk: keyTk, Name: key}}
+			value = &t.NodeExprMove{Tk: keyTk, Expr: name}
+		} else {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &next, "quoted JSON key requires a value", "expected ':' followed by a JSON value")
+		}
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, jsonLiteralEntry{key: key, value: value})
+		sep, err := peek(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if sep.KeywType == t.KwNewline {
+			jsonSkipNewlines(ctx)
+			sep, err = peek(ctx)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if sep.KeywType == t.KwComma {
+			consume(ctx)
+			jsonSkipNewlines(ctx)
+			continue
+		}
+		if sep.KeywType != t.KwBraceCl {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &sep, "JSON object entries must be comma-separated", "expected ',' or '}'")
+		}
+	}
+	params := make([]string, len(entries))
+	sets := make([]string, len(entries))
+	for i, entry := range entries {
+		params[i] = fmt.Sprintf("__json_value_%d $%s.Value", i, alias)
+		sets[i] = fmt.Sprintf("    try __json_result.set(%s, move __json_value_%d)", strconv.Quote(entry.key), i)
+	}
+	source := "(fn(" + strings.Join(params, ", ") + ") !$" + alias + ".Value:\n    __json_result := try " + alias + ".object()\n" + strings.Join(sets, "\n") + "\n    ret move __json_result\n..) (" + strings.Repeat(alias+".null(),", len(entries)) + " )\n"
+	expr, err := parseGeneratedJSONExpr(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	call, ok := expr.(*t.NodeExprCall)
+	if !ok {
+		return nil, fmt.Errorf("internal JSON object lowering did not produce a call")
+	}
+	call.Args = call.Args[:0]
+	call.JSONLiteral = true
+	call.JSONModuleAlias = alias
+	for _, entry := range entries {
+		call.Args = append(call.Args, entry.value)
+	}
+	return call, nil
+}
+
+func parseJSONArray(ctx *ParseCtx, open t.Token) (t.NodeExpr, error) {
+	alias, _ := jsonModuleAlias(ctx)
+	consume(ctx)
+	jsonSkipNewlines(ctx)
+	values := []t.NodeExpr{}
+	for {
+		item, err := peek(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if item.KeywType == t.KwBrackCl {
+			consume(ctx)
+			break
+		}
+		value, err := parseJSONValue(ctx, item, true)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+		sep, err := peek(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if sep.KeywType == t.KwNewline {
+			jsonSkipNewlines(ctx)
+			sep, err = peek(ctx)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if sep.KeywType == t.KwComma {
+			consume(ctx)
+			jsonSkipNewlines(ctx)
+			continue
+		}
+		if sep.KeywType != t.KwBrackCl {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &sep, "JSON array entries must be comma-separated", "expected ',' or ']'")
+		}
+	}
+	params := make([]string, len(values))
+	appends := make([]string, len(values))
+	for i := range values {
+		params[i] = fmt.Sprintf("__json_value_%d $%s.Value", i, alias)
+		appends[i] = fmt.Sprintf("    try __json_array.append(move __json_value_%d)", i)
+	}
+	source := "(fn(" + strings.Join(params, ", ") + ") !$" + alias + ".Value:\n    __json_result := try " + alias + ".array()\n    __json_array := try __json_result.asArray()\n" + strings.Join(appends, "\n") + "\n    ret move __json_result\n..) (" + strings.Repeat(alias+".null(),", len(values)) + " )\n"
+	expr, err := parseGeneratedJSONExpr(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	call, ok := expr.(*t.NodeExprCall)
+	if !ok {
+		return nil, fmt.Errorf("internal JSON array lowering did not produce a call")
+	}
+	call.Args = append(call.Args[:0], values...)
+	call.JSONLiteral = true
+	call.JSONModuleAlias = alias
+	return call, nil
+}
 
 func parseLambdaExpr(ctx *ParseCtx, fnTk t.Token) (t.NodeExpr, error) {
 	consume(ctx) // fn
@@ -177,6 +420,18 @@ func parseSimplePrimaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
 	}
 	if tk.KeywType == t.KwFn {
 		return parseLambdaExpr(ctx, tk)
+	}
+	// `json` is contextual: it remains a normal identifier unless followed by
+	// one of the supported JSON value forms.
+	if tk.Type == t.TokName && tk.Repr == "json" {
+		next, nextErr := peekNth(ctx, 1)
+		if nextErr == nil && (next.KeywType == t.KwBraceOp || next.KeywType == t.KwBrackOp || next.KeywType == t.KwTrue || next.KeywType == t.KwFalse || next.KeywType == t.KwNoneLit || next.Type == t.TokLitStr || next.Type == t.TokLitNum) {
+			if _, imported := jsonModuleAlias(ctx); !imported {
+				return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, "JSON literals require the standard json module", "import it with `use \"std:json\" as <alias>`")
+			}
+			consume(ctx)
+			return parseJSONValue(ctx, next, false)
+		}
 	}
 	// `array` is contextual so existing variables, imports, and modules may
 	// continue to use that name. It starts an array expression only when it is
@@ -716,11 +971,11 @@ func parsePostfixProtoView(ctx *ParseCtx, member *t.NodeExprMemberAccess) (*t.No
 		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &member.Tk, "proto view takes no value arguments", "expected: `value.proto[Prototype]()`")
 	}
 	consume(ctx)
-	return &t.NodeExprProtoView{Tk: member.Tk, Target: member.Target, ProtoType: typeArgs[0]}, nil
+	return &t.NodeExprProtoView{Tk: member.Tk, Target: member.Target, ProtoType: typeArgs[0], Borrowed: member.Member == "protoBorrow"}, nil
 }
 
 func protoMemberFromExpr(expr t.NodeExpr) (*t.NodeExprMemberAccess, bool) {
-	if member, ok := expr.(*t.NodeExprMemberAccess); ok && member.Member == "proto" {
+	if member, ok := expr.(*t.NodeExprMemberAccess); ok && (member.Member == "proto" || member.Member == "protoBorrow") {
 		return member, true
 	}
 	nameExpr, ok := expr.(*t.NodeExprName)
@@ -728,7 +983,7 @@ func protoMemberFromExpr(expr t.NodeExpr) (*t.NodeExprMemberAccess, bool) {
 		return nil, false
 	}
 	composite, ok := nameExpr.Name.(*t.NodeNameComposite)
-	if !ok || len(composite.Parts) < 2 || composite.Parts[len(composite.Parts)-1] != "proto" {
+	if !ok || len(composite.Parts) < 2 || (composite.Parts[len(composite.Parts)-1] != "proto" && composite.Parts[len(composite.Parts)-1] != "protoBorrow") {
 		return nil, false
 	}
 	ownerParts := append([]string(nil), composite.Parts[:len(composite.Parts)-1]...)
@@ -740,7 +995,7 @@ func protoMemberFromExpr(expr t.NodeExpr) (*t.NodeExprMemberAccess, bool) {
 		ownerName = &t.NodeNameComposite{Parts: ownerParts, Tokens: ownerTokens}
 	}
 	return &t.NodeExprMemberAccess{
-		Tk: composite.Tokens[len(composite.Tokens)-1], Target: &t.NodeExprName{Tk: nameExpr.Tk, Name: ownerName}, Member: "proto",
+		Tk: composite.Tokens[len(composite.Tokens)-1], Target: &t.NodeExprName{Tk: nameExpr.Tk, Name: ownerName}, Member: composite.Parts[len(composite.Parts)-1],
 	}, true
 }
 
@@ -751,7 +1006,7 @@ func parseInferredProtoView(ctx *ParseCtx, member *t.NodeExprMemberAccess) (*t.N
 		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &member.Tk, "proto view takes no value arguments", "expected: `value.proto()`")
 	}
 	consume(ctx)
-	return &t.NodeExprProtoView{Tk: member.Tk, Target: member.Target}, nil
+	return &t.NodeExprProtoView{Tk: member.Tk, Target: member.Target, Borrowed: member.Member == "protoBorrow"}, nil
 }
 
 func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExpr, error) {
@@ -823,7 +1078,7 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 		}
 
 		if next.KeywType == t.KwBrackOp {
-			if member, ok := expr.(*t.NodeExprMemberAccess); ok && member.Member == "proto" {
+			if member, ok := expr.(*t.NodeExprMemberAccess); ok && (member.Member == "proto" || member.Member == "protoBorrow") {
 				expr, e = parsePostfixProtoView(ctx, member)
 				if e != nil {
 					return nil, e
@@ -831,7 +1086,7 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 				continue
 			}
 			if nameExpr, ok := expr.(*t.NodeExprName); ok {
-				if composite, compositeOK := nameExpr.Name.(*t.NodeNameComposite); compositeOK && len(composite.Parts) >= 2 && composite.Parts[len(composite.Parts)-1] == "proto" {
+				if composite, compositeOK := nameExpr.Name.(*t.NodeNameComposite); compositeOK && len(composite.Parts) >= 2 && (composite.Parts[len(composite.Parts)-1] == "proto" || composite.Parts[len(composite.Parts)-1] == "protoBorrow") {
 					ownerParts := append([]string(nil), composite.Parts[:len(composite.Parts)-1]...)
 					ownerTokens := append([]t.Token(nil), composite.Tokens[:len(composite.Tokens)-1]...)
 					var ownerName t.NodeName
@@ -840,7 +1095,7 @@ func parsePostfixExpr(ctx *ParseCtx, tk t.Token, baseExpr t.NodeExpr) (t.NodeExp
 					} else {
 						ownerName = &t.NodeNameComposite{Parts: ownerParts, Tokens: ownerTokens}
 					}
-					member := &t.NodeExprMemberAccess{Tk: composite.Tokens[len(composite.Tokens)-1], Target: &t.NodeExprName{Tk: nameExpr.Tk, Name: ownerName}, Member: "proto"}
+					member := &t.NodeExprMemberAccess{Tk: composite.Tokens[len(composite.Tokens)-1], Target: &t.NodeExprName{Tk: nameExpr.Tk, Name: ownerName}, Member: composite.Parts[len(composite.Parts)-1]}
 					expr, e = parsePostfixProtoView(ctx, member)
 					if e != nil {
 						return nil, e
@@ -1055,7 +1310,7 @@ func parseUnaryExpr(ctx *ParseCtx, tk t.Token) (t.NodeExpr, error) {
 
 func tokenEndsExpr(tk t.Token) bool {
 	switch tk.KeywType {
-	case t.KwNewline, t.KwComma, t.KwParenCl, t.KwColon, t.KwDots, t.KwBrackCl, t.KwTo:
+	case t.KwNewline, t.KwComma, t.KwParenCl, t.KwColon, t.KwDots, t.KwBrackCl, t.KwBraceCl, t.KwTo:
 		return true
 	default:
 		return false

@@ -181,7 +181,7 @@ gl_stdout := Console(handle=none, handleId=0xFFFFFFF5)
 gl_stderr := Console(handle=none, handleId=0xFFFFFFF4)
 
 pub stdout() writer.Writer:
-   ret gl_stdout.proto()
+   ret gl_stdout.protoBorrow()
 ..
 
 # The interface is constant; only the OS handle cache is mutable. Magma globals
@@ -207,7 +207,7 @@ pub stdoutConst() writer.ConstWriter*:
 # Returns a writer for the Win32 standard error handle.
 # O(1).
 pub stderr() writer.Writer:
-   ret gl_stderr.proto()
+   ret gl_stderr.protoBorrow()
 ..
 
 Stdin impl reader.Reader(handle ptr)
@@ -224,7 +224,7 @@ gl_stdin := Stdin(handle=none)
 # Returns a reader for the Win32 standard input handle.
 # O(1).
 pub stdin() reader.Reader:
-   ret gl_stdin.proto()
+   ret gl_stdin.protoBorrow()
 ..
 
 # Closes a Win32 file handle.

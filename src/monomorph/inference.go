@@ -24,7 +24,23 @@ func (m *monoCtx) inferGenericExpr(module string, gl *t.NodeGlobal, expr t.NodeE
 	case *t.NodeExprProtoView:
 		if n.ProtoType == nil {
 			if expected == nil {
-				return fmt.Errorf("cannot infer prototype type for .proto(); use a typed expectation or .proto[Prototype]()")
+				ownerType := m.shallowExprType(module, gl, n.Target, env)
+				if ownerType != nil {
+					if pointer, ok := ownerType.KindNode.(*t.NodeTypePointer); ok {
+						ownerType = &t.NodeType{KindNode: pointer.Kind}
+					}
+					owner, _, _, err := m.getStructDefFromType(module, gl, ownerType)
+					if err == nil && owner != nil && len(owner.Implements) == 1 {
+						candidate := cloneType(owner.Implements[0].Type)
+						if ownerGlobal := m.modules[owner.Module]; ownerGlobal != nil && m.rewriteType(owner.Module, ownerGlobal, candidate) == nil {
+							n.ProtoType = candidate
+						}
+					}
+				}
+				if n.ProtoType == nil {
+					return fmt.Errorf("cannot infer prototype type for .proto(); use a typed expectation or .proto[Prototype]()")
+				}
+				return m.inferGenericExpr(module, gl, n.Target, nil, env)
 			}
 			definition, _, _, err := m.getStructDefFromType(module, gl, expected)
 			if err != nil || definition == nil || !definition.IsProto {

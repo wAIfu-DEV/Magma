@@ -193,6 +193,15 @@ pub elapsedUs(startTicks u64) u64:
     ret ticksToUs(e)
 ..
 
+# Returns whole nanoseconds elapsed since a value previously read by ticks().
+# @complexity O(1)
+# @example
+#   elapsed := time.elapsedNs(started)
+pub elapsedNs(startTicks u64) u64:
+    e u64 = elapsedTicks(startTicks)
+    ret ticksToNs(e)
+..
+
 # Returns whole seconds elapsed since a value previously read by ticks().
 # @complexity O(1)
 # @example

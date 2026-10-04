@@ -135,7 +135,11 @@ func ordinaryImplementationBytes(source []byte) []byte {
 		line := lines[index]
 		trimmed := strings.TrimSpace(line)
 		indent := len(line) - len(strings.TrimLeft(line, " \t"))
-		if indent == 0 && strings.Contains(trimmed, "[") && strings.Contains(trimmed, "]") && strings.HasSuffix(trimmed, ":") {
+		openParen := strings.IndexByte(trimmed, '(')
+		openBracket := strings.IndexByte(trimmed, '[')
+		closeBracket := strings.IndexByte(trimmed, ']')
+		genericDeclaration := openBracket >= 0 && closeBracket > openBracket && openParen > closeBracket
+		if indent == 0 && genericDeclaration && strings.HasSuffix(trimmed, ":") {
 			index++
 			for index < len(lines) {
 				candidate := strings.TrimSpace(lines[index])
@@ -187,28 +191,12 @@ func pathForModuleID(state *types.SharedState, id types.ModuleID) string {
 // UseCachedSpecializations lets monomorphization avoid reparsing provider
 // source when the exact concrete symbol already has cached bitcode.
 func UseCachedSpecializations(state *types.SharedState, cacheRoot, compilerVersion, safetyMode string) error {
-	cache, err := incrementalcache.New(cacheRoot, state.Cwd, nil)
-	if err != nil {
-		return err
-	}
-	state.GenericSpecializationHit = func(packageName, symbol string) bool {
-		for _, file := range state.InterfaceFiles {
-			if file == nil || file.PackageName != packageName {
-				continue
-			}
-			id := string(file.ModuleID) + ":specialization:" + symbol
-			result, err := cache.LatestResult(id)
-			return err == nil && result.Hit &&
-				result.Metadata.Inputs.CompilerVersion == compilerVersion &&
-				result.Metadata.Inputs.InterfaceSchema == fmt.Sprintf("mgi-v%d", moduleinterface.SchemaVersion) &&
-				result.Metadata.Inputs.BackendVersion == ObjectCacheBackendVersion &&
-				result.Metadata.Inputs.LLVMVersion == llvmobject.LLVMCacheVersion &&
-				result.Metadata.Inputs.TargetTriple == state.Target.Triple &&
-				result.Metadata.Inputs.DataLayout == state.Target.DataLayout &&
-				result.Metadata.Inputs.SafetyMode == safetyMode
-		}
-		return false
-	}
+	// A concrete specialization can consume layouts from modules which are not
+	// dependencies of its generic provider (for example Future[world.MeshTask]).
+	// Selecting the provider's latest entry here cannot validate those argument
+	// layouts. Always materialize the specialization in the current program;
+	// object lowering still reuses it when its complete key matches.
+	state.GenericSpecializationHit = nil
 	return nil
 }
 

@@ -37,7 +37,7 @@ func Materialize(value *Interface, available map[string]*Interface, sourcePath s
 
 	for _, item := range value.Structs {
 		isPublic := !item.Private
-		definition := &t.StructDef{Module: packageName, Name: item.Name, IsPublic: isPublic, TypeParams: append([]string(nil), item.TypeParams...), FieldNb: map[string]int{}, Fields: map[string]*t.NodeType{}, Funcs: map[string]*t.NodeFuncDef{}}
+		definition := &t.StructDef{Module: packageName, Name: item.Name, IsPublic: isPublic, TypeParams: append([]string(nil), item.TypeParams...), FieldNb: map[string]int{}, Fields: map[string]*t.NodeType{}, Funcs: map[string]*t.NodeFuncDef{}, LayoutSize: item.StorageSize, LayoutAlign: item.StorageAlignment}
 		args := make([]t.NodeArg, 0, len(item.Fields))
 		for index, field := range item.Fields {
 			typ, err := materializeType(field.Type)
@@ -173,7 +173,7 @@ func materializeFunction(item Function) (*t.NodeFuncDef, error) {
 		if err != nil {
 			return nil, err
 		}
-		args = append(args, t.NodeArg{Name: argument.Name, TypeNode: typ})
+		args = append(args, t.NodeArg{Name: argument.Name, TypeNode: typ, BoundedCount: argument.BoundedCount})
 	}
 	return &t.NodeFuncDef{Class: t.NodeGenericClass{NameNode: nodeName(item.Name), TypeParams: append([]string(nil), item.TypeParams...), OwnerTypeParams: append([]string(nil), item.OwnerTypeParams...), ArgsNode: t.NodeArgList{Args: args}}, ReturnType: result, AbsName: item.Symbol, ContextABI: parseContextABI(item.ContextABI), IsDestructor: item.Destructor, IsMember: item.Member, IsExternal: item.External, IsPublic: true, NoRetain: item.NoRetain, ExportName: item.ExportName, ExportABI: item.ExportABI}, nil
 }
@@ -188,7 +188,7 @@ func materializeProtoMethod(item Function, proto *t.ProtoDef, slot int) (*t.Prot
 		if err != nil {
 			return nil, err
 		}
-		method.Args = append(method.Args, t.NodeArg{Name: argument.Name, TypeNode: typ})
+		method.Args = append(method.Args, t.NodeArg{Name: argument.Name, TypeNode: typ, BoundedCount: argument.BoundedCount})
 	}
 	return method, nil
 }

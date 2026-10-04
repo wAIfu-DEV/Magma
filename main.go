@@ -5,12 +5,14 @@ import (
 	"Magma/src/comp_err"
 	compilerpipeline "Magma/src/compiler_pipeline"
 	"Magma/src/debug"
+	incrementalcache "Magma/src/incremental_cache"
 	"Magma/src/lsp"
 	"Magma/src/makeabs"
 	"Magma/src/shared"
 	magmatarget "Magma/src/target"
 	"Magma/src/types"
 	_ "embed"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -34,8 +36,11 @@ options:
   --version, -v           print the compiler version
   --out, -o <path>        output path (default depends on --emit)
   --emit, -e <kind>       llvm, object, or exe (default exe)
-  --backend <kind>        object (default) or deprecated textual backend
+  --run, -r               run the program after successful compilation
+  --strategy <kind>       thinlto (default), whole, or textual
+  --preset <kind>         default, fast-comp, or fast-runtime
   --incremental           cached bitcode compilation (default; use --incremental=false to disable)
+  --jobs <n>              ThinLTO workers or LLVM whole-program thread limit
   --cache-dir <path>      incremental cache directory (default: user cache)
   --incremental-explain   print per-module cache hit/miss reasons
   --opt, -O <0-3>         LLVM optimization level (default 3)
@@ -53,10 +58,13 @@ type options struct {
 	debug              bool
 	timings            bool
 	version            bool
+	run                bool
 	out                string
 	emit               string
-	backend            string
+	strategy           string
+	preset             string
 	incremental        bool
+	jobs               int
 	cacheDir           string
 	incrementalExplain bool
 	opt                int
@@ -97,12 +105,16 @@ func parseArgs(args []string) (options, error) {
 	flags.BoolVar(&opts.timings, "timings", false, "print compilation phase timings")
 	flags.BoolVar(&opts.version, "version", false, "print compiler version")
 	flags.BoolVar(&opts.version, "v", false, "print compiler version")
+	flags.BoolVar(&opts.run, "run", false, "run the program after compilation")
+	flags.BoolVar(&opts.run, "r", false, "run the program after compilation")
 	flags.StringVar(&opts.out, "out", "", "output path")
 	flags.StringVar(&opts.out, "o", "", "output path")
 	flags.StringVar(&opts.emit, "emit", "exe", "output kind")
 	flags.StringVar(&opts.emit, "e", "exe", "output kind")
-	flags.StringVar(&opts.backend, "backend", opts.backend, "object or deprecated textual backend")
+	flags.StringVar(&opts.strategy, "strategy", opts.strategy, "thinlto, whole, or textual")
+	flags.StringVar(&opts.preset, "preset", "default", "default, fast-comp, or fast-runtime")
 	flags.BoolVar(&opts.incremental, "incremental", opts.incremental, "cached bitcode compilation")
+	flags.IntVar(&opts.jobs, "jobs", 0, "ThinLTO workers or LLVM whole-program thread limit")
 	flags.StringVar(&opts.cacheDir, "cache-dir", "", "incremental cache directory")
 	flags.BoolVar(&opts.incrementalExplain, "incremental-explain", false, "explain incremental cache hits and misses")
 	flags.IntVar(&opts.opt, "opt", 3, "optimization level")
@@ -119,17 +131,22 @@ func parseArgs(args []string) (options, error) {
 	if err := flags.Parse(args); err != nil {
 		return options{}, err
 	}
-	incrementalExplicit := false
+	explicit := map[string]bool{}
 	flags.Visit(func(visited *flag.Flag) {
-		if visited.Name == "incremental" {
-			incrementalExplicit = true
-		}
+		explicit[visited.Name] = true
 	})
-	if opts.backend == "textual" && !incrementalExplicit {
+	if err := applyPreset(&opts, explicit); err != nil {
+		return options{}, err
+	}
+	incrementalExplicit := explicit["incremental"]
+	if opts.strategy == "textual" && !incrementalExplicit {
 		opts.incremental = false
 	}
 
 	if opts.version || opts.clangVersion || opts.lsp {
+		if opts.run {
+			return options{}, fmt.Errorf("--run requires an input file")
+		}
 		if flags.NArg() != 0 {
 			return options{}, fmt.Errorf("information commands do not accept an input file")
 		}
@@ -149,6 +166,9 @@ func parseArgs(args []string) (options, error) {
 	default:
 		return options{}, fmt.Errorf("invalid --emit value %q (expected llvm, object, or exe)", opts.emit)
 	}
+	if opts.run && opts.emit != "exe" {
+		return options{}, fmt.Errorf("--run requires executable output; use --emit exe")
+	}
 	if opts.emit == "llvm" {
 		if incrementalExplicit && opts.incremental {
 			return options{}, fmt.Errorf("incremental compilation does not support textual LLVM output; use --emit object or --emit exe")
@@ -156,12 +176,30 @@ func parseArgs(args []string) (options, error) {
 		// LLVM text output is retained as a whole-program inspection path. It
 		// cannot represent the linked cached-bitcode pipeline's native result.
 		opts.incremental = false
+		// Artifact selection supplies the whole-program inspection default only
+		// when the default preset is in use. A named preset is the master choice
+		// for its strategy unless --strategy explicitly overrides it.
+		if !explicit["strategy"] && opts.preset == "default" {
+			opts.strategy = "whole"
+		}
 	}
 	if opts.opt < 0 || opts.opt > 3 {
 		return options{}, fmt.Errorf("invalid --opt value %d (expected 0 through 3)", opts.opt)
 	}
-	if opts.backend != "" && opts.backend != "textual" && opts.backend != "object" {
-		return options{}, fmt.Errorf("invalid --backend value %q (expected textual or object)", opts.backend)
+	if opts.jobs < 0 {
+		return options{}, fmt.Errorf("invalid --jobs value %d (expected zero or greater)", opts.jobs)
+	}
+	if opts.strategy != "thinlto" && opts.strategy != "whole" && opts.strategy != "textual" {
+		return options{}, fmt.Errorf("invalid --strategy value %q (expected thinlto, whole, or textual)", opts.strategy)
+	}
+	if opts.strategy == "textual" && opts.jobs != 0 {
+		return options{}, fmt.Errorf("--jobs is not supported by --strategy textual")
+	}
+	if opts.strategy == "thinlto" && !opts.incremental {
+		return options{}, fmt.Errorf("--strategy thinlto requires incremental compilation")
+	}
+	if opts.strategy == "thinlto" && opts.emit == "llvm" {
+		return options{}, fmt.Errorf("--strategy thinlto requires object or executable output")
 	}
 	if supplied, ok := opts.compilerArgs["ERROR_TRACE_SLOTS"]; ok {
 		value, err := strconv.ParseUint(supplied, 0, 64)
@@ -175,6 +213,29 @@ func parseArgs(args []string) (options, error) {
 	}
 	opts.inputFile = flags.Arg(0)
 	return opts, nil
+}
+
+func applyPreset(opts *options, explicit map[string]bool) error {
+	strategy, optimization, jobs := opts.strategy, 3, 0
+	switch opts.preset {
+	case "default":
+	case "fast-comp":
+		strategy, optimization = "textual", 0
+	case "fast-runtime":
+		strategy = "whole"
+	default:
+		return fmt.Errorf("invalid --preset value %q (expected default, fast-comp, or fast-runtime)", opts.preset)
+	}
+	if !explicit["strategy"] {
+		opts.strategy = strategy
+	}
+	if !explicit["opt"] && !explicit["O"] {
+		opts.opt = optimization
+	}
+	if !explicit["jobs"] {
+		opts.jobs = jobs
+	}
+	return nil
 }
 
 func normalizeArgs(args []string) []string {
@@ -224,11 +285,8 @@ func wrappedMain() error {
 		fmt.Printf("Clang %s (%s)\n", version, path)
 		return nil
 	}
-	if opts.backend == "textual" {
-		fmt.Fprintln(os.Stderr, "warning: the textual LLVM IR backend is deprecated and will be removed in a future release")
-	}
 	stop = timings.start("Preparation", "Clang and target resolution")
-	clangPath, _, err := clangresolver.Resolve("")
+	clangPath, clangVersion, err := clangresolver.Resolve("")
 	if err != nil {
 		stop()
 		return err
@@ -261,6 +319,23 @@ func wrappedMain() error {
 	if e != nil {
 		stop()
 		return e
+	}
+	buildManifestConfig := manifestConfig(opts, absPath, clangPath, clangVersion)
+	if opts.emit == "exe" {
+		reused, reuseErr := tryReuseExecutable(opts.out, buildManifestConfig)
+		if reuseErr != nil {
+			stop()
+			return reuseErr
+		}
+		if reused {
+			stop()
+			debug.Printf("reusing unchanged executable: %s\n", opts.out)
+			if opts.run {
+				timings.report(os.Stderr)
+				return runOutput(opts.out)
+			}
+			return nil
+		}
 	}
 
 	s, e := shared.MakeShared(cwd, opts.stdRoot)
@@ -337,7 +412,7 @@ func wrappedMain() error {
 	}
 
 	stop = timings.start("Back end", backendLoweringLabel(opts))
-	output, isObject, e := lowerBackend(ready, opts)
+	output, objects, e := lowerBackend(ready, opts)
 	stop()
 	if e != nil {
 		return e
@@ -347,13 +422,56 @@ func wrappedMain() error {
 	debug.Printf("Successful lowering through %s\n", backendLoweringLabel(opts))
 
 	stop = timings.start("Back end", "output and Clang")
-	if isObject {
-		e = emitObjectOutput(opts, output, nativeLibraries(s), bundledFiles(s), embeddedAssets(s))
+	libraries := nativeLibraries(s)
+	bundles := bundledFiles(s)
+	assets := embeddedAssets(s)
+	if objects != nil {
+		e = emitObjectOutput(opts, objects, libraries, bundles, assets)
 	} else {
-		e = emitOutput(opts, output, nativeLibraries(s), bundledFiles(s), embeddedAssets(s))
+		e = emitOutput(opts, output, libraries, bundles, assets)
 	}
 	stop()
-	return e
+	if e != nil {
+		return e
+	}
+	if opts.emit == "exe" {
+		if e = writeExecutableManifest(opts.out, buildManifestConfig, s, assets, bundles, libraries); e != nil {
+			return e
+		}
+	}
+	if !opts.run {
+		return nil
+	}
+	timings.report(os.Stderr)
+	return runOutput(opts.out)
+}
+
+type programExitError struct {
+	code int
+}
+
+func (e programExitError) Error() string {
+	return fmt.Sprintf("program exited with status %d", e.code)
+}
+
+func runOutput(output string) error {
+	executable, err := filepath.Abs(output)
+	if err != nil {
+		return fmt.Errorf("resolve executable %q: %w", output, err)
+	}
+	debug.Printf("running: %s\n", executable)
+	command := exec.Command(executable)
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return programExitError{code: exitErr.ExitCode()}
+		}
+		return fmt.Errorf("program failed: %w", err)
+	}
+	return nil
 }
 
 type embeddedAsset struct {
@@ -439,7 +557,9 @@ func emitOutput(opts options, ir []byte, nativeLibraries, bundles []string, asse
 		return emitOutputWithAssets(opts, ir, nativeLibraries, bundles, assets)
 	}
 	if opts.emit == "llvm" && opts.opt == 0 {
-		return os.WriteFile(opts.out, []byte(ir), 0666)
+		// LowerReachable already produced the requested final artifact. Sending it
+		// through Clang at -O0 only reparses and reprints otherwise usable IR.
+		return os.WriteFile(opts.out, ir, 0666)
 	}
 
 	clangPath, clangVersion, err := clangresolver.Resolve("")
@@ -499,7 +619,7 @@ func emitOutput(opts options, ir []byte, nativeLibraries, bundles []string, asse
 	return nil
 }
 
-func emitObjectOutput(opts options, object []byte, nativeLibraries, bundles []string, assets []embeddedAsset) error {
+func emitObjectOutput(opts options, objects [][]byte, nativeLibraries, bundles []string, assets []embeddedAsset) error {
 	if opts.emit == "llvm" {
 		return fmt.Errorf("internal error: LLVM output was lowered as an object")
 	}
@@ -508,8 +628,11 @@ func emitObjectOutput(opts options, object []byte, nativeLibraries, bundles []st
 			return fmt.Errorf("output directory %q: %w", dir, err)
 		}
 	}
-	if opts.emit == "object" && len(assets) == 0 {
-		return os.WriteFile(opts.out, object, 0666)
+	if len(objects) == 0 {
+		return fmt.Errorf("internal error: object lowering produced no objects")
+	}
+	if opts.emit == "object" && len(assets) == 0 && len(objects) == 1 {
+		return os.WriteFile(opts.out, objects[0], 0666)
 	}
 
 	clangPath, clangVersion, err := clangresolver.Resolve("")
@@ -522,12 +645,14 @@ func emitObjectOutput(opts options, object []byte, nativeLibraries, bundles []st
 		return fmt.Errorf("create object-link workspace: %w", err)
 	}
 	defer os.RemoveAll(temporaryDir)
-	programObject := filepath.Join(temporaryDir, "program.o")
-	if err := os.WriteFile(programObject, object, 0600); err != nil {
-		return fmt.Errorf("write program object: %w", err)
+	inputs := make([]string, 0, len(objects)+1)
+	for index, object := range objects {
+		programObject := filepath.Join(temporaryDir, fmt.Sprintf("program-%06d.o", index))
+		if err := os.WriteFile(programObject, object, 0600); err != nil {
+			return fmt.Errorf("write program object %d: %w", index, err)
+		}
+		inputs = append(inputs, programObject)
 	}
-
-	inputs := []string{programObject}
 	if len(assets) != 0 {
 		assetSource := filepath.Join(temporaryDir, "assets.c")
 		assetObject := filepath.Join(temporaryDir, "assets.o")
@@ -551,6 +676,23 @@ func emitObjectOutput(opts options, object []byte, nativeLibraries, bundles []st
 	}
 	if opts.emit == "object" {
 		args = append(args, "-r")
+	}
+	if opts.strategy == "thinlto" {
+		cacheRoot := opts.cacheDir
+		if cacheRoot == "" {
+			cacheRoot, err = incrementalcache.DefaultRoot()
+			if err != nil {
+				return fmt.Errorf("resolve ThinLTO cache: %w", err)
+			}
+		}
+		thinCache := filepath.Join(cacheRoot, "thinlto")
+		if err := os.MkdirAll(thinCache, 0700); err != nil {
+			return fmt.Errorf("create ThinLTO cache: %w", err)
+		}
+		args = append(args, "-fuse-ld=lld", "-flto=thin", "-O"+strconv.Itoa(opts.opt), "-Wl,--thinlto-cache-dir="+thinCache)
+		if opts.jobs > 0 {
+			args = append(args, "-Wl,--thinlto-jobs="+strconv.Itoa(opts.jobs))
+		}
 	}
 	args = append(args, inputs...)
 	if opts.emit == "exe" {
@@ -766,6 +908,10 @@ func main() {
 		if err == flag.ErrHelp {
 			fmt.Println(usage)
 			return
+		}
+		var exitErr programExitError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.code)
 		}
 		comp_err.Print(err)
 		os.Exit(1)

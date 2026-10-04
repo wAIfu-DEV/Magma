@@ -1,9 +1,8 @@
-# Experimental LLVM object backend
+# LLVM object backend
 
-This package is the opt-in foundation for lowering Magma into LLVM's in-memory
-object model. It deliberately does not participate in `compiler_pipeline.Lower`;
-the textual backend remains the production backend until feature parity and
-output validation are complete.
+This package lowers Magma into LLVM's in-memory object model. The textual and
+typed backends are both supported strategies and share semantic validation,
+backend-neutral lowering contracts, and typed `@llvm` operations.
 
 ## Supported LLVM version
 
@@ -27,7 +26,7 @@ host's signed system package repository. They are deliberately not bundled in
 the ordinary Magma compiler. Distribution therefore remains split:
 
 - normal builds have no LLVM development dependency and use textual lowering;
-- experimental object-backend builds require the system LLVM 22 development
+- object-backend builds require the system LLVM 22 development
   package and both build tags above.
 
 CI uses Arch Linux's signed `llvm`, `llvm-libs`, and `clang` packages. A future

@@ -8,12 +8,13 @@ use "std:io" as io
 use "std:strings" as strings
 use "std:time" as time
 
+ext ext_getenv getenv(name u8*) u8*
+
 legacyGetenv(name u8*) u8*:
-    # SAFETY: LLVM
+    # SAFETY: getenv returns either a borrowed process-environment pointer or none.
     unsafe:
-        llvm "  call void asm sideeffect \"\", \"~{memory}\"()\n"
-        llvm "  %value = call ptr @getenv(ptr %name)\n"
-        llvm "  ret ptr %value\n"
+        @llvm("sideeffect", void)
+        ret ext_getenv(name)
     ..
 ..
 

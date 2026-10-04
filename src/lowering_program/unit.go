@@ -42,6 +42,9 @@ func buildUnit(backend lb.Backend, state *t.SharedState, moduleID t.ModuleID, se
 	if err != nil {
 		return err
 	}
+	if err := types.ValidateProtoLayouts(); err != nil {
+		return err
+	}
 	types.CrossModule = true
 
 	state.FilesM.Lock()

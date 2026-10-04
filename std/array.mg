@@ -130,12 +130,11 @@ runCleanupFromIdx[T](arr Array[T]*, idx u64, cleanup ($T) void) void:
     if cleanup != none:
         items := arr.view()
         i u64 = idx
-        zeroVal T = mem.zeroValue[T]()
         valSize u64 = sizeof T
         loop i < items.count():
             # SAFETY: this is the container's occupancy-aware removal path.
             unsafe:
-                if mem.compare(addrof items[i], addrof zeroVal, valSize) == false:
+                if mem.isZero(addrof items[i], valSize) == false:
                     value $T = items[i]
                     items[i] = mem.zeroValue[T]()
                     cleanup(move value)

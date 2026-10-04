@@ -19,7 +19,7 @@ const FILLED_MASK u64 = 0x7FFFFFFFFFFFFFFF
 # Reduces syscall overhead for many small writes.
 # @complexity O(1) for most operations until buffer fills.
 pub Writer impl writer.Writer(
-    underlying writer.Writer
+    underlying writer.Writer*
     buffer ptr
     position u64
     allocator alc.Allocator
@@ -35,11 +35,18 @@ pub Writer impl writer.Writer(
 # @example
 #   bufferedWriter := try buffered.writerBuffered(a, output)
 pub writerBuffered(w writer.Writer) !$Writer:
+    a := ctx.alloc
+    buffer := try a.alloc(DEFAULT_BUFFER_SIZE)
+    onerror a.free(buffer)
+    underlying := try a.allocT[writer.Writer](1)
+    unsafe:
+        *underlying = w
+    ..
     ret Writer(
-        underlying=w,
-        buffer=try ctx.alloc.alloc(DEFAULT_BUFFER_SIZE),
+        underlying=underlying,
+        buffer=buffer,
         position=0,
-        allocator=ctx.alloc,
+        allocator=a,
     )
 ..
 
@@ -64,7 +71,8 @@ Writer.flush() !u64:
     
     loop remaining > 0:
         toWrite str = strings.fromPtrNoCopy(writePtr, remaining)
-        written u64 = try this.underlying.write(toWrite)
+        underlying := this.underlying
+        written u64 = try underlying.write(toWrite)
         if written > remaining:
             this.position = remaining
             throw errors.failure("flush failed: writer returned too many bytes")
@@ -109,7 +117,8 @@ bufferedWrite(bw Writer*, bytes str) !u64:
     # If write is larger than buffer, flush and write directly
     if bytesLen >= DEFAULT_BUFFER_SIZE:
         try bw.flush()
-        ret try bw.underlying.write(bytes)
+        underlying := bw.underlying
+        ret try underlying.write(bytes)
     ..
     
     # If write doesn't fit in remaining buffer space, flush first
@@ -138,7 +147,7 @@ bufferedWrite(bw Writer*, bytes str) !u64:
 # @example
 #   output := bufferedWriter.writer()
 Writer.writer() writer.Writer:
-    ret this.proto()
+    ret this.protoBorrow()
 ..
 
 # Closes the buffered writer, flushing any remaining data.
@@ -149,6 +158,8 @@ Writer.writer() writer.Writer:
 destr Writer.close() !void:
     try this.flush()
     this.allocator.free(this.buffer)
+    this.allocator.free(this.underlying)
+    this.underlying = none
     this.buffer = none
     this.position = 0
 ..
@@ -169,7 +180,7 @@ Writer.write(bytes str) !u64:
 # @example
 #   try bufferedWriter.writeAll("complete payload")
 Writer.writeAll(bytes str) !u64:
-    output := this.proto[writer.Writer]()
+    output := this.protoBorrow[writer.Writer]()
     ret try output.writeAll(bytes)
 ..
 
@@ -180,7 +191,7 @@ Writer.writeAll(bytes str) !u64:
 # @example
 #   try bufferedWriter.writeLn("record")
 Writer.writeLn(bytes str) !u64:
-    output := this.proto[writer.Writer]()
+    output := this.protoBorrow[writer.Writer]()
     ret try output.writeLn(bytes)
 ..
 
@@ -191,7 +202,7 @@ Writer.writeLn(bytes str) !u64:
 # @example
 #   try bufferedWriter.writeBool(true)
 Writer.writeBool(b bool) !u64:
-    output := this.proto[writer.Writer]()
+    output := this.protoBorrow[writer.Writer]()
     ret try output.writeBool(b)
 ..
 
@@ -202,7 +213,7 @@ Writer.writeBool(b bool) !u64:
 # @example
 #   try bufferedWriter.writeInt64(-42)
 Writer.writeInt64(num i64) !u64:
-    output := this.proto[writer.Writer]()
+    output := this.protoBorrow[writer.Writer]()
     ret try output.writeInt64(num)
 ..
 
@@ -213,7 +224,7 @@ Writer.writeInt64(num i64) !u64:
 # @example
 #   try bufferedWriter.writeUint64(42)
 Writer.writeUint64(num u64) !u64:
-    output := this.proto[writer.Writer]()
+    output := this.protoBorrow[writer.Writer]()
     ret try output.writeUint64(num)
 ..
 
@@ -226,7 +237,7 @@ Writer.writeUint64(num u64) !u64:
 # @example
 #   try bufferedWriter.writeFloat64(3.14159, 2)
 Writer.writeFloat64(flt f64, precision u64) !u64:
-    output := this.proto[writer.Writer]()
+    output := this.protoBorrow[writer.Writer]()
     ret try output.writeFloat64(flt, precision)
 ..
 
@@ -234,7 +245,7 @@ Writer.writeFloat64(flt f64, precision u64) !u64:
 # Reduces syscall overhead for many small reads.
 # @complexity O(1) for most operations when reading from buffer.
 pub Reader impl reader.Reader(
-    underlying reader.Reader
+    underlying reader.Reader*
     buffer u8*
     position u64   # Current read position in buffer
     filled u64     # How much of buffer contains valid data
@@ -267,9 +278,15 @@ Reader.markEof() void:
 #   bufferedReader := try buffered.readerBuffered(a, input)
 pub readerBuffered(r reader.Reader) !$Reader:
     a := ctx.alloc
+    buffer := try a.alloc(DEFAULT_BUFFER_SIZE)
+    onerror a.free(buffer)
+    underlying := try a.allocT[reader.Reader](1)
+    unsafe:
+        *underlying = r
+    ..
     ret Reader(
-        underlying=r,
-        buffer=try a.alloc(DEFAULT_BUFFER_SIZE),
+        underlying=underlying,
+        buffer=buffer,
         position=0,
         filled=0,
         allocator=a,
@@ -302,7 +319,8 @@ Reader.fillBuffer() !bool:
     readPtr ptr = cast.utop(cast.ptou(this.buffer) + filled)
     buffSlice u8[] = slices.fromPtr(readPtr, toRead)
     
-    readCount u64 = try this.underlying.readToBuff(buffSlice, toRead)
+    underlying := this.underlying
+    readCount u64 = try underlying.readToBuff(buffSlice, toRead)
     if readCount > toRead:
         throw errors.failure("buffered reader returned too many bytes")
     ..
@@ -353,7 +371,8 @@ bufferedRead(br Reader*, buff u8[], nBytes u64) !u64:
         if remaining >= DEFAULT_BUFFER_SIZE:
             dstPtr = cast.utop(cast.ptou(slices.toPtr(buff)) + totalRead)
             directBuff u8[] = slices.fromPtr(dstPtr, remaining)
-            directRead u64 = try br.underlying.readToBuff(directBuff, remaining)
+            underlying := br.underlying
+            directRead u64 = try underlying.readToBuff(directBuff, remaining)
             if directRead > remaining:
                 throw errors.failure("buffered reader returned too many bytes")
             ..
@@ -380,7 +399,7 @@ Reader.readRaw(buff u8[], nBytes u64) !u64:
 # @example
 #   input := bufferedReader.reader()
 Reader.reader() reader.Reader:
-    ret this.proto()
+    ret this.protoBorrow()
 ..
 
 updateAfterRealloc(value str*, data ptr, capacity u64) void:
@@ -537,6 +556,8 @@ Reader.readLn() !$str:
 #   bufferedReader.close()
 destr Reader.close() void:
     this.allocator.free(this.buffer)
+    this.allocator.free(this.underlying)
+    this.underlying = none
     this.buffer = none
     this.position = 0
     this.filled = 0

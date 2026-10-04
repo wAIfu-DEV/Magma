@@ -247,10 +247,56 @@ func parseStmtMatch(ctx *ParseCtx, matchTk t.Token) (*t.NodeStmtMatch, error) {
 func parseStmtBounded(ctx *ParseCtx, tk t.Token) (*t.NodeStmtBounded, error) {
 	consume(ctx)
 	stmt := &t.NodeStmtBounded{Tk: tk}
+	// Multiple leading `pointer by extent` clauses are nested at parse time.
+	// This keeps each assertion scoped and requires no runtime guard.
+	var pointers []t.NodeExpr
+	var extents []t.NodeExpr
+	for {
+		first, e := peek(ctx)
+		if e != nil {
+			return nil, e
+		}
+		second, err := peekNth(ctx, 1)
+		if err != nil || first.Type != t.TokName || second.Type != t.TokName || second.Repr != "by" {
+			break
+		}
+		consume(ctx)
+		pointer := &t.NodeExprName{Tk: first, Name: &t.NodeNameSingle{Tk: first, Name: first.Repr}}
+		by, err := peek(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if by.Type != t.TokName || by.Repr != "by" {
+			return nil, comp_err.CompilationErrorToken(ctx.Fctx, &by, "expected 'by' after bounded pointer", "use: bounded ptr by count, i < count:")
+		}
+		consume(ctx)
+		next, err := peek(ctx)
+		if err != nil {
+			return nil, err
+		}
+		extent, err := parseExpression(ctx, next, 0)
+		if err != nil {
+			return nil, err
+		}
+		pointers = append(pointers, pointer)
+		extents = append(extents, extent)
+		next, err = peek(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if next.KeywType == t.KwComma {
+			consume(ctx)
+			continue
+		}
+		break
+	}
 	for {
 		next, e := peek(ctx)
 		if e != nil {
 			return nil, e
+		}
+		if next.KeywType == t.KwColon {
+			break
 		}
 		predicate, e := parseExpression(ctx, next, 0)
 		if e != nil {
@@ -266,7 +312,7 @@ func parseStmtBounded(ctx *ParseCtx, tk t.Token) (*t.NodeStmtBounded, error) {
 		}
 		consume(ctx)
 	}
-	if len(stmt.Predicates) == 0 {
+	if len(stmt.Predicates) == 0 && len(pointers) == 0 {
 		return nil, comp_err.CompilationErrorToken(ctx.Fctx, &tk, "bounded requires at least one range comparison", "use: bounded i < values.count():")
 	}
 	next, e := peek(ctx)
@@ -278,6 +324,16 @@ func parseStmtBounded(ctx *ParseCtx, tk t.Token) (*t.NodeStmtBounded, error) {
 		return nil, e
 	}
 	stmt.Body = body
+	if len(pointers) > 0 {
+		stmt.Pointer = pointers[len(pointers)-1]
+		stmt.Extent = extents[len(extents)-1]
+		for i := len(pointers) - 2; i >= 0; i-- {
+			stmt = &t.NodeStmtBounded{
+				Tk: tk, Pointer: pointers[i], Extent: extents[i],
+				Body: t.NodeBody{Statements: []t.NodeStatement{stmt}},
+			}
+		}
+	}
 	return stmt, nil
 }
 

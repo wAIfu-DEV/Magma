@@ -37,8 +37,7 @@ Result(wallNs u64, cpuNs u64, minimum u64, maximum u64, total u64)
 
 cpuRelax() void:
     unsafe:
-        llvm "  call void asm sideeffect \"pause\", \"~{memory}\"()\n"
-        llvm "  ret void\n"
+        @llvm("asm_sideeffect", "pause", void)
     ..
 ..
 

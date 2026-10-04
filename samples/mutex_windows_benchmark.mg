@@ -18,8 +18,7 @@ const MAX_WORKERS u64 = 24
 
 consumeMutex(value ptr) void:
     unsafe:
-        llvm "  call void asm sideeffect \"\", \"r,~{memory}\"(ptr %value)\n"
-        llvm "  ret void\n"
+        @llvm("sideeffect", void)
     ..
 ..
 

@@ -39,10 +39,11 @@ var keywordHovers = map[string]string{
 	"llvm":     "`llvm` inserts an inline LLVM fragment. Its validity remains the programmer's responsibility.",
 	"noctx":    "`noctx` removes the hidden context argument from a function or function-pointer type.",
 	"fn":       "`fn(parameters) ReturnType:` creates a captureless anonymous function. Enclosing locals must be passed explicitly as parameters.",
-	"bounded":  "`bounded condition:` checks one or more range predicates on entry and establishes reusable proofs for its lexical block.",
+	"bounded":  "`bounded condition:` asserts compile-time range facts without a runtime check. `bounded ptr by count:` declares a local pointer extent; `p u8* bounded count` declares a function parameter contract.",
 	"unsafe":   "`unsafe:` localizes operations whose validity the compiler cannot prove, including explicit ownership claims with `move`. It does not disable unrelated type checks.",
 	"move":     "`move value` transfers ownership from a named place and prevents subsequent use until reinitialization.",
 	"this":     "`this` is the implicit pointer-like receiver available inside a method body.",
+	"json":     "`json value` constructs an owned `json.Value`. Objects accept quoted or identifier keys and identifier shorthand; arrays and aggregates may be nested.",
 }
 
 var directiveHovers = map[string]string{
@@ -72,6 +73,11 @@ func (a *analysis) keywordHover(index int) string {
 		return directiveHovers[token.Repr]
 	}
 	switch token.Repr {
+	case "json":
+		if !jsonExpressionAt(tokens, index) {
+			return ""
+		}
+		return keywordHovers["json"]
 	case "array":
 		if !arrayExpressionAt(tokens, index) {
 			return ""
@@ -97,10 +103,18 @@ func (a *analysis) keywordHover(index int) string {
 		}
 		return "`Type impl Prototype(...)` declares that a struct or prototype implements one or more prototypes."
 	}
-	if token.Type != types.TokKeyword && token.Repr != "move" && token.Repr != "this" {
+	if token.Type != types.TokKeyword && token.Repr != "move" && token.Repr != "this" && token.Repr != "json" {
 		return ""
 	}
 	return keywordHovers[token.Repr]
+}
+
+func jsonExpressionAt(tokens []types.Token, index int) bool {
+	if index < 0 || index+1 >= len(tokens) || tokens[index].Type != types.TokName || tokens[index].Repr != "json" {
+		return false
+	}
+	next := tokens[index+1]
+	return next.KeywType == types.KwBraceOp || next.KeywType == types.KwBrackOp || next.KeywType == types.KwTrue || next.KeywType == types.KwFalse || next.KeywType == types.KwNoneLit || next.Type == types.TokLitStr || next.Type == types.TokLitNum
 }
 
 func arrayExpressionAt(tokens []types.Token, index int) bool {

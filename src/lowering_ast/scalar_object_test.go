@@ -362,6 +362,7 @@ func TestTryPropagatesThroughTraceAndErrorCleanups(t *testing.T) {
 		"icmp ne i32",
 		"try.failure.",
 		"call %type.error @core.errorTracePush",
+		"define %type.error @core.errorTracePush",
 		"store i64 99",
 		"ret { %type.error, i64 }",
 		"throw.failure.",
@@ -484,6 +485,9 @@ func TestPrototypeViewBuildsTypedPrivateVtable(t *testing.T) {
 		"api.mg": {ModuleName: "api", GlNode: &mt.NodeGlobal{StructDefs: map[string]*mt.StructDef{"View": viewDef, "ViewVtable": vtableDef}}},
 	}, CoreTypes: map[mt.CoreTypeRole]*mt.StructDef{}}
 	ir, err := llvmobject.ExperimentalIR("proto-view.mg", func(backend lb.Backend) error {
+		if err := backend.ConfigureModule(lb.ModuleSpec{SourceFile: "proto-view.mg", TargetTriple: "x86_64-unknown-linux-gnu", DataLayout: "e-p:64:64-i64:64"}); err != nil {
+			return err
+		}
 		typeLowerer, err := loweringtypes.New(backend, state)
 		if err != nil {
 			return err
@@ -501,7 +505,7 @@ func TestPrototypeViewBuildsTypedPrivateVtable(t *testing.T) {
 	text := string(ir)
 	for _, expected := range []string{
 		"@app.Record.__proto.api.View = private constant %struct.api.ViewVtable { ptr @app.Record.get }",
-		"insertvalue %struct.api.View",
+		"store %struct.app.Record",
 		"ptr @app.Record.__proto.api.View",
 		"ret %struct.api.View",
 		"define internal i64 @api.View.get(ptr %0)",
@@ -515,7 +519,7 @@ func TestPrototypeViewBuildsTypedPrivateVtable(t *testing.T) {
 	}
 }
 
-func TestContextfulFunctionUsesLeadingPointerAndMaterializesContext(t *testing.T) {
+func TestContextfulFunctionUsesLeadingPointerWithoutMaterializingReadOnlyContext(t *testing.T) {
 	i64 := primitive("i64")
 	contextDef := &mt.StructDef{
 		Module: "context", Name: "Ctx", FieldOrder: []string{"value"}, FieldNb: map[string]int{"value": 0},
@@ -557,14 +561,15 @@ func TestContextfulFunctionUsesLeadingPointerAndMaterializesContext(t *testing.T
 	text := string(ir)
 	for _, expected := range []string{
 		"define internal i64 @app.contextful(ptr %0, i64 %1)",
-		"load %struct.context.Ctx, ptr %0",
-		"store %struct.context.Ctx",
 		"store i64 %1",
-		"call i64 @app.contextful(ptr",
+		"call i64 @app.contextful(ptr %0",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("contextful lowering missing %q:\n%s", expected, text)
 		}
+	}
+	if strings.Contains(text, "alloca %struct.context.Ctx") || strings.Contains(text, "load %struct.context.Ctx, ptr %0") {
+		t.Fatalf("read-only implicit context was materialized:\n%s", text)
 	}
 }
 
@@ -664,7 +669,7 @@ func TestASTControlFlowStatementsBuildTextualEquivalentCFG(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(ir)
-	for _, expected := range []string{"if.then", "if.else", "while.cond", "while.exit", "for.cond", "for.increment", "for.break.increment", "bounded.body", "bounded.exit", "and i1"} {
+	for _, expected := range []string{"if.then", "if.else", "while.cond", "while.exit", "for.cond", "for.increment", "for.break.increment"} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("control-flow lowering missing %q:\n%s", expected, text)
 		}

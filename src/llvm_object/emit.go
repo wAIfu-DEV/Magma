@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -13,6 +14,19 @@ import (
 )
 
 var initializeTargets sync.Once
+var configureThreads sync.Once
+
+// ConfigureThreads applies LLVM's process-wide thread-pool limit. LLVM's
+// ordinary whole-module pass pipeline may not contain parallel work, but this
+// exposes the supported control rather than assuming that it is ineffective.
+func ConfigureThreads(jobs int) {
+	if jobs < 1 {
+		return
+	}
+	configureThreads.Do(func() {
+		llvm.ParseCommandLineOptions([]string{"magma", "--threads=" + strconv.Itoa(jobs)}, "")
+	})
+}
 
 type OptimizationLevel uint8
 

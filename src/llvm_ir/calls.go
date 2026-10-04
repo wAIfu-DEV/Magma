@@ -14,8 +14,6 @@ func callReturnType(call *t.NodeExprCall) *t.NodeType {
 }
 
 func irExprCallFuncPtr(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (SsaName, error) {
-	irWrite(ctx, "  ; call fnptr\n")
-
 	if fnCall.FuncPtrType == nil {
 		return SsaName{}, fmt.Errorf("cannot lower unresolved function-pointer call")
 	}
@@ -101,7 +99,6 @@ func irExprCallFuncNonPtr(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (Ss
 	if len(fnCall.Args) != len(fnCall.AssociatedFnDef.Class.ArgsNode.Args) {
 		return SsaName{}, fmt.Errorf("cannot lower call to %q: expected %d arguments, got %d", fnCall.AssociatedFnDef.AbsName, len(fnCall.AssociatedFnDef.Class.ArgsNode.Args), len(fnCall.Args))
 	}
-	irWritef(ctx, "  ; call %s\n", fnCall.AssociatedFnDef.AbsName)
 
 	argsSsa := make([]SsaName, len(fnCall.Args))
 	for i, expr := range fnCall.Args {
@@ -209,7 +206,6 @@ func irExprCallFuncMember(ctx *IrCtx, fnCall *t.NodeExprCall, topLevel bool) (Ss
 	if expectedArgs < 0 || len(fnCall.Args) != expectedArgs {
 		return SsaName{}, fmt.Errorf("cannot lower member call to %q: expected %d explicit arguments, got %d", fnCall.AssociatedFnDef.AbsName, expectedArgs, len(fnCall.Args))
 	}
-	irWritef(ctx, "  ; call member %s\n", fnCall.AssociatedFnDef.AbsName)
 
 	argsSsa := make([]SsaName, len(fnCall.Args))
 	for i, expr := range fnCall.Args {

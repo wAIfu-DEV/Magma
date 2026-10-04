@@ -23,6 +23,14 @@ func TestSafetyKeywordCompletion(t *testing.T) {
 	}
 }
 
+func TestJSONExpressionCompletion(t *testing.T) {
+	a := &analysis{file: &types.FileCtx{PackageName: "main"}, docs: &docIndex{expressionSymbols: map[string]map[string]completionItem{}}}
+	items := a.expressionCompletions("js", 1)
+	if len(items) != 1 || items[0].Label != "json" || items[0].InsertTextFormat != 2 {
+		t.Fatalf("JSON completion = %#v", items)
+	}
+}
+
 func TestSafetySemanticTokensExcludeMoveFunctionCall(t *testing.T) {
 	source := "mod main\nmain(value $str) void:\n    unsafe:\n        bounded 0 < 1:\n            pointer ptr = addrof value\n            size u64 = sizeof ptr\n            consume(move value)\n            move(\"call\")\n        ..\n    ..\n..\n"
 	uri := "file:///tmp/safety_tokens.mg"
@@ -35,6 +43,20 @@ func TestSafetySemanticTokensExcludeMoveFunctionCall(t *testing.T) {
 	// unsafe, bounded, addrof, sizeof, and the ownership-transfer move produce
 	// five tokens; the ordinary move(...) call does not.
 	if got := strings.Count(output.String(), ",0,0"); got != 5 {
+		t.Fatalf("semantic token response = %s, token endings = %d", output.String(), got)
+	}
+}
+
+func TestJSONSemanticTokenIsContextual(t *testing.T) {
+	source := "mod main\nmain() !void:\n    value := try json {field: none}\n    moduleValue := json.null()\n..\n"
+	uri := "file:///tmp/json_tokens.mg"
+	var output bytes.Buffer
+	s := &server{in: bufio.NewReader(nil), out: &output, documents: map[string]*document{uri: {URI: uri, Text: source}}}
+	params, _ := json.Marshal(map[string]any{"textDocument": map[string]any{"uri": uri}})
+	if err := s.handleSemanticTokens(message{ID: json.RawMessage("1"), Params: params}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(output.String(), ",0,0"); got != 1 {
 		t.Fatalf("semantic token response = %s, token endings = %d", output.String(), got)
 	}
 }

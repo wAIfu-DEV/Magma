@@ -13,10 +13,11 @@ import (
 	"sort"
 	"strings"
 
+	llvmir "Magma/src/llvm_ir"
 	t "Magma/src/types"
 )
 
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 type Interface struct {
 	Schema               int             `json:"schema"`
@@ -60,8 +61,9 @@ type Type struct {
 }
 
 type Argument struct {
-	Name string `json:"name"`
-	Type Type   `json:"type"`
+	Name         string `json:"name"`
+	Type         Type   `json:"type"`
+	BoundedCount string `json:"bounded_count,omitempty"`
 }
 
 type Function struct {
@@ -86,13 +88,15 @@ type Field struct {
 }
 
 type Struct struct {
-	Name        string   `json:"name"`
-	Symbol      string   `json:"symbol"`
-	Private     bool     `json:"private,omitempty"`
-	TypeParams  []string `json:"type_params,omitempty"`
-	Fields      []Field  `json:"fields,omitempty"`
-	Destructors []string `json:"destructors,omitempty"`
-	Implements  []Type   `json:"implements,omitempty"`
+	Name             string   `json:"name"`
+	Symbol           string   `json:"symbol"`
+	Private          bool     `json:"private,omitempty"`
+	TypeParams       []string `json:"type_params,omitempty"`
+	Fields           []Field  `json:"fields,omitempty"`
+	Destructors      []string `json:"destructors,omitempty"`
+	Implements       []Type   `json:"implements,omitempty"`
+	StorageSize      int      `json:"storage_size,omitempty"`
+	StorageAlignment int      `json:"storage_alignment,omitempty"`
 }
 
 type UnionVariant struct {
@@ -234,6 +238,13 @@ func Generate(state *t.SharedState, file *t.FileCtx, compilerVersion string) (*I
 				return nil, err
 			}
 			value.Implements = append(value.Implements, implemented)
+		}
+		if len(value.Implements) != 0 {
+			size, alignment, err := llvmir.TypeSizeAndAlignment(state, &t.NodeType{KindNode: &t.NodeTypeAbsolute{AbsoluteName: definition.Module + "." + definition.Name}})
+			if err != nil {
+				return nil, err
+			}
+			value.StorageSize, value.StorageAlignment = size, alignment
 		}
 		sort.Strings(value.Destructors)
 		out.Structs = append(out.Structs, value)
@@ -462,6 +473,9 @@ func Validate(value *Interface) error {
 		if err := add("type", item.Name); err != nil {
 			return err
 		}
+		if len(item.Implements) != 0 && (item.StorageSize < 0 || item.StorageAlignment < 1) {
+			return fmt.Errorf("public implementation %q lacks valid storage layout", item.Name)
+		}
 		for _, field := range item.Fields {
 			if err := validateType(field.Type); err != nil {
 				return err
@@ -631,7 +645,7 @@ func function(fn *t.NodeFuncDef) (Function, error) {
 		if err != nil {
 			return Function{}, err
 		}
-		value.Arguments = append(value.Arguments, Argument{Name: arg.Name, Type: typ})
+		value.Arguments = append(value.Arguments, Argument{Name: arg.Name, Type: typ, BoundedCount: arg.BoundedCount})
 	}
 	return value, nil
 }
@@ -642,7 +656,7 @@ func protoFunction(method *t.ProtoMethod) (Function, error) {
 		if err != nil {
 			return Function{}, err
 		}
-		value.Arguments = append(value.Arguments, Argument{Name: arg.Name, Type: typ})
+		value.Arguments = append(value.Arguments, Argument{Name: arg.Name, Type: typ, BoundedCount: arg.BoundedCount})
 	}
 	var err error
 	value.Result, err = typeOf(method.Ret)

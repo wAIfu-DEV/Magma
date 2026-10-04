@@ -73,7 +73,7 @@ gl_heapAllocator := HeapAllocator(value=0)
 
 # Returns an allocator object that uses the OS's standard heap allocation methods.
 pub noctx allocator() a.Allocator:
-    ret gl_heapAllocator.proto()
+    ret gl_heapAllocator.protoBorrow()
 ..
 
 # Returns a heap-allocated region of memory of exactly nBytes bytes wide.

@@ -38,7 +38,7 @@ Iterator[T].hasData() bool:
 # @throws any error reported by nextFunc
 # @warning Call hasData before next unless the callback defines other behavior.
 Iterator[T].next() !T:
-    value := try this.fn_next(this.impl, this.index)
+    index := this.index
     this.index = this.index + 1
-    ret value
+    ret try this.fn_next(this.impl, index)
 ..

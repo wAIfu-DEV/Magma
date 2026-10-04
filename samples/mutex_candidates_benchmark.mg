@@ -46,16 +46,13 @@ ticketNew() TicketMutex:
 
 compareExchange(value atomic.U32*, expected u32, desired u32) u32:
     unsafe:
-        llvm "  %result = cmpxchg ptr %value, i32 %expected, i32 %desired acquire monotonic, align 4\n"
-        llvm "  %observed = extractvalue { i32, i1 } %result, 0\n"
-        llvm "  ret i32 %observed\n"
+        ret @llvm("cmpxchg_old", value, expected, desired, "acquire", "monotonic", 4, u32)
     ..
 ..
 
 cpuRelax() void:
     unsafe:
-        llvm "  call void asm sideeffect \"pause\", \"~{memory}\"()\n"
-        llvm "  ret void\n"
+        @llvm("asm_sideeffect", "pause", void)
     ..
 ..
 
@@ -63,8 +60,7 @@ cpuRelax() void:
 # candidates whose complete initialization is just zeroing their state.
 consumeMutex(value ptr) void:
     unsafe:
-        llvm "  call void asm sideeffect \"\", \"r,~{memory}\"(ptr %value)\n"
-        llvm "  ret void\n"
+        @llvm("sideeffect", void)
     ..
 ..
 

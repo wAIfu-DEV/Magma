@@ -20,7 +20,6 @@ func irCStringGlobal(ctx *IrCtx, value string) SsaName {
 func irExprLitStr(ctx *IrCtx, litStr *t.NodeExprLit) (SsaName, error) {
 	constSsa := irCStringGlobal(ctx, litStr.Value)
 	constLen := len(litStr.Value) + 1
-
 	litSsa := SsaName{
 		Repr:      fmt.Sprintf("{ ptr %s, i64 %d, ptr null, ptr null }", constSsa.Repr, constLen-1),
 		IsLiteral: true,
@@ -233,7 +232,10 @@ func irNameVariableStorage(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, *t.No
 		return SsaName{}, nil, fmt.Errorf("cannot lower variable name without a resolved type")
 	}
 	if variable.IsImplicitContext {
-		return SsaName{Repr: "%.ctx.addr"}, variable.Type, nil
+		if ctx.ContextPtr.Repr == "" {
+			return SsaName{}, nil, fmt.Errorf("implicit context has not been initialized")
+		}
+		return ctx.ContextPtr, variable.Type, nil
 	}
 	switch variable.Storage {
 	case t.VariableStorageGlobal:
@@ -493,6 +495,47 @@ func irExprNameLvalue(ctx *IrCtx, nameExpr *t.NodeExprName) (SsaName, error) {
 	return curPtr, nil
 }
 
+// materializeContext gives a function a writable context slot on first write.
+// Until then contextful functions forward their caller's context pointer.
+func materializeContext(ctx *IrCtx, contextType *t.NodeType) error {
+	if ctx.contextLocal {
+		return nil
+	}
+	cpy := *ctx
+	cpy.bld.Body = cpy.bld.Head
+	irWrite(&cpy, "  %.ctx.addr = alloca ")
+	if contextType != nil {
+		if err := irType(&cpy, contextType); err != nil {
+			return err
+		}
+	} else {
+		irWrite(&cpy, "%type.context")
+	}
+	irWrite(&cpy, "\n")
+	if ctx.ContextPtr.Repr != "" {
+		irWrite(&cpy, "  %.ctx.value = load ")
+		if contextType != nil {
+			if err := irType(&cpy, contextType); err != nil {
+				return err
+			}
+		} else {
+			irWrite(&cpy, "%type.context")
+		}
+		irWritef(&cpy, ", ptr %s\n  store ", ctx.ContextPtr.Repr)
+		if contextType != nil {
+			if err := irType(&cpy, contextType); err != nil {
+				return err
+			}
+		} else {
+			irWrite(&cpy, "%type.context")
+		}
+		irWrite(&cpy, " %.ctx.value, ptr %.ctx.addr\n")
+	}
+	ctx.ContextPtr = ssaName("%.ctx.addr")
+	ctx.contextLocal = true
+	return nil
+}
+
 func irExprSubscript(ctx *IrCtx, subs *t.NodeExprSubscript) (SsaName, error) {
 	if subs == nil || subs.Target == nil || subs.Expr == nil {
 		return SsaName{}, fmt.Errorf("cannot lower incomplete subscript expression")
@@ -500,7 +543,7 @@ func irExprSubscript(ctx *IrCtx, subs *t.NodeExprSubscript) (SsaName, error) {
 	if subs.BoxType == nil || subs.BoxType.KindNode == nil || subs.ElemType == nil || subs.ElemType.KindNode == nil {
 		return SsaName{}, fmt.Errorf("cannot lower subscript without resolved container and element types")
 	}
-	if _, pointer := subs.BoxType.KindNode.(*t.NodeTypePointer); !pointer && subs.RangeProof == nil {
+	if subs.RangeProof == nil {
 		return SsaName{}, fmt.Errorf("cannot lower safe subscript at line %d, column %d without a validated range proof", subs.Tk.Pos.Line, subs.Tk.Pos.Col)
 	}
 	subsExpr, e := irExpression(ctx, subs.IndexType, subs.Expr, false)
@@ -624,7 +667,7 @@ func irExprSubscriptLvalue(ctx *IrCtx, subs *t.NodeExprSubscript) (SsaName, erro
 	if subs.BoxType == nil || subs.BoxType.KindNode == nil || subs.ElemType == nil || subs.ElemType.KindNode == nil {
 		return SsaName{}, fmt.Errorf("cannot lower subscript lvalue without resolved container and element types")
 	}
-	if _, pointer := subs.BoxType.KindNode.(*t.NodeTypePointer); !pointer && subs.RangeProof == nil {
+	if subs.RangeProof == nil {
 		return SsaName{}, fmt.Errorf("cannot lower safe subscript lvalue at line %d, column %d without a validated range proof", subs.Tk.Pos.Line, subs.Tk.Pos.Col)
 	}
 	subsExpr, e := irExpression(ctx, subs.IndexType, subs.Expr, false)
@@ -709,6 +752,11 @@ func irExprSubscriptLvalue(ctx *IrCtx, subs *t.NodeExprSubscript) (SsaName, erro
 }
 
 func irExprAssign(ctx *IrCtx, ass *t.NodeExprAssign, lhs t.NodeExpr, rhs t.NodeExpr) (SsaName, error) {
+	if variable := implicitContextRoot(lhs); variable != nil {
+		if err := materializeContext(ctx, variable.Type); err != nil {
+			return SsaName{}, err
+		}
+	}
 	lhsPtr, e := irExpressionLvalue(ctx, lhs)
 	if e != nil {
 		return SsaName{}, e
@@ -760,6 +808,25 @@ func irExprAssign(ctx *IrCtx, ass *t.NodeExprAssign, lhs t.NodeExpr, rhs t.NodeE
 
 	irWritef(ctx, ", ptr %s\n", lhsPtr.Repr)
 	return lhsPtr, nil
+}
+
+func implicitContextRoot(expr t.NodeExpr) *t.NodeExprVarDef {
+	switch node := expr.(type) {
+	case *t.NodeExprName:
+		switch variable := node.AssociatedNode.(type) {
+		case *t.NodeExprVarDef:
+			if variable.IsImplicitContext {
+				return variable
+			}
+		case *t.NodeExprVarDefAssign:
+			if variable.VarDef != nil && variable.VarDef.IsImplicitContext {
+				return variable.VarDef
+			}
+		}
+	case *t.NodeExprMemberAccess:
+		return implicitContextRoot(node.Target)
+	}
+	return nil
 }
 
 func irTryCall(ctx *IrCtx, callRetSsa SsaName, fnCall *t.NodeExprCall, pos t.FilePos) (SsaName, error) {

@@ -26,21 +26,82 @@ func irProtoVtables(ctx *IrCtx, gl *t.NodeGlobal, reachable map[string]bool) err
 				return fmt.Errorf("unresolved prototype implementation on %s", implementation.Name)
 			}
 			proto := relation.Proto
-			if !reachable[t.ProtoVtableSymbol(implementation, proto)] {
-				continue
-			}
-			irWriteGlf(ctx, "@%s = private constant %%struct.%s.%s { ", t.ProtoVtableSymbol(implementation, proto), proto.Module, proto.VtableName)
-			for i, method := range proto.Methods {
-				concrete := implementation.Funcs[method.Name]
-				if concrete == nil {
-					return fmt.Errorf("missing resolved prototype method %s.%s", implementation.Name, method.Name)
+			for _, borrowed := range []bool{false, true} {
+				symbol := t.ProtoVtableSymbol(implementation, proto)
+				if borrowed {
+					symbol = t.ProtoBorrowVtableSymbol(implementation, proto)
 				}
-				if i != 0 {
-					irWriteGl(ctx, ", ")
+				if !reachable[symbol] {
+					continue
 				}
-				irWriteGlf(ctx, "ptr @%s", concrete.AbsName)
+				irWriteGlf(ctx, "@%s = private constant %%struct.%s.%s { ", symbol, proto.Module, proto.VtableName)
+				for i, method := range proto.Methods {
+					concrete := implementation.Funcs[method.Name]
+					if concrete == nil {
+						return fmt.Errorf("missing resolved prototype method %s.%s", implementation.Name, method.Name)
+					}
+					if i != 0 {
+						irWriteGl(ctx, ", ")
+					}
+					entry := concrete.AbsName
+					if borrowed {
+						entry = t.ProtoBorrowThunkSymbol(implementation, proto, method)
+					}
+					irWriteGlf(ctx, "ptr @%s", entry)
+				}
+				irWriteGl(ctx, " }\n")
+				if borrowed {
+					for _, method := range proto.Methods {
+						concrete := implementation.Funcs[method.Name]
+						irWrite(ctx, "define private ")
+						if err := irThrowingType(ctx, method.Ret); err != nil {
+							return err
+						}
+						irWritef(ctx, " @%s(", t.ProtoBorrowThunkSymbol(implementation, proto, method))
+						if method.ContextABI == t.ContextABIContextful {
+							irWrite(ctx, "ptr %ctx, ")
+						}
+						irWrite(ctx, "ptr %storage")
+						for i, arg := range method.Args {
+							irWrite(ctx, ", ")
+							if err := irType(ctx, arg.TypeNode); err != nil {
+								return err
+							}
+							irWritef(ctx, " %%arg%d", i)
+						}
+						irWrite(ctx, ") alwaysinline {\n  %receiver = load ptr, ptr %storage\n  ")
+						returnsValue := !(isVoidType(method.Ret) && !method.Ret.Throws)
+						if returnsValue {
+							irWrite(ctx, "%result = ")
+						}
+						irWrite(ctx, "call ")
+						if err := irThrowingType(ctx, method.Ret); err != nil {
+							return err
+						}
+						irWritef(ctx, " @%s(", concrete.AbsName)
+						if method.ContextABI == t.ContextABIContextful {
+							irWrite(ctx, "ptr %ctx, ")
+						}
+						irWrite(ctx, "ptr %receiver")
+						for i, arg := range method.Args {
+							irWrite(ctx, ", ")
+							if err := irType(ctx, arg.TypeNode); err != nil {
+								return err
+							}
+							irWritef(ctx, " %%arg%d", i)
+						}
+						if returnsValue {
+							irWrite(ctx, ")\n  ret ")
+							if err := irThrowingType(ctx, method.Ret); err != nil {
+								return err
+							}
+							irWrite(ctx, " %result\n}\n")
+						} else {
+							irWrite(ctx, ")\n  ret void\n}\n")
+						}
+					}
+				}
 			}
-			irWriteGl(ctx, " }\n")
 		}
 	}
 	return nil
@@ -48,6 +109,61 @@ func irProtoVtables(ctx *IrCtx, gl *t.NodeGlobal, reachable map[string]bool) err
 
 func irDefineStruct(ctx *IrCtx, structNode *t.NodeStructDef) error {
 	definition := ctx.fCtx.GlNode.StructDefs[structNode.Class.NameNode.(*t.NodeNameSingle).Name]
+	if definition != nil && definition.IsProto && definition.Proto != nil {
+		pointerSize := ctx.Shared.Target.PointerBits / 8
+		maxSize, maxAlign, alignType := pointerSize, pointerSize, "ptr"
+		for _, file := range ctx.Shared.Files {
+			if file == nil || file.GlNode == nil {
+				continue
+			}
+			for _, candidate := range file.GlNode.StructDefs {
+				for _, implementation := range candidate.Implements {
+					if implementation == nil || implementation.Proto == nil || implementation.Proto.Module != definition.Proto.Module || implementation.Proto.Name != definition.Proto.Name {
+						continue
+					}
+					typ := &t.NodeType{KindNode: &t.NodeTypeAbsolute{AbsoluteName: candidate.Module + "." + candidate.Name}}
+					layout, err := cABITypeLayout(ctx, typ)
+					if err != nil {
+						return err
+					}
+					if layout.size > maxSize {
+						maxSize = layout.size
+					}
+					if layout.align > maxAlign {
+						maxAlign, alignType = layout.align, "%struct."+candidate.Module+"."+candidate.Name
+					}
+				}
+			}
+		}
+		irWriteGlf(ctx, "%%struct.%s = type { ptr, [0 x %s], [%d x i8] }\n", structNode.AbsName, alignType, maxSize)
+		return nil
+	}
+	if definition != nil {
+		if union := ctx.fCtx.GlNode.UnionDefs[definition.Name]; union != nil {
+			var maxSize int
+			var maxAlign int = 1
+			var alignVariant *t.UnionVariant
+			for _, variant := range union.Variants {
+				typ := &t.NodeType{KindNode: &t.NodeTypeAbsolute{AbsoluteName: union.Module + ".__union_" + union.Name + "_" + variant.Name}}
+				layout, err := cABITypeLayout(ctx, typ)
+				if err != nil {
+					return err
+				}
+				if layout.size > maxSize {
+					maxSize = layout.size
+				}
+				if layout.align > maxAlign {
+					maxAlign, alignVariant = layout.align, variant
+				}
+			}
+			alignType := "i8"
+			if alignVariant != nil {
+				alignType = "%struct." + union.Module + ".__union_" + union.Name + "_" + alignVariant.Name
+			}
+			irWriteGlf(ctx, "%%struct.%s = type { i64, [0 x %s], [%d x i8] }\n", structNode.AbsName, alignType, maxSize)
+			return nil
+		}
+	}
 	if definition != nil && definition.CoreRole != t.CoreTypeNone {
 		irWriteGlf(ctx, "%s = type { ", definition.CoreRole.LLVMName())
 	} else {

@@ -5,6 +5,7 @@ mod allocator
 use "std:errors" as errors
 use "std:checked" as checked
 use "std:cast" as cast
+use "std:llvm" as low
 
 # Generic allocator interface backed by a compiler-generated immutable vtable.
 pub proto Allocator(
@@ -37,28 +38,52 @@ Allocator.reallocT[T](block T*, count u64) !$T*:
     ret cast.reinterpret[T](try this.realloc(block, try checked.byteCount[T](count)))
 ..
 
-# Internal bridge used by intrinsic values that embed an Allocator protocol.
-# The pointer must address two fields laid out as { implementation, vtable }.
-pub fromEmbedded(p ptr) Allocator:
+# Zero vtable marks an inactive allocator in borrowed string descriptors.
+pub noctx empty() Allocator:
+    value Allocator
+    ret value
+..
+
+# The first two machine words of a borrowed Allocator are its wrapper vtable
+# and the implementation pointer kept in inline proto storage. Strings retain
+# those two words and reconstruct a borrowed proto when releasing their data.
+# The implementation must stay alive until every string using it is released.
+AllocatorBorrowedHeader(
+    vtable ptr
+    implementation ptr
+)
+
+AllocatorEmbeddedFields(
+    implementation ptr
+    vtable ptr
+)
+
+pub noctx fromEmbedded(p ptr) Allocator:
     unsafe:
-        value Allocator* = cast.reinterpret[Allocator](p)
-        ret *value
+        fields AllocatorEmbeddedFields* = low.reinterpret[AllocatorEmbeddedFields](p)
+        value Allocator
+        value.vtable = fields.vtable
+        raw AllocatorBorrowedHeader* = low.reinterpret[AllocatorBorrowedHeader](addrof value)
+        raw.implementation = fields.implementation
+        ret value
     ..
+..
+
+pub noctx Allocator.implementation() ptr:
+    unsafe:
+        raw AllocatorBorrowedHeader* = low.reinterpret[AllocatorBorrowedHeader](this)
+        ret raw.implementation
+    ..
+..
+
+pub noctx Allocator.dispatchTable() ptr:
+    ret this.vtable
 ..
 
 # Reports whether this protocol has no dispatch table. Such a value cannot
 # allocate or free and is used as the non-owning marker in intrinsic strings.
 pub noctx Allocator.isNull() bool:
     ret this.vtable == none
-..
-
-# Raw protocol fields used when embedding an allocator in an intrinsic value.
-pub noctx Allocator.implementation() ptr:
-    ret this.impl
-..
-
-pub noctx Allocator.dispatchTable() ptr:
-    ret this.vtable
 ..
 
 # Stable placeholder used by containers whose optional backing allocator is
@@ -83,5 +108,5 @@ NullAllocator.free(block ptr) void:
 gl_nullAllocator := NullAllocator(value=0)
 
 pub noctx null() Allocator:
-    ret gl_nullAllocator.proto()
+    ret gl_nullAllocator.protoBorrow()
 ..
